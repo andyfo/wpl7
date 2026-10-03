@@ -1,0 +1,52 @@
+{
+  "version": 17,
+  "users": [
+    {
+      "status": 1,
+      "username": "gateway",
+      "public_keys": [
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFAKE wpl7-ftp"
+      ],
+      "home_dir": "/var/www/html",
+      "permissions": {
+        "/": [
+          "list",
+          "download",
+          "upload",
+          "overwrite",
+          "delete",
+          "rename",
+          "create_dirs",
+          "chmod",
+          "chtimes",
+          "copy"
+        ]
+      },
+      "description": "the FTP gateway",
+      "filters": {
+        "denied_protocols": [
+          "FTP",
+          "DAV",
+          "HTTP"
+        ],
+        "denied_login_methods": [
+          "password",
+          "password-over-SSH",
+          "keyboard-interactive"
+        ]
+      },
+      "filesystem": {
+        "provider": 0
+      }
+    }
+  ],
+  "groups": [],
+  "folders": [],
+  "admins": [],
+  "api_keys": [],
+  "shares": [],
+  "event_actions": [],
+  "event_rules": [],
+  "roles": [],
+  "ip_lists": []
+}

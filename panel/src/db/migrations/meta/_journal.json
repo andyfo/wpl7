@@ -1,0 +1,146 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1788037047713,
+      "tag": "0000_stormy_wind_dancer",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788077198624,
+      "tag": "0001_furry_tarantula",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788078965759,
+      "tag": "0002_panoramic_centennial",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1789710121798,
+      "tag": "0003_cloudy_invisible_woman",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1789729785169,
+      "tag": "0004_overjoyed_hobgoblin",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1789816224399,
+      "tag": "0005_backups_toggle_and_visitor_stats",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1789828765698,
+      "tag": "0006_visitor_countries_crawlers_and_addresses",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1789914836839,
+      "tag": "0007_backup_roots_and_offsite_copies",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1789922604594,
+      "tag": "0008_offsite_encryption",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1789924381486,
+      "tag": "0009_wp_inventory_vulnerabilities_batches",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1790061057096,
+      "tag": "0010_api_activity_log",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1790068303839,
+      "tag": "0011_system_updates",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1790246906011,
+      "tag": "0012_recipes",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1790256173862,
+      "tag": "0013_users",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1790334450926,
+      "tag": "0014_ftp_logins",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1790537850810,
+      "tag": "0015_jobs_schedules",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1790597754678,
+      "tag": "0016_mcp_oauth",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1790689151821,
+      "tag": "0017_job_log_output",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1790754031350,
+      "tag": "0018_security",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1790916924545,
+      "tag": "0019_panel_files",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+# WPL7 blocked addresses, the network layer: loads the table `inet wpl7` the panel last wrote
+# (docs/security.md). Deliberately not nftables.service, whose /etc/nftables.conf starts with
+# `flush ruleset` and would take Docker's and UFW's rules with it. Installed by
+# provision/setup.sh.
+[Unit]
+Description=WPL7 blocked addresses (nftables table inet wpl7)
+Documentation=https://github.com/andyfo/wpl7/blob/main/docs/security.md
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/wpl7-firewall boot
+
+[Install]
+WantedBy=multi-user.target

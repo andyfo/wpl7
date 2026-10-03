@@ -1,0 +1,19 @@
+# Grouping for the notes `gh release create --generate-notes` writes. PR titles are the
+# release-note lines, so label every PR with one of these.
+changelog:
+  exclude:
+    labels: [no-release-note]
+  categories:
+    - title: Breaking changes
+      labels: [breaking]
+    - title: Features
+      labels: [feature]
+    - title: Fixes
+      labels: [fix]
+    - title: Documentation
+      labels: [docs]
+    - title: Internal
+      labels: [internal]
+    # Anything unlabelled still appears, so a forgotten label loses the grouping, not the line.
+    - title: Other changes
+      labels: ['*']

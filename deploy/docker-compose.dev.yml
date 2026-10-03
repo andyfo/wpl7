@@ -1,0 +1,73 @@
+# Overlay: local development on macOS (Docker Desktop). HTTP only, no ACME.
+#   SRV_ROOT=$HOME/wpl7-dev/srv TLS_MODE=none DEV_DOMAIN=dev.localtest.me \
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.build.yml up -d
+# *.localtest.me publicly resolves to 127.0.0.1, so site URLs work with zero /etc/hosts edits.
+# The panel is reachable at http://localhost:3000 (bypasses Traefik in dev).
+# Mailpit replaces postfix: it catches all wp_mail() output, web UI at http://mail.localtest.me
+# Mailpit speaks no milter protocol, so the DKIM signer is switched off here - signing and the
+# traffic view (which parses postfix's log) are production-only.
+services:
+  traefik:
+    command:
+      - "--log.level=INFO"
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=wpl7_proxy"
+      # The rules folder: site protection (sec-<slug>.yml), blocked addresses and move
+      # forwarding all live here, so a local stack without it exercises none of them.
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--entrypoints.web.address=:80"
+      # This list replaces the production one wholesale, so the access log the visitor
+      # statistics are built from has to be repeated here or the feature is dev-only broken.
+      # Only the TLS flags are left out on purpose (panel/test/unit/composeFlags.test.ts).
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+      - "--accesslog.fields.headers.defaultmode=drop"
+      - "--accesslog.fields.headers.names.User-Agent=keep"
+      - "--accesslog.fields.headers.names.Referer=keep"
+      - "--accesslog.fields.headers.names.Cf-Connecting-Ip=keep"
+      - "--accesslog.fields.headers.names.True-Client-Ip=keep"
+      - "--accesslog.fields.headers.names.Fastly-Client-Ip=keep"
+    ports: !override
+      - "80:80"
+
+  dkim:
+    # Assigning a profile that is never activated keeps the service out of `up` without
+    # removing it from the base file (same trick as docker-compose.worker.yml).
+    profiles: ["dkim-disabled"]
+
+  mail:
+    image: axllent/mailpit:latest
+    depends_on: !override []
+    volumes: !override []
+    environment:
+      RELAYHOST: ""
+      RELAYHOST_USERNAME: ""
+      RELAYHOST_PASSWORD: ""
+      ALLOW_EMPTY_SENDER_DOMAINS: ""
+      HOSTNAME: ""
+      POSTFIX_smtpd_milters: ""
+      POSTFIX_non_smtpd_milters: ""
+      POSTFIX_milter_protocol: ""
+      POSTFIX_milter_default_action: ""
+      # Listen on the same port site containers' msmtp targets (mail:587).
+      MP_SMTP_BIND_ADDR: 0.0.0.0:587
+      # Site containers always authenticate now (each with its own login, so the relay can
+      # tell whose mail is whose). Mailpit does not enforce anything - it accepts whatever
+      # is offered - which keeps dev sending working while the real sender authorization is
+      # exercised against postfix in production.
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.mailpit.rule: Host(`mail.localtest.me`)
+      traefik.http.routers.mailpit.entrypoints: web
+      traefik.http.services.mailpit.loadbalancer.server.port: "8025"
+
+  panel:
+    ports:
+      - "3000:3000"
+    labels:
+      traefik.enable: "false"

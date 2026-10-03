@@ -1,0 +1,7 @@
+# Overlay for worker servers (SERVER_ROLE=worker in .env): the full stack minus the panel.
+# Assigning the panel a profile that is never activated excludes it without touching the
+# base file - single-server installs keep working with plain `docker compose up`.
+# provision/compose.sh appends this file automatically when SERVER_ROLE=worker.
+services:
+  panel:
+    profiles: ["panel-disabled"]

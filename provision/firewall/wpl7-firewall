@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# wpl7-firewall - the network layer of WPL7's blocked addresses (docs/security.md).
+#
+# The panel decides who is blocked and writes the rules to $SRV_ROOT/wpl7-firewall/wpl7.nft;
+# this only checks and loads them into a table of their own, `inet wpl7`, which drops TCP 80
+# and 443 from a blocked address before Docker forwards the ports. Nothing else on the host is
+# touched: not UFW, not Docker's rules, not nftables.service (whose default configuration
+# begins with `flush ruleset`, which is why this has a unit of its own).
+#
+#   wpl7-firewall apply    check the panel's file with `nft -c`, then load it in one transaction
+#   wpl7-firewall off      remove the table and keep it removed, until `on` - panel or no panel
+#   wpl7-firewall on       load the last file again
+#   wpl7-firewall status   what is loaded, as one line of JSON
+#   wpl7-firewall boot     what the unit runs at boot: load the last file unless switched off
+#
+# Installed by provision/setup.sh to /usr/local/sbin; its unit is wpl7-firewall.service.
+set -euo pipefail
+
+[ -r /etc/default/wpl7-firewall ] && . /etc/default/wpl7-firewall
+SRV_ROOT="${SRV_ROOT:-/srv}"
+DIR="$SRV_ROOT/wpl7-firewall"
+RULES="$DIR/wpl7.nft"
+LOAD="$DIR/wpl7.nft.load"
+STATUS="$DIR/status.json"
+OFF="$DIR/off"
+
+boot_id() { cat /proc/sys/kernel/random/boot_id 2>/dev/null || echo unknown; }
+table_loaded() { nft list table inet wpl7 >/dev/null 2>&1; }
+# A message fit for a JSON string: one line, no quotes or backslashes, bounded.
+clean() { printf '%s' "$1" | tr '\n\r\t' '   ' | tr -d '"\\' | cut -c1-300; }
+
+write_status() { # state message
+  local state=$1 message=${2:-} applied_at sha loaded=false
+  applied_at="$(date +%s)"
+  sha="$( [ -f "$RULES" ] && sha256sum "$RULES" | cut -d' ' -f1 || echo '')"
+  table_loaded && loaded=true
+  mkdir -p "$DIR"
+  printf '{"state":"%s","table":%s,"appliedAt":%s,"sha256":"%s","bootId":"%s","message":"%s"}\n' \
+    "$state" "$loaded" "$applied_at" "$sha" "$(boot_id)" "$(clean "$message")" > "$STATUS.tmp"
+  mv -f "$STATUS.tmp" "$STATUS"
+  cat "$STATUS"
+}
+
+# The file may only ever touch this one table: refused, and never loaded, if it would flush the
+# ruleset or reach into anybody else's tables.
+foreign_statements() {
+  grep -vE '^[[:space:]]*(#|$)' "$RULES" \
+    | grep -E '^[[:space:]]*(table|delete|flush|add|insert|replace|destroy|create|reset)\b' \
+    | grep -vE '^[[:space:]]*(table|delete table) inet wpl7([[:space:]]|\{|$)' || true
+}
+
+# The timeouts in the file count down from when the panel wrote it. Loaded later - at boot, or
+# on `on` after a while off - each timed block gets what is left of it, and one whose time is up
+# the least nft takes, a second, rather than its whole length again.
+write_loadable() {
+  local now written elapsed
+  now="$(date +%s)"
+  written="$(stat -c %Y "$RULES" 2>/dev/null || stat -f %m "$RULES")"
+  elapsed=$(( now - written ))
+  [ "$elapsed" -gt 0 ] || elapsed=0
+  awk -v elapsed="$elapsed" '{
+    out = ""; rest = $0
+    while (match(rest, /timeout [0-9]+s/)) {
+      left = substr(rest, RSTART + 8, RLENGTH - 9) - elapsed
+      if (left < 1) left = 1
+      out = out substr(rest, 1, RSTART - 1) "timeout " left "s"
+      rest = substr(rest, RSTART + RLENGTH)
+    }
+    print out rest
+  }' "$RULES" > "$LOAD"
+}
+
+apply() {
+  if [ -e "$OFF" ]; then
+    write_status off "switched off on this server with wpl7-firewall off"
+    return 0
+  fi
+  if ! command -v nft >/dev/null 2>&1; then
+    write_status error "nft is not installed (apt-get install nftables)"
+    return 1
+  fi
+  if [ ! -f "$RULES" ]; then
+    write_status missing "the panel has not written $RULES yet"
+    return 0
+  fi
+  local foreign
+  foreign="$(foreign_statements)"
+  if [ -n "$foreign" ]; then
+    write_status error "refused: the file reaches outside table inet wpl7 ($foreign)"
+    return 1
+  fi
+  local out
+  write_loadable
+  if ! out="$(nft -c -f "$LOAD" 2>&1)"; then
+    rm -f "$LOAD"
+    write_status error "nft -c: $out"
+    return 1
+  fi
+  if ! out="$(nft -f "$LOAD" 2>&1)"; then
+    rm -f "$LOAD"
+    write_status error "nft -f: $out"
+    return 1
+  fi
+  rm -f "$LOAD"
+  write_status ok ""
+}
+
+status() {
+  local loaded=false state
+  table_loaded && loaded=true
+  if [ -e "$OFF" ]; then
+    state=off
+  elif ! command -v nft >/dev/null 2>&1; then
+    state=error
+  elif [ -f "$STATUS" ]; then
+    state="$(sed -n 's/.*"state":"\([a-z]*\)".*/\1/p' "$STATUS")"
+  else
+    state=missing
+  fi
+  local applied_at sha message
+  applied_at="$( [ -f "$STATUS" ] && sed -n 's/.*"appliedAt":\([0-9]*\).*/\1/p' "$STATUS" || echo 0)"
+  sha="$( [ -f "$STATUS" ] && sed -n 's/.*"sha256":"\([0-9a-f]*\)".*/\1/p' "$STATUS" || echo '')"
+  message="$( [ -f "$STATUS" ] && sed -n 's/.*"message":"\([^"]*\)".*/\1/p' "$STATUS" || echo '')"
+  command -v nft >/dev/null 2>&1 || message="nft is not installed"
+  printf '{"state":"%s","table":%s,"appliedAt":%s,"sha256":"%s","bootId":"%s","message":"%s"}\n' \
+    "${state:-missing}" "$loaded" "${applied_at:-0}" "$sha" "$(boot_id)" "$(clean "$message")"
+}
+
+case "${1:-}" in
+  apply) apply ;;
+  off)
+    mkdir -p "$DIR"
+    touch "$OFF"
+    if command -v nft >/dev/null 2>&1 && table_loaded; then nft delete table inet wpl7; fi
+    write_status off "switched off on this server with wpl7-firewall off"
+    ;;
+  on)
+    rm -f "$OFF"
+    apply
+    ;;
+  status) status ;;
+  boot)
+    # Never fails the boot: a server without its blocks is one that serves everybody, which is
+    # what it did before any of this existed.
+    if [ -e "$OFF" ] || [ ! -f "$RULES" ]; then exit 0; fi
+    apply >/dev/null 2>&1 || echo "wpl7-firewall: could not load $RULES at boot; see $STATUS" >&2
+    exit 0
+    ;;
+  *)
+    sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+    exit 2
+    ;;
+esac

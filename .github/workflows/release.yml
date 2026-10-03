@@ -1,0 +1,148 @@
+# Cut a release from a tag. `scripts/release.sh <version>` is what creates the tag.
+#
+# A release is the `main` commit that has been running on the maintainer's box since it was
+# merged - the edge channel is the soak test, and this workflow only packages the result:
+# images on GHCR, a bundle tarball for fresh installs, and a manifest.json that the panel's
+# update checker and provision/update.sh both read.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  meta:
+    name: Check the tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+      # `latest` and the X.Y alias only move for a real release.
+      panel-tags: ${{ steps.v.outputs.panel-tags }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        env:
+          TAG: ${{ github.ref_name }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          packaged="$(node -p "require('./panel/package.json').version")"
+          # The panel reports package.json's version when it is not running from a stamped
+          # image, and update.sh compares versions as semver. A tag that disagrees with the
+          # package would publish a release nothing can recognise.
+          if [ "$version" != "$packaged" ]; then
+            echo "::error::tag $TAG says $version but panel/package.json says $packaged"
+            exit 1
+          fi
+          registry="ghcr.io/${REPOSITORY,,}"
+          prerelease=false
+          case "$version" in *-*) prerelease=true ;; esac
+          {
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo 'panel-tags<<EOF'
+            echo "$registry/panel:$version"
+            if [ "$prerelease" = false ]; then
+              echo "$registry/panel:${version%.*}"
+              echo "$registry/panel:latest"
+            fi
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: meta
+    uses: ./.github/workflows/test.yml
+
+  images:
+    needs: [meta, test]
+    uses: ./.github/workflows/build-images.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      version: ${{ needs.meta.outputs.version }}
+      panel-tags: ${{ needs.meta.outputs.panel-tags }}
+      wordpress-suffix: ${{ needs.meta.outputs.version }}
+
+  publish:
+    name: Publish the release
+    needs: [meta, images]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build the install bundle
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Only what a blank machine needs to provision itself. Everything else - the panel,
+          # the site images - arrives as an image, which is why this is a few kilobytes.
+          git archive --format=tar.gz --prefix='' -o "wpl7-$VERSION-bundle.tar.gz" \
+            "$GITHUB_SHA" deploy provision
+
+      - name: Write manifest.json
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          registry="ghcr.io/${REPOSITORY,,}"
+          min_from=0.2.0
+          # The floor has to be reachable from this release itself, or the install created by
+          # its own install.sh can never update again - and an edge box cannot reach it
+          # either. `sort -V` is exactly the comparison update.sh makes.
+          if [ "$(printf '%s\n%s\n' "$min_from" "$VERSION" | sort -V | head -1)" != "$min_from" ]; then
+            echo "::error::minUpgradeFrom $min_from is newer than the $VERSION being released - bump panel/package.json or lower the floor"
+            exit 1
+          fi
+          # What update.sh resolves a version into, and what the panel's checker caches.
+          # minUpgradeFrom is the oldest version this release can be applied to directly;
+          # requiresDowntime is shown in the UI before the Update button is pressed.
+          jq -n \
+            --arg version "$VERSION" \
+            --arg publishedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg notesUrl "https://github.com/$REPOSITORY/releases/tag/$TAG" \
+            --arg panel "$registry/panel:$VERSION" \
+            --arg registry "$registry" \
+            --arg gitSha "$GITHUB_SHA" \
+            --arg minFrom "$min_from" \
+            '{
+              version: $version,
+              channel: "stable",
+              publishedAt: $publishedAt,
+              notesUrl: $notesUrl,
+              gitSha: $gitSha,
+              images: {
+                panel: $panel,
+                wordpress: (["8.2","8.3","8.4","8.5"] | map({ (.): ($registry + "/wordpress:php" + . + "-" + $version) }) | add)
+              },
+              minUpgradeFrom: $minFrom,
+              requiresDowntime: false
+            }' > manifest.json
+          cat manifest.json
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          assets=("wpl7-$VERSION-bundle.tar.gz" manifest.json)
+          # install.sh arrives in the phase that writes it; until then a release simply has
+          # one asset fewer rather than failing here.
+          if [ -f install.sh ]; then assets+=(install.sh); fi
+          flags=(--generate-notes --title "$TAG")
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" "${flags[@]}" "${assets[@]}"

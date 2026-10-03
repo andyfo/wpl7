@@ -1,0 +1,245 @@
+diff --git a/internal/ftpd/handler.go b/internal/ftpd/handler.go
+index 54f5a5b..33d3d25 100644
+--- a/internal/ftpd/handler.go
++++ b/internal/ftpd/handler.go
+@@ -488,12 +488,17 @@ func (c *Connection) handleFTPUploadToExistingFile(fs vfs.Fs, flags int, resolve
+ 		return nil, ftpserver.ErrFileNameNotAllowed
+ 	}
+ 
++	// WPL7: upstream renames the existing file to the temporary path here and truncates it
++	// there, so the file is missing for the whole transfer and lost if the transfer fails.
++	// Instead a replacement is staged in a new temporary file, which is renamed over the
++	// existing one only once the upload succeeds, and a resume continues the file in place.
++	staged := false
+ 	if common.Config.IsAtomicUploadEnabled() && fs.IsAtomicUploadSupported() {
+-		_, _, err = fs.Rename(resolvedPath, filePath, 0)
+-		if err != nil {
+-			c.Log(logger.LevelError, "error renaming existing file for atomic upload, source: %q, dest: %q, err: %+v",
+-				resolvedPath, filePath, err)
+-			return nil, c.GetFsError(fs, err)
++		if isResume {
++			filePath = resolvedPath
++		} else {
++			staged = true
++			flags |= os.O_CREATE
+ 		}
+ 	}
+ 
+@@ -502,6 +507,9 @@ func (c *Connection) handleFTPUploadToExistingFile(fs vfs.Fs, flags int, resolve
+ 		c.Log(logger.LevelError, "error opening existing file, flags: %v, source: %q, err: %+v", flags, filePath, err)
+ 		return nil, c.GetFsError(fs, err)
+ 	}
++	if staged {
++		vfs.CopyFileMode(fs, resolvedPath, filePath)
++	}
+ 
+ 	initialSize := int64(0)
+ 	truncatedSize := int64(0) // bytes truncated and not included in quota
+@@ -514,7 +522,8 @@ func (c *Connection) handleFTPUploadToExistingFile(fs vfs.Fs, flags int, resolve
+ 			_, _ = file.Seek(initialSize, io.SeekStart) // for sftp seek simply set the offset
+ 		}
+ 	} else {
+-		if vfs.HasTruncateSupport(fs) {
++		// WPL7: a staged replacement leaves the existing file as it is until it succeeds.
++		if vfs.HasTruncateSupport(fs) && !staged {
+ 			vfolder, err := c.User.GetVirtualFolderForPath(path.Dir(requestPath))
+ 			if err == nil {
+ 				dataprovider.UpdateUserFolderQuota(&vfolder, &c.User, 0, -fileSize, false)
+diff --git a/internal/ftpd/internal_test.go b/internal/ftpd/internal_test.go
+index 9a3eb3d..0133091 100644
+--- a/internal/ftpd/internal_test.go
++++ b/internal/ftpd/internal_test.go
+@@ -869,7 +869,8 @@ func TestUploadOverwriteErrors(t *testing.T) {
+ 		filepath.Join(os.TempDir(), "sub", "file1"), 0, "/sub/file1")
+ 	assert.Error(t, err)
+ 	fs = vfs.NewOsFs(connID, user.GetHomeDir(), "", nil)
+-	_, err = connection.handleFTPUploadToExistingFile(fs, 0, "missing1", "missing2", 0, "missing")
++	// WPL7: a resume continues the existing file in place, so it fails on that path.
++	_, err = connection.handleFTPUploadToExistingFile(fs, 0, filepath.Join("missing_dir", "missing1"), "missing2", 0, "missing")
+ 	assert.Error(t, err)
+ }
+ 
+diff --git a/internal/sftpd/handler.go b/internal/sftpd/handler.go
+index dfbd180..4454ed9 100644
+--- a/internal/sftpd/handler.go
++++ b/internal/sftpd/handler.go
+@@ -472,12 +472,20 @@ func (c *Connection) handleSFTPUploadToExistingFile(fs vfs.Fs, pflags sftp.FileO
+ 		return nil, c.GetPermissionDeniedError()
+ 	}
+ 
++	// WPL7: upstream renames the existing file to the temporary path here and truncates it
++	// there, so the file is missing for the whole transfer and lost if the transfer fails.
++	// Instead a replacement is staged in a new temporary file, which is renamed over the
++	// existing one only once the upload succeeds, and a resume continues the file in place.
++	staged := false
+ 	if common.Config.IsAtomicUploadEnabled() && fs.IsAtomicUploadSupported() {
+-		_, _, err = fs.Rename(resolvedPath, filePath, 0)
+-		if err != nil {
+-			c.Log(logger.LevelError, "error renaming existing file for atomic upload, source: %q, dest: %q, err: %+v",
+-				resolvedPath, filePath, err)
+-			return nil, c.GetFsError(fs, err)
++		if isResume {
++			filePath = resolvedPath
++		} else {
++			if osFlags&os.O_EXCL != 0 {
++				return nil, c.GetFsError(fs, os.ErrExist)
++			}
++			staged = true
++			osFlags |= os.O_CREATE
+ 		}
+ 	}
+ 
+@@ -487,6 +495,9 @@ func (c *Connection) handleSFTPUploadToExistingFile(fs vfs.Fs, pflags sftp.FileO
+ 			osFlags, pflags, filePath, err)
+ 		return nil, c.GetFsError(fs, err)
+ 	}
++	if staged {
++		vfs.CopyFileMode(fs, resolvedPath, filePath)
++	}
+ 
+ 	initialSize := int64(0)
+ 	truncatedSize := int64(0) // bytes truncated and not included in quota
+@@ -500,7 +511,8 @@ func (c *Connection) handleSFTPUploadToExistingFile(fs vfs.Fs, pflags sftp.FileO
+ 		}
+ 		initialSize = fileSize
+ 	} else {
+-		if isTruncate && vfs.HasTruncateSupport(fs) {
++		// WPL7: a staged replacement leaves the existing file as it is until it succeeds.
++		if isTruncate && vfs.HasTruncateSupport(fs) && !staged {
+ 			c.updateQuotaAfterTruncate(requestPath, fileSize)
+ 		} else {
+ 			initialSize = fileSize
+diff --git a/internal/sftpd/internal_test.go b/internal/sftpd/internal_test.go
+index 61d8611..98b40ed 100644
+--- a/internal/sftpd/internal_test.go
++++ b/internal/sftpd/internal_test.go
+@@ -329,7 +329,9 @@ func TestUploadFiles(t *testing.T) {
+ 	var flags sftp.FileOpenFlags
+ 	flags.Write = true
+ 	flags.Trunc = true
+-	_, err := c.handleSFTPUploadToExistingFile(fs, flags, "missing_path", "other_missing_path", 0, "/missing_path", nil)
++	// WPL7: an atomic overwrite stages the upload in a new file and leaves the existing one
++	// alone, so it fails on the temporary path, not on the existing one.
++	_, err := c.handleSFTPUploadToExistingFile(fs, flags, "missing_path", filepath.Join("missing_dir", "other_missing_path"), 0, "/missing_path", nil)
+ 	assert.Error(t, err, "upload to existing file must fail if one or both paths are invalid")
+ 
+ 	common.Config.UploadMode = common.UploadModeStandard
+diff --git a/internal/sftpd/scp.go b/internal/sftpd/scp.go
+index 4e3abce..16ea219 100644
+--- a/internal/sftpd/scp.go
++++ b/internal/sftpd/scp.go
+@@ -256,11 +256,16 @@ func (c *scpCommand) handleUploadFile(fs vfs.Fs, resolvedPath, filePath string,
+ 		c.sendErrorMessage(fs, err)
+ 		return err
+ 	}
++	// WPL7: a replacement staged next to the file it replaces, which stays as it is until then.
++	staged := !isNewFile && filePath != resolvedPath
++	if staged {
++		vfs.CopyFileMode(fs, resolvedPath, filePath)
++	}
+ 
+ 	initialSize := int64(0)
+ 	truncatedSize := int64(0) // bytes truncated and not included in quota
+ 	if !isNewFile {
+-		if vfs.HasTruncateSupport(fs) {
++		if vfs.HasTruncateSupport(fs) && !staged {
+ 			vfolder, err := c.connection.User.GetVirtualFolderForPath(path.Dir(requestPath))
+ 			if err == nil {
+ 				dataprovider.UpdateUserFolderQuota(&vfolder, &c.connection.User, 0, -fileSize, false)
+@@ -334,16 +339,9 @@ func (c *scpCommand) handleUpload(uploadFilePath string, sizeToRead int64) error
+ 		return common.ErrPermissionDenied
+ 	}
+ 
+-	if common.Config.IsAtomicUploadEnabled() && fs.IsAtomicUploadSupported() {
+-		_, _, err = fs.Rename(p, filePath, 0)
+-		if err != nil {
+-			c.connection.Log(logger.LevelError, "error renaming existing file for atomic upload, source: %q, dest: %q, err: %v",
+-				p, filePath, err)
+-			c.sendErrorMessage(fs, err)
+-			return err
+-		}
+-	}
+-
++	// WPL7: upstream renames the existing file to the temporary path here, so it is missing
++	// for the whole transfer and lost if the transfer fails. handleUploadFile stages the
++	// replacement in a new temporary file instead, renamed over this one only on success.
+ 	return c.handleUploadFile(fs, p, filePath, sizeToRead, false, stat.Size(), uploadFilePath)
+ }
+ 
+diff --git a/internal/sftpd/sftpd_test.go b/internal/sftpd/sftpd_test.go
+index b813e82..109a806 100644
+--- a/internal/sftpd/sftpd_test.go
++++ b/internal/sftpd/sftpd_test.go
+@@ -5669,14 +5669,26 @@ func TestQuotaLimits(t *testing.T) {
+ 			_, err = client.Lstat(testFileName1)
+ 			assert.Error(t, err)
+ 			// overwriting an existing file will work if the resulting size is lesser or equal than the current one
+-			err = sftpUploadFile(testFilePath, testFileName, testFileSize, client)
+-			assert.NoError(t, err)
+-			err = sftpUploadFile(testFilePath2, testFileName, testFileSize2, client)
+-			assert.NoError(t, err)
++			// WPL7: but not through an SFTP backend that has a quota of its own: a staged replacement is a new
++			// file there, which needs room next to the file it replaces until it takes its place.
++			expectedSize := testFileSize2
++			if user.Username == localUser.Username {
++				err = sftpUploadFile(testFilePath, testFileName, testFileSize, client)
++				assert.NoError(t, err)
++				err = sftpUploadFile(testFilePath2, testFileName, testFileSize2, client)
++				assert.NoError(t, err)
++			} else {
++				err = sftpUploadFile(testFilePath2, testFileName, testFileSize2, client)
++				assert.Error(t, err)
++				expectedSize = testFileSize
++			}
+ 			err = sftpUploadFile(testFilePath1, testFileName, testFileSize1, client)
+ 			assert.Error(t, err)
+-			_, err := client.Stat(testFileName)
+-			assert.Error(t, err)
++			// WPL7: a failed overwrite leaves the file it would have replaced as it was.
++			info, err := client.Stat(testFileName)
++			if assert.NoError(t, err) {
++				assert.Equal(t, expectedSize, info.Size())
++			}
+ 		}
+ 		if user.Username == defaultUsername {
+ 			err = os.RemoveAll(user.GetHomeDir())
+diff --git a/internal/vfs/stagedoverwrite.go b/internal/vfs/stagedoverwrite.go
+new file mode 100644
+index 0000000..7bd4fcd
+--- /dev/null
++++ b/internal/vfs/stagedoverwrite.go
+@@ -0,0 +1,34 @@
++// Copyright (C) 2019 Nicola Murino
++//
++// This program is free software: you can redistribute it and/or modify
++// it under the terms of the GNU Affero General Public License as published
++// by the Free Software Foundation, version 3.
++//
++// This program is distributed in the hope that it will be useful,
++// but WITHOUT ANY WARRANTY; without even the implied warranty of
++// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++// GNU Affero General Public License for more details.
++//
++// You should have received a copy of the GNU Affero General Public License
++// along with this program. If not, see <https://www.gnu.org/licenses/>.
++
++// WPL7: staged overwrites for atomic uploads (deploy/sftpgo-image in https://github.com/andyfo/wpl7).
++
++package vfs
++
++import (
++	"github.com/drakkan/sftpgo/v2/internal/logger"
++)
++
++// CopyFileMode gives a staged replacement the permission bits of the file it replaces.
++// The replacement is a new file, so it would otherwise get the default mode instead.
++// A failure is logged, not returned: the upload itself can still succeed.
++func CopyFileMode(fs Fs, source, target string) {
++	info, err := fs.Lstat(source)
++	if err != nil || !info.Mode().IsRegular() {
++		return
++	}
++	if err := fs.Chmod(target, info.Mode().Perm()); err != nil {
++		fsLog(fs, logger.LevelWarn, "unable to give %q the mode of %q: %v", target, source, err)
++	}
++}

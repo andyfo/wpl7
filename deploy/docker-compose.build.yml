@@ -1,0 +1,19 @@
+# Overlay: build the panel from this checkout instead of pulling the released image.
+#
+# provision/compose.sh appends it when .env says WPL7_SOURCE=build, which is what a checkout
+# install and provision/build.sh both use. Local development on macOS needs it explicitly:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.build.yml up -d --build
+services:
+  panel:
+    build:
+      context: ..
+      dockerfile: panel/Dockerfile
+      # What this build is, baked in: the panel cannot read its own commit at runtime
+      # (.dockerignore drops .git). provision/lib.sh's wpl7_stamp sets both; the defaults
+      # are what an ad-hoc `docker compose build` in a checkout gets.
+      args:
+        VERSION: ${WPL7_VERSION:-dev}
+        GIT_SHA: ${WPL7_GIT_SHA:-unknown}
+    # Local tag, never pushed. Versioned rather than `latest` so an on-box `build.sh` (which
+    # stamps `dev`) cannot quietly overwrite the image a source-mode deploy produced.
+    image: wpl7-panel:${WPL7_VERSION:-dev}

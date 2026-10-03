@@ -1,0 +1,29 @@
+# Dependencies here reach a lot of other people's servers, so they are watched rather than
+# left to rot. Weekly and grouped: a pull request per dependency would bury the ones that
+# matter.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /panel
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [internal]
+    groups:
+      # Patch and minor bumps are the ones worth taking in a batch; a major arrives on its
+      # own, because it needs reading.
+      production:
+        dependency-type: production
+        update-types: [minor, patch]
+      development:
+        dependency-type: development
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [internal]
+    groups:
+      actions:
+        patterns: ['*']

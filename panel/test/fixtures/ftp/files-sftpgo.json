@@ -1,0 +1,77 @@
+{
+  "common": {
+    "idle_timeout": 15,
+    "upload_mode": 0,
+    "setstat_mode": 0,
+    "rename_mode": 0,
+    "symlink_mode": 0,
+    "max_total_connections": 0,
+    "max_per_host_connections": 0,
+    "allow_self_connections": 0,
+    "defender": {
+      "enabled": false
+    }
+  },
+  "sftpd": {
+    "bindings": [
+      {
+        "port": 2022,
+        "address": "",
+        "apply_proxy_config": false
+      }
+    ],
+    "max_auth_tries": 2,
+    "host_keys": [
+      "/etc/wpl7-ftp/host_ed25519"
+    ],
+    "password_authentication": false,
+    "keyboard_interactive_authentication": false,
+    "enabled_ssh_commands": []
+  },
+  "ftpd": {
+    "bindings": [
+      {
+        "port": 0
+      }
+    ]
+  },
+  "webdavd": {
+    "bindings": [
+      {
+        "port": 0
+      }
+    ]
+  },
+  "httpd": {
+    "bindings": [
+      {
+        "port": 0,
+        "enable_web_admin": false,
+        "enable_web_client": false,
+        "enable_rest_api": false
+      }
+    ]
+  },
+  "telemetry": {
+    "bind_port": 0
+  },
+  "plugins": [],
+  "data_provider": {
+    "driver": "memory",
+    "name": "/etc/wpl7-ftp/users.json",
+    "naming_rules": 6,
+    "password_caching": true,
+    "track_quota": 0,
+    "create_default_admin": false,
+    "users_base_dir": "",
+    "backups_path": "/var/lib/sftpgo/backups",
+    "password_hashing": {
+      "algo": "argon2id",
+      "argon2_options": {
+        "memory": 19456,
+        "iterations": 2,
+        "parallelism": 1
+      }
+    }
+  }
+}

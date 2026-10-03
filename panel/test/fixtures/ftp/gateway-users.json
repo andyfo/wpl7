@@ -1,0 +1,106 @@
+{
+  "version": 17,
+  "users": [
+    {
+      "status": 1,
+      "username": "acme",
+      "password": "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g",
+      "home_dir": "/var/lib/sftpgo/users/acme",
+      "expiration_date": 0,
+      "permissions": {
+        "/": [
+          "list",
+          "download",
+          "upload",
+          "overwrite",
+          "delete",
+          "rename",
+          "create_dirs",
+          "chmod",
+          "chtimes",
+          "copy"
+        ]
+      },
+      "description": "site acme",
+      "filters": {
+        "denied_protocols": [
+          "DAV",
+          "HTTP"
+        ]
+      },
+      "filesystem": {
+        "provider": 5,
+        "sftpconfig": {
+          "endpoint": "wpl7-ftp-acme:2022",
+          "username": "gateway",
+          "private_key": {
+            "status": "Plain",
+            "payload": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n"
+          },
+          "fingerprints": [
+            "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ],
+          "prefix": "/",
+          "disable_concurrent_reads": false,
+          "buffer_size": 0,
+          "equality_check_mode": 0
+        }
+      }
+    },
+    {
+      "status": 1,
+      "username": "zed",
+      "password": "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHRzYWx0c2FsdA$aGFzaGhhc2hoYXNoaGFzaGhhc2hoYXNoaGFzaGhhc2g",
+      "home_dir": "/var/lib/sftpgo/users/zed",
+      "expiration_date": 1800000000000,
+      "permissions": {
+        "/": [
+          "list",
+          "download",
+          "upload",
+          "overwrite",
+          "delete",
+          "rename",
+          "create_dirs",
+          "chmod",
+          "chtimes",
+          "copy"
+        ]
+      },
+      "description": "site shop",
+      "filters": {
+        "denied_protocols": [
+          "DAV",
+          "HTTP"
+        ]
+      },
+      "filesystem": {
+        "provider": 5,
+        "sftpconfig": {
+          "endpoint": "wpl7-ftp-shop:2022",
+          "username": "gateway",
+          "private_key": {
+            "status": "Plain",
+            "payload": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n"
+          },
+          "fingerprints": [
+            "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          ],
+          "prefix": "/wp-content/themes/child",
+          "disable_concurrent_reads": false,
+          "buffer_size": 0,
+          "equality_check_mode": 0
+        }
+      }
+    }
+  ],
+  "groups": [],
+  "folders": [],
+  "admins": [],
+  "api_keys": [],
+  "shares": [],
+  "event_actions": [],
+  "event_rules": [],
+  "roles": [],
+  "ip_lists": []
+}

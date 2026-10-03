@@ -1,0 +1,24 @@
+# Overlay: backups on a disk other than ${SRV_ROOT}/backups, on THIS server.
+#
+# Only needed on the machine that runs the panel. Worker servers need nothing here: the
+# panel reaches their filesystem over SSH as root, so any absolute path works the moment it
+# is set on the Servers page.
+#
+# The panel writes backups from inside its container and hands their paths to the Docker API
+# as bind sources (the sibling-container rule, docs/architecture.md), so the directory has to
+# be mounted at the IDENTICAL path on both sides - which is exactly what this does.
+#
+# provision/compose.sh includes this automatically whenever BACKUP_ROOT is set in .env; run
+# it by hand only if you invoke docker compose directly:
+#   docker compose -f docker-compose.yml -f docker-compose.backup-root.yml up -d panel
+#
+# The zero-config alternative, and the better one if the disk is not in use yet: mount it at
+# ${SRV_ROOT}/backups and leave BACKUP_ROOT unset. Then nothing here is needed at all.
+services:
+  panel:
+    environment:
+      # Adopted once into server 1's row on first boot; the panel is the source of truth
+      # afterwards, so editing it later does not move anything (use Backups -> Storage).
+      BACKUP_ROOT: ${BACKUP_ROOT}
+    volumes:
+      - ${BACKUP_ROOT}:${BACKUP_ROOT}

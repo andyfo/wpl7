@@ -1,0 +1,58 @@
+# The gate every other workflow goes through. Extracted so a release and a merge to main
+# cannot drift into testing different things.
+name: Test
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# Split in two so the gate answers at the speed of its slowest half, not their sum: typecheck
+# and build are seconds of work and should not report a type error from behind the suite.
+jobs:
+  test:
+    name: Unit + API tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/panel-deps
+      - run: npm test
+        working-directory: panel
+
+  check:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/panel-deps
+      - run: npm run typecheck
+        working-directory: panel
+      # The panel image runs this same build. Catching a broken bundle here means no box
+      # ever gets as far as replacing a working container with a broken one.
+      - run: npm run build
+        working-directory: panel
+
+  # What a pull request's run tested, by tree - the merge result it checked out. A squash merge
+  # made while main stood still lands exactly this tree on main, and deploy.yml builds that
+  # without testing it a second time.
+  mark:
+    name: Mark the tested tree
+    needs: [test, check]
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - id: tree
+        run: |
+          echo "sha=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+          git rev-parse HEAD > tested-commit.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tested-tree-${{ steps.tree.outputs.sha }}
+          path: tested-commit.txt
+          retention-days: 7
+          overwrite: true

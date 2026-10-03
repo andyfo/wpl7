@@ -1,0 +1,290 @@
+# Test every push and pull request; publish `edge` and deploy main to the production server.
+#
+# `edge` is the rolling build of main: the same artefacts a release produces, rebuilt on every
+# merge, and what the maintainer's own box runs. Dogfooding the release path is the point -
+# every merge exercises the mechanism users update through, and this workflow goes red when
+# the box rolls back.
+#
+# The server does the real work. provision/deploy.sh is the single entry point - one forced
+# command on the CI key, one flag whitelist - and it picks the mechanism from the install: a
+# box that compiles its panel fast-forwards the checkout and rebuilds what the diff touched;
+# a box that pulls hands over to provision/update.sh --to=edge. Either way it waits for the
+# panel to report healthy and rolls back if it does not. This workflow is the gate and the
+# trigger, nothing more.
+#
+# One-time setup, on the server:  sudo ./provision/ci-access.sh --repo=<owner>/<repo>
+#   required secrets: DEPLOY_HOST, DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS
+#   optional secrets: DEPLOY_USER (default wp), DEPLOY_PORT (22), DEPLOY_PATH (/opt/wpl7)
+# Worker fleets: put WPL7_API_KEY=wpl7_... in ~wp/.wpl7-deploy.env on the server - the panel API
+# key stays there and never enters GitHub.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: 'Force a full provision/setup.sh run (apt, ufw, image rebuilds)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Supersede PR runs; never cancel a deploy half-way through a rebuild. An expression in
+# cancel-in-progress resolves to the string "false", which GitHub reads as true - so the branch
+# goes in the group instead: PRs share one per ref and supersede each other, while every push
+# gets a group of its own and cannot be evicted by the next merge. Back-to-back deploys still
+# queue one at a time on the deploy job's own deploy-production group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # A squash merge made while main stood still lands exactly the tree its pull request's run
+  # tested and passed (test.yml's `mark` job), so testing it again would only hold the deploy
+  # up. Any doubt - no mark, an expired one, the lookup failing - and the tests run.
+  #
+  # An artifact's name is no proof on its own: any pull request's run can upload one, a fork's
+  # included, and name it after another merge's tree. What counts is a mark from a successful
+  # run of this workflow at the merged pull request's own head commit - a run of the merged code
+  # itself, workflows included - which GitHub, not the run, says it came from.
+  tested:
+    name: Tested already?
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.find.outputs.skip }}
+    steps:
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          TREE: ${{ github.event.head_commit.tree_id }}
+        # The runner's bash has -e on: every lookup that can fail says what it falls back to.
+        run: |
+          set -uo pipefail
+          # The pull request this push merged, and the head commit its runs tested.
+          head="$(gh api "repos/$REPOSITORY/commits/$SHA/pulls" \
+            --jq "[.[] | select(.merge_commit_sha == \"$SHA\")][0].head.sha // empty")" || head=''
+          if [ -z "$head" ] || [ -z "$TREE" ]; then exit 0; fi
+          runs="$(gh api "repos/$REPOSITORY/actions/artifacts?name=tested-tree-$TREE" \
+            --jq ".artifacts[] | select((.expired | not) and .workflow_run.head_sha == \"$head\") | .workflow_run.id")" || runs=''
+          for run in $runs; do
+            passed="$(gh api "repos/$REPOSITORY/actions/runs/$run" \
+              --jq 'select(.event == "pull_request" and .path == ".github/workflows/deploy.yml" and .conclusion == "success") | .id')" || passed=''
+            if [ -n "$passed" ]; then
+              echo "::notice::Run $run of the merged pull request's head ($head) tested and passed this exact tree; not testing it again."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+
+  # Split in two so the gate answers at the speed of its slowest half, not their sum: typecheck
+  # and build are seconds of work and should not report a type error from behind the suite.
+  test:
+    needs: tested
+    if: ${{ !cancelled() && needs.tested.outputs.skip != 'true' }}
+    uses: ./.github/workflows/test.yml
+
+  meta:
+    name: Name this build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      short-sha: ${{ steps.v.outputs.short-sha }}
+      panel-tags: ${{ steps.v.outputs.panel-tags }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA:0:7}"
+          # An edge build is a prerelease of whatever the package says it will be next, so
+          # semver puts it below that release and above the one before it.
+          version="$(node -p "require('./panel/package.json').version")-edge.$short"
+          registry="ghcr.io/${REPOSITORY,,}"
+          {
+            echo "version=$version"
+            echo "short-sha=$short"
+            echo 'panel-tags<<EOF'
+            echo "$registry/panel:edge"
+            echo "$registry/panel:sha-$short"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+  # The conditions below are spelled out because a skipped job skips everything after it unless
+  # told otherwise - and `test` is skipped, as a pass, for a tree tested already (`tested`).
+  images:
+    needs: [test, meta]
+    if: ${{ !cancelled() && needs.meta.result == 'success' && (needs.test.result == 'success' || needs.test.result == 'skipped') }}
+    uses: ./.github/workflows/build-images.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      version: ${{ needs.meta.outputs.version }}
+      panel-tags: ${{ needs.meta.outputs.panel-tags }}
+      wordpress-suffix: edge
+      wordpress-extra-suffix: sha-${{ needs.meta.outputs.short-sha }}
+
+  edge-release:
+    name: Move the edge release
+    needs: [meta, images]
+    if: ${{ !cancelled() && needs.meta.result == 'success' && needs.images.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    # Recreating a release is not atomic, so never two at once.
+    concurrency:
+      group: edge-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the install bundle
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # install.sh --channel=edge is documented, and it needs a bundle as well as a
+          # manifest: a blank machine has no checkout to provision itself from. Same archive
+          # release.yml builds, from the commit this edge build was made at.
+          git archive --format=tar.gz --prefix='' -o "wpl7-$VERSION-bundle.tar.gz" \
+            "$GITHUB_SHA" deploy provision
+      - name: Write manifest.json
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          registry="ghcr.io/${REPOSITORY,,}"
+          min_from=0.2.0
+          # The floor has to be reachable from what this very build publishes, or a fresh
+          # `install.sh --channel=edge` can never take its next one: update.sh refuses the
+          # update before it pulls anything. `sort -V` is exactly the comparison it makes,
+          # and it ranks 0.2.0 below 0.2.0-edge.<sha>, which is why the package version has
+          # to be at or above the floor rather than a release behind it.
+          if [ "$(printf '%s\n%s\n' "$min_from" "$VERSION" | sort -V | head -1)" != "$min_from" ]; then
+            echo "::error::minUpgradeFrom $min_from is newer than the $VERSION this build publishes - bump panel/package.json or lower the floor"
+            exit 1
+          fi
+          # Same shape as a real release's manifest: update.sh and the panel's checker read
+          # one code path for both channels.
+          jq -n \
+            --arg version "$VERSION" \
+            --arg publishedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg notesUrl "https://github.com/$REPOSITORY/releases/tag/edge" \
+            --arg panel "$registry/panel:edge" \
+            --arg registry "$registry" \
+            --arg gitSha "$GITHUB_SHA" \
+            --arg minFrom "$min_from" \
+            '{
+              version: $version,
+              channel: "edge",
+              publishedAt: $publishedAt,
+              notesUrl: $notesUrl,
+              gitSha: $gitSha,
+              images: {
+                panel: $panel,
+                wordpress: (["8.2","8.3","8.4","8.5"] | map({ (.): ($registry + "/wordpress:php" + . + "-edge") }) | add)
+              },
+              minUpgradeFrom: $minFrom,
+              requiresDowntime: false
+            }' > manifest.json
+      - name: Recreate it at this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # A release's tag cannot be moved, so the rolling one is deleted and remade. The
+          # window where `edge` does not exist is seconds, and nothing applies an update
+          # without having resolved the manifest first.
+          gh release delete edge --yes --cleanup-tag 2>/dev/null || true
+          assets=("wpl7-$VERSION-bundle.tar.gz" manifest.json)
+          # Same as release.yml: the installer arrives in the phase that writes it, and until
+          # then an edge release simply has one asset fewer rather than failing here.
+          if [ -f install.sh ]; then assets+=(install.sh); fi
+          gh release create edge \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "edge ($VERSION)" \
+            --notes "Rolling build of \`main\`. Recreated on every merge; do not link to it as a version." \
+            "${assets[@]}"
+
+  deploy:
+    name: Deploy to production
+    needs: [test, edge-release]
+    # `[skip deploy]` in the merge commit message is the escape hatch for a change the
+    # server cannot take blind - a migration that has to be driven by hand, or the rename
+    # itself, where the deploy path is one of the things being renamed. Tests still run.
+    if: >-
+      ${{ !cancelled() && github.event_name != 'pull_request' && !contains(github.event.head_commit.message, '[skip deploy]')
+      && (needs.test.result == 'success' || needs.test.result == 'skipped') && needs.edge-release.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Authorize SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          for v in DEPLOY_SSH_KEY DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!v}" ]; then
+              echo "::error::$v is not set - run 'sudo ./provision/ci-access.sh' on the server."
+              exit 1
+            fi
+          done
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER || 'wp' }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || '22' }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/opt/wpl7' }}
+          FULL: ${{ inputs.full && '--full' || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_HOST" ]; then
+            echo "::error::DEPLOY_HOST is not set - run 'sudo ./provision/ci-access.sh' on the server."
+            exit 1
+          fi
+          # StrictHostKeyChecking=yes: the runner only trusts the host key ci-access.sh pinned.
+          # Worker servers update themselves when the server has an API key configured.
+          ssh -i ~/.ssh/id_ed25519 -p "$DEPLOY_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=20 \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "$DEPLOY_PATH/provision/deploy.sh --ref=$GITHUB_SHA --workers $FULL" \
+            2>&1 | tee deploy.log
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Deploy \`${GITHUB_SHA:0:7}\` — ${{ job.status }}"
+            echo
+            echo '```'
+            tail -40 deploy.log 2>/dev/null || echo "(no output - the connection never got that far)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

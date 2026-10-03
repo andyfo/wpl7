@@ -1,0 +1,95 @@
+{
+  "type": "plugin-recipe",
+  "typeVersion": 1,
+  "id": "breakdance",
+  "name": "Breakdance",
+  "plugin": "breakdance",
+  "version": "1.0",
+  "vendorUrl": "https://breakdance.com/",
+  "description": "Activates your Breakdance license on every new site, fixes Breakdance's stored URLs and re-activates it when the site moves to its own domain, and releases it when the site is deleted.",
+  "inputs": [
+    {
+      "id": "key",
+      "label": "License key",
+      "hint": "Your license key from breakdance.com → Portal → License Keys."
+    }
+  ],
+  "hooks": {
+    "afterInstall": [
+      {
+        "run": "wp",
+        "label": "Activating the Breakdance license",
+        "args": [
+          "breakdance",
+          "license",
+          "{{inputs.key}}"
+        ],
+        "expect": "Status:\\s*Valid[\\s\\S]*Activation:\\s*Active"
+      },
+      {
+        "run": "wp",
+        "label": "Updating Breakdance to the current release",
+        "args": [
+          "plugin",
+          "update",
+          "{{plugin}}"
+        ],
+        "optional": true
+      }
+    ],
+    "afterUrlChange": [
+      {
+        "run": "wp",
+        "label": "Replacing URLs inside Breakdance content",
+        "args": [
+          "breakdance",
+          "replace_url",
+          "{{oldUrl}}",
+          "{{newUrl}}"
+        ],
+        "optional": true
+      },
+      {
+        "run": "wp",
+        "label": "Clearing the Breakdance CSS cache",
+        "args": [
+          "breakdance",
+          "clear_cache"
+        ],
+        "optional": true
+      },
+      {
+        "run": "wp",
+        "label": "Re-activating the Breakdance license for the new URL",
+        "args": [
+          "breakdance",
+          "license",
+          "{{inputs.key}}"
+        ],
+        "expect": "Status:\\s*Valid[\\s\\S]*Activation:\\s*Active"
+      }
+    ],
+    "beforeRemove": [
+      {
+        "run": "wp",
+        "label": "Clearing the Breakdance license",
+        "args": [
+          "breakdance",
+          "license",
+          "clear"
+        ]
+      }
+    ],
+    "verify": [
+      {
+        "run": "wp",
+        "label": "Checking the Breakdance license",
+        "args": [
+          "breakdance",
+          "status"
+        ],
+        "expect": "License:\\s*Pro Mode"
+      }
+    ]
+  }
+}

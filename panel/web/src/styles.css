@@ -1,0 +1,1399 @@
+@import 'tailwindcss';
+@import './fonts.css';
+
+@theme inline {
+  --font-sans: 'Inter', 'Avenir Next', 'Segoe UI', sans-serif;
+  --color-surface: var(--surface);
+  --color-neutral-50: var(--n50);
+  --color-neutral-100: var(--n100);
+  --color-neutral-200: var(--n200);
+  --color-neutral-300: var(--n300);
+  --color-neutral-400: var(--n400);
+  --color-neutral-500: var(--n500);
+  --color-neutral-600: var(--n600);
+  --color-neutral-700: var(--n700);
+  --color-neutral-800: var(--n800);
+  --color-neutral-900: var(--n900);
+}
+
+:root {
+  color-scheme: light;
+  --surface: #ffffff;
+  --canvas: #f6f6f8;
+  --sidebar: #fafafa;
+  --n50: #f8f8fa;
+  --n100: #f1f1f4;
+  --n200: #e3e3e9;
+  --n300: #cdced6;
+  --n400: #6b6c75;
+  --n500: #646570;
+  --n600: #50515e;
+  --n700: #3d3e49;
+  --n800: #2d2e38;
+  --n900: #202127;
+  --accent: #315fc5;
+  --accent-foreground: #ffffff;
+  --accent-hover: #244ba4;
+  --accent-soft: #e9effc;
+  --accent-text: #294fa5;
+  --chart-load: var(--accent);
+  --chart-memory: #8270bb;
+  --chart-disk: #b6813b;
+  --shadow: 0 2px 3px #18181b03, 0 5px 24px #18181b03;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --surface: #1c1d22;
+  --canvas: #131418;
+  --sidebar: #17181c;
+  --n50: #202126;
+  --n100: #26272e;
+  --n200: #34353e;
+  --n300: #484a55;
+  --n400: #92939e;
+  --n500: #a5a6b1;
+  --n600: #bfc0c9;
+  --n700: #d4d5dc;
+  --n800: #e5e5eb;
+  --n900: #f3f3f6;
+  --accent: #9bb7ff;
+  --accent-foreground: #17181c;
+  --accent-hover: #bed0ff;
+  --accent-soft: #25314b;
+  --accent-text: #bdd0ff;
+  --chart-load: var(--accent);
+  --chart-memory: #b39ddb;
+  --chart-disk: #d7b378;
+  --shadow: 0 2px 12px #0000000a;
+  --color-emerald-50: #16362c;
+  --color-emerald-100: #214031;
+  --color-emerald-700: #8fdeb2;
+  --color-emerald-800: #a1e0b9;
+  --color-emerald-900: #bde8cb;
+  --color-emerald-300: #427458;
+  --color-amber-50: #392f1d;
+  --color-amber-100: #3f3423;
+  --color-amber-200: #5d4a2b;
+  --color-amber-300: #78603b;
+  --color-amber-700: #e6c080;
+  --color-amber-800: #edcc91;
+  --color-amber-900: #edd4a6;
+  --color-red-50: #3b2424;
+  --color-red-100: #452a2a;
+  --color-red-200: #633a38;
+  --color-red-300: #945b53;
+  --color-red-700: #efa79a;
+  --color-red-800: #efb4ab;
+  --color-rose-50: #3b242b;
+  --color-rose-300: #85505b;
+  --color-rose-700: #ec9fad;
+  --color-rose-900: #efb6c0;
+  --color-sky-50: #1e303e;
+  --color-sky-100: #243c4c;
+  --color-sky-700: #8dcde6;
+  --color-sky-800: #a6daee;
+  --color-violet-100: #362e4a;
+  --color-violet-800: #cebae9;
+}
+
+/* Theme colors share neutral surfaces in both light and dark mode. */
+:root[data-accent='violet'] {
+  --accent: #7250b5;
+  --accent-hover: #5b3a99;
+  --accent-soft: #f0eafb;
+  --accent-text: #64429f;
+}
+:root[data-theme='dark'][data-accent='violet'] {
+  --accent: #c0a6ef;
+  --accent-hover: #d4c1f5;
+  --accent-soft: #342a47;
+  --accent-text: #d3bdf7;
+}
+:root[data-accent='rose'] {
+  --accent: #b33f69;
+  --accent-hover: #973052;
+  --accent-soft: #f9eaf0;
+  --accent-text: #993859;
+}
+:root[data-theme='dark'][data-accent='rose'] {
+  --accent: #eca5bd;
+  --accent-hover: #f4bfd0;
+  --accent-soft: #452b36;
+  --accent-text: #f3bed0;
+}
+:root[data-accent='amber'] {
+  --accent: #946019;
+  --accent-hover: #784b11;
+  --accent-soft: #f8efdf;
+  --accent-text: #825517;
+}
+:root[data-theme='dark'][data-accent='amber'] {
+  --accent: #e9be7c;
+  --accent-hover: #f4d6a4;
+  --accent-soft: #3e3325;
+  --accent-text: #f3d3a0;
+}
+:root[data-accent='graphite'] {
+  --accent: #505563;
+  --accent-hover: #393d49;
+  --accent-soft: #eceef2;
+  --accent-text: #454a57;
+}
+:root[data-theme='dark'][data-accent='graphite'] {
+  --accent: #c1c4ce;
+  --accent-hover: #dde0e7;
+  --accent-soft: #32343c;
+  --accent-text: #d7d9e2;
+}
+
+:root[data-accent='yellow'] {
+  --accent: #e8c83b;
+  --accent-hover: #d4b02b;
+  --accent-soft: #fff8d6;
+  --accent-text: #76600d;
+  --accent-foreground: #30290a;
+  --chart-load: #947900;
+}
+:root[data-theme='dark'][data-accent='yellow'] {
+  --accent: #ead45d;
+  --accent-hover: #f3e38c;
+  --accent-soft: #39351e;
+  --accent-text: #f2df86;
+  --chart-load: #ead45d;
+}
+:root[data-accent='yellow'] :focus-visible,
+:root[data-accent='yellow'] .color-option[aria-pressed='true'] .color-swatch {
+  outline-color: var(--accent-text);
+}
+:root[data-accent='green'] {
+  --accent: #28744e;
+  --accent-hover: #1c5c3a;
+  --accent-soft: #e7f3ea;
+  --accent-text: #246440;
+}
+:root[data-theme='dark'][data-accent='green'] {
+  --accent: #93d3a6;
+  --accent-hover: #b5e4c2;
+  --accent-soft: #253b2d;
+  --accent-text: #b7e3c3;
+}
+
+@layer base {
+  body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--n900);
+    -webkit-font-smoothing: antialiased;
+  }
+  button,
+  a,
+  input,
+  select,
+  textarea {
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:not(:disabled),
+  select {
+    cursor: pointer;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+  }
+  ::selection {
+    background: var(--accent-soft);
+    color: var(--accent-text);
+  }
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.025em;
+  }
+  table {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.app-shell {
+  display: flex;
+  min-height: 100dvh;
+}
+.sidebar {
+  --sidebar-gutter: 18px;
+  width: 242px;
+  flex-shrink: 0;
+  height: 100dvh;
+  position: sticky;
+  top: 0;
+  /* Over the page, which a nav entry's fly-out hangs across; under dialogs (z-40, z-50),
+     which cover the sidebar too. */
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--sidebar);
+  border-right: 1px solid var(--n200);
+  padding: 30px var(--sidebar-gutter) 0;
+}
+.brand {
+  display: block;
+  /* 24px to the first row: the other 6 are .sidebar-scroll's. */
+  padding: 0 10px 18px;
+}
+.brand-name {
+  font-size: 30px;
+  font-weight: 750;
+  letter-spacing: -1px;
+  line-height: 0.7;
+}
+/*
+ * L7 is the only colour in the panel's chrome, and it is the theme accent, so the wordmark
+ * follows the colour picker the way the mark used to. Colour is the whole distinction -
+ * both halves are the same weight. The gradient is the resting state; a
+ * specular band parked off the left edge sweeps across once on load and again on hover -
+ * two background layers clipped to the glyphs, no extra element and no JS. The @supports
+ * guard is not decoration: without background-clip the browser would paint `color:
+ * transparent` and the wordmark would disappear. The reduced-motion block at the end of
+ * this file drops both sweeps and leaves the gradient.
+ */
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .brand-name-accent {
+    --l7-sheen: color-mix(in oklab, var(--accent) 26%, white);
+    background-image:
+      linear-gradient(115deg, transparent 42%, var(--l7-sheen) 50%, transparent 58%),
+      linear-gradient(100deg, var(--accent) 0%, color-mix(in oklab, var(--accent) 62%, var(--n900)) 100%);
+    background-size: 260% 100%, 100% 100%;
+    /* The sheen layer is 2.6x the text, so 100% parks it off the left and 0 sweeps it off
+       the right. Both ends are clear of the glyphs, which is why dropping the hover state
+       can snap straight back without a reverse sweep. */
+    background-position: 100% 0, 0 0;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: l7-sheen 1.2s cubic-bezier(0.25, 0.6, 0.25, 1) 0.45s 1;
+  }
+  :root[data-theme='dark'] .brand-name-accent {
+    /* The dark accent is already light, so the highlight has to go nearly white to read. */
+    --l7-sheen: color-mix(in oklab, var(--accent) 12%, white);
+  }
+  .brand:hover .brand-name-accent,
+  .brand:focus-visible .brand-name-accent,
+  .about-wordmark:hover .brand-name-accent,
+  .login-wordmark:hover .brand-name-accent {
+    background-position: 0 0, 0 0;
+    transition: background-position 0.9s cubic-bezier(0.25, 0.6, 0.25, 1);
+  }
+}
+@keyframes l7-sheen {
+  from {
+    background-position: 100% 0, 0 0;
+  }
+  to {
+    background-position: 0 0, 0 0;
+  }
+}
+/*
+ * Everything between the wordmark and the account row scrolls together. The scroller runs
+ * out to the sidebar's edges, so a scrollbar sits against its border rather than on the
+ * rows; the 6px at either end is room for a focus ring, which it would otherwise cut off.
+ */
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  margin-inline: calc(-1 * var(--sidebar-gutter));
+  padding: 6px var(--sidebar-gutter);
+  scrollbar-width: thin;
+  scrollbar-color: var(--n300) transparent;
+}
+.sidebar-nav {
+  flex-shrink: 0;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-bottom: 3px;
+  border-radius: 8px;
+  color: var(--n500);
+  font-size: 13px;
+  font-weight: 500;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.nav-item:hover {
+  background: var(--n100);
+  color: var(--n900);
+}
+.nav-item-active,
+.nav-item-active:hover {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.nav-indicator {
+  margin-left: auto;
+  width: 5px;
+  height: 5px;
+  border-radius: 100%;
+}
+.nav-item-active .nav-indicator {
+  background: var(--accent);
+}
+/*
+ * Appearance, Support and About. The auto margin takes whatever height the nav leaves and
+ * sets them at the foot of the sidebar; when there is none, they follow the nav down and are
+ * scrolled to.
+ */
+.sidebar-bottom {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding-top: 12px;
+}
+.appearance-disclosure summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 8px;
+  color: var(--n500);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.appearance-disclosure summary::-webkit-details-marker {
+  display: none;
+}
+.appearance-disclosure summary:hover {
+  color: var(--n900);
+  background: var(--n100);
+}
+.appearance-chevron {
+  display: inline-flex;
+  transition: transform 0.15s;
+}
+.appearance-disclosure[open] .appearance-chevron {
+  transform: rotate(180deg);
+}
+/* Reads as one group with the Appearance row above it, not as a stray nav item. */
+.sidebar-bottom-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* The same 3px the nav puts between its own rows, so the two pills do not touch. */
+  margin-top: 3px;
+  padding: 11px 12px;
+  border-radius: 8px;
+  color: var(--n500);
+  font-size: 12px;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+.sidebar-bottom-link:hover {
+  color: var(--n900);
+  background: var(--n100);
+}
+.sidebar-bottom-link-active,
+.sidebar-bottom-link-active:hover {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.appearance-expanded {
+  padding: 8px 0 4px;
+}
+.theme-switch {
+  display: flex;
+  padding: 4px;
+  gap: 2px;
+  border: 1px solid var(--n200);
+  background: var(--canvas);
+  border-radius: 9px;
+}
+.theme-switch button {
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  align-items: center;
+  gap: 5px;
+  border-radius: 6px;
+  padding: 7px 6px;
+  font-size: 10px;
+  color: var(--n500);
+}
+.theme-switch button[aria-pressed='true'] {
+  background: var(--surface);
+  color: var(--n900);
+  box-shadow: 0 1px 4px #0000000d;
+}
+.account-row {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--n200);
+  padding: 22px 0;
+  /* 10px under About, with .sidebar-scroll's 6. */
+  margin-top: 4px;
+}
+.account-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 6px;
+  margin: -6px;
+  border-radius: 10px;
+  color: inherit;
+  transition: background 0.15s;
+}
+.account-link:hover {
+  background: var(--n100);
+}
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 650;
+}
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border-radius: 7px;
+  color: var(--n500);
+}
+.icon-button:hover {
+  background: var(--n100);
+  color: var(--n900);
+}
+.workspace {
+  min-width: 0;
+  flex: 1;
+}
+.workspace-header {
+  height: 72px;
+  padding: 0 40px;
+  border-bottom: 1px solid var(--n200);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+}
+/*
+ * The About page's wordmark, and the same one over the sign-in card: the sidebar's brand at
+ * display size, carrying the same gradient and sheen (see .brand-name-accent above). Only the
+ * size is this rule's business.
+ *
+ * text-indent on both lines is the centring fix: letter-spacing is added after the LAST
+ * glyph too, so a centred line sits half a letter-space off - left for the tracked strapline,
+ * right for the tightened wordmark. Half the tracking each way puts the two back on one axis.
+ */
+.about-wordmark,
+.login-wordmark {
+  font-size: 58px;
+  letter-spacing: -3px;
+  line-height: 1;
+  text-indent: -1.5px;
+}
+.about-tagline {
+  /* .main-content caps every paragraph at a readable measure; without auto margins that box
+     hugs the left edge on a wide screen and takes the centred text with it. */
+  margin: 14px auto 0;
+  color: var(--n500);
+  font-size: 10px;
+  letter-spacing: 2.4px;
+  text-indent: 1.2px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+/*
+ * Cards in one row end level - and a card with fewer rows spreads them over the height it is
+ * given rather than piling them at the top and leaving a void underneath.
+ */
+.about-grid > .panel-card {
+  display: flex;
+  flex-direction: column;
+}
+.about-grid .panel-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.about-facts {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+.about-facts > div {
+  flex: 1;
+}
+.version-tag {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--n500);
+}
+.version-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--n500);
+  transition: color 0.15s;
+}
+.version-link:hover,
+.version-link:hover .version-number {
+  color: var(--accent-text);
+}
+.version-number {
+  color: var(--n400);
+  transition: color 0.15s;
+}
+.main-content {
+  padding: 38px 40px 50px;
+}
+.mobile-menu {
+  display: none;
+}
+.skip-link {
+  position: fixed;
+  z-index: 100;
+  top: 8px;
+  left: 8px;
+  padding: 12px;
+  background: var(--surface);
+  transform: translateY(-200%);
+}
+.skip-link:focus {
+  transform: translateY(0);
+}
+.panel-card {
+  border: 1px solid var(--n200);
+  background: var(--surface);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+.panel-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 20px 22px;
+  border-bottom: 1px solid var(--n100);
+}
+.panel-card-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--n900);
+}
+.panel-card-body {
+  padding: 20px 22px;
+  min-width: 0;
+  overflow-x: auto;
+}
+/* A modal is already a narrow column, so the field caps only make it ragged there. */
+.modal-panel .field-control {
+  max-width: none;
+}
+/* A sheet comes in from the edge it sits on. */
+.modal-sheet {
+  animation: sheet-in 0.18s ease-out;
+}
+@keyframes sheet-in {
+  from {
+    transform: translateX(32px);
+    opacity: 0;
+  }
+}
+
+/* Prose keeps a readable measure; only tables and charts use the full width. */
+.measure,
+.main-content p,
+.main-content ul,
+.main-content ol {
+  max-width: 1000px;
+}
+.button-primary {
+  background: var(--accent);
+  color: var(--accent-foreground);
+  box-shadow: 0 2px 4px #00000008;
+}
+.button-primary:hover {
+  background: var(--accent-hover);
+}
+.button-primary:disabled {
+  opacity: 0.45;
+}
+.stat-tile {
+  padding: 22px;
+  position: relative;
+  overflow: hidden;
+}
+.stat-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--n500);
+}
+.stat-value {
+  margin-top: 13px;
+  font-size: 28px;
+  line-height: 1.2;
+  letter-spacing: -0.035em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.stat-sub {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--n500);
+}
+/* One size for every page heading, dashboard included. */
+.page-title {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 1.2;
+}
+.action-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--n500);
+  white-space: nowrap;
+}
+.action-link:hover {
+  color: var(--accent-text);
+}
+.resource-section {
+  overflow: hidden;
+}
+.resource-toolbar {
+  padding: 21px 22px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--n200);
+}
+.resource-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 600;
+  font-size: 13px;
+}
+.resource-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.resource-controls select {
+  border: 1px solid var(--n200);
+  background: var(--surface);
+  border-radius: 6px;
+  padding: 7px 25px 7px 9px;
+  font-size: 11px;
+  max-width: 180px;
+}
+.range-switch {
+  display: flex;
+  gap: 3px;
+  background: var(--n100);
+  border-radius: 7px;
+  padding: 3px;
+}
+.range-switch button {
+  font-size: 10px;
+  padding: 5px 9px;
+  border-radius: 5px;
+  color: var(--n500);
+}
+.range-switch button[aria-pressed='true'] {
+  background: var(--surface);
+  color: var(--n900);
+  box-shadow: 0 1px 3px #0000000a;
+}
+.live-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-text);
+  font-size: 10px;
+  font-weight: 500;
+}
+.live-label::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+  border-radius: 50%;
+}
+.live-label-stale {
+  color: var(--chart-disk);
+}
+.resource-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.resource-chart {
+  padding: 23px 22px 18px;
+  min-width: 0;
+}
+.resource-chart + .resource-chart {
+  border-left: 1px solid var(--n200);
+}
+.resource-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--n500);
+}
+.resource-value {
+  margin: 14px 0 5px;
+  font-size: 29px;
+  font-weight: 550;
+  letter-spacing: -0.05em;
+  font-variant-numeric: tabular-nums;
+}
+.resource-unit {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--n500);
+  letter-spacing: 0;
+  margin-left: 7px;
+}
+.resource-sub {
+  color: var(--n500);
+  font-size: 10px;
+  min-height: 16px;
+}
+.chart-area {
+  position: relative;
+  margin-top: 22px;
+}
+.chart-area svg {
+  width: 100%;
+  height: 112px;
+  display: block;
+  overflow: visible;
+}
+.chart-grid {
+  stroke: var(--n200);
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
+}
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--n500);
+  font-size: 11px;
+}
+.chart-times {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9px;
+  color: var(--n400);
+  margin-top: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.chart-tooltip {
+  background: var(--surface);
+  border: 1px solid var(--n200);
+  box-shadow: var(--shadow);
+  position: absolute;
+  pointer-events: none;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  padding: 5px 8px;
+  border-radius: 5px;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.resource-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 22px;
+  background: var(--n50);
+  border-top: 1px solid var(--n200);
+  font-size: 10px;
+  color: var(--n500);
+}
+.dashboard-table th {
+  font-size: 9px;
+  color: var(--n400);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 500;
+  padding: 0 12px 13px 0;
+  text-align: left;
+  white-space: nowrap;
+}
+.dashboard-table td {
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+.dashboard-table tbody tr {
+  transition: background 0.15s;
+}
+.dashboard-table tbody tr:hover {
+  background: var(--n50);
+}
+.dashboard-table tbody tr:last-child td {
+  padding-bottom: 2px;
+}
+.site-monogram {
+  display: grid;
+  place-items: center;
+  height: 32px;
+  width: 32px;
+  border: 1px solid var(--n200);
+  border-radius: 8px;
+  background: var(--n50);
+  color: var(--n600);
+  font-size: 12px;
+  font-weight: 600;
+}
+/* Mail setup guide: a numbered rail, so a fleet reads as one sequence of steps. */
+.setup-step {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 18px;
+}
+.setup-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.setup-marker {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: 1px solid var(--n300);
+  border-radius: 50%;
+  background: var(--surface);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--n500);
+}
+.setup-marker-done {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+.setup-line {
+  flex: 1;
+  width: 1px;
+  min-height: 12px;
+  margin: 8px 0;
+  background: var(--n200);
+}
+.setup-body {
+  min-width: 0;
+  padding-bottom: 36px;
+}
+.setup-step:last-child .setup-body {
+  padding-bottom: 0;
+}
+.entity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 1px solid var(--n200);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--n600);
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+.entity-chip:hover {
+  background: var(--n50);
+  color: var(--n900);
+}
+.entity-chip-active,
+.entity-chip-active:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.login-page {
+  background: radial-gradient(ellipse at 50% 20%, var(--accent-soft), transparent 65%), var(--canvas);
+}
+.login-page form {
+  border: 1px solid var(--n200);
+}
+
+@media (min-width: 1450px) {
+  .main-content {
+    padding: 44px 56px;
+  }
+  .workspace-header {
+    padding: 0 56px;
+  }
+}
+@media (max-width: 1100px) {
+  .sidebar {
+    --sidebar-gutter: 12px;
+    width: 216px;
+  }
+  .main-content {
+    padding: 28px 24px;
+  }
+  .workspace-header {
+    padding: 0 24px;
+  }
+  .resource-chart {
+    padding: 20px 16px 16px;
+  }
+  .resource-value {
+    font-size: 25px;
+  }
+}
+@media (max-width: 800px) {
+  .sidebar {
+    display: none;
+  }
+  .sidebar-open {
+    display: flex;
+    position: fixed;
+    left: 0;
+    top: 60px;
+    width: 242px;
+    height: calc(100dvh - 60px);
+    z-index: 40;
+  }
+  .sidebar-backdrop {
+    position: fixed;
+    inset: 60px 0 0;
+    background: #0007;
+    z-index: 30;
+  }
+  .mobile-menu {
+    display: inline-flex;
+  }
+  .workspace-header {
+    height: 60px;
+    padding: 0 18px;
+  }
+  .main-content {
+    padding: 25px 18px;
+  }
+}
+@media (max-width: 600px) {
+  .resource-grid {
+    grid-template-columns: 1fr;
+  }
+  .resource-chart + .resource-chart {
+    border-left: 0;
+    border-top: 1px solid var(--n200);
+  }
+  .resource-chart {
+    padding: 22px;
+  }
+  .resource-value {
+    font-size: 30px;
+  }
+  .stat-tile {
+    padding: 18px;
+  }
+  .stat-value {
+    font-size: 24px;
+  }
+  .version-tag {
+    font-size: 11px;
+    gap: 5px;
+  }
+  .dashboard-table {
+    min-width: 560px;
+  }
+  .resource-toolbar {
+    align-items: flex-start;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.color-picker {
+  margin-top: 14px;
+}
+.color-picker-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 0 5px;
+  font-size: 10px;
+  color: var(--n500);
+}
+.color-options {
+  --edge-fade: none;
+  display: flex;
+  gap: 3px;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 4px;
+  scroll-padding-inline: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--n300) transparent;
+  -webkit-mask-image: var(--edge-fade);
+  mask-image: var(--edge-fade);
+}
+/* Fades whichever edge still has colours behind it, so a half-swatch reads as
+   "keep scrolling" rather than a clipped one. Set from ColorPicker. */
+.color-options[data-more='end'] {
+  --edge-fade: linear-gradient(to right, #000 calc(100% - 24px), #0000);
+}
+.color-options[data-more='start'] {
+  --edge-fade: linear-gradient(to left, #000 calc(100% - 24px), #0000);
+}
+.color-options[data-more='both'] {
+  --edge-fade: linear-gradient(to right, #0000, #000 24px, #000 calc(100% - 24px), #0000);
+}
+.color-option {
+  display: flex;
+  /* 5.5 to a row when they cannot all fit, so the sixth one always peeks. */
+  flex: 0 0 clamp(32px, calc((100% - 15px) / 5.5), 36px);
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 2px;
+  border-radius: 7px;
+  color: var(--n500);
+  font-size: 9px;
+}
+.color-option:hover {
+  background: var(--n100);
+}
+.color-option[aria-pressed='true'] {
+  color: var(--n900);
+}
+.color-swatch {
+  display: grid;
+  place-items: center;
+  width: 23px;
+  height: 23px;
+  border-radius: 50%;
+  color: white;
+}
+.color-option[aria-pressed='true'] .color-swatch {
+  outline: 1px solid var(--accent);
+  outline-offset: 3px;
+}
+.nav-parent-active {
+  color: var(--n900);
+}
+.nav-children {
+  margin: 0 0 8px 22px;
+  padding-left: 9px;
+  border-left: 1px solid var(--n200);
+}
+.nav-child {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+/*
+ * A group none of whose pages is showing hangs its links beside its row instead of under it,
+ * as WordPress's admin menu does. NavGroup (Layout.tsx) folds one only where there is room
+ * beside the sidebar and a hover to open it with. Folded away the links are clipped to
+ * nothing rather than display: none, which keeps them in the tab order and in front of a
+ * screen reader - and tabbing onto one opens the fly-out. It is position: fixed because the
+ * sidebar scrolls and would clip it; placeFlyout supplies the coordinates.
+ */
+.nav-group-folded .nav-submenu {
+  position: fixed;
+  z-index: 1;
+  top: var(--flyout-top, 0);
+  left: var(--flyout-left, 0);
+  /* Room for the arrow, whose tip then meets the row's edge; see-through, and still the
+     group's, so a pointer on its way from the row to the links never leaves it. */
+  padding-left: 7px;
+  opacity: 0;
+  clip-path: inset(50%);
+  /* Shutting waits a moment, so a pointer that cuts the corner over the row below on its
+     way across does not lose it. */
+  transition:
+    opacity 0.12s 0.2s,
+    clip-path 0s 0.32s;
+}
+@media (hover: hover) {
+  .nav-group-folded:not(.nav-group-dismissed):hover .nav-submenu {
+    opacity: 1;
+    clip-path: inset(-40px);
+    /* And opening waits a beat, so sweeping down the nav past the row does not flash it. */
+    transition-delay: 0.06s;
+  }
+  .nav-group-folded:hover > .nav-item {
+    background: var(--n100);
+    color: var(--n900);
+  }
+}
+.nav-group-folded:not(.nav-group-dismissed):has(:focus-visible) .nav-submenu {
+  opacity: 1;
+  clip-path: inset(-40px);
+  transition-delay: 0s;
+}
+.nav-group-folded:has(:focus-visible) > .nav-item {
+  background: var(--n100);
+  color: var(--n900);
+}
+.nav-group-dismissed .nav-submenu {
+  transition: none;
+}
+.nav-group-folded .nav-children {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 176px;
+  margin: 0;
+  padding: 5px;
+  border: 1px solid var(--n200);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow:
+    0 10px 15px -3px #0000001a,
+    0 4px 6px -4px #0000001a;
+}
+.nav-group-folded .nav-child {
+  margin: 0;
+}
+/* Inside the row: the usual 4px offset would land on the panel's border. */
+.nav-group-folded .nav-child:focus-visible {
+  outline-offset: -2px;
+}
+/* The arrow on the row, as in WordPress. The 6s centre a 10px square on the panel's border. */
+.nav-group-folded .nav-children::before {
+  content: '';
+  position: absolute;
+  top: calc(var(--flyout-arrow, 21px) - 6px);
+  left: -6px;
+  width: 10px;
+  height: 10px;
+  border-bottom: 1px solid var(--n200);
+  border-left: 1px solid var(--n200);
+  background: var(--surface);
+  transform: rotate(45deg);
+}
+
+/*
+ * WP Godmode's green, on its nav entry and its page, whatever accent the panel is wearing and
+ * in either theme. The accent tokens are re-pointed rather than each piece recoloured, so the
+ * active pill and its dot, focus rings and .button-primary all work unchanged inside it.
+ */
+.godmode {
+  --accent: #17a34a;
+  --accent-hover: #15803d;
+  --accent-foreground: #ffffff;
+  --accent-soft: color-mix(in oklab, #17a34a 12%, transparent);
+  --accent-text: #17a34a;
+}
+/* The panel's own sections end at Settings; the rule says what follows is not one of them. */
+.nav-promo {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--n200);
+}
+/* Green at rest, not only when open: an entry that looks like the rest would not be noticed. */
+.nav-item.godmode {
+  color: var(--accent-text);
+}
+.nav-item.godmode:hover {
+  background: color-mix(in oklab, var(--accent) 7%, transparent);
+  color: var(--accent-text);
+}
+.nav-item.godmode.nav-item-active {
+  background: var(--accent-soft);
+}
+/* The logo and the screenshots link to wpgodmode.com, and turn its green under the pointer. */
+.godmode-logo-link {
+  display: block;
+  width: fit-content;
+  margin: 0 auto;
+  border-radius: 6px;
+}
+.godmode-logo {
+  height: 40px;
+  width: auto;
+  aspect-ratio: 134.116 / 25.836;
+  color: var(--n900);
+  transition: color 0.15s;
+}
+.godmode-logo-link:hover .godmode-logo {
+  color: var(--accent-text);
+}
+.godmode-headline {
+  margin: 26px auto 0;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.25;
+}
+.godmode-point-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.godmode-shot-link {
+  display: block;
+  border-radius: 10px;
+}
+.godmode-shot {
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--n200);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  transition: border-color 0.15s;
+}
+.godmode-shot-link:hover .godmode-shot {
+  border-color: var(--accent);
+}
+
+/*
+ * Support: the community's card and the Enterprise one side by side, the bug report under both.
+ * Enterprise is the one paid thing on the page, so it is dark green in either theme, whatever
+ * accent the panel is wearing. It is the same card underneath: .support-premium re-points the
+ * neutral and accent tokens, so the text utilities, the icon tile, the ticks and .button-primary
+ * inside it all read on the green ground without a second set of rules.
+ */
+.support-card {
+  display: flex;
+  flex-direction: column;
+  padding: 26px;
+}
+.support-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.support-tag {
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--n100);
+  color: var(--n500);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.support-tag-premium {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent-text) 32%, transparent);
+}
+.support-check {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+.support-check svg {
+  stroke-width: 2.6;
+}
+.support-premium {
+  color-scheme: dark;
+  --premium-glow: #7fd8a4;
+  /* Green under the card on a light canvas; on a dark one a coloured shadow is only a haze. */
+  --premium-shadow: 0 24px 48px -28px #0f5c36bf;
+  --n900: #f6f6f8;
+  --n800: #e5e5eb;
+  --n700: #d4d5dc;
+  --n600: #bfc0c9;
+  /* The muted greys lean green, or they read as dust on the ground. */
+  --n500: #a3b3aa;
+  --n400: #8d9e94;
+  --n300: #ffffff2e;
+  --n200: #ffffff1c;
+  --n100: #ffffff10;
+  --accent: #ffffff;
+  --accent-hover: #e4e5eb;
+  --accent-foreground: #17181c;
+  --accent-soft: color-mix(in oklab, var(--premium-glow) 16%, transparent);
+  --accent-text: var(--premium-glow);
+  border-color: transparent;
+  color: var(--n900);
+  /* Light off the top corner, a fainter answer from the opposite one, a forest-green ground -
+     and a hairline border that catches the light where it falls. */
+  background:
+    radial-gradient(90% 75% at 100% 0%, color-mix(in oklab, var(--premium-glow) 30%, transparent), transparent 70%)
+      padding-box,
+    radial-gradient(70% 60% at 0% 100%, color-mix(in oklab, var(--premium-glow) 9%, transparent), transparent 70%)
+      padding-box,
+    linear-gradient(160deg, #173d2c, #0a1a13) padding-box,
+    linear-gradient(225deg, color-mix(in oklab, var(--premium-glow) 85%, transparent), #ffffff1f 38%, #ffffff0d)
+      border-box;
+  box-shadow:
+    inset 0 1px 0 #ffffff0f,
+    0 2px 4px #0000000f,
+    var(--premium-shadow);
+}
+:root[data-theme='dark'] .support-premium {
+  --premium-shadow: 0 16px 40px -24px #000000b3;
+}
+.support-premium .support-icon {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent-text) 30%, transparent);
+}
+/* White into the card's light, as L7 is painted in the accent - and with the same guard, since
+   without background-clip the title would be transparent text on a dark card. */
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .support-premium .support-title {
+    background-image: linear-gradient(100deg, var(--n900) 25%, color-mix(in oklab, var(--premium-glow) 70%, var(--n900)));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}

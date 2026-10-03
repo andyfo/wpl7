@@ -1,0 +1,61 @@
+{
+  "type": "plugin-recipe",
+  "typeVersion": 1,
+  "id": "acf-pro",
+  "name": "ACF PRO",
+  "plugin": "advanced-custom-fields-pro",
+  "version": "1.0",
+  "vendorUrl": "https://www.advancedcustomfields.com/",
+  "description": "Activates your ACF PRO license on every new site, re-activates it when the site moves to its own domain, and releases it when the site is deleted.",
+  "inputs": [
+    {
+      "id": "key",
+      "label": "License key",
+      "hint": "Your license key from advancedcustomfields.com → Licenses.",
+      "constant": "ACF_PRO_LICENSE"
+    }
+  ],
+  "hooks": {
+    "afterInstall": [
+      {
+        "run": "php",
+        "label": "Activating the ACF PRO license",
+        "code": "if (!function_exists('acf_pro_check_defined_license')) { fwrite(STDERR, \"ACF PRO licensing functions are not loaded - is the plugin active?\\n\"); exit(1); }\nif (!defined('ACF_PRO_LICENSE') || ACF_PRO_LICENSE === '') { fwrite(STDERR, \"ACF_PRO_LICENSE is not defined on this site\\n\"); exit(1); }\nif (function_exists('acf_pro_delete_license_transient')) { acf_pro_delete_license_transient('acf_activation_error'); }\nacf_pro_check_defined_license();\nif (function_exists('acf_pro_get_license_status')) { acf_pro_get_license_status(true); }\nif (acf_pro_is_license_active()) { echo 'OK: license active for ' . home_url() . \"\\n\"; exit(0); }\n$fail = function_exists('acf_pro_get_activation_failure_transient') ? acf_pro_get_activation_failure_transient() : null;\n$why = is_array($fail) && !empty($fail['error']) ? wp_strip_all_tags((string) $fail['error']) : 'license is not active after the activation attempt';\nfwrite(STDERR, $why . \"\\n\");\nexit(1);",
+        "expect": "^OK:"
+      },
+      {
+        "run": "wp",
+        "label": "Updating ACF PRO to the current release",
+        "args": [
+          "plugin",
+          "update",
+          "{{plugin}}"
+        ],
+        "optional": true
+      }
+    ],
+    "afterUrlChange": [
+      {
+        "run": "php",
+        "label": "Re-activating the ACF PRO license for the new URL",
+        "code": "if (!function_exists('acf_pro_check_defined_license')) { fwrite(STDERR, \"ACF PRO licensing functions are not loaded - is the plugin active?\\n\"); exit(1); }\nif (!defined('ACF_PRO_LICENSE') || ACF_PRO_LICENSE === '') { fwrite(STDERR, \"ACF_PRO_LICENSE is not defined on this site\\n\"); exit(1); }\nif (function_exists('acf_pro_delete_license_transient')) { acf_pro_delete_license_transient('acf_activation_error'); }\nacf_pro_check_defined_license();\nif (function_exists('acf_pro_get_license_status')) { acf_pro_get_license_status(true); }\nif (acf_pro_is_license_active()) { echo 'OK: license active for ' . home_url() . \"\\n\"; exit(0); }\n$fail = function_exists('acf_pro_get_activation_failure_transient') ? acf_pro_get_activation_failure_transient() : null;\n$why = is_array($fail) && !empty($fail['error']) ? wp_strip_all_tags((string) $fail['error']) : 'license is not active after the activation attempt';\nfwrite(STDERR, $why . \"\\n\");\nexit(1);",
+        "expect": "^OK:"
+      }
+    ],
+    "beforeRemove": [
+      {
+        "run": "php",
+        "label": "Releasing the ACF PRO activation",
+        "code": "if (!function_exists('acf_pro_deactivate_license')) { echo \"ACF PRO is not loaded; nothing to release\\n\"; exit(0); }\n$r = acf_pro_deactivate_license(true);\nif (is_wp_error($r)) { fwrite(STDERR, $r->get_error_message() . \"\\n\"); exit(1); }\nif (is_array($r) && empty($r['success'])) { fwrite(STDERR, wp_strip_all_tags((string) ($r['message'] ?? 'deactivation failed')) . \"\\n\"); exit(1); }\necho \"OK: activation released\\n\";"
+      }
+    ],
+    "verify": [
+      {
+        "run": "php",
+        "label": "Checking the ACF PRO license",
+        "code": "if (!function_exists('acf_pro_is_license_active')) { fwrite(STDERR, \"ACF PRO is not active on this site\\n\"); exit(1); }\nif (function_exists('acf_pro_get_license_status')) { acf_pro_get_license_status(true); }\nif (acf_pro_is_license_active()) { echo 'OK: license active for ' . home_url() . \"\\n\"; exit(0); }\nfwrite(STDERR, \"license is not active\\n\");\nexit(1);",
+        "expect": "^OK:"
+      }
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+name: Bug report
+description: Something does not work the way it says it does
+labels: [fix]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Found a security problem? Please do not use this form —
+        [report it privately](https://github.com/andyfo/wpl7/security/advisories/new).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The version in the panel header, which opens About — or Settings → Updates.
+      placeholder: "0.2.0 (stable)"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: |
+        `docker logs --tail 100 wpl7-panel`, the failing job's log from the Jobs page, or the
+        output of whichever script failed. **Check it for passwords, API keys and customer
+        domains before pasting.**
+      render: text
+  - type: dropdown
+    id: install
+    attributes:
+      label: How this install gets its panel
+      description: "`WPL7_SOURCE` in `deploy/.env`."
+      options:
+        - image (pulls the released panel — the default)
+        - build (compiles from a checkout)
+        - not sure

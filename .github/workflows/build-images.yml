@@ -1,0 +1,173 @@
+# Build and push the images a WPL7 release consists of.
+#
+# The panel image is the release artefact: it already carries deploy/ and provision/ as the
+# bundle it pushes to worker servers (panel/Dockerfile), so a box that has pulled it has
+# everything needed to provision itself. The site images are built here rather than on every
+# box so that every server in a fleet runs byte-identical WordPress containers, and so
+# wp-cli is fetched once instead of once per machine. The SFTPGo image (FTP logins) is
+# versioned on its own, and published only when its version is new.
+#
+# Called by release.yml (tags) and deploy.yml (edge). Both go through test.yml first.
+name: Build images
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Stamped into the panel image as WPL7_VERSION.
+        required: true
+        type: string
+      panel-tags:
+        description: Newline-separated full tags for the panel image.
+        required: true
+        type: string
+      wordpress-suffix:
+        description: Site image tags become php<X.Y>-<suffix>.
+        required: true
+        type: string
+      wordpress-extra-suffix:
+        description: A second site image tag suffix, or empty.
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # Every PHP version the panel offers. Keep in step with WP_PHP_VERSIONS in .env.example.
+  PHP_VERSIONS: '["8.2", "8.3", "8.4", "8.5"]'
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      registry: ${{ steps.names.outputs.registry }}
+      php-versions: ${{ steps.names.outputs.php-versions }}
+    steps:
+      - id: names
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # GHCR rejects an uppercase path; github.repository is whatever the owner typed.
+          echo "registry=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "php-versions=$PHP_VERSIONS" >> "$GITHUB_OUTPUT"
+
+  panel:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          # The repo root, because the image carries deploy/ and provision/ too.
+          context: .
+          file: panel/Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VERSION=${{ inputs.version }}
+            GIT_SHA=${{ github.sha }}
+          tags: ${{ inputs.panel-tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # An attestation manifest makes `docker pull` on an older daemon pick the wrong
+          # entry; nothing here consumes provenance, so it is off.
+          provenance: false
+
+  wordpress:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ${{ fromJSON(needs.prepare.outputs.php-versions) }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: tags
+        env:
+          REGISTRY: ${{ needs.prepare.outputs.registry }}
+          PHP: ${{ matrix.php }}
+          SUFFIX: ${{ inputs.wordpress-suffix }}
+          EXTRA: ${{ inputs.wordpress-extra-suffix }}
+        run: |
+          set -euo pipefail
+          {
+            echo 'value<<EOF'
+            echo "$REGISTRY/wordpress:php$PHP-$SUFFIX"
+            if [ -n "$EXTRA" ]; then echo "$REGISTRY/wordpress:php$PHP-$EXTRA"; fi
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: deploy/wordpress-image
+          platforms: linux/amd64
+          push: true
+          # Refresh the upstream wordpress:php<X.Y>-apache base here, once, rather than
+          # leaving every box to decide when it last pulled.
+          pull: true
+          build-args: |
+            PHP_TAG=php${{ matrix.php }}
+          tags: ${{ steps.tags.outputs.value }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+  # SFTPGo with WPL7's patch (deploy/sftpgo-image). Its tag is deploy/sftpgo-image/VERSION,
+  # not the release's: servers keep an image they have, so a tag must always mean the same
+  # bytes - it is built once, and a change to the image is a new VERSION.
+  sftpgo:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: tag
+        env:
+          REGISTRY: ${{ needs.prepare.outputs.registry }}
+        run: |
+          set -euo pipefail
+          ref="$REGISTRY/sftpgo:$(cat deploy/sftpgo-image/VERSION)"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          if out="$(docker buildx imagetools inspect "$ref" 2>&1)"; then
+            echo "::notice::$ref is published already; not rebuilt"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif grep -qi 'not found' <<<"$out"; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            # Not "absent" but "could not tell": building now could overwrite what servers run.
+            echo "::error::could not check $ref: $out"
+            exit 1
+          fi
+      - if: steps.tag.outputs.exists == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/sftpgo-image
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tag.outputs.ref }}
+          cache-from: type=gha,scope=sftpgo
+          cache-to: type=gha,mode=max,scope=sftpgo
+          provenance: false

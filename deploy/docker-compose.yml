@@ -1,0 +1,285 @@
+# WPL7 system stack: Traefik (edge + ACME) · MariaDB (shared DB) · postfix (mail relay)
+# · opendkim (signing milter) · panel.
+# Site containers are NOT in this file — the panel creates them via the Docker API and Traefik
+# discovers them through labels. Config values come from ./.env (see .env.example).
+#
+# Production:            docker compose up -d
+# With wildcard DNS-01:  docker compose -f docker-compose.yml -f docker-compose.dns.yml up -d
+# Local dev (macOS):     docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.build.yml up -d
+name: wpl7
+
+services:
+  traefik:
+    # Keep this on a currently-maintained minor. Traefik's Docker provider pinned API v1.24
+    # up to v3.5, and provision/setup.sh installs the newest docker-ce - Engine 29 refuses
+    # anything below API 1.40, so an older Traefik silently discovers no containers at all
+    # (default self-signed cert + 404 on every host). v3.6+ negotiates the API version.
+    image: traefik:v3.7
+    container_name: wpl7-traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    command:
+      - "--log.level=INFO"
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=wpl7_proxy"
+      # File provider: the panel drops per-site dynamic configs here (e.g. the
+      # forward-to-new-server proxy while a moved site's DNS propagates).
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      # Access log -> the panel's per-site visitor statistics. It goes to stdout rather than
+      # to a file because Docker then rotates it for us (provision/daemon.json caps it at
+      # 3x10MB) and the panel reads it back with `docker logs --since`, exactly as it reads
+      # the mail relay's. Traefik is the only place that sees the real client address: a
+      # site container is behind this proxy and its own Apache log records only our IP.
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+      # User-Agent identifies crawlers (and the panel's own uptime probe, which hits every
+      # site once a minute); Referer is where the visit came from. The three vendor headers
+      # carry the visitor's own address when a site sits behind a CDN - Cloudflare, Akamai,
+      # Fastly - and the panel only believes them when the connection itself came from that
+      # CDN (docs/security.md). Nothing else is kept.
+      - "--accesslog.fields.headers.defaultmode=drop"
+      - "--accesslog.fields.headers.names.User-Agent=keep"
+      - "--accesslog.fields.headers.names.Referer=keep"
+      - "--accesslog.fields.headers.names.Cf-Connecting-Ip=keep"
+      - "--accesslog.fields.headers.names.True-Client-Ip=keep"
+      - "--accesslog.fields.headers.names.Fastly-Client-Ip=keep"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt-staging.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt-staging.acme.storage=/letsencrypt/acme-staging.json"
+      - "--certificatesresolvers.letsencrypt-staging.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+      - "--certificatesresolvers.letsencrypt-staging.acme.httpchallenge.entrypoint=web"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${SRV_ROOT:-/srv}/traefik:/letsencrypt
+      - ${SRV_ROOT:-/srv}/traefik/dynamic:/etc/traefik/dynamic
+
+  mariadb:
+    image: mariadb:11.4
+    container_name: wpl7-mariadb
+    restart: unless-stopped
+    networks:
+      db:
+        aliases:
+          - mariadb
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MARIADB_AUTO_UPGRADE: "1"
+    command:
+      - "--character-set-server=utf8mb4"
+      - "--collation-server=utf8mb4_unicode_ci"
+      - "--innodb-buffer-pool-size=${MARIADB_BUFFER_POOL:-256M}"
+      - "--max-connections=${MARIADB_MAX_CONNECTIONS:-300}"
+    volumes:
+      - ${SRV_ROOT:-/srv}/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  mail:
+    image: boky/postfix:latest
+    container_name: wpl7-mail
+    restart: unless-stopped
+    networks:
+      proxy:
+        aliases:
+          - mail
+    environment:
+      # Empty RELAYHOST = direct MX delivery; set SMTP_RELAYHOST in .env for smarthost mode.
+      RELAYHOST: ${SMTP_RELAYHOST:-}
+      RELAYHOST_USERNAME: ${SMTP_USERNAME:-}
+      RELAYHOST_PASSWORD: ${SMTP_PASSWORD:-}
+      ALLOW_EMPTY_SENDER_DOMAINS: "true"
+      HOSTNAME: ${MAIL_HOSTNAME:-}
+      # Hand every message to the panel-managed signer. POSTFIX_* variables are applied
+      # after the image's own DKIM setup, so these win even though no keys live in this
+      # container. milter_default_action=accept keeps mail flowing (unsigned) if the
+      # signer is down - a delivery outage would be worse than a missing signature.
+      POSTFIX_smtpd_milters: inet:dkim:8891
+      POSTFIX_non_smtpd_milters: inet:dkim:8891
+      POSTFIX_milter_protocol: "6"
+      POSTFIX_milter_default_action: accept
+      # Per-site authentication. Every site container authenticates with its own SASL login
+      # and the panel publishes which sender domains that login owns, so a compromised site
+      # cannot emit mail as another customer's domain. That holds the envelope; the signer
+      # holds the From: header to the same owners before it signs (its signing policy). `reject_known_sender_login_mismatch` (not the plain
+      # variant) deliberately leaves domains the fleet knows nothing about alone: a customer
+      # relaying their own off-fleet address keeps working, and nothing off-fleet can be
+      # signed anyway. Maps and the credential database are written by the panel
+      # (panel/src/services/mailAuth.ts) into ${SRV_ROOT}/mail.
+      POSTFIX_smtpd_sasl_auth_enable: "yes"
+      POSTFIX_smtpd_sasl_type: cyrus
+      POSTFIX_smtpd_sasl_path: smtpd
+      POSTFIX_smtpd_sasl_security_options: noanonymous
+      # The hop is an internal Docker network with no published port, so requiring TLS
+      # before AUTH would only add a certificate for the panel to rotate.
+      POSTFIX_smtpd_tls_auth_only: "no"
+      # Without this, libsasl looks in its compiled-in directory and silently falls back to
+      # /etc/sasldb2 - every login then fails with "unable to open Berkeley db".
+      POSTFIX_cyrus_sasl_config_path: /etc/sasl2
+      POSTFIX_smtpd_sender_login_maps: texthash:/etc/postfix/policy/sender_login
+      POSTFIX_smtpd_sender_restrictions: "check_sasl_access texthash:/etc/postfix/policy/sasl_block, reject_known_sender_login_mismatch, permit"
+    env_file:
+      # Panel-managed overrides, written by Mail -> Setup guide (currently just the hostname
+      # postfix announces). Optional: absent on a fresh install, and `environment:` above is
+      # the provisioning default. POSTFIX_* settings are applied after the image's own
+      # config, so a value here wins over HOSTNAME without the two fighting.
+      #
+      # Compose resolves `environment:` over `env_file:` for the same key, so anything the
+      # panel is expected to own at runtime must NOT also be listed above - adding
+      # POSTFIX_myhostname there would silently pin the hostname and make the panel's field
+      # look broken. The SASL settings above are safe: the panel never writes those.
+      - path: ${SRV_ROOT:-/srv}/mail/relay.env
+        required: false
+    volumes:
+      # Persist the queue so a restart does not discard mail postfix has accepted but not
+      # yet delivered. A named volume rather than a path under ${SRV_ROOT}: postfix keeps
+      # its chrooted sockets (public/pickup, dev/log) in here, and a host bind mount cannot
+      # always host those - postfix then dies with "chmod socket public/pickup: Invalid
+      # argument". Docker also seeds a new named volume from the image, so the queue
+      # directory tree arrives with the ownership postfix insists on.
+      - mailspool:/var/spool/postfix
+      # Sender-authorization maps (read-only) and the SASL credential database. The db is
+      # written by saslpasswd2 inside this container, so it is mounted read-write and lives
+      # under ${SRV_ROOT} - keeping it in the image would lose every site's ability to send
+      # the next time the container is recreated.
+      - ${SRV_ROOT:-/srv}/mail/policy:/etc/postfix/policy:ro
+      - ${SRV_ROOT:-/srv}/mail/sasl:/etc/postfix/sasl
+      - ${SRV_ROOT:-/srv}/mail/sasl2:/etc/sasl2:ro
+    depends_on:
+      - dkim
+    # No published ports and no Traefik labels: reachable only from wpl7_proxy (not an open relay).
+
+  # DKIM signing milter. Keys, tables and opendkim.conf are all written by the panel
+  # (Mail -> DKIM & DMARC); this container only reads them. Running it separately from
+  # postfix keeps the key layout ours rather than the postfix image's, so a site that
+  # moves between servers keeps signing with the same published key.
+  dkim:
+    image: instrumentisto/opendkim:latest
+    container_name: wpl7-dkim
+    restart: unless-stopped
+    networks:
+      proxy:
+        aliases:
+          - dkim
+    volumes:
+      - ${SRV_ROOT:-/srv}/mail/dkim:/etc/opendkim/keys:ro
+      # A full replacement rather than a conf.d drop-in: the image appends drop-ins to its
+      # shipped config on every start, so a restarted container would accumulate copies.
+      # provision/setup.sh creates this file so the bind mount is never a directory.
+      - ${SRV_ROOT:-/srv}/mail/opendkim.conf:/etc/opendkim/opendkim.conf:ro
+
+  panel:
+    # The release artefact. A box pulls the panel rather than compiling it, so an update is a
+    # pull and a recreate rather than a build on a customer's VPS, and every server in a
+    # fleet runs the identical binary. The image already carries deploy/ and provision/ as
+    # the bundle pushed to workers, so it is the whole payload.
+    #
+    # WPL7_IMAGE_TAG rather than WPL7_VERSION: an edge build is published under the moving
+    # tag `edge` while calling itself `0.3.0-edge.a1b2c3d`, so the tag a box pulls and the
+    # version it reports are two different things. provision/update.sh writes both into
+    # .env from the release manifest. docker-compose.build.yml puts `build:` back for source
+    # mode (WPL7_SOURCE=build); `latest` is only a fallback for an ad-hoc `docker compose`
+    # outside an install, since setup.sh refuses image mode without an explicit version.
+    image: ${WPL7_PANEL_IMAGE:-ghcr.io/andyfo/wpl7/panel}:${WPL7_IMAGE_TAG:-latest}
+    container_name: wpl7-panel
+    restart: unless-stopped
+    networks:
+      - proxy
+      - db
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    stop_grace_period: 30s
+    environment:
+      NODE_ENV: production
+      PANEL_PORT: "3000"
+      SRV_ROOT: ${SRV_ROOT:-/srv}
+      TLS_MODE: ${TLS_MODE:-letsencrypt}
+      ACME_RESOLVER: ${ACME_RESOLVER:-letsencrypt}
+      PANEL_DOMAIN: ${PANEL_DOMAIN}
+      DEV_DOMAIN: ${DEV_DOMAIN}
+      DNS_PROVIDER: ${DNS_PROVIDER:-}
+      SERVER_PUBLIC_IP: ${SERVER_PUBLIC_IP:-}
+      DOCKER_PROXY_NETWORK: wpl7_proxy
+      DOCKER_DB_NETWORK: wpl7_db
+      # What to compare against when checking for updates. WPL7_VERSION is deliberately not
+      # here - it is baked into the image, so it cannot disagree with what is running.
+      WPL7_CHANNEL: ${WPL7_CHANNEL:-stable}
+      WPL7_SOURCE: ${WPL7_SOURCE:-image}
+      WPL7_REPO: ${WPL7_REPO:-andyfo/wpl7}
+      # ...and what this install was published as, which is what a WORKER has to be told:
+      # it has no checkout and no release of its own, and setup.sh refuses image mode
+      # without a version (jobs/handlers/servers.ts).
+      WPL7_IMAGE_TAG: ${WPL7_IMAGE_TAG:-}
+      WPL7_WORDPRESS_IMAGE: ${WPL7_WORDPRESS_IMAGE:-}
+      WPL7_GITHUB_TOKEN: ${WPL7_GITHUB_TOKEN:-}
+      # Where this install lives on the HOST. provision/compose.sh exports it; the panel
+      # needs it to name the update.sh systemd should run, and /app/bundle is not it.
+      WPL7_INSTALL_DIR: ${WPL7_INSTALL_DIR:-/opt/wpl7}
+      MARIADB_HOST: mariadb
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      PANEL_SESSION_SECRET: ${PANEL_SESSION_SECRET}
+      PANEL_ADMIN_USER: ${PANEL_ADMIN_USER:-admin}
+      PANEL_ADMIN_PASSWORD: ${PANEL_ADMIN_PASSWORD:-}
+      SMTP_RELAYHOST: ${SMTP_RELAYHOST:-}
+      BACKUP_CRON: ${BACKUP_CRON:-0 3 * * *}
+      BACKUP_RETENTION: ${BACKUP_RETENTION:-10}
+      WP_DEFAULT_PHP: ${WP_DEFAULT_PHP:-8.3}
+      WP_PHP_VERSIONS: ${WP_PHP_VERSIONS:-8.2,8.3,8.4,8.5}
+      WP_DEFAULT_LOCALE: ${WP_DEFAULT_LOCALE:-en_US}
+      WP_DEFAULT_PLUGINS: ${WP_DEFAULT_PLUGINS:-}
+      # The public recipe catalog (docs/licenses.md): empty = the official one, `off` = only
+      # the recipes bundled with this version, anything else = a fork's own index + key.
+      WPL7_CATALOG_URL: ${WPL7_CATALOG_URL:-}
+      WPL7_CATALOG_PUBLIC_KEY: ${WPL7_CATALOG_PUBLIC_KEY:-}
+      # DNS provider tokens: same credentials the Traefik DNS-01 overlay uses; the panel
+      # additionally manages per-site A records with them (multi-server dev routing).
+      CF_DNS_API_TOKEN: ${CF_DNS_API_TOKEN:-}
+      HETZNER_API_KEY: ${HETZNER_API_KEY:-}
+      DO_AUTH_TOKEN: ${DO_AUTH_TOKEN:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Identical host/container path: every path the panel passes to the Docker API
+      # as a bind source must be valid on the host (sibling-container rule).
+      - ${SRV_ROOT:-/srv}:${SRV_ROOT:-/srv}
+    extra_hosts:
+      # The web terminal SSHes to this host's own sshd (root shell on server 1).
+      - host.docker.internal:host-gateway
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.panel.rule: Host(`${PANEL_DOMAIN}`)
+      traefik.http.routers.panel.entrypoints: websecure
+      traefik.http.routers.panel.tls.certresolver: ${ACME_RESOLVER:-letsencrypt}
+      traefik.http.services.panel.loadbalancer.server.port: "3000"
+
+volumes:
+  # Transient by nature (mail in flight), so deliberately not under ${SRV_ROOT} with the
+  # backed-up state. Inspect it from the panel: Mail -> Queue.
+  mailspool:
+    name: wpl7_mailspool
+
+networks:
+  proxy:
+    name: wpl7_proxy
+  db:
+    name: wpl7_db
+    internal: true

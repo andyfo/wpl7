@@ -1,0 +1,24 @@
+name: Feature or change
+description: Something WPL7 should do that it does not
+labels: [feature]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: |
+        What are you trying to do, and what makes it hard today? Describe the situation
+        rather than the solution — the best version of a feature is often not the one first
+        asked for.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: Optional. If you already know the shape you want, describe it.
+  - type: textarea
+    id: workaround
+    attributes:
+      label: What you do instead today
+      description: Optional, and useful — a workaround says a lot about what the feature has to beat.
