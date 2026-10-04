@@ -23,7 +23,7 @@ jobs:
       # `latest` and the X.Y alias only move for a real release.
       panel-tags: ${{ steps.v.outputs.panel-tags }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - id: v
         env:
           TAG: ${{ github.ref_name }}
@@ -77,7 +77,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Build the install bundle
         env:
