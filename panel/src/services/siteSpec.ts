@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { Config } from '../config.js';
 import type { ServerRow, SiteRow } from '../db/schema.js';
 import type { ContainerLimits, SiteContainerSpec } from './docker.js';
+import type { DnsService } from './dns.js';
 import { traefikLabels } from './labels.js';
 import type { PanelSettings } from './settings.js';
 import { siteNetworkName, siteNetworksFor } from './siteNetwork.js';
@@ -94,12 +95,29 @@ export function sitePaths(config: Config, slug: string) {
   };
 }
 
+/**
+ * What decides a site's certificate on the server it runs on. Built by siteTlsFor, never from
+ * the server row as it is: the row may name Cloudflare with no token there to answer for it.
+ */
+export interface SiteTls {
+  devDomain: string;
+  /** Where dev sites get the shared wildcard certificate from; '' = each gets its own. */
+  wildcardProvider: string;
+}
+
+export function siteTlsFor(
+  dns: Pick<DnsService, 'wildcardProvider'>,
+  server: Pick<ServerRow, 'devDomain' | 'dnsProvider'>,
+): SiteTls {
+  return { devDomain: server.devDomain, wildcardProvider: dns.wildcardProvider(server.dnsProvider) };
+}
+
 export function buildSiteContainerSpec(
   config: Config,
   site: Pick<SiteRow, 'slug' | 'phpVersion' | 'dbName' | 'dbUser' | 'dbPassword' | 'containerName'>,
   domains: string[],
-  /** The server this container will run on - its devDomain decides the wildcard-cert labels. */
-  server: Pick<ServerRow, 'devDomain' | 'dnsProvider'>,
+  /** The server this container will run on - its dev domain and wildcard decide the certificate labels. */
+  server: SiteTls,
   /** Memory/CPU/pid ceilings; see siteRuntimeFrom. */
   runtime: SiteRuntime,
   /**
@@ -134,7 +152,7 @@ export function buildSiteContainerSpec(
             tlsMode: config.tlsMode,
             acmeResolver: config.acmeResolver,
             devDomain: server.devDomain,
-            dnsProvider: server.dnsProvider,
+            dnsProvider: server.wildcardProvider,
           })
         : { 'traefik.enable': 'false' }),
       'wpl7.managed': 'true',

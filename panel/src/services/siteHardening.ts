@@ -1,5 +1,5 @@
 import { asc } from 'drizzle-orm';
-import { sites } from '../db/schema.js';
+import { sites, type SiteRow } from '../db/schema.js';
 import type { JobWorker } from '../jobs/worker.js';
 import type { ContainerPolicy } from '../../shared/security.js';
 import type { CoreServices } from './index.js';
@@ -97,6 +97,33 @@ export interface HardeningSweep {
 }
 
 /**
+ * One site of a sweep: a `site.reconcile` queued for it, unless it is busy. One already waiting
+ * on a reconcile counts as queued, so two sweeps never report each other as a conflict.
+ */
+export function queueReconcile(
+  worker: Pick<JobWorker, 'enqueue' | 'activeSiteJob'>,
+  site: Pick<SiteRow, 'id' | 'slug' | 'serverId' | 'status'>,
+  sweep: HardeningSweep,
+): void {
+  if (site.status === 'provisioning' || site.status === 'deleting') {
+    sweep.busy.push(site.slug);
+    return;
+  }
+  const active = worker.activeSiteJob(site.id);
+  if (active) {
+    if (active.type === 'site.reconcile') sweep.queued.push(site.slug);
+    else sweep.busy.push(site.slug);
+    return;
+  }
+  try {
+    worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: site.slug, serverId: site.serverId });
+    sweep.queued.push(site.slug);
+  } catch {
+    sweep.busy.push(site.slug);
+  }
+}
+
+/**
  * Queue a `site.reconcile` for every site whose container was built without these mounts, or
  * with an older shape of them. Detected by the container's own label, so it is right on any
  * install however it was updated: the update hook calls it (updates/hooks.ts), and so does
@@ -124,22 +151,7 @@ export async function sweepHardening(s: CoreServices, worker: Pick<JobWorker, 'e
       // A container the panel cannot explain - a move's leftover, a site deleted while this
       // server was away - is not the sweep's to rebuild.
       if (!site) continue;
-      if (site.status === 'provisioning' || site.status === 'deleting') {
-        sweep.busy.push(site.slug);
-        continue;
-      }
-      const active = worker.activeSiteJob(site.id);
-      if (active) {
-        if (active.type === 'site.reconcile') sweep.queued.push(site.slug);
-        else sweep.busy.push(site.slug);
-        continue;
-      }
-      try {
-        worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: site.slug, serverId: site.serverId });
-        sweep.queued.push(site.slug);
-      } catch {
-        sweep.busy.push(site.slug);
-      }
+      queueReconcile(worker, site, sweep);
     }
   }
   if (sweep.queued.length > 0) {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ServerCheck, ServerDto, ServerSystemInfoDto } from '../../../shared/types';
@@ -225,7 +225,17 @@ export function ServerDetail() {
             )}
             <FactRow label="Public IP" value={server.publicIp || '– (set it under Edit settings)'} />
             <FactRow label="Dev domain" value={server.devDomain || '–'} />
-            <FactRow label="DNS provider" value={server.dnsProvider || 'none (HTTP challenges)'} />
+            <FactRow
+              label="Wildcard certificate"
+              value={
+                <>
+                  {server.dnsProvider ? `on, from ${server.dnsProvider === 'cloudflare' ? 'Cloudflare' : server.dnsProvider}` : 'off: a certificate per site'}{' '}
+                  <Link className="text-xs text-neutral-500 underline" to="/settings?tab=dns#wildcard">
+                    Settings → DNS
+                  </Link>
+                </>
+              }
+            />
             <FactRow label="Host key" value={server.hostKeySha256 ?? 'not pinned yet'} />
             <FactRow
               label="Backups"
@@ -282,7 +292,7 @@ function FtpRow({ serverId }: { serverId: number }) {
   return <FactRow label="FTP / SFTP" value={serverFtpSummary(ftp.data)} />;
 }
 
-function FactRow({ label, value }: { label: string; value: string }) {
+function FactRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex gap-3">
       <dt className="w-32 shrink-0 text-neutral-500">{label}</dt>
@@ -464,7 +474,6 @@ function EditServerModal({ server, onClose }: { server: ServerDto; onClose: () =
   const [name, setName] = useState(server.name);
   const [publicIp, setPublicIp] = useState(server.publicIp);
   const [devDomain, setDevDomain] = useState(server.devDomain);
-  const [dnsProvider, setDnsProvider] = useState(server.dnsProvider);
   const [sshHost, setSshHost] = useState(server.sshHost ?? '');
   const [sshPort, setSshPort] = useState(String(server.sshPort));
   const [sshUser, setSshUser] = useState(server.sshUser);
@@ -479,7 +488,6 @@ function EditServerModal({ server, onClose }: { server: ServerDto; onClose: () =
     if (name !== server.name) body.name = name;
     if (publicIp !== server.publicIp) body.publicIp = publicIp;
     if (devDomain !== server.devDomain) body.devDomain = devDomain;
-    if (dnsProvider !== server.dnsProvider) body.dnsProvider = dnsProvider;
     if (server.kind === 'ssh') {
       if (sshHost !== server.sshHost) body.sshHost = sshHost;
       if (Number(sshPort) !== server.sshPort) body.sshPort = Number(sshPort);
@@ -512,9 +520,6 @@ function EditServerModal({ server, onClose }: { server: ServerDto; onClose: () =
         </Field>
         <Field label="Dev domain" hint="Wildcard hostname new sites on this server get, e.g. dev.example.com.">
           <input className={inputClass} value={devDomain} onChange={(e) => setDevDomain(e.target.value)} />
-        </Field>
-        <Field label="DNS provider" hint='Empty = HTTP challenges. "cloudflare" enables DNS-01 for wildcard certificates.'>
-          <input className={inputClass} value={dnsProvider} onChange={(e) => setDnsProvider(e.target.value)} />
         </Field>
         {server.kind === 'ssh' && (
           <div className="grid grid-cols-3 gap-3">

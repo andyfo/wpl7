@@ -466,6 +466,7 @@ function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
   const run = useRunJob([['site', slug]]);
   const [domainsText, setDomainsText] = useState('');
   const [keepDevAlias, setKeepDevAlias] = useState(true);
+  const [manageDns, setManageDns] = useState(false);
   const domains = domainsText.split(/[\s,]+/).map((d) => d.trim().toLowerCase()).filter(Boolean);
   const done = isTerminal(run.job?.status);
 
@@ -480,8 +481,24 @@ function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
             <input className={inputClass} value={domainsText} onChange={(e) => setDomainsText(e.target.value)} autoFocus />
           </Field>
           <Toggle checked={keepDevAlias} onChange={setKeepDevAlias} label="Keep the dev hostname as a 301 redirect" />
+          {meta.data?.dnsManaged && (
+            <Toggle
+              checked={manageDns}
+              onChange={setManageDns}
+              label={
+                <span>
+                  Point them at this server through Cloudflare
+                  <span className="block text-xs text-neutral-500">
+                    Creates or replaces their <code>A</code> records, where the token in Settings → DNS reaches the zone.
+                  </span>
+                </span>
+              }
+            />
+          )}
           <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
-            Before continuing, point DNS at this server: an <code>A</code> record for the apex and for <code>www</code>.
+            {manageDns
+              ? 'A domain whose zone the token does not reach still needs its A record pointed at this server by hand.'
+              : <>Before continuing, point DNS at this server: an <code>A</code> record for the apex and for <code>www</code>.</>}
             {meta.data?.mailMode === 'smarthost' && ' For email deliverability also add your SMTP provider’s SPF/DKIM records.'}
           </div>
           <ErrorNote error={run.error} />
@@ -489,7 +506,9 @@ function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
             <Button
               disabled={domains.length === 0 || run.isPending}
-              onClick={() => run.mutate({ path: `/api/sites/${slug}/go-live`, body: { domains, keepDevAlias } })}
+              onClick={() =>
+                run.mutate({ path: `/api/sites/${slug}/go-live`, body: { domains, keepDevAlias, ...(manageDns ? { manageDns: true } : {}) } })
+              }
             >
               Go live
             </Button>
@@ -659,7 +678,7 @@ function VisitorsTab({ slug }: { slug: string }) {
 
       <Card title="Busiest addresses">
         {!t.ipsCollected ? (
-          <EmptyState>Address collection is off (Settings → Visitor statistics).</EmptyState>
+          <EmptyState>Address collection is off (Settings → Monitoring → Visitor statistics).</EmptyState>
         ) : t.topIps.length === 0 ? (
           <EmptyState>No requests recorded yet.</EmptyState>
         ) : (
@@ -714,7 +733,7 @@ function VisitorsTab({ slug }: { slug: string }) {
 
       <p className="text-xs text-neutral-500">
         Visitors are counted from a one-way hash of address and browser, under a key discarded every night. Addresses
-        themselves are kept only as Settings → Visitor statistics says - and a blocked address for as long as it is
+        themselves are kept only as Settings → Monitoring → Visitor statistics says - and a blocked address for as long as it is
         blocked, and 30 days after.
       </p>
       {blocking && <BlockDialog address={blocking} siteSlug={slug} onClose={() => setBlocking(null)} />}

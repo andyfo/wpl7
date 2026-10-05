@@ -151,7 +151,7 @@ function BlockedCard({ slug, rules }: { slug: string; rules: CustomRule[] }) {
                         {r.ip ? (
                           <span className="font-mono">{r.ip}</span>
                         ) : (
-                          <span className="text-neutral-400" title="Addresses are not stored (Settings → Visitor statistics)">
+                          <span className="text-neutral-400" title="Addresses are not stored (Settings → Monitoring → Visitor statistics)">
                             not stored
                           </span>
                         )}

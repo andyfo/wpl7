@@ -4,7 +4,7 @@ import type { Db } from '../../db/index.js';
 import { sites, type ServerRow, type SiteRow } from '../../db/schema.js';
 import type { Config } from '../../config.js';
 import type { JobContext } from '../context.js';
-import { siteScheme, type TraefikLabelOpts } from '../../services/labels.js';
+import { siteScheme } from '../../services/labels.js';
 import { DEFAULT_UPLOADS_INI, sitePaths } from '../../services/siteSpec.js';
 import { ensureSiteNetwork } from '../../services/siteNetwork.js';
 import { mailLogin, renderMsmtprc, type SenderOwner } from '../../services/mailAuth.js';
@@ -289,19 +289,6 @@ export async function syncRelayAuth(
   for (const failed of results.filter((r) => !r.ok)) {
     ctx.warn(`Mail relay not updated on "${failed.name}": ${failed.detail}`);
   }
-}
-
-/** Traefik label context for a site on a given server (devDomain/dnsProvider are per-server). */
-export function labelOptsFor(
-  config: Config,
-  server: ServerRow,
-): Pick<TraefikLabelOpts, 'tlsMode' | 'acmeResolver' | 'devDomain' | 'dnsProvider'> {
-  return {
-    tlsMode: config.tlsMode,
-    acmeResolver: config.acmeResolver,
-    devDomain: server.devDomain,
-    dnsProvider: server.dnsProvider,
-  };
 }
 
 /**

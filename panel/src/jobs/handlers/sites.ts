@@ -11,6 +11,7 @@ import {
   siteImage,
   sitePaths,
   siteRuntimeFrom,
+  siteTlsFor,
   type SiteRuntime,
 } from '../../services/siteSpec.js';
 import {
@@ -122,7 +123,7 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
     ctx.info('Creating and starting container (unrouted until WordPress is installed)…');
     ctx.pushCompensation('remove container', () => server.docker.removeContainer(site.containerName));
     await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, domains, server.row, siteRuntimeFrom(s.settings), { routing: false }),
+      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings), { routing: false }),
     );
     await startSiteContainer(server, s, site, ctx);
 
@@ -221,7 +222,7 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
     await s.security.kick(server.id);
     await server.docker.removeContainer(site.containerName);
     await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, domains, server.row, siteRuntimeFrom(s.settings)),
+      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings)),
     );
     await startSiteContainer(server, s, site, ctx);
 
@@ -575,7 +576,7 @@ async function replaceContainer(
   await server.docker.removeContainer(name);
   try {
     await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, next.site, next.domains, server.row, runtime),
+      buildSiteContainerSpec(s.config, next.site, next.domains, siteTlsFor(s.dns, server.row), runtime),
     );
     if (run) await startSiteContainer(server, s, row, ctx);
   } catch (err) {
@@ -583,7 +584,7 @@ async function replaceContainer(
     try {
       await server.docker.removeContainer(name);
       await server.docker.createSiteContainer(
-        buildSiteContainerSpec(s.config, previous.site, previous.domains, server.row, runtime),
+        buildSiteContainerSpec(s.config, previous.site, previous.domains, siteTlsFor(s.dns, server.row), runtime),
       );
       if (run) await startSiteContainer(server, s, row, ctx);
       ctx.info('Previous container restored.');
@@ -644,7 +645,7 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
     ctx.error(`Site is not responding on PHP ${newVersion}; rolling back to PHP ${oldVersion}.`);
     await server.docker.removeContainer(site.containerName);
     await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, domains, server.row, siteRuntimeFrom(s.settings)),
+      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings)),
     );
     await startSiteContainer(server, s, site, ctx);
     throw new Error(`PHP ${newVersion} switch failed the smoke check; rolled back to ${oldVersion}`);
@@ -820,7 +821,7 @@ export async function siteUpdateDomains(
     ctx.error('A domain in this request was claimed by another site while certificates were issuing.');
     await server.docker.removeContainer(site.containerName);
     await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, oldDomains, server.row, siteRuntimeFrom(s.settings)),
+      buildSiteContainerSpec(s.config, site, oldDomains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings)),
     );
     if (wasRunning) await startSiteContainer(server, s, site, ctx);
     throw err;

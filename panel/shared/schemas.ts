@@ -1273,6 +1273,27 @@ export const settingsUpdateBody = z.object({
   mcpEnabled: z.boolean().optional(),
 }).strict();
 
+/**
+ * A Cloudflare API token (Settings -> DNS): 40 characters, or since 2026 a `cfut_` / `cfat_`
+ * prefix, 40 characters and a checksum. A Global API Key (`cfk_`) is refused by name: the
+ * panel authenticates with a token, and Cloudflare would only say "invalid".
+ */
+const cloudflareTokenSchema = z
+  .string()
+  .trim()
+  .min(30, 'That is too short to be a Cloudflare API token')
+  .max(200)
+  .regex(/^[A-Za-z0-9_-]+$/, 'A Cloudflare API token is one word: letters, digits, "-" and "_"')
+  .refine((t) => !t.startsWith('cfk_'), 'That is a Global API Key. Create an API token instead (My Profile → API Tokens)');
+
+export const dnsTokenBody = z.object({ token: cloudflareTokenSchema }).strict();
+
+/** Left out: the stored token. */
+export const dnsCheckBody = z.object({ token: cloudflareTokenSchema.optional() }).strict();
+
+/** A server's wildcard certificate, from Cloudflare (on) or none (off). */
+export const dnsWildcardBody = z.object({ on: z.boolean() }).strict();
+
 export const historyQuery = z.object({
   hours: queryNumber(z.coerce.number().int().min(1).max(168).default(24)),
 }).strict();

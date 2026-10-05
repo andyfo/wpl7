@@ -227,13 +227,16 @@ The whole of it is docs/security.md; the moving parts:
 
 ## TLS
 
-Traefik resolvers: `letsencrypt` (HTTP-01), `letsencrypt-staging` (testing), and — when `DNS_PROVIDER`
-is configured (compose overlay `docker-compose.dns.yml`) — `letsencrypt-dns` issuing one wildcard cert
-for `*.<DEV_DOMAIN>`, plus its `letsencrypt-dns-staging` twin. Pure dev-domain sites share the wildcard;
-custom-domain sites always use HTTP-01. `ACME_RESOLVER` selects the CA for *all* of them: setting it to
+Traefik resolvers: `letsencrypt` (HTTP-01), `letsencrypt-staging` (testing), and on every server
+`letsencrypt-dns` issuing one wildcard cert for `*.<DEV_DOMAIN>`, plus its `letsencrypt-dns-staging`
+twin — DNS-01 with `DNS_PROVIDER`, Cloudflare when that is empty, its token read from the file the
+panel keeps on each server (services/traefikDns.ts, docs/dns.md). Pure dev-domain sites share the
+wildcard on a server whose wildcard certificate is switched on in Settings → DNS — and only while
+there is a token to answer the challenge with (`DnsService.wildcardProvider`); custom-domain sites
+always use HTTP-01. `ACME_RESOLVER` selects the CA for *all* of them: setting it to
 `letsencrypt-staging` also switches the wildcard to the staging DNS-01 resolver, so nothing hits the
 production CA. Note that `TLS_MODE` only chooses http vs https — it does not pick the CA.
-Without a DNS provider each dev subdomain gets its own HTTP-01 cert (counts against Let's Encrypt's
+Without the wildcard each dev subdomain gets its own HTTP-01 cert (counts against Let's Encrypt's
 50 certs/week per registered domain).
 
 ## Panel internals

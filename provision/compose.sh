@@ -37,10 +37,6 @@ if grep -q '^SERVER_ROLE=worker' "$ENV_FILE"; then WORKER=1; fi
 if [ "$WORKER" = 0 ] && { [ "$(wpl7_source_mode "$ENV_FILE")" = build ] || [ "${WPL7_COMPOSE_BUILD:-0}" = 1 ]; }; then
   FILES+=(-f "$DEPLOY_DIR/docker-compose.build.yml")
 fi
-# Wildcard dev-domain certificates need the DNS-01 overlay.
-if grep -q '^DNS_PROVIDER=..*' "$ENV_FILE"; then
-  FILES+=(-f "$DEPLOY_DIR/docker-compose.dns.yml")
-fi
 # Worker servers run the stack without the panel (the central panel drives them over SSH).
 if [ "$WORKER" = 1 ]; then
   FILES+=(-f "$DEPLOY_DIR/docker-compose.worker.yml")

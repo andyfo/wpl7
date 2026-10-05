@@ -137,8 +137,11 @@ describe('GET /api/mail/setup', () => {
     const setup = (await app.inject({ method: 'GET', url: '/api/mail/setup', headers })).json();
 
     expect(setup.dns.configured).toBe(false);
-    expect(setup.dns.hint).toMatch(/DNS_PROVIDER/);
-    expect(setup.dns.hint).toMatch(/CF_DNS_API_TOKEN/);
+    expect(setup.dns.provider).toBe('');
+    // The panel's own Settings, not a file on the server: that is where the token lives now.
+    expect(setup.dns.hint).toMatch(/Settings → DNS/);
+    expect(setup.dns.hint).toMatch(/Zone → Zone → Read and Zone → DNS → Edit/);
+    expect(setup.dns.hint).not.toMatch(/deploy\/\.env/);
   });
 
   it('marks every step ready once the zone is writable', async () => {

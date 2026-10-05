@@ -234,6 +234,13 @@ export interface ContainerLimits {
   pidsLimit?: number;
 }
 
+export interface ContainerConfig {
+  /** `Config.Cmd`: what compose's `command:` became. */
+  cmd: string[];
+  /** Variables with a non-empty value. */
+  envSet: string[];
+}
+
 /**
  * A single read of a container's cumulative resource counters.
  *
@@ -269,6 +276,12 @@ export interface DockerPort {
   containerImage(name: string): Promise<string | null>;
   /** The ceilings a container runs under now; null when it does not exist. */
   containerLimits(name: string): Promise<ContainerLimits | null>;
+  /**
+   * How a container was started: its command, and the names of the environment variables it
+   * has a value for - never the values, which is where a compose file puts its credentials.
+   * Null when it does not exist.
+   */
+  containerConfig(name: string): Promise<ContainerConfig | null>;
   /**
    * Change a container's ceilings in place, running or stopped, without restarting it. It
    * cannot lift a CPU cap (see limitsChange) - a container that has to lose one is rebuilt.
@@ -500,6 +513,19 @@ export class DockerService implements DockerPort {
     try {
       const info = (await this.docker.getContainer(name).inspect()) as { Config?: { Image?: string } };
       return info.Config?.Image ?? null;
+    } catch (err) {
+      if (isStatusError(err, 404)) return null;
+      throw err;
+    }
+  }
+
+  async containerConfig(name: string): Promise<ContainerConfig | null> {
+    try {
+      const info = (await this.docker.getContainer(name).inspect()) as { Config?: { Cmd?: string[] | null; Env?: string[] | null } };
+      const envSet = (info.Config?.Env ?? [])
+        .map((entry) => /^([^=]+)=(.+)$/s.exec(entry)?.[1])
+        .filter((key): key is string => key !== undefined);
+      return { cmd: info.Config?.Cmd ?? [], envSet };
     } catch (err) {
       if (isStatusError(err, 404)) return null;
       throw err;

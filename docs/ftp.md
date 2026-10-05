@@ -126,7 +126,7 @@ While FTP is stopped the tab shows **Paused**, and a login attempt fails.
 
 ## Settings
 
-**Settings → FTP & SFTP** applies to every server:
+**Settings → Sites → FTP & SFTP** applies to every server:
 
 - **Allow FTP and SFTP logins**: off removes every server's gateway and file servers - at
   once from the servers the panel can reach, and from any other as soon as it can reach it.

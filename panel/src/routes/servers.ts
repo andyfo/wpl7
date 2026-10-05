@@ -15,6 +15,8 @@ import { backupRootProblem, normalizeAbsolutePath } from '../../shared/backupRoo
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { jobToDto, serverToDto, viewerOf } from '../lib/dto.js';
 import { readPanelPublicKey } from '../servers/keys.js';
+import { CLOUDFLARE } from '../services/dns.js';
+import { sweepWildcardSites, wildcardProblem } from '../services/wildcardSites.js';
 import type { AppDeps } from './deps.js';
 
 const idParams = z.object({ id: z.coerce.number().int().positive() });
@@ -48,6 +50,18 @@ export function registerServerRoutes(app: FastifyInstance, deps: AppDeps): void 
         throw conflict(`${body.sshHost}:${body.sshPort} is already registered as "${existing.name}"`);
       }
     }
+    // Only a wildcard certificate the token can get (Settings -> DNS). Without it the server
+    // starts with a certificate per site, and is switched over there once the token reaches its
+    // dev domain's records - adding a server is not refused over an optional certificate.
+    let dnsProvider = body.dnsProvider;
+    if (dnsProvider === CLOUDFLARE) {
+      // Not registered yet, so no Traefik of its own to read: the token and the zone only.
+      const problem = await wildcardProblem(deps, { id: 0, devDomain: body.devDomain }, dnsProvider);
+      if (problem) {
+        deps.log.warn(`Server "${body.name}" starts without a wildcard certificate. ${problem}`);
+        dnsProvider = '';
+      }
+    }
     const now = Date.now();
     const row = deps.db
       .insert(servers)
@@ -59,7 +73,7 @@ export function registerServerRoutes(app: FastifyInstance, deps: AppDeps): void 
         sshUser: body.sshUser,
         publicIp: body.publicIp ?? '',
         devDomain: body.devDomain,
-        dnsProvider: body.dnsProvider,
+        dnsProvider,
         status: body.provision ? 'provisioning' : 'ok',
         createdAt: now,
         updatedAt: now,
@@ -97,6 +111,8 @@ export function registerServerRoutes(app: FastifyInstance, deps: AppDeps): void 
         .send({ error: { code: 'bad_gateway', message: 'Server verification failed', details: { checks } } });
     }
     const job = deps.worker.enqueue('server.syncPlugins', { serverId: row.id }, undefined, { serverId: row.id });
+    // Its Traefik's copy of the Cloudflare token (Settings -> DNS), now rather than at the next tick.
+    void deps.traefikDns.kick(row.id);
     const fresh = deps.servers.rowById(row.id)!;
     return reply.status(201).send({ server: serverToDto(fresh, 0), checks, job: jobToDto(job, viewerOf(req)) });
   });
@@ -176,6 +192,17 @@ export function registerServerRoutes(app: FastifyInstance, deps: AppDeps): void 
       const taken = deps.servers.listRows().some((s) => s.id !== row.id && s.name === body.name);
       if (taken) throw conflict(`Server name "${body.name}" is already taken`);
     }
+    // The wildcard certificate, as Settings -> DNS switches it (routes/dns.ts): only where the
+    // server's Traefik can answer the challenge - for Cloudflare, with a token reaching the zone's records.
+    // Asked when it is switched on, and when the dev domain under one in force changes.
+    const nextProvider = body.dnsProvider ?? row.dnsProvider;
+    const nextDevDomain = body.devDomain ?? row.devDomain;
+    const switchedOn = nextProvider !== '' && nextProvider !== row.dnsProvider;
+    const movedUnder = nextDevDomain !== row.devDomain && deps.dns.wildcardProvider(nextProvider) !== '';
+    if (switchedOn || movedUnder) {
+      const problem = await wildcardProblem(deps, { id: row.id, devDomain: nextDevDomain }, nextProvider);
+      if (problem) throw conflict(`"${row.name}" can't use a wildcard certificate. ${problem}`, { reason: problem });
+    }
     const patch: Record<string, unknown> = { updatedAt: Date.now() };
     for (const key of ['name', 'sshHost', 'sshPort', 'sshUser', 'publicIp', 'devDomain', 'dnsProvider'] as const) {
       if (body[key] !== undefined) patch[key] = body[key];
@@ -186,6 +213,11 @@ export function registerServerRoutes(app: FastifyInstance, deps: AppDeps): void 
     // FTP's passive mode hands clients this address; a gateway still announcing the old one
     // would send every data connection somewhere else.
     if (body.publicIp !== undefined && body.publicIp !== row.publicIp) void deps.ftp.recheck(row.id);
+    // Switched off: the dev sites sharing the wildcard certificate are rebuilt onto certificates
+    // of their own (services/wildcardSites.ts).
+    if (body.dnsProvider !== undefined && body.dnsProvider !== row.dnsProvider) {
+      await sweepWildcardSites(deps, deps.worker, [row.id]);
+    }
     // Last, and on its own: it creates the directory and probes it for writability, and a
     // failure there must not roll back the rest of the edit (or be lost in it).
     if (body.backupRoot !== undefined) await deps.storage.setRoot(row.id, body.backupRoot);

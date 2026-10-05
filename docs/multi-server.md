@@ -64,8 +64,11 @@ add the key to your VPS provider account *before* creating the VPS so it gets ba
 4. verifies the result exactly like manual registration below,
 5. syncs the plugin-catalog zips.
 
-The DNS provider token is passed to `setup.sh` on **stdin** (`--dns-token-stdin`), never on the command
-line, so it can't leak via the process list. Each worker's `deploy/.env` gets its own random
+The Cloudflare token never goes to `setup.sh`: once the server is verified, the panel puts its Traefik's
+copy in place itself ([dns.md](dns.md#wildcard-certificate-for-dev-sites-recommended)). Another DNS
+provider's token, for a fleet whose `DNS_PROVIDER` is not Cloudflare, is passed to `setup.sh` on
+**stdin** (`--dns-token-stdin`), never on the command line, so it can't leak via the process list.
+Each worker's `deploy/.env` gets its own random
 `MARIADB_ROOT_PASSWORD`; the panel never stores remote database credentials — admin operations run via
 `docker exec` into that server's `wpl7-mariadb`, which reads the password from its own environment.
 
@@ -75,9 +78,10 @@ Run the provisioner yourself on the new server, then register:
 
 ```bash
 ./provision/setup.sh --role=worker --dev-domain=dev.example.com --acme-email=you@example.com \
-  --panel-key='ssh-ed25519 AAAA… panel' \
-  --dns-provider=cloudflare --dns-token-stdin <<<"$CF_TOKEN"     # token via stdin, for the wildcard cert
+  --panel-key='ssh-ed25519 AAAA… panel'
 ```
+
+No Cloudflare token here: the panel gives the server's Traefik its copy when it registers it.
 
 then **Servers → Add server → "Already provisioned"**. Registration verifies before keeping anything:
 SSH + sudo, Docker, `wpl7-traefik` and `wpl7-mariadb` running (mail is optional), the `/srv` directories,
@@ -120,13 +124,13 @@ created on any *other* server get an explicit `<slug>.<devDomain>` A record → 
 specific record beats the wildcard; TTL 300, unproxied), created at site creation, re-pointed on a
 move, deleted with the site.
 
-Record automation needs `DNS_PROVIDER=cloudflare` + `CF_DNS_API_TOKEN` in `deploy/.env` — the same
-token the DNS-01 wildcard-cert overlay uses; scope **Zone → DNS → Edit** on the relevant zones.
-Cloudflare is the only provider the panel manages records with for now; with any other setup the panel
-still works — it warns and tells you exactly which record to create by hand. Every server issues its
-own `*.<devDomain>` wildcard certificate via DNS-01 (provisioning injects the token into each worker's
-`.env`); custom domains use per-host HTTP-01 on whichever server hosts the site. Record tables:
-docs/dns.md.
+Record automation needs a Cloudflare API token in **Settings → DNS**, with **Zone → Zone → Read** and
+**Zone → DNS → Edit** on the relevant zones. Cloudflare is the only provider the panel manages records
+with for now; without a token the panel still works — it warns and tells you exactly which record to
+create by hand. A server whose wildcard certificate is on (Settings → DNS, per server) issues its own
+`*.<devDomain>` certificate via DNS-01, with the copy of the token the panel keeps on every server;
+custom domains use per-host HTTP-01 on whichever server hosts the site. Record tables and the
+wildcard certificate: docs/dns.md.
 
 ## Moving a site
 

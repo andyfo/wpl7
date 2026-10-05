@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { jobs, schedules, sites, type SiteRow } from '../../src/db/schema.js';
 import { runAs } from '../../src/jobs/actor.js';
+import type { RunHow } from '../../src/jobs/schedulers.js';
 import { makeWorld, type TestWorld } from '../helpers.js';
 
 function addSite(w: TestWorld, slug: string, status = 'running'): SiteRow {
@@ -54,13 +55,14 @@ describe('built-in schedules', () => {
       'site-networks',
       'site-protection',
       'blocked-addresses',
+      'wildcard-token',
       'ftp',
       'update-watchdog',
     ]);
     expect(byKey.get('backups')).toMatchObject({ kind: 'builtin', group: 'jobs', pausable: true, settingsHref: '/settings#backups' });
     expect(byKey.get('backups')!.cadence.cron).toBe(w.deps.settings.get('backupCron'));
     expect(byKey.get('uptime')!.group).toBe('background');
-    for (const key of ['mail-ingest', 'site-networks', 'site-protection', 'blocked-addresses', 'ftp', 'update-watchdog']) {
+    for (const key of ['mail-ingest', 'site-networks', 'site-protection', 'blocked-addresses', 'wildcard-token', 'ftp', 'update-watchdog']) {
       expect(byKey.get(key)!.pausable, key).toBe(false);
       expect(byKey.get(key)!.lockedReason, key).toBeTruthy();
     }
@@ -201,6 +203,32 @@ describe('built-in schedules', () => {
     expect(queued).toHaveLength(1);
     expect(queued[0]!.lane).toBe('housekeeping');
     expect(w.deps.schedulers.get('housekeeping').lastOutcome).toBe('skipped');
+  });
+
+  it('arms a timer for every task that runs on an interval, and runs at boot what cannot wait', async () => {
+    const w = await makeWorld();
+    const sched = w.deps.schedulers;
+    const runs: [string, RunHow][] = [];
+    vi.spyOn(sched, 'run').mockImplementation(async (key, how) => {
+      runs.push([key, how]);
+      return null;
+    });
+    vi.spyOn(sched, 'runDueCustom').mockResolvedValue();
+    vi.useFakeTimers();
+    try {
+      sched.start();
+      // A token seeded from deploy/.env on this boot is on no server yet, and no change kicks it.
+      expect(runs).toContainEqual(['wildcard-token', 'boot']);
+      vi.advanceTimersByTime(61 * 60_000);
+      const timed = new Set(runs.filter(([, how]) => how === 'timer').map(([key]) => key));
+      const interval = sched.list().filter((t) => t.kind === 'builtin' && t.cadence.everyMs !== null);
+      expect(interval.map((t) => t.key)).toContain('wildcard-token');
+      for (const task of interval) expect(timed.has(task.key!), task.key!).toBe(true);
+    } finally {
+      sched.stop();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
   });
 
   it('does not arm a cron before it is started', async () => {

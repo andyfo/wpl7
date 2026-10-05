@@ -8,6 +8,7 @@ import { connectDb, openDb, type Db } from '../src/db/index.js';
 import { runMigrations } from '../src/db/migrate.js';
 import { loadConfig, type Config } from '../src/config.js';
 import type {
+  ContainerConfig,
   ContainerLimits,
   ContainerLogsOpts,
   ContainerSample,
@@ -34,7 +35,9 @@ import { ServerRegistry, type HandlePorts } from '../src/servers/registry.js';
 import { BackupService } from '../src/services/backup.js';
 import { OffsiteService } from '../src/services/offsite.js';
 import { StorageService } from '../src/services/storage.js';
-import { DnsService, type DnsProviderClient, type DnsTxtRecord, type DnsZone } from '../src/services/dns.js';
+import { CloudflareApiError, DnsService, type DnsProviderClient, type DnsTxtRecord, type DnsZone } from '../src/services/dns.js';
+import { DnsAccount, type DnsClient } from '../src/services/dnsAccount.js';
+import { TraefikDnsSync } from '../src/services/traefikDns.js';
 import type { DnsResolver } from '../src/services/mailDns.js';
 import { MonitorService } from '../src/services/monitor.js';
 import { MailService } from '../src/services/mail.js';
@@ -323,6 +326,19 @@ export class FakeDocker implements DockerPort {
   containerImages = new Map<string, string>([['wpl7-panel', 'ghcr.io/andyfo/wpl7/panel:0.3.0']]);
   async containerImage(name: string): Promise<string | null> {
     return this.containers.has(name) ? (this.containerImages.get(name) ?? `${name}:latest`) : null;
+  }
+  /**
+   * How each container was started. Traefik defaults to what deploy/docker-compose.yml starts it
+   * with: the DNS resolver on Cloudflare, the token read from the panel's file.
+   */
+  containerConfigs = new Map<string, ContainerConfig>([
+    [
+      'wpl7-traefik',
+      { cmd: ['--certificatesresolvers.letsencrypt-dns.acme.dnschallenge.provider=cloudflare'], envSet: ['CF_DNS_API_TOKEN_FILE'] },
+    ],
+  ]);
+  async containerConfig(name: string): Promise<ContainerConfig | null> {
+    return this.containers.has(name) ? (this.containerConfigs.get(name) ?? { cmd: [], envSet: [] }) : null;
   }
   /** Each site container's ceilings: as created, then as changed in place. */
   limits = new Map<string, ContainerLimits>();
@@ -1080,16 +1096,40 @@ export class FakeGitHub {
   };
 }
 
-/** Recording DNS provider fake: manages any zone listed in `zones`. */
-export class FakeDnsProvider implements DnsProviderClient {
+/**
+ * Recording DNS provider fake: manages any zone listed in `zones`. Also the client Settings ->
+ * DNS checks a token with (makeWorld's `dnsClient`): `refuse` answers the way Cloudflare does a
+ * token it will not take, `recordsRefused` a zone the token reads but not its records.
+ */
+export class FakeDnsProvider implements DnsClient {
   zones: string[] = [];
   records = new Map<string, string>(); // fqdn -> ip
   txt = new Map<string, DnsTxtRecord[]>(); // fqdn -> TXT records
+  refuse: CloudflareApiError | null = null;
+  recordsRefused = new Set<string>();
   private txtSeq = 0;
   calls: { method: string; fqdn: string; ip?: string; content?: string; zone?: string }[] = [];
 
+  /** What Cloudflare answers a token it does not know. */
+  static invalidToken(): CloudflareApiError {
+    return new CloudflareApiError(400, 'Invalid API Token (1000)', 'GET', '/zones');
+  }
+
+  async listZones(): Promise<{ zones: DnsZone[]; total: number }> {
+    this.calls.push({ method: 'listZones', fqdn: '' });
+    if (this.refuse) throw this.refuse;
+    return { zones: this.zones.map((name) => ({ id: `zone-${name}`, name })), total: this.zones.length };
+  }
+  async probeRecords(zone: DnsZone): Promise<void> {
+    this.calls.push({ method: 'probeRecords', fqdn: zone.name, zone: zone.name });
+    if (this.recordsRefused.has(zone.name)) {
+      throw new CloudflareApiError(403, 'Unauthorized to access requested resource (9109)', 'GET', `/zones/${zone.id}/dns_records`);
+    }
+  }
+
   async findZone(fqdn: string): Promise<DnsZone | null> {
     this.calls.push({ method: 'findZone', fqdn });
+    if (this.refuse) throw this.refuse;
     const zone = this.zones.find((z) => fqdn === z || fqdn.endsWith(`.${z}`));
     return zone ? { id: `zone-${zone}`, name: zone } : null;
   }
@@ -1132,6 +1172,10 @@ export class FakeDnsProvider implements DnsProviderClient {
   }
 }
 
+const refuseCloudflare = (): never => {
+  throw new Error('test tried to reach Cloudflare; pass makeWorld({ dnsClient })');
+};
+
 /** Nothing in the suite may reach the network; a test that means to post supplies its own. */
 const refuseToLeaveTheSuite: PostLike = async (url) => {
   throw new Error(`test tried to POST ${url}; pass makeWorld({ communityPost })`);
@@ -1141,6 +1185,11 @@ export async function makeWorld(
   opts: {
     exec?: ExecPort;
     dnsProvider?: DnsProviderClient;
+    /**
+     * The Cloudflare client Settings -> DNS makes from a token. Without one, a test that sets a
+     * token fails rather than reaching Cloudflare.
+     */
+    dnsClient?: (token: string) => DnsClient;
     wporg?: FakeWporg;
     resolver?: DnsResolver;
     /** The community's /feedback endpoint. Without one the suite refuses to leave the box. */
@@ -1230,6 +1279,10 @@ export async function makeWorld(
   const monitor = new MonitorService(db, config, servers);
   const backup = new BackupService(db, config, servers);
   const dns = new DnsService(opts.dnsProvider ?? null, log);
+  const dnsAccount = new DnsAccount(settings, dns, servers, config, log, opts.dnsClient ?? refuseCloudflare);
+  // No debounce: a test awaits `traefikDns.idle()` (or the sync itself).
+  const traefikDns = new TraefikDnsSync(config, servers, () => dnsAccount.token(), log, { debounceMs: 0 });
+  dnsAccount.onChange = () => void traefikDns.kickAll();
   // No settle: the fake relay has logged the test message by the time sendmail returns.
   const mail = new MailService(db, config, servers, settings, log, opts.resolver, dns, 0);
   const offsite = new OffsiteService(db, config, servers, backup, mail, log);
@@ -1309,6 +1362,8 @@ export async function makeWorld(
     monitor,
     settings,
     dns,
+    dnsAccount,
+    traefikDns,
     mail,
     traffic,
     updates,

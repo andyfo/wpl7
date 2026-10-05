@@ -5,6 +5,8 @@ import type { BackupService } from './backup.js';
 import type { OffsiteService } from './offsite.js';
 import type { StorageService } from './storage.js';
 import type { DnsService } from './dns.js';
+import type { DnsAccount } from './dnsAccount.js';
+import type { TraefikDnsSync } from './traefikDns.js';
 import type { MailService } from './mail.js';
 import type { MonitorService } from './monitor.js';
 import type { SettingsService } from './settings.js';
@@ -53,7 +55,12 @@ export interface CoreServices {
   storage: StorageService;
   monitor: MonitorService;
   settings: SettingsService;
+  /** The panel's own records, in the Cloudflare account Settings -> DNS holds the token of. */
   dns: DnsService;
+  /** That token: kept write-only, checked, and handed on. */
+  dnsAccount: DnsAccount;
+  /** Every server's Traefik given the same token, for the wildcard certificate's DNS challenges. */
+  traefikDns: TraefikDnsSync;
   mail: MailService;
   traffic: TrafficService;
   geoip: GeoIpService;

@@ -24,8 +24,12 @@ taken before that keeps whatever structure the backup had.
 - `docker logs wpl7-traefik | grep -i acme` shows validation errors.
 - Rate limits: Let's Encrypt allows 5 failed validations per hostname per hour and 50 certs per
   registered domain per week. Use `TLS_MODE=staging` (`ACME_RESOLVER=letsencrypt-staging`) while testing,
-  and configure `DNS_PROVIDER` so dev sites share one wildcard cert.
+  and switch on the wildcard certificate (**Settings → DNS**) so dev sites share one.
 - `acme*.json` must be mode 600 or Traefik refuses to start the resolver.
+- A dev site on a server whose wildcard certificate is on: **Settings → DNS → Check** says whether the
+  token reaches the dev domain's zone and can read its records, and the table there whether that
+  server's Traefik has the token. `docker logs wpl7-traefik | grep -i -e acme -e cloudflare` shows what
+  Cloudflare answered. A token that lacks **Zone → Zone → Read** fails the zone lookup even with DNS Edit.
 
 ## "Error establishing a database connection"
 - `docker inspect --format '{{.State.Health.Status}}' wpl7-mariadb` → should be `healthy`.
@@ -286,7 +290,7 @@ own log is `docker logs wpl7-ftp` on that server (logins, bans, transfers).
   reach (Servers → Edit settings). SFTP needs neither.
 - **"Port … is already in use … so it offers SFTP only"**: another program on the server listens
   on an FTP port (often a preinstalled FTP server); SFTP still works there. Stop it, or change the
-  port in Settings → FTP & SFTP.
+  port in Settings → Sites → FTP & SFTP.
 - **"port 2222 is already in use"**: the SFTP port is taken on that server, often by its own SSH.
   Change the SFTP port in Settings.
 - **The right password is refused**: after repeated failures the gateway bans the address for 30
@@ -343,7 +347,7 @@ server says the same. `setup.sh --no-firewall` servers stay HTTP only by design.
 The scan's result says what happened, and its job's log (Jobs → *Malware scan*) the details:
 
 - **"ran out of time"** or **"ran out of memory"**: raise **Time per scan** or **Memory per
-  scan** in Settings → Malware scans. A site with many unpublished plugins takes longest.
+  scan** in Settings → Security → Malware scans. A site with many unpublished plugins takes longest.
 - **"could not be read"**: files or folders the site's own user (`www-data`) may not read - often
   root-owned files from a manual copy. `docker exec wp-<slug> chown -R www-data: /var/www/html`
   hands them back.

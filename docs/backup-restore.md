@@ -274,7 +274,7 @@ is also how a backup taken before a site moved gets restored: fetch it onto the 
 
 Failed copies back off 10 minutes → 1 hour → 6 hours and then stop. They stay listed in
 **Backups → Storage → Recent failures** with the error and a **Retry** button, and the operator is
-emailed at most once a day per destination (Settings → alert address).
+emailed at most once a day per destination (Settings → Mail → Send alerts to).
 
 ### Security
 

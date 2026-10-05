@@ -7,6 +7,7 @@ import { reconcileSiteNetworks } from '../services/siteNetwork.js';
 import { siteRuntimeFrom } from '../services/siteSpec.js';
 import { sweepLegacyRename } from '../services/legacyRename.js';
 import { sweepHardening } from '../services/siteHardening.js';
+import { sweepWildcardSites } from '../services/wildcardSites.js';
 import { FIRST_CHECK_DELAY_MS } from '../services/updates.js';
 import { fleetScanPass } from '../services/wpBulk.js';
 import { ScheduleStore, customCronProblem, graceMs, nextCronRun } from '../services/schedules.js';
@@ -379,7 +380,7 @@ export class Schedulers {
         group: 'background',
         name: 'Site network repair',
         description:
-          "Re-attaches Traefik, the mail relay and MariaDB to every site's network. Compose drops those connections whenever it recreates the stack. Also rebuilds, once, any site container made before its protection reached inside it.",
+          "Re-attaches Traefik, the mail relay and MariaDB to every site's network. Compose drops those connections whenever it recreates the stack. Also rebuilds, once, any site container made before its protection reached inside it, and any dev site still on a wildcard certificate its server can no longer renew.",
         pausable: false,
         lockedReason: 'Without it, a redeployed stack can leave sites unreachable.',
         cadence: () => ({ everyMs: MIN, text: 'Every minute' }),
@@ -395,6 +396,8 @@ export class Schedulers {
           if (how === 'boot' || Date.now() - this.hardeningSweptAt >= 60 * MIN) {
             this.hardeningSweptAt = Date.now();
             await sweepHardening(s, this.worker);
+            // Its own trigger is Settings -> DNS; this is for the sites that were busy then.
+            await sweepWildcardSites(s, this.worker);
           }
           return result;
         },
@@ -423,6 +426,20 @@ export class Schedulers {
         lockedReason: 'It is what ends blocks on time and restores them on a server that rebooted.',
         cadence: () => ({ everyMs: MIN, text: 'Every minute, and right after each change' }),
         tick: (how) => this.blockedAddressesTick(how),
+      },
+      {
+        key: 'wildcard-token',
+        group: 'background',
+        name: 'Wildcard certificate token',
+        description:
+          "Keeps each server's copy of the Cloudflare token in Settings → DNS, which Traefik answers the wildcard certificate's DNS challenges with, and restarts Traefik where a token it may still hold was replaced or removed.",
+        pausable: false,
+        lockedReason: 'Without it, a server added or set up again has no token, and a replaced token never reaches the servers.',
+        cadence: () => ({ everyMs: MIN, text: 'Every minute, and right after each change', settingsHref: '/settings?tab=dns' }),
+        tick: () => {
+          const { kicked } = s.traefikDns.tick();
+          return kicked > 0 ? { message: `Checking ${plural(kicked, 'server')}` } : { idle: true };
+        },
       },
       {
         key: 'ftp',
@@ -503,6 +520,9 @@ export class Schedulers {
       every('site-protection', MIN),
       // Blocked addresses: blocks that ran out, and servers whose list changed or rebooted.
       every('blocked-addresses', MIN),
+      // Traefik's copy of the Cloudflare token: a change kicks every server at once; the tick is
+      // for a server that was away then, a write or restart that failed, and the half-hourly look.
+      every('wildcard-token', MIN),
       // The public recipe catalog: a conditional GET an hour, so a recipe published there
       // reaches this install within the hour without a release (docs/licenses.md).
       every('catalog', 3600_000),
@@ -541,6 +561,9 @@ export class Schedulers {
     // written by an older one) is put right, without rewriting what is already right.
     void this.run('site-protection', 'boot');
     void this.run('blocked-addresses', 'boot');
+    // Now, not in a minute: a token seeded from deploy/.env on this boot - an install, or the
+    // update that moved Traefik to the file - is on no server yet, and no change will kick it.
+    void this.run('wildcard-token', 'boot');
   }
 
   /** Called on start and whenever the backup cron setting changes. Arms nothing until started. */
