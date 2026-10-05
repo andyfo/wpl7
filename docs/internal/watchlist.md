@@ -22,6 +22,7 @@ for a reason; remove one once there is nothing left to watch.
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-10-02 05:12 UTC | Both overrides apply to 0.21.12; signatures named |
 | [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-09-30 07:23 UTC | 2.7.6 is the latest; patch still needed |
 | [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
+| [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-10-04 18:10 UTC | `latest` is v5.1.0; hostname logic as relied on |
 | [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-09-30 07:23 UTC | Both answer as expected |
 | [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-09-30 09:51 UTC | All six as listed |
 | [AI assistants' address lists](#ai-assistants-address-lists) | Medium | 2026-09-30 10:46 UTC | All 12 lists pass the checks |
@@ -145,6 +146,34 @@ for a reason; remove one once there is nothing left to watch.
      `wpl7-firewall apply`. A blocked client must time out on 80 and 443 and still reach 22.
   5. Repeat after `ufw reload`, `systemctl restart docker`, a restart of the whole container (a
      reboot: the boot unit loads the table), and `wpl7-firewall off` / `on`.
+
+## boky/postfix: how the relay picks its hostname
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-04 18:10 UTC. `boky/postfix:latest` is v5.1.0 (2026-01-04, digest
+  `sha256:aafc7723…`), which the live box runs. There and on upstream `master`,
+  `postfix_set_hostname` falls back to `$HOSTNAME` when `POSTFIX_myhostname` is unset, and
+  `run.sh` applies every `POSTFIX_*` setting after it, on every start. `master` has since
+  replaced OpenDKIM with rspamd (2026-07-23); no release has that yet.
+- **The problem:** `deploy/docker-compose.yml` runs `boky/postfix:latest`, unpinned, and an update
+  pulls whatever release `latest` is then. The panel relies on how the image picks
+  `myhostname`: `MAIL_HOSTNAME` reaches it as `HOSTNAME`, a name set in the panel as
+  `POSTFIX_myhostname`, applied after it. The image applies the container's creation-time
+  environment again on every start, so a restart undoes a hostname changed since. The panel
+  puts it back every minute (`convergeHostname` in `panel/src/services/mail.ts`) and reads the
+  default with `printenv HOSTNAME` in the container (`RELAY_HOSTNAME_PROBE` in
+  `panel/src/services/mailHostname.ts`).
+- **Check:** `gh release list -R bokysan/docker-postfix --limit 3`. For a release since the last
+  check, read `postfix_set_hostname` and `postfix_custom_commands` at its tag, and the order
+  `image_root/scripts/run.sh` calls them in:
+  `gh api 'repos/bokysan/docker-postfix/contents/image_root/scripts/functions.sh?ref=<tag>' -H 'Accept: application/vnd.github.raw' | sed -n '/^postfix_set_hostname/,/^}/p'`.
+  Read its release notes for the other variables the compose `environment:` sets.
+- **When it changes:** if the hostname no longer comes from `HOSTNAME`, or `POSTFIX_*` settings
+  stop being applied after it, change the compose `environment:` and `RELAY_HOSTNAME_PROBE` to
+  match and run `npx vitest run test/api/mailSetup.test.ts`. Then, on a container of the new
+  image: set a name with `postconf -e` and `postfix reload`, `docker restart` it, and see what it
+  announces. If the image ever reads a mounted file again at every start, the panel's
+  per-minute repair can go.
 
 ## wordpress.org's checksum lists
 

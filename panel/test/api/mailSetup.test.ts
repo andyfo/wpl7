@@ -1,7 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { sites } from '../../src/db/schema.js';
-import { MAIL_CONTAINER, DKIM_CONTAINER } from '../../src/services/mail.js';
-import { FakeDnsProvider, makeApp, makeWorld, type TestWorld } from '../helpers.js';
+import { MAIL_CONTAINER, DKIM_CONTAINER, MailService } from '../../src/services/mail.js';
+import type { ExecPort } from '../../src/lib/exec.js';
+import { ExecFiles } from '../../src/lib/files.js';
+import { FakeDnsProvider, FakeDocker, makeApp, makeWorld, type TestWorld } from '../helpers.js';
 import type { DnsResolver } from '../../src/services/mailDns.js';
 
 const nx = () => {
@@ -78,6 +82,21 @@ async function setupWorld(opts: { zones?: string[]; resolver?: DnsResolver; publ
   return { world, dnsProvider };
 }
 
+const PANEL_HEADER = '# Written by the WPL7 panel (Mail -> Setup guide).\n';
+const relayEnvPath = (world: TestWorld) => path.join(world.config.srvRoot, 'mail', 'relay.env');
+
+function writeRelayEnv(world: TestWorld, content: string): void {
+  fs.mkdirSync(path.dirname(relayEnvPath(world)), { recursive: true });
+  fs.writeFileSync(relayEnvPath(world), content);
+}
+
+/** The `postconf -e … && postfix reload` calls made into the relay, as their shell lines. */
+const reloads = (world: TestWorld): string[] =>
+  world.docker.calls
+    .filter((c) => c.method === 'exec' && c.args[0] === MAIL_CONTAINER)
+    .map((c) => (c.args[1] as string[]).join(' '))
+    .filter((line) => line.includes('postfix reload') && line.includes('postconf'));
+
 describe('GET /api/mail/setup', () => {
   it('returns the server steps, the domain plan and the rDNS instructions in one call', async () => {
     const { world } = await setupWorld();
@@ -95,6 +114,21 @@ describe('GET /api/mail/setup', () => {
     const domain = setup.domains.find((d: { domain: string }) => d.domain === 'acme.test');
     expect(domain.steps.map((s: { id: string }) => s.id)).toEqual(['spf', 'dkim', 'dmarc']);
     expect(domain.ready).toBe(false);
+  });
+
+  it('says where the announced name comes from: the default, and the name set in the panel', async () => {
+    const { world } = await setupWorld();
+    world.docker.relayHostnames = { live: 'srv.example.com', fallback: 'mail.example.com' };
+    writeRelayEnv(world, `${PANEL_HEADER}POSTFIX_myhostname=srv.example.com\n`);
+    const { app, headers } = await authedApp(world);
+
+    const setup = (await app.inject({ method: 'GET', url: '/api/mail/setup', headers })).json();
+    expect(setup.servers[0]).toMatchObject({ defaultHostname: 'mail.example.com', hostnameOverride: 'srv.example.com' });
+
+    // A relay that is down cannot say what it was created with; the override is still on disk.
+    world.docker.containers.set(MAIL_CONTAINER, 'exited');
+    const down = (await app.inject({ method: 'GET', url: '/api/mail/setup', headers })).json();
+    expect(down.servers[0]).toMatchObject({ defaultHostname: null, hostnameOverride: 'srv.example.com' });
   });
 
   it('explains how to switch automation on when no DNS token is configured', async () => {
@@ -429,6 +463,155 @@ describe('PUT /api/mail/servers/:serverId/hostname', () => {
       payload: { hostname: 'smtp.example.com' },
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('PUT /api/mail/servers/:serverId/hostname with the default name', () => {
+  it('goes back to the default rather than pinning it as an override', async () => {
+    // Pinned, the relay would keep this name after MAIL_HOSTNAME changed; as the default, it
+    // follows .env - which is what asking for the default name means.
+    const { world } = await setupWorld();
+    world.docker.relayHostnames = { live: 'srv.example.com', fallback: 'mail.example.com' };
+    writeRelayEnv(world, `${PANEL_HEADER}POSTFIX_myhostname=srv.example.com\n`);
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: 0 });
+    world.docker.execQueue.push({ stdout: 'mail.example.com\n', stderr: '', exitCode: 0 });
+    const { app, headers } = await authedApp(world);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/mail/servers/1/hostname',
+      headers,
+      payload: { hostname: 'Mail.Example.com' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ effective: 'mail.example.com', applied: true });
+    expect(res.json().detail).toMatch(/the default/);
+    expect(fs.existsSync(relayEnvPath(world))).toBe(false);
+    expect(reloads(world)).toEqual(['sh -c postconf -e myhostname=mail.example.com && postfix reload']);
+  });
+});
+
+describe('DELETE /api/mail/servers/:serverId/hostname', () => {
+  it('drops the override and puts the relay back on its default, live', async () => {
+    const { world } = await setupWorld();
+    world.docker.relayHostnames = { live: 'srv.example.com', fallback: 'mail.example.com' };
+    writeRelayEnv(world, `${PANEL_HEADER}POSTFIX_myhostname=srv.example.com\nPOSTFIX_smtp_tls_loglevel=1\n`);
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: 0 });
+    world.docker.execQueue.push({ stdout: 'mail.example.com\n', stderr: '', exitCode: 0 });
+    const { app, headers } = await authedApp(world);
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/mail/servers/1/hostname', headers });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ effective: 'mail.example.com', applied: true });
+    expect(reloads(world)).toEqual(['sh -c postconf -e myhostname=mail.example.com && postfix reload']);
+    // The panel's other settings stay; only the hostname goes.
+    const left = fs.readFileSync(relayEnvPath(world), 'utf8');
+    expect(left).toContain('POSTFIX_smtp_tls_loglevel=1');
+    expect(left).not.toContain('POSTFIX_myhostname');
+  });
+
+  it('removes the file once nothing is left in it, and waits for a relay that is down', async () => {
+    const { world } = await setupWorld();
+    world.docker.containers.set(MAIL_CONTAINER, 'exited');
+    writeRelayEnv(world, `${PANEL_HEADER}POSTFIX_myhostname=srv.example.com\n`);
+    const { app, headers } = await authedApp(world);
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/mail/servers/1/hostname', headers });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ applied: false });
+    expect(res.json().detail).toMatch(/next starts/);
+    expect(fs.existsSync(relayEnvPath(world))).toBe(false);
+    expect(reloads(world)).toEqual([]);
+  });
+
+  it('reports an unknown server rather than writing nothing quietly', async () => {
+    const { world } = await setupWorld();
+    const { app, headers } = await authedApp(world);
+    const res = await app.inject({ method: 'DELETE', url: '/api/mail/servers/99/hostname', headers });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('the relay hostname across a restart', () => {
+  // A restarted relay re-applies the environment its container was created with, which says
+  // nothing of an override set - or removed - since then (mailHostname.ts).
+  it('puts back the name set in the panel when a restart has undone it', async () => {
+    const { world } = await setupWorld();
+    world.docker.relayHostnames = { live: 'mail.example.com', fallback: 'mail.example.com' };
+    writeRelayEnv(world, `${PANEL_HEADER}POSTFIX_myhostname=smtp.example.com\n`);
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: 0 });
+    world.docker.execQueue.push({ stdout: 'smtp.example.com\n', stderr: '', exitCode: 0 });
+
+    await world.core.mail.ingestTick();
+
+    expect(reloads(world)).toEqual(['sh -c postconf -e myhostname=smtp.example.com && postfix reload']);
+  });
+
+  it('puts back the default when a restart brought back a name that was reset', async () => {
+    const { world } = await setupWorld();
+    world.docker.relayHostnames = { live: 'srv.example.com', fallback: 'mail.example.com' };
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: 0 });
+    world.docker.execQueue.push({ stdout: 'mail.example.com\n', stderr: '', exitCode: 0 });
+
+    expect(await world.core.mail.convergeHostname(1)).toEqual({ from: 'srv.example.com', to: 'mail.example.com' });
+    expect(reloads(world)).toEqual(['sh -c postconf -e myhostname=mail.example.com && postfix reload']);
+  });
+
+  it('leaves a relay alone that announces what it should, or cannot say', async () => {
+    const { world } = await setupWorld();
+    writeRelayEnv(world, `${PANEL_HEADER}POSTFIX_myhostname=SMTP.example.com\n`);
+    world.docker.relayHostnames = { live: 'smtp.example.com', fallback: 'mail.example.com' };
+    expect(await world.core.mail.convergeHostname(1)).toBeNull();
+
+    world.docker.relayHostnames = null; // mailpit, in local development
+    expect(await world.core.mail.convergeHostname(1)).toBeNull();
+
+    world.docker.relayHostnames = { live: 'mail.example.com', fallback: 'mail.example.com' };
+    world.docker.containers.set(MAIL_CONTAINER, 'exited');
+    expect(await world.core.mail.convergeHostname(1)).toBeNull();
+    expect(reloads(world)).toEqual([]);
+  });
+
+  it('does not take an override it could not read for no override', async () => {
+    // Taken for "none", a slow or failing read would put the relay back on the default.
+    const { world } = await setupWorld();
+    world.docker.relayHostnames = { live: 'smtp.example.com', fallback: 'mail.example.com' };
+    fs.mkdirSync(relayEnvPath(world), { recursive: true });
+
+    await expect(world.core.mail.convergeHostname(1)).rejects.toThrow();
+    expect(reloads(world)).toEqual([]);
+  });
+
+  it('does not take a check that timed out on a server for no override', async () => {
+    // The server's real file adapter, over a shell where the check comes back as the remote
+    // `timeout` wrapper's 124 - which exists() answers as "not there".
+    const docker = new FakeDocker();
+    docker.containers.set(MAIL_CONTAINER, 'running');
+    docker.relayHostnames = { live: 'smtp.example.com', fallback: 'mail.example.com' };
+    const relayOn = (exitCode: number) => {
+      const shell: ExecPort = {
+        run: async () => ({ stdout: '', stderr: '', exitCode }),
+        runWithInput: async () => ({ stdout: '', stderr: '', exitCode }),
+        runToStream: async () => ({ exitCode, stderr: '' }),
+      };
+      const handle = { id: 2, name: 'worker', docker, files: new ExecFiles(shell) };
+      const log = { info: () => undefined, warn: () => undefined };
+      return new MailService(
+        null as never,
+        { srvRoot: '/srv' } as never,
+        { handleFor: () => handle } as never,
+        null as never,
+        log as never,
+      );
+    };
+
+    await expect(relayOn(124).convergeHostname(2)).rejects.toThrow(/exit 124/);
+    expect(docker.calls.filter((c) => c.method === 'exec' && String(c.args[1]).includes('postfix reload'))).toEqual([]);
+
+    // Confirmed not there, it is no override: the default is put back.
+    docker.execQueue.push({ stdout: '', stderr: '', exitCode: 0 });
+    docker.execQueue.push({ stdout: 'mail.example.com\n', stderr: '', exitCode: 0 });
+    expect(await relayOn(3).convergeHostname(2)).toEqual({ from: 'smtp.example.com', to: 'mail.example.com' });
   });
 });
 

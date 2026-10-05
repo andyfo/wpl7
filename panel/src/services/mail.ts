@@ -72,6 +72,14 @@ import {
   type RecordCheck,
 } from './mailDns.js';
 import { mergeSpf, planDomainSteps, RDNS_GUIDES, spfLookupCount, spfMechanismsFor } from './mailSetup.js';
+import {
+  hostnameOverride,
+  parseHostnameProbe,
+  RELAY_HOSTNAME_PROBE,
+  relayEnvWith,
+  sameHostname,
+  type RelayHostnames,
+} from './mailHostname.js';
 import type { DnsService } from './dns.js';
 import type {
   MailDkimKeyDto,
@@ -126,7 +134,8 @@ export function mailPaths(config: Config) {
      * Panel-written overrides for the relay container, read by compose as an optional
      * `env_file`. This is how a setting changed in the panel survives the container being
      * recreated: `deploy/.env` lives in the checkout, which the panel cannot reach on its
-     * own server, but `${SRV_ROOT}` is mounted into it.
+     * own server, but `${SRV_ROOT}` is mounted into it. A restart is another matter - see
+     * mailHostname.ts.
      */
     relayEnv: path.join(root, 'relay.env'),
   };
@@ -961,7 +970,10 @@ export class MailService {
     this.settings.setRaw('mail.logCursor', { ...this.cursors(), [serverId]: ts });
   }
 
-  /** Pull new log lines from every server into `mail_messages`, then apply the abuse guard. */
+  /**
+   * Pull new log lines from every server into `mail_messages`, then apply the abuse guard.
+   * Also puts back a relay's hostname where a restart moved it (convergeHostname).
+   */
   async ingestTick(): Promise<void> {
     for (const row of this.servers.listRows()) {
       if (row.status === 'unreachable') continue;
@@ -969,6 +981,11 @@ export class MailService {
         await this.ingestServer(row.id);
       } catch (err) {
         this.log.warn(`Mail log ingest for server "${row.name}" failed: ${err instanceof Error ? err.message : err}`);
+      }
+      try {
+        await this.convergeHostname(row.id);
+      } catch (err) {
+        this.log.warn(`Mail hostname check for server "${row.name}" failed: ${err instanceof Error ? err.message : err}`);
       }
     }
     // Runs on the freshly ingested rows: the guard is only ever as current as the traffic
@@ -1361,7 +1378,7 @@ export class MailService {
         const status = byServer.get(row.id);
         const hostname = status?.hostname ?? '';
         const port25 = status?.checks.find((c) => c.name === 'port-25');
-        const [hostnameA, reverseDns, hostnameAutomatable] = await Promise.all([
+        const [hostnameA, reverseDns, hostnameAutomatable, settings] = await Promise.all([
           row.publicIp
             ? checkHostnameA(this.resolver, hostname, row.publicIp)
             : Promise.resolve({ verdict: 'missing' as const, found: null, detail: 'This server has no public IP recorded' }),
@@ -1369,12 +1386,15 @@ export class MailService {
             ? checkReverseDns(this.resolver, row.publicIp, hostname || undefined)
             : Promise.resolve({ verdict: 'missing' as const, found: null, detail: 'This server has no public IP recorded' }),
           hostname ? (this.dns?.canManage(hostname) ?? Promise.resolve(false)) : Promise.resolve(false),
+          this.hostnameSettings(row.id),
         ]);
         return {
           serverId: row.id,
           name: row.name,
           ip: row.publicIp,
           hostname,
+          defaultHostname: settings.fallback,
+          hostnameOverride: settings.override,
           mode: status?.mode ?? this.config.mailMode,
           hostnameA,
           reverseDns,
@@ -1403,60 +1423,122 @@ export class MailService {
   }
 
   /**
-   * Change the name the relay announces in HELO.
+   * Change the name the relay announces in HELO, or - `hostname` null - go back to the default.
    *
    * Two writes, because neither alone is enough. `postconf` + `postfix reload` makes it true
    * now, without dropping the queue or a connection - but it lives in the container's
    * filesystem and a recreate would revert it. The override file makes it survive that,
-   * because compose reads it back as an `env_file` on the next `up`.
+   * because compose reads it back as an `env_file` on the next `up`. A restart in between is
+   * convergeHostname's to repair.
+   *
+   * Asking for the default name is going back to it: no override is written, so the relay
+   * keeps following MAIL_HOSTNAME if that changes later.
    */
-  async setMailHostname(serverId: number, hostname: string): Promise<{ effective: string; applied: boolean; detail: string }> {
+  async setMailHostname(
+    serverId: number,
+    hostname: string | null,
+  ): Promise<{ effective: string; applied: boolean; detail: string }> {
     const handle = this.servers.handleFor(serverId);
     const p = mailPaths(this.config);
+    const running = (await handle.docker.containerState(MAIL_CONTAINER)) === 'running';
+    const names = running ? await this.relayHostnames(handle) : null;
+    const override = hostname !== null && !(names && sameHostname(hostname, names.fallback)) ? hostname : null;
 
     await handle.files.mkdirp(p.root);
-    await handle.files.writeFile(
-      p.relayEnv,
-      `# Written by the WPL7 panel (Mail -> Setup guide). Read by the mail container as
-` +
-        `# an optional env_file, so a value set here outlives the container being recreated.
-` +
-        `# POSTFIX_* settings are applied after the image's own config, so this wins over the
-` +
-        `# MAIL_HOSTNAME default in deploy/.env.
-` +
-        `POSTFIX_myhostname=${hostname}
-`,
-    );
+    const next = relayEnvWith(await this.readRelayEnv(handle), override);
+    if (next === null) await handle.files.rm(p.relayEnv);
+    else await handle.files.writeFile(p.relayEnv, next);
 
-    if ((await handle.docker.containerState(MAIL_CONTAINER)) !== 'running') {
+    if (!running) {
       return {
-        effective: hostname,
+        effective: override ?? '',
         applied: false,
         detail: `Saved. ${MAIL_CONTAINER} is not running on "${handle.name}", so it takes effect when the relay next starts.`,
       };
     }
-
-    // `reload` re-reads main.cf without restarting: no dropped connection, no queue pause.
-    const res = await handle.docker.exec(
-      MAIL_CONTAINER,
-      ['sh', '-c', `postconf -e ${shellQuote([`myhostname=${hostname}`])} && postfix reload`],
-      { timeoutMs: 30_000 },
-    );
-    if (res.exitCode !== 0) {
-      throw badGateway('The relay refused the new hostname', (res.stderr || res.stdout).slice(0, 300));
+    const wanted = override ?? names?.fallback;
+    if (wanted === undefined) {
+      throw badGateway(
+        'Removed the override, but the relay did not report its default name, so it changes once the relay is recreated',
+      );
     }
-    // Read it back rather than trusting the write: this value is what receivers will see.
-    const check = await handle.docker.exec(MAIL_CONTAINER, ['postconf', '-h', 'myhostname'], { timeoutMs: 20_000 });
-    const effective = check.stdout.trim() || hostname;
-    this.port25Cache.delete(serverId);
+    const effective = await this.announce(handle, wanted || null);
     return {
       effective,
       applied: true,
       detail:
-        `The relay now announces itself as ${effective}. Point an A record at this server for it and ` +
-        `update the server's reverse DNS to match — the checks above will follow on their own.`,
+        `The relay now announces itself as ${effective}${override === null ? ', the default' : ''}. ` +
+        `Point an A record at this server for it and update the server's reverse DNS to match; ` +
+        `the setup guide's checks follow on their own.`,
     };
+  }
+
+  /** Go back to the default name: MAIL_HOSTNAME, as the relay was created with it. */
+  resetMailHostname(serverId: number): Promise<{ effective: string; applied: boolean; detail: string }> {
+    return this.setMailHostname(serverId, null);
+  }
+
+  /**
+   * Put the name the relay announces back to the one it should have, where a restart moved it.
+   *
+   * A restarted relay re-applies the environment its container was created with
+   * (mailHostname.ts), so an override set or removed since then is undone until compose next
+   * recreates it. Checked on every mail-log tick: one file read and one exec, and the repair
+   * is a reload, so nothing in flight is lost.
+   */
+  async convergeHostname(serverId: number): Promise<{ from: string; to: string } | null> {
+    const handle = this.servers.handleFor(serverId);
+    if ((await handle.docker.containerState(MAIL_CONTAINER)) !== 'running') return null;
+    const names = await this.relayHostnames(handle);
+    if (!names) return null;
+    const wanted = hostnameOverride(await this.readRelayEnv(handle)) ?? names.fallback;
+    if (!wanted || sameHostname(wanted, names.live)) return null;
+    const now = await this.announce(handle, wanted);
+    this.log.info(`Mail relay on "${handle.name}" was announcing ${names.live || 'nothing'}; set it back to ${now}`);
+    return { from: names.live, to: now };
+  }
+
+  /** The name postfix announces and the default it falls back to; null where it cannot say. */
+  private async relayHostnames(handle: ServerHandle): Promise<RelayHostnames | null> {
+    const res = await handle.docker.exec(MAIL_CONTAINER, RELAY_HOSTNAME_PROBE, { timeoutMs: 20_000 }).catch(() => null);
+    return res && res.exitCode === 0 ? parseHostnameProbe(res.stdout) : null;
+  }
+
+  /**
+   * The relay.env on one server, null only when it is confirmed not there. A check that failed
+   * throws instead (readOptional): taken for "no override", a server that merely answered
+   * slowly would have its relay put back on the default.
+   */
+  private readRelayEnv(handle: ServerHandle): Promise<string | null> {
+    return handle.files.readOptional(mailPaths(this.config).relayEnv);
+  }
+
+  /**
+   * Make postfix announce `hostname` - null: its own default - and return what it reads back,
+   * which is what receivers will see. A reload re-reads main.cf without restarting: no dropped
+   * connection, no queue pause.
+   */
+  private async announce(handle: ServerHandle, hostname: string | null): Promise<string> {
+    const edit = hostname ? `postconf -e ${shellQuote([`myhostname=${hostname}`])}` : 'postconf -# myhostname';
+    const res = await handle.docker.exec(MAIL_CONTAINER, ['sh', '-c', `${edit} && postfix reload`], { timeoutMs: 30_000 });
+    if (res.exitCode !== 0) {
+      throw badGateway('The relay refused the new hostname', (res.stderr || res.stdout).slice(0, 300));
+    }
+    const check = await handle.docker.exec(MAIL_CONTAINER, ['postconf', '-h', 'myhostname'], { timeoutMs: 20_000 });
+    this.port25Cache.delete(handle.id);
+    return check.stdout.trim() || hostname || '';
+  }
+
+  /** Where the announced name comes from, for the setup guide. Null wherever that is unknown. */
+  private async hostnameSettings(serverId: number): Promise<{ fallback: string | null; override: string | null }> {
+    try {
+      const handle = this.servers.handleFor(serverId);
+      const running = (await handle.docker.containerState(MAIL_CONTAINER)) === 'running';
+      const [names, env] = await Promise.all([running ? this.relayHostnames(handle) : null, this.readRelayEnv(handle)]);
+      return { fallback: names?.fallback || null, override: hostnameOverride(env) };
+    } catch {
+      return { fallback: null, override: null };
+    }
   }
 
   /** Write the mail hostname's A record, for the servers whose zone the panel can reach. */

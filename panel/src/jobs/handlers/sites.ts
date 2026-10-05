@@ -370,7 +370,15 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   }
 
   const p = sitePaths(s.config, site.slug);
-  if (ctx.payload.finalBackup && (await server.files.exists(p.wordpress))) {
+  // Not there means nothing to back up. A check that failed means nothing at all: taken for
+  // "not there", it would delete the site without the backup that was asked for.
+  const hasFiles =
+    ctx.payload.finalBackup &&
+    (await server.files.exists(p.wordpress).catch((err: unknown) => {
+      updateSiteRow(s.db, site.id, { status: 'error' });
+      throw new Error(`Could not check the site's files for its final backup - site NOT deleted: ${errMsg(err)}`);
+    }));
+  if (hasFiles) {
     ctx.info('Taking final backup…');
     s.monitor.busySlugs.add(site.slug);
     try {

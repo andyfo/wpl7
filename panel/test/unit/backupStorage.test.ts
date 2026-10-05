@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { backups, servers, sites, type SiteRow } from '../../src/db/schema.js';
+import { backups, jobLogs, servers, sites, type SiteRow } from '../../src/db/schema.js';
 import { hostExec, type ExecPort, type ExecResult } from '../../src/lib/exec.js';
 import { sitePaths } from '../../src/services/siteSpec.js';
 import { StorageService, parseMounts } from '../../src/services/storage.js';
@@ -272,6 +272,8 @@ describe('parseMounts', () => {
 });
 
 describe('server.relocateBackups', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   const runJob = async (w: TestWorld, payload: { serverId: number; to: string }) => {
     const job = w.worker.enqueue('server.relocateBackups', payload, undefined, { serverId: payload.serverId });
     const ctx = new JobContext(job.id, payload, w.db);
@@ -319,6 +321,29 @@ describe('server.relocateBackups', () => {
     // The location still changes, so new backups land in the right place and a re-run
     // finishes the job.
     expect(w.servers.rowById(1)!.backupRoot).toBe(to);
+  });
+
+  it('skips a backup it could not check, saying why, and still moves the rest', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = makeSite(w);
+    const unchecked = await w.core.backup.create(site, 'manual', {});
+    await w.core.backup.create(site, 'scheduled', {});
+    // As a check that timed out on a server: before, this read as "files missing".
+    const files = w.servers.handleFor(1).files;
+    const real = files.exists.bind(files);
+    const source = w.core.backup.backupDir(unchecked);
+    vi.spyOn(files, 'exists').mockImplementation((p) =>
+      p === source ? Promise.reject(new Error(`test -e ${p} failed (exit 124)`)) : real(p),
+    );
+    const to = path.join(tmpRoot('relocate-unchecked'), 'backups');
+
+    const ctx = await runJob(w, { serverId: 1, to });
+    expect(ctx.getResult()).toMatchObject({ moved: 1, skipped: 1, root: to });
+    expect(fs.existsSync(unchecked.path)).toBe(true);
+    expect(w.db.select().from(backups).where(eq(backups.id, unchecked.id)).get()!.path).toBe(unchecked.path);
+    const warned = w.db.select().from(jobLogs).all().map((l) => l.message).join('\n');
+    expect(warned).toMatch(/exit 124/);
+    expect(warned).not.toMatch(/files missing/);
   });
 
   it('is re-runnable and a no-op once everything has arrived', async () => {

@@ -38,6 +38,7 @@ import { DnsService, type DnsProviderClient, type DnsTxtRecord, type DnsZone } f
 import type { DnsResolver } from '../src/services/mailDns.js';
 import { MonitorService } from '../src/services/monitor.js';
 import { MailService } from '../src/services/mail.js';
+import { RELAY_HOSTNAME_PROBE } from '../src/services/mailHostname.js';
 import { TrafficService } from '../src/services/traffic.js';
 import { UpdateService } from '../src/services/updates.js';
 import { SystemUpdateService } from '../src/services/systemUpdate.js';
@@ -155,6 +156,11 @@ function isAdministratorList(cmd: string[]): boolean {
   return cmd[0] === 'wp' && cmd[1] === 'user' && cmd[2] === 'list' && cmd.includes('--role=administrator');
 }
 
+/** MailService's look at what the relay announces and what its default is (mailHostname.ts). */
+function isRelayHostnameProbe(cmd: string[]): boolean {
+  return cmd.length === RELAY_HOSTNAME_PROBE.length && cmd.every((part, i) => part === RELAY_HOSTNAME_PROBE[i]);
+}
+
 /** sasldblistusers2 / saslpasswd2 / the chmod on the db / `postfix reload`. */
 function isRelayAuthCommand(cmd: string[]): boolean {
   const line = cmd.join(' ');
@@ -216,6 +222,13 @@ export class FakeDocker implements DockerPort {
   relayAuthResult: RunResult = { stdout: '', stderr: '', exitCode: 0 };
   /** False = the relay is mailpit (local dev), which has no credential database. */
   relayHasSasl = true;
+  /**
+   * What the relay's postfix announces, and the HOSTNAME its container was created with (the
+   * default), for MailService's hostname probe. Infrastructure like the relay auth: the mail-log
+   * tick asks every minute, so it never eats a test's scripted answers. Null = a relay that
+   * cannot say, as mailpit cannot.
+   */
+  relayHostnames: { live: string; fallback: string } | null = { live: 'mail.example.test', fallback: 'mail.example.test' };
   /** What `apache2ctl -t` in a site container says; override to have Apache refuse a file. */
   apacheCheck: RunResult = { stdout: '', stderr: 'Syntax OK', exitCode: 0 };
   /**
@@ -343,6 +356,11 @@ export class FakeDocker implements DockerPort {
       return { stdout: this.relayHasSasl ? 'yes\n' : 'no\n', stderr: '', exitCode: 0 };
     }
     if (isRelayAuthCommand(cmd)) return this.relayAuthResult;
+    if (isRelayHostnameProbe(cmd)) {
+      return this.relayHostnames
+        ? { stdout: `${this.relayHostnames.live}\n${this.relayHostnames.fallback}\n`, stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: 'sh: postconf: not found', exitCode: 127 };
+    }
     if (isDropInWrite(cmd)) return this.dropIn(name, cmd, null);
     // Apache's own check before a reload of a site's protection (services/security.ts):
     // infrastructure again, answered here rather than from the queue.
@@ -707,6 +725,9 @@ export class MappedFiles implements FilesPort {
   }
   readFile(p: string) {
     return this.inner.readFile(this.m(p));
+  }
+  readOptional(p: string) {
+    return this.inner.readOptional(this.m(p));
   }
   rm(p: string) {
     return this.inner.rm(this.m(p));

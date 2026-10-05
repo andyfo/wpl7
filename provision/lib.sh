@@ -29,6 +29,43 @@ wpl7_env_set() {
   printf '%s' "$out" > "$file"
 }
 
+# ------------------------------------------------------------------- mail relay
+
+# Make NAME the hostname the mail relay announces, as `setup.sh --mail-hostname=NAME` asks:
+# MAIL_HOSTNAME in the .env, and no hostname left in the panel's relay.env. Mail -> Setup
+# guide writes one there, and compose reads that file after .env, so it would win. The
+# override goes even when .env already says NAME: that is when it is the only thing between
+# the operator and the name they asked for. Other settings in the file are kept; a file with
+# none left is removed, so the compose `env_file` is simply absent again.
+#
+# Touches no container: `compose up` recreates the relay, its environment having changed.
+wpl7_mail_hostname_set() {
+  local env_file=$1 relay_env=$2 name=$3 old override kept changed=0
+  old="$(wpl7_env_get "$env_file" MAIL_HOSTNAME)"
+  if [ "$old" != "$name" ]; then
+    wpl7_env_set "$env_file" MAIL_HOSTNAME "$name"
+    echo "MAIL_HOSTNAME: ${old:-(unset)} -> $name"
+    changed=1
+  fi
+  if [ -f "$relay_env" ] && grep -q '^POSTFIX_myhostname=' "$relay_env"; then
+    override="$(grep '^POSTFIX_myhostname=' "$relay_env" | tail -n 1 | cut -d= -f2-)"
+    kept="$(grep -v '^POSTFIX_myhostname=' "$relay_env" || true)"
+    if grep -q '^[A-Za-z_][A-Za-z0-9_]*=' <<<"$kept"; then
+      printf '%s\n' "$kept" > "$relay_env.tmp" && mv "$relay_env.tmp" "$relay_env"
+    else
+      rm -f "$relay_env"
+    fi
+    echo "Cleared the hostname set in the panel ($override), so $name is the one that applies"
+    changed=1
+  fi
+  if [ "$changed" = 1 ]; then
+    echo "Next: add an A record for $name -> this server, and change the server's reverse DNS to"
+    echo "match. Panel -> Mail -> Setup guide checks both."
+  else
+    echo "The mail relay already announces $name"
+  fi
+}
+
 # -------------------------------------------------------------- build identity
 
 # How this install gets its panel image.

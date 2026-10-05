@@ -1086,6 +1086,13 @@ export interface MailServerSetupDto {
   ip: string;
   /** Name postfix announces in HELO; both the A record and the PTR should point at it. */
   hostname: string;
+  /**
+   * What it announces without an override: MAIL_HOSTNAME in deploy/.env, as this server's
+   * relay was created with it. Null when the relay cannot say (it is not running).
+   */
+  defaultHostname: string | null;
+  /** The name set in the panel, which wins over the default; null when there is none. */
+  hostnameOverride: string | null;
   mode: 'smarthost' | 'direct';
   /** Does the mail hostname resolve to this server? */
   hostnameA: MailRecordCheck;

@@ -140,11 +140,17 @@ export function registerMailRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   /**
    * Change the name the relay announces. Applied live and persisted, so it survives the
-   * container being recreated - see MailService.setMailHostname.
+   * container being restarted or recreated - see MailService.setMailHostname.
    */
   r.put('/api/mail/servers/:serverId/hostname', { schema: { params: serverIdParams, body: mailHostnameBody } }, async (req) => {
     requireServer(req.params.serverId);
     return deps.mail.setMailHostname(req.params.serverId, req.body.hostname);
+  });
+
+  /** Drop the panel's override: the relay goes back to MAIL_HOSTNAME, live. */
+  r.delete('/api/mail/servers/:serverId/hostname', { schema: { params: serverIdParams } }, async (req) => {
+    requireServer(req.params.serverId);
+    return deps.mail.resetMailHostname(req.params.serverId);
   });
 
   /** The one server-side record that lives in a normal DNS zone (reverse DNS does not). */

@@ -367,7 +367,8 @@ export class Schedulers {
         key: 'mail-ingest',
         group: 'background',
         name: 'Mail log',
-        description: "Reads each server's mail relay log into Mail traffic and enforces the per-site sending limits.",
+        description:
+          "Reads each server's mail relay log into Mail traffic and enforces the per-site sending limits. Also puts back the relay's hostname when a restart has changed it.",
         pausable: false,
         lockedReason: 'It is also what enforces the sending limits that suspend a site sending spam.',
         cadence: () => ({ everyMs: MIN, text: 'Every minute' }),

@@ -172,6 +172,8 @@ export class BackupService {
 
       const p = sitePaths(this.config, site.slug);
       const candidates = ['wordpress', 'config', 'site.json'];
+      // A check that fails fails the backup: taken for "not there", it would leave the site's
+      // files out of an archive that still says complete.
       const entries: string[] = [];
       for (const e of candidates) {
         if (await h.files.exists(path.join(p.root, e))) entries.push(e);
@@ -211,9 +213,10 @@ export class BackupService {
       }
       await h.files.writeFile(path.join(dir, 'sha256sums'), sums.join('\n') + '\n');
 
+      // A size that could not be read is counted as 0 rather than failing a finished backup.
       let sizeBytes = 0;
       for (const f of await h.files.readdir(dir)) {
-        sizeBytes += (await h.files.stat(path.join(dir, f)))?.sizeBytes ?? 0;
+        sizeBytes += (await h.files.stat(path.join(dir, f)).catch(() => null))?.sizeBytes ?? 0;
       }
 
       const updated = this.db

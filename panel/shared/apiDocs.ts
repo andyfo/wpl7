@@ -1138,6 +1138,12 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         level: 'full',
       },
       {
+        method: 'DELETE',
+        path: '/api/mail/servers/:serverId/hostname',
+        summary: 'Put the relay back on its default name, MAIL_HOSTNAME (applied live)',
+        level: 'full',
+      },
+      {
         method: 'POST',
         path: '/api/mail/servers/:serverId/publish-hostname',
         summary: 'Point the relay hostname\'s A record at that server',

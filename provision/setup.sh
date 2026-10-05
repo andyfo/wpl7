@@ -249,30 +249,14 @@ if [ ! -f "$ENV_FILE" ]; then
   echo "Wrote $ENV_FILE - review it (SMTP relay, DNS provider for wildcard certs) before going to production."
 else
   echo "Keeping existing $ENV_FILE"
-  # ...with one exception. A flag passed on THIS run is an instruction, not a default being
-  # re-derived, so it is honoured. Only explicitly-passed values are applied: re-deriving the
-  # defaults here would silently undo deliberate edits, which is the whole reason this branch
-  # leaves the file alone.
-  if [ -n "$MAIL_HOSTNAME_ARG" ] && [ "$(env_value MAIL_HOSTNAME)" != "$MAIL_HOSTNAME_ARG" ]; then
-    OLD_MAIL_HOSTNAME="$(env_value MAIL_HOSTNAME)"
-    set_env_value MAIL_HOSTNAME "$MAIL_HOSTNAME_ARG"
-    echo "MAIL_HOSTNAME: ${OLD_MAIL_HOSTNAME:-(unset)} -> $MAIL_HOSTNAME_ARG (the mail relay is recreated below)"
-    # The panel writes the same setting to its own override file, which compose reads last
-    # and which would therefore silently win over the value just given here. An explicit
-    # flag is the operator overruling the panel, so the override is dropped rather than
-    # left to quietly beat it.
-    RELAY_ENV="$SRV_ROOT/mail/relay.env"
-    if [ -f "$RELAY_ENV" ] && grep -q '^POSTFIX_myhostname=' "$RELAY_ENV"; then
-      grep -v '^POSTFIX_myhostname=' "$RELAY_ENV" > "$RELAY_ENV.tmp" && mv "$RELAY_ENV.tmp" "$RELAY_ENV"
-      # No setting lines left means the panel has no overrides at all; drop the file so the
-      # compose env_file simply goes back to being absent.
-      grep -q '^[A-Za-z_][A-Za-z0-9_]*=' "$RELAY_ENV" || rm -f "$RELAY_ENV"
-      echo "  (cleared the panel's hostname override so this value is the one that applies)"
-    fi
-    echo "  Next: add an A record for $MAIL_HOSTNAME_ARG -> this server, and change the"
-    echo "  server's reverse DNS to match. Panel -> Mail -> Setup guide checks both."
-  fi
   # Idempotent re-runs may still deliver a fresh panel key below.
+fi
+# A --mail-hostname passed on THIS run is an instruction, not a default being re-derived, so
+# it is honoured on an existing install too, whose .env is otherwise left alone: re-deriving
+# the defaults would silently undo deliberate edits. It also beats a name set in the panel -
+# the operator overruling it - and the stack started below recreates the relay with it.
+if [ -n "$MAIL_HOSTNAME_ARG" ]; then
+  wpl7_mail_hostname_set "$ENV_FILE" "$SRV_ROOT/mail/relay.env" "$MAIL_HOSTNAME_ARG"
 fi
 
 # Which release this install runs, as recorded by whoever put the bundle here: install.sh for
