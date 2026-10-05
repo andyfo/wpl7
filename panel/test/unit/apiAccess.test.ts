@@ -27,6 +27,7 @@ const EXCEPTIONS: Record<string, string> = {
   'PUT /api/sites/:slug/offsite-enabled': 'full',
   'PUT /api/sites/:slug/mail-suspension': 'full',
   'DELETE /api/backups/:id': 'full',
+  'POST /api/backups/bulk-delete': 'full',
   // Reads that are more than Read only: what a file or a backup holds, a WP Godmode chat (a
   // command's output, quoting whatever the site holds), and a root shell.
   'GET /api/sites/:slug/files/content': 'manage',
@@ -79,6 +80,7 @@ const DESTRUCTIVE = [
   'POST /api/auth/logout-all',
   'POST /api/backup-destinations/:id/passphrase',
   'POST /api/backups/:id/restore',
+  'POST /api/backups/bulk-delete',
   'POST /api/jobs/:id/cancel',
   'POST /api/mail/dkim',
   'POST /api/mail/domains/:domain/publish',

@@ -1,6 +1,7 @@
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
-import { moveCleanups, sites, type SiteRow } from '../../db/schema.js';
+import { backups, moveCleanups, sites, type SiteRow } from '../../db/schema.js';
+import { BACKUP_DELETE_LANE } from '../../services/backup.js';
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { Config } from '../../config.js';
@@ -330,6 +331,8 @@ export async function ensureSiteImage(
 export const siteDeletePayload = z.object({
   siteId: z.number().int(),
   finalBackup: z.boolean(),
+  /** Delete the backups the site already has, too - all but the final one, when one is taken. */
+  deleteBackups: z.boolean().default(false),
 });
 
 export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayload>>, s: CoreServices): Promise<void> {
@@ -370,6 +373,7 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   }
 
   const p = sitePaths(s.config, site.slug);
+  let finalBackupId: number | null = null;
   // Not there means nothing to back up. A check that failed means nothing at all: taken for
   // "not there", it would delete the site without the backup that was asked for.
   const hasFiles =
@@ -382,7 +386,7 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
     ctx.info('Taking final backup…');
     s.monitor.busySlugs.add(site.slug);
     try {
-      await s.backup.create(site, 'final', { jobId: ctx.jobId, log: (l, m) => ctx.log(l, m) });
+      finalBackupId = (await s.backup.create(site, 'final', { jobId: ctx.jobId, log: (l, m) => ctx.log(l, m) })).id;
     } catch (err) {
       updateSiteRow(s.db, site.id, { status: 'error' });
       throw new Error(`Final backup failed - site NOT deleted: ${errMsg(err)}`);
@@ -440,7 +444,74 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   // were the last on the server.
   if (hadFtp) await s.ftp.kick(server.id);
   ctx.info(`Site "${site.slug}" deleted.`);
-  ctx.setResult({ slug: site.slug, finalBackup: ctx.payload.finalBackup });
+  // Last, once the site is really gone: a teardown that fails part-way leaves its backups as
+  // they were, for a site that still exists.
+  const backupDeleteJobId = ctx.payload.deleteBackups ? queueBackupDeletion(ctx, s, site, finalBackupId) : null;
+  ctx.setResult({
+    slug: site.slug,
+    finalBackup: ctx.payload.finalBackup,
+    ...(finalBackupId !== null ? { finalBackupId } : {}),
+    ...(backupDeleteJobId !== null ? { backupDeleteJobId } : {}),
+  });
+}
+
+/**
+ * Queue the deletion of the backups a deleted site already had - all but the one it is left
+ * with, which is the final backup just taken. When one was asked for and could not be taken
+ * (the files were already gone: a second attempt after a teardown that failed half-way), the
+ * newest complete backup stays in its place, rather than nothing being left of a site whose
+ * owner asked for a last backup.
+ *
+ * Queued rather than done here: removing remote copies is minutes of rclone, and this job
+ * holds the server's lane - every other site on the machine would wait for the bucket.
+ */
+function queueBackupDeletion(
+  ctx: JobContext<z.infer<typeof siteDeletePayload>>,
+  s: CoreServices,
+  site: SiteRow,
+  finalBackupId: number | null,
+): number | null {
+  // By slug, as the site's Backups tab lists them; the panel's own snapshots are never a site's.
+  const rows = s.db
+    .select()
+    .from(backups)
+    .where(and(eq(backups.siteSlug, site.slug), ne(backups.type, 'panel')))
+    .orderBy(desc(backups.createdAt), desc(backups.id))
+    .all();
+  let kept = finalBackupId === null ? undefined : rows.find((r) => r.id === finalBackupId);
+  if (!kept && ctx.payload.finalBackup) {
+    kept = rows.find((r) => r.status === 'complete');
+    if (kept) {
+      const when = new Date(kept.createdAt).toISOString().slice(0, 16).replace('T', ' ');
+      ctx.warn(
+        `No final backup could be taken - the site's files were already gone - so its newest backup, ` +
+          `#${kept.id} (${kept.type}, ${when} UTC), is the one kept instead.`,
+      );
+    }
+  }
+  // Oldest first, as a bulk delete goes: stopped half-way, it has spared the newest.
+  const doomed = rows.filter((r) => r.id !== kept?.id).reverse();
+  if (doomed.length === 0) {
+    ctx.info(kept ? 'It had no other backups to delete.' : 'It had no backups to delete.');
+    return null;
+  }
+  try {
+    const job = s.worker.enqueue(
+      'backup.delete',
+      { backupIds: doomed.map((r) => r.id), parentJobId: ctx.jobId },
+      undefined,
+      { lane: BACKUP_DELETE_LANE, siteSlug: site.slug },
+    );
+    const n = doomed.length;
+    ctx.info(
+      `${kept ? `Its ${n} other backup${n === 1 ? '' : 's'}` : `Its ${n} backup${n === 1 ? '' : 's'}`} ` +
+        `${n === 1 ? 'is' : 'are'} deleted next, remote copies included: job #${job.id}.`,
+    );
+    return job.id;
+  } catch (err) {
+    ctx.warn(`Could not queue the deletion of its backups (${errMsg(err)}); delete them under Backups instead.`);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

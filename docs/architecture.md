@@ -245,8 +245,8 @@ all Docker/MariaDB mutations — serialized per server (one running job each; a 
 source and target lanes) — writing step logs the UI polls. A job may instead take a **named lane**
 (`jobs.lane`), orthogonal to the server lanes: offsite uploads run in `offsite:<serverId>`, so at most
 one upload per server is in flight while that server's site operations carry on beside it; commands run
-in a site (`wp.cli`, `site.shell`, `wp.rest`) take `exec:<serverId>` the same way, and the nightly housekeeping its
-own `housekeeping` lane. Each job records how it was queued (`origin`, `created_by`, `schedule_id`):
+in a site (`wp.cli`, `site.shell`, `wp.rest`) take `exec:<serverId>` the same way, the nightly housekeeping its
+own `housekeeping` lane, and bulk backup deletions `backup-delete`. Each job records how it was queued (`origin`, `created_by`, `schedule_id`):
 the request's admin or API key, or the schedule, travels to `JobWorker.enqueue` in an
 `AsyncLocalStorage` context (`src/jobs/actor.ts`) that a Fastify `onRoute` hook opens around every API
 handler, so no enqueue call site passes it along. Everything recurring - scheduled backups, the nightly

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { backups } from '../../db/schema.js';
+import { backups, type BackupRow } from '../../db/schema.js';
 import { backupTypes } from '../../../shared/schemas.js';
 import type { CoreServices } from '../../services/index.js';
 import type { JobContext } from '../context.js';
@@ -178,4 +178,110 @@ async function readManifest(
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// backup.delete — several backups, everywhere
+
+export const backupDeletePayload = z.object({
+  // No upper bound here: the API caps what a request may name (MAX_BULK_BACKUP_DELETE), and a
+  // site deletion names that site's backups, all of them, however many there are.
+  backupIds: z.array(z.number().int().positive()).min(1),
+  /**
+   * The site deletion that queued this one. It is still finishing up when this starts, and is
+   * done with the backups by then - without this, every one of them would read as in use.
+   */
+  parentJobId: z.number().int().positive().optional(),
+});
+
+/** Reasons a failed deletion's error spells out before it says "and N more". */
+const REASONS_IN_ERROR = 3;
+
+const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** `#12 (shop, scheduled, 2026-10-01 03:00 UTC)` - enough to find it again in a list. */
+function describeBackup(row: BackupRow): string {
+  const when = new Date(row.createdAt).toISOString().slice(0, 16).replace('T', ' ');
+  return `#${row.id} (${row.siteSlug}, ${row.type}, ${when} UTC)`;
+}
+
+/**
+ * Delete each backup the way the Delete button does - remote copies first, then the files and
+ * the row - one after the other, in the `backup-delete` lane. A backup that is in use (being
+ * written, restored, copied) is skipped rather than waited for, and one whose remote copy
+ * cannot be removed is kept; either way the job ends failed and names it, because something
+ * it was asked to delete is still there. One that is already gone counts as done.
+ */
+export async function backupDelete(ctx: JobContext<z.infer<typeof backupDeletePayload>>, s: CoreServices): Promise<void> {
+  const { backupIds, parentJobId } = ctx.payload;
+  const except = parentJobId === undefined ? [ctx.jobId] : [ctx.jobId, parentJobId];
+  const log = { info: (m: string) => ctx.info(m), warn: (m: string) => ctx.warn(m), error: (m: string) => ctx.error(m) };
+  let deleted = 0;
+  let alreadyGone = 0;
+  let keptByPolicy = 0;
+  let freedBytes = 0;
+  const notDeleted: string[] = [];
+  const report = () =>
+    ctx.setResult({
+      requested: backupIds.length,
+      deleted,
+      alreadyGone,
+      notDeleted: notDeleted.length,
+      freedBytes,
+      ...(keptByPolicy > 0 ? { keptByPolicy } : {}),
+    });
+
+  ctx.info(`Deleting ${backupIds.length} backup${backupIds.length === 1 ? '' : 's'}…`);
+  report();
+  for (const id of backupIds) {
+    ctx.checkCanceled();
+    const row = s.db.select().from(backups).where(eq(backups.id, id)).get();
+    if (!row) {
+      alreadyGone++;
+      report();
+      continue;
+    }
+    const what = describeBackup(row);
+    const blocker = s.backup.deletionBlocker(row, except);
+    if (blocker) {
+      notDeleted.push(blocker);
+      ctx.warn(`Kept ${what}: ${blocker}`);
+      report();
+      continue;
+    }
+    try {
+      const out = await s.offsite.deleteEverywhere(row, log);
+      keptByPolicy += out.keptByPolicy;
+      if (out.purgeFailed > 0) {
+        const reason = `${what}: ${out.purgeFailed} remote copy/copies could not be removed, so the backup was kept`;
+        notDeleted.push(reason);
+        ctx.error(`Kept ${reason}`);
+      } else {
+        deleted++;
+        freedBytes += row.sizeBytes ?? 0;
+        ctx.info(`Deleted ${what}`);
+      }
+    } catch (err) {
+      // Its server unreachable, most likely: the row stays, so the files are not orphaned silently.
+      notDeleted.push(`${what}: ${errMsg(err)}`);
+      ctx.error(`Could not delete ${what}: ${errMsg(err)}`);
+    }
+    report();
+  }
+
+  if (keptByPolicy > 0) {
+    ctx.warn(
+      `${keptByPolicy} remote copy/copies were left in place because their destination manages its own retention. ` +
+        `Remove them with your provider's tools if you want them gone.`,
+    );
+  }
+  if (alreadyGone > 0) ctx.info(`${alreadyGone} had already been deleted.`);
+  if (notDeleted.length > 0) {
+    const more = notDeleted.length > REASONS_IN_ERROR ? `; and ${notDeleted.length - REASONS_IN_ERROR} more, see the log` : '';
+    throw new Error(
+      `${notDeleted.length} of ${backupIds.length} backups were not deleted: ` +
+        `${notDeleted.slice(0, REASONS_IN_ERROR).join('; ')}${more}`,
+    );
+  }
+  ctx.info(`Done: ${deleted} deleted.`);
 }

@@ -60,13 +60,19 @@ export function patchBackupParams(prev: URLSearchParams, patch: Partial<BackupFi
   return next;
 }
 
-/** The `GET /api/backups` query for these filters. */
-export function backupListParams(filters: BackupFilters): Record<string, string> {
+/** The filters as the API reads them - `GET /api/backups` and `GET /api/backups/ids` alike. */
+export function backupFilterParams(filters: BackupFilters): Record<string, string> {
   const out: Record<string, string> = {};
   if (filters.siteSlug) out.siteSlug = filters.siteSlug;
   else if (filters.deleted) out.deleted = 'true';
   if (filters.type) out.type = filters.type;
   if (filters.serverId) out.serverId = String(filters.serverId);
+  return out;
+}
+
+/** The `GET /api/backups` query for these filters: one page of them. */
+export function backupListParams(filters: BackupFilters): Record<string, string> {
+  const out = backupFilterParams(filters);
   out.limit = String(BACKUPS_PAGE_SIZE);
   if (filters.page > 1) out.offset = String((filters.page - 1) * BACKUPS_PAGE_SIZE);
   return out;
@@ -98,4 +104,60 @@ export function deletedSiteSafeguard(
     };
   }
   return { warning: `${backup.siteSlug} has been deleted; its backups are all that is left of it.` };
+}
+
+/** Whether the filters name one site and nothing else: "every backup of shop". */
+export const siteOnly = (f: BackupFilters): f is BackupFilters & { siteSlug: string } =>
+  f.siteSlug !== null && f.type === null && f.serverId === null;
+
+/** "of shop", "of deleted sites" - whose backups "all 312 backups …" are, as plainly as the filters allow. */
+export function matchingPhrase(filters: BackupFilters): string {
+  if (siteOnly(filters)) return filters.siteSlug === 'panel' ? "of the panel's own database" : `of ${filters.siteSlug}`;
+  if (filters.deleted && filters.siteSlug === null && filters.type === null && filters.serverId === null) {
+    return 'of deleted sites';
+  }
+  return 'that match these filters';
+}
+
+const inWords = (names: string[]) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`);
+
+/**
+ * What a bulk delete says first, and what has to be typed. Always something: `delete`, as for
+ * deleting plugins in bulk - or the site's name where this takes everything a site has, as
+ * deleting the site itself asked for it.
+ *
+ * `rows` is what is selected, whichever page it is on. A deleted site loses everything when
+ * every complete backup it has left is among them - counted as deletedSiteSafeguard counts it,
+ * with a site the summary does not name taken as wiped out. `wholeSite` names a site that
+ * still exists when the selection is every backup it has ("Select all" on a filter naming
+ * only it), which the rows alone cannot tell.
+ */
+export function bulkDeleteSafeguard(
+  rows: Pick<BackupListItemDto, 'siteDeleted' | 'siteSlug' | 'status'>[],
+  deletedSites: Pick<BackupListDto['deletedSites'][number], 'slug' | 'complete'>[],
+  wholeSite: string | null = null,
+): { warning?: string; confirmWord: string } {
+  const picked = new Map<string, number>();
+  for (const row of rows) {
+    if (row.siteDeleted && row.status === 'complete') picked.set(row.siteSlug, (picked.get(row.siteSlug) ?? 0) + 1);
+  }
+  const wiped = [...picked]
+    .filter(([slug, n]) => n >= (deletedSites.find((d) => d.slug === slug)?.complete ?? 0))
+    .map(([slug]) => slug);
+  if (wiped.length === 1) {
+    return {
+      warning: `This takes the last backup${picked.get(wiped[0]!)! === 1 ? '' : 's'} of ${wiped[0]}, a site that has been deleted. Nothing of it is left after this.`,
+      confirmWord: wiped[0]!,
+    };
+  }
+  if (wiped.length > 1) {
+    return {
+      warning: `This takes the last backups of ${inWords(wiped)}, sites that have been deleted. Nothing of them is left after this.`,
+      confirmWord: 'delete',
+    };
+  }
+  if (wholeSite && wholeSite !== 'panel') {
+    return { warning: `${wholeSite} is left with no backups at all until its next one is taken.`, confirmWord: wholeSite };
+  }
+  return { confirmWord: 'delete' };
 }

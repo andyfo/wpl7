@@ -278,6 +278,8 @@ export interface BackupDto {
   rootPath: string | null;
   /** One entry per destination that has, or should have, this backup. */
   copies: BackupCopyDto[];
+  /** The queued or running `backup.delete` job that is about to remove this backup, if any. */
+  deletingJobId: number | null;
   createdAt: number;
 }
 
@@ -300,6 +302,23 @@ export interface BackupListDto {
    * no files, and must not stand in for a site's last usable one.
    */
   deletedSites: { slug: string; backups: number; complete: number; lastBackupAt: number; sizeBytes: number }[];
+}
+
+/**
+ * `GET /api/backups/ids`: every backup some filters match that a bulk delete could take - not
+ * one still being written, nor one a deletion already has - newest first, with what deleting
+ * them asks about. At most MAX_BULK_BACKUP_DELETE of them; `total` says how many there are.
+ */
+export interface BackupIdsDto {
+  items: {
+    id: number;
+    siteSlug: string;
+    siteDeleted: boolean;
+    status: 'complete' | 'failed';
+    /** Completed copies at remote destinations, which a delete removes too. */
+    remoteCopies: number;
+  }[];
+  total: number;
 }
 
 /** One backup at one offsite destination. */

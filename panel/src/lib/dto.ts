@@ -86,7 +86,7 @@ function recipesWithoutOutput(result: Record<string, unknown>): Record<string, u
   return { ...result, outcomes: result.outcomes.map((o: RecipeOutcome) => withoutStepOutput(o)) };
 }
 
-export function backupToDto(row: BackupRow, copies: BackupCopyDto[] = []): BackupDto {
+export function backupToDto(row: BackupRow, copies: BackupCopyDto[] = [], deletingJobId: number | null = null): BackupDto {
   return {
     id: row.id,
     siteSlug: row.siteSlug,
@@ -101,6 +101,7 @@ export function backupToDto(row: BackupRow, copies: BackupCopyDto[] = []): Backu
     filesPresent: row.filesPresent === 1,
     rootPath: row.rootPath,
     copies,
+    deletingJobId,
     createdAt: row.createdAt,
   };
 }

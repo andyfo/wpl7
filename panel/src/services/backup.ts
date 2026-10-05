@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, notInArray } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import {
   backupCopies,
@@ -33,6 +33,33 @@ export const PRUNED_BACKUP_TYPES = ['scheduled', 'panel'] as const;
 const BACKUP_USING_JOB_TYPES = ['backup.create', 'backup.restore', 'site.move', 'site.delete'] as const;
 /** Job types that read or write ONE backup's files, outside the site's job lane. */
 const COPY_JOB_TYPES = ['backup.offsite', 'backup.fetch'] as const;
+
+/**
+ * The named lane `backup.delete` runs in: beside every server's work - purging remote copies
+ * is minutes of rclone, which must not hold a server's sites up - and one deletion at a time,
+ * so two of them naming the same backup take turns instead of racing.
+ */
+export const BACKUP_DELETE_LANE = 'backup-delete';
+
+/** The server a `server.relocateBackups` payload moves the backups of; null for one that cannot be read. */
+function relocatedServer(payload: string): number | null {
+  try {
+    const id = (JSON.parse(payload) as { serverId?: unknown }).serverId;
+    return typeof id === 'number' ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The backup ids a `backup.delete` payload names; none for one that cannot be read. */
+function idsToDelete(payload: string): number[] {
+  try {
+    const ids = (JSON.parse(payload) as { backupIds?: unknown }).backupIds;
+    return Array.isArray(ids) ? ids.filter((id): id is number => typeof id === 'number') : [];
+  } catch {
+    return [];
+  }
+}
 
 export const tsStamp = (d: Date) =>
   d
@@ -323,8 +350,11 @@ export class BackupService {
    * By slug, not site id, because that is how a restore finds its site: a deleted site's
    * backups keep its slug but lose its id, and a site that later takes the same name can
    * restore them - which the id would never have seen coming.
+   *
+   * `except` leaves out jobs that are done with the files: the deletion asking, and the site
+   * deletion that queued it, which is still finishing up when the deletion starts.
    */
-  activeJobFor(row: BackupRow): JobRow | undefined {
+  activeJobFor(row: BackupRow, except: readonly number[] = []): JobRow | undefined {
     const siteJob = this.db
       .select()
       .from(jobs)
@@ -333,10 +363,76 @@ export class BackupService {
           eq(jobs.siteSlug, row.siteSlug),
           inArray(jobs.status, ['queued', 'running']),
           inArray(jobs.type, [...BACKUP_USING_JOB_TYPES]),
+          except.length > 0 ? notInArray(jobs.id, [...except]) : undefined,
         ),
       )
       .get();
     return siteJob ?? this.activeCopyJobFor(row.id);
+  }
+
+  /**
+   * Queued and running `backup.delete` jobs, by the backup ids they name. Whatever one of them
+   * names is as good as gone: it is not restored, fetched or copied offsite in the meantime,
+   * and retention leaves it to the job.
+   */
+  pendingDeletion(): Map<number, JobRow> {
+    const out = new Map<number, JobRow>();
+    const active = this.db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.type, 'backup.delete'), inArray(jobs.status, ['queued', 'running'])))
+      .all();
+    for (const job of active) {
+      for (const id of idsToDelete(job.payload)) if (!out.has(id)) out.set(id, job);
+    }
+    return out;
+  }
+
+  /** The queued or running `backup.delete` job that names this backup, if any. */
+  deletionJobFor(backupId: number): JobRow | undefined {
+    return this.pendingDeletion().get(backupId);
+  }
+
+  /**
+   * The running `server.relocateBackups` that may be moving this backup's files right now. It
+   * copies a backup, points the row at the copy, then removes the original - one at a time, and
+   * nothing marks which one it is on. Deleting any of that server's local backups meanwhile
+   * could remove the files from under the copy, or delete the row after it was pointed at the
+   * new place and leave the copy behind with nothing that knows of it. A queued relocation is
+   * no reason: when it starts it leaves alone whatever a deletion names (serverRelocateBackups).
+   */
+  relocationJobFor(row: BackupRow): JobRow | undefined {
+    if (row.filesPresent === 0) return undefined; // nothing local to move
+    return this.db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.type, 'server.relocateBackups'), eq(jobs.status, 'running')))
+      .all()
+      .find((job) => relocatedServer(job.payload) === row.serverId);
+  }
+
+  /**
+   * Why deleting this backup right now would be unsafe, in words; null when nothing stands in
+   * the way. `except` as for activeJobFor. Another deletion naming the same backup is not a
+   * reason: the two take turns in their lane, and the second finds it gone.
+   */
+  deletionBlocker(row: BackupRow, except: readonly number[] = []): string | null {
+    if (row.status === 'creating') return `Backup #${row.id} is still being created`;
+    if (this.copiesOf(row.id).some((c) => c.status === 'uploading')) {
+      return `Backup #${row.id} is being copied to a remote destination right now; wait for that copy to finish`;
+    }
+    const job = this.activeJobFor(row, except);
+    if (job) {
+      return (
+        `Backup #${row.id} cannot be deleted while job #${job.id} (${job.type}) for "${row.siteSlug}" is ${job.status}; ` +
+        `wait for it to finish`
+      );
+    }
+    const relocation = this.relocationJobFor(row);
+    if (relocation) {
+      return `Backup #${row.id} cannot be deleted while job #${relocation.id} moves its server's backups to a new location; wait for it to finish`;
+    }
+    return null;
   }
 
   /**
@@ -364,21 +460,18 @@ export class BackupService {
     return this.db.select().from(backupCopies).where(eq(backupCopies.backupId, backupId)).all();
   }
 
-  /** 409 when the backup is still being written or a job may be using it. */
+  /** 409 when the backup is still being written, a job may be using it, or one is deleting it. */
   assertDeletable(row: BackupRow): void {
-    if (row.status === 'creating') throw conflict(`Backup #${row.id} is still being created`);
-    const uploading = this.copiesOf(row.id).find((c) => c.status === 'uploading');
-    if (uploading) {
-      throw conflict(
-        `Backup #${row.id} is being copied to a remote destination right now; wait for that copy to finish`,
-      );
-    }
-    const job = this.activeJobFor(row);
+    const blocker = this.deletionBlocker(row);
+    if (blocker) throw conflict(blocker);
+    this.assertNotBeingDeleted(row);
+  }
+
+  /** 409 when a `backup.delete` job names this backup: it is about to be gone. */
+  assertNotBeingDeleted(row: BackupRow): void {
+    const job = this.deletionJobFor(row.id);
     if (job) {
-      throw conflict(
-        `Backup #${row.id} cannot be deleted while job #${job.id} (${job.type}) for "${row.siteSlug}" is ${job.status}; ` +
-          `wait for it to finish`,
-      );
+      throw conflict(`Backup #${row.id} is being deleted (job #${job.id}, ${job.status})`);
     }
   }
 
@@ -394,6 +487,8 @@ export class BackupService {
   async prune(retention: number): Promise<{ deleted: number; offsiteOnly: number }> {
     let deleted = 0;
     let offsiteOnly = 0;
+    // Ones a deletion job names are its to remove: pruning them as well would race it.
+    const doomed = this.pendingDeletion();
     const slugs = this.db
       .selectDistinct({ slug: backups.siteSlug })
       .from(backups)
@@ -413,7 +508,9 @@ export class BackupService {
         .orderBy(desc(backups.createdAt))
         .all();
       for (const row of rows.slice(retention)) {
+        if (doomed.has(row.id)) continue;
         if (this.activeJobFor(row)) continue; // a restore/move/backup of this site is in flight; next run
+        if (this.relocationJobFor(row)) continue; // its files may be on their way to a new location
         const copies = this.copiesOf(row.id);
         // An upload that has not happened yet would lose its source. Skipping costs one
         // night of retention; not skipping costs the offsite copy entirely.

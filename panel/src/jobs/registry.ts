@@ -20,7 +20,14 @@ import {
   siteUpdateDomains,
   siteUpdateDomainsPayload,
 } from './handlers/sites.js';
-import { backupCreate, backupCreatePayload, backupRestore, backupRestorePayload } from './handlers/backups.js';
+import {
+  backupCreate,
+  backupCreatePayload,
+  backupDelete,
+  backupDeletePayload,
+  backupRestore,
+  backupRestorePayload,
+} from './handlers/backups.js';
 import {
   backupFetch,
   backupFetchPayload,
@@ -108,6 +115,9 @@ const registry: Partial<Record<JobType, RegistryEntry>> = {
   'backup.offsite': entry(backupOffsitePayload, backupOffsite, 12 * 3600_000) as RegistryEntry,
   'backup.fetch': entry(backupFetchPayload, backupFetch, 12 * 3600_000) as RegistryEntry,
   'backup.offsitePurge': entry(backupOffsitePurgePayload, backupOffsitePurge, 6 * 3600_000) as RegistryEntry,
+  // Each backup at a destination is one rclone purge; hundreds of them, at several
+  // destinations, is hours rather than minutes.
+  'backup.delete': entry(backupDeletePayload, backupDelete, 6 * 3600_000) as RegistryEntry,
   'panel.snapshot': entry(panelSnapshotPayload, panelSnapshot, 10 * 60_000) as RegistryEntry,
   'wp.coreUpdate': entry(wpCoreUpdatePayload, wpCoreUpdate, 20 * 60_000) as RegistryEntry,
   'wp.pluginTask': entry(wpPluginTaskPayload, wpPluginTask, 10 * 60_000) as RegistryEntry,
