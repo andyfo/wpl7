@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { backupCopies, backupDestinations, backups, servers, sites } from '../../src/db/schema.js';
-import type { BackupListDto } from '../../shared/types.js';
+import { eq } from 'drizzle-orm';
+import { backupCopies, backupDestinations, backups, jobs, servers, sites } from '../../src/db/schema.js';
+import type { BackupIdsDto, BackupListDto, JobDto } from '../../shared/types.js';
 import { makeApp, makeWorld, type TestWorld } from '../helpers.js';
 
 async function authedApp() {
@@ -170,5 +171,158 @@ describe('DELETE /api/backups/:id', () => {
     const res = await ctx.app.inject({ method: 'DELETE', url: `/api/backups/${old.id}`, headers: ctx.headers });
     expect(res.statusCode).toBe(409);
     expect(res.json().error.message).toContain(`#${restore.id}`);
+  });
+});
+
+const bulkDelete = (ctx: Awaited<ReturnType<typeof authedApp>>, payload: unknown) =>
+  ctx.app.inject({ method: 'POST', url: '/api/backups/bulk-delete', headers: ctx.headers, payload });
+
+/** The queued deletion: its lane, the site it shows under, and the ids it was handed. */
+const queued = (w: TestWorld, job: JobDto) => {
+  const row = w.db.select().from(jobs).where(eq(jobs.id, job.id)).get()!;
+  return { type: row.type, lane: row.lane, siteSlug: row.siteSlug, ids: (JSON.parse(row.payload) as { backupIds: number[] }).backupIds };
+};
+
+describe('POST /api/backups/bulk-delete', () => {
+
+  it('queues one deletion job for the backups named, oldest first, leaving out ids that do not exist', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    const newer = addBackup(w, 'gone', { createdAt: 3000 });
+    const older = addBackup(w, 'gone', { type: 'final', createdAt: 1000 });
+    const res = await bulkDelete(ctx, { ids: [newer.id, 999, older.id, newer.id] });
+    expect(res.statusCode, res.body).toBe(202);
+    const { job, count } = res.json() as { job: JobDto; count: number };
+    expect(count).toBe(2);
+    expect(res.headers.location).toBe(`/api/jobs/${job.id}`);
+    // Its own lane, beside the servers' work; shown under the one site it is about.
+    expect(queued(w, job)).toEqual({ type: 'backup.delete', lane: 'backup-delete', siteSlug: 'gone', ids: [older.id, newer.id] });
+    expect(job.summary).toBe('2 backups');
+  });
+
+  it('names no site for backups of several, and answers 404 when none of the ids exist', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    const a = addBackup(w, 'one', { createdAt: 1000 });
+    const b = addBackup(w, 'panel', { type: 'panel', createdAt: 2000 });
+    const res = await bulkDelete(ctx, { ids: [a.id, b.id] });
+    expect(res.statusCode).toBe(202);
+    expect(queued(w, res.json().job).siteSlug).toBeNull();
+
+    const none = await bulkDelete(ctx, { ids: [404] });
+    expect(none.statusCode).toBe(404);
+  });
+
+  it('takes ids only: never a filter, which would be read again when the request arrives', async () => {
+    const ctx = await authedApp();
+    addBackup(ctx.world, 'gone', { createdAt: 1000 });
+    for (const payload of [
+      {},
+      { ids: [] },
+      // Regression: by filter, a site deleted after the list was read joined "deleted" and lost
+      // backups nobody had been shown.
+      { filter: { deleted: true } },
+      { ids: [1], filter: { siteSlug: 'gone' } },
+      { ids: [1], asOf: 5 },
+      { ids: Array.from({ length: 5001 }, (_, i) => i + 1) },
+    ]) {
+      const res = await bulkDelete(ctx, payload);
+      expect(res.statusCode, JSON.stringify(payload).slice(0, 80)).toBe(400);
+    }
+  });
+
+  it('keeps a backup it is deleting from being restored, copied, fetched or deleted beside it', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    const shop = addSite(w, 'shop');
+    const backup = addBackup(w, 'shop', { siteId: shop, type: 'manual', createdAt: 1000 });
+    const res = await bulkDelete(ctx, { ids: [backup.id] });
+    const jobId = (res.json() as { job: JobDto }).job.id;
+
+    const tries = [
+      { method: 'POST' as const, url: `/api/backups/${backup.id}/restore`, payload: {} },
+      { method: 'POST' as const, url: `/api/backups/${backup.id}/offsite`, payload: {} },
+      { method: 'DELETE' as const, url: `/api/backups/${backup.id}` },
+    ];
+    for (const t of tries) {
+      const answer = await ctx.app.inject({ ...t, headers: ctx.headers });
+      expect(answer.statusCode, t.url).toBe(409);
+      expect(answer.json().error.message, t.url).toContain(`job #${jobId}`);
+    }
+  });
+});
+
+describe('GET /api/backups/ids', () => {
+  const ids = async (ctx: Awaited<ReturnType<typeof authedApp>>, query = '') => {
+    const res = await ctx.app.inject({ method: 'GET', url: `/api/backups/ids${query}`, headers: ctx.headers });
+    expect(res.statusCode, res.body).toBe(200);
+    return res.json() as BackupIdsDto;
+  };
+
+  it('answers every backup the filters match, on every page, newest first', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    const shop = addSite(w, 'shop');
+    const made = Array.from({ length: 60 }, (_, i) => addBackup(w, 'shop', { siteId: shop, createdAt: 1000 + i }));
+    const gone = addBackup(w, 'gone', { type: 'final', createdAt: 500 });
+    addBackup(w, 'panel', { type: 'panel', createdAt: 700 });
+
+    const all = await ids(ctx, '?siteSlug=shop');
+    // The list pages fifty at a time; Select all reaches past that.
+    expect((await list(ctx, '?siteSlug=shop')).items).toHaveLength(50);
+    expect(all.total).toBe(60);
+    expect(all.items.map((b) => b.id)).toEqual(made.map((b) => b.id).reverse());
+    expect(all.items[0]).toEqual({ id: made[59]!.id, siteSlug: 'shop', siteDeleted: false, status: 'complete', remoteCopies: 0 });
+    expect(await ids(ctx, '?deleted=true')).toEqual({
+      items: [{ id: gone.id, siteSlug: 'gone', siteDeleted: true, status: 'complete', remoteCopies: 0 }],
+      total: 1,
+    });
+  });
+
+  it('leaves out what nothing could delete now, and counts the remote copies', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    const now = Date.now();
+    const writing = addBackup(w, 'gone', { createdAt: 3000, status: 'creating' });
+    const doomed = addBackup(w, 'gone', { createdAt: 2000 });
+    const failed = addBackup(w, 'gone', { createdAt: 1500, status: 'failed', sizeBytes: null });
+    const copied = addBackup(w, 'gone', { createdAt: 1000 });
+    const dest = (name: string) =>
+      w.db
+        .insert(backupDestinations)
+        .values({ name, provider: 's3', config: '{}', secrets: '{}', copyTypes: '["scheduled"]', copyFromTs: 0, createdAt: now, updatedAt: now })
+        .returning()
+        .get().id;
+    // One copy made, one that never made it: only the first is something a delete removes.
+    w.db
+      .insert(backupCopies)
+      .values([
+        { backupId: copied.id, destinationId: dest('bucket'), status: 'complete', remotePath: 'b/gone/1', completedAt: now, createdAt: now },
+        { backupId: copied.id, destinationId: dest('other'), status: 'failed', remotePath: 'o/gone/1', createdAt: now },
+      ])
+      .run();
+    await bulkDelete(ctx, { ids: [doomed.id] });
+
+    const res = await ids(ctx, '?siteSlug=gone');
+    expect(res.items.map((b) => b.id)).toEqual([failed.id, copied.id]);
+    expect(res.items.map((b) => b.id)).not.toContain(writing.id);
+    expect(res.items.find((b) => b.id === copied.id)!.remoteCopies).toBe(1);
+    expect(res.items.find((b) => b.id === failed.id)!.status).toBe('failed');
+  });
+
+  it('is what was selected, whatever the filters would match later', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    addBackup(w, 'gone', { type: 'final', createdAt: 1000 });
+    const shop = addSite(w, 'shop');
+    const shopsOld = addBackup(w, 'shop', { siteId: shop, createdAt: 500 });
+    const selected = (await ids(ctx, '?deleted=true')).items.map((b) => b.id);
+    // shop is deleted after "Select all": "deleted" now matches its backup as well...
+    w.db.delete(sites).where(eq(sites.id, shop)).run();
+    expect((await ids(ctx, '?deleted=true')).items.map((b) => b.id)).toContain(shopsOld.id);
+    // ...but the deletion sent is the ids that were selected, and takes those only.
+    const res = await bulkDelete(ctx, { ids: selected });
+    expect(queued(w, res.json().job).ids).toEqual(selected);
+    expect(queued(w, res.json().job).ids).not.toContain(shopsOld.id);
   });
 });

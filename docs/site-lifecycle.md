@@ -140,6 +140,12 @@ while the container actually exists.
   survive site deletion, listed under **Backups → Deleted sites**: the final one stays until you delete
   it, scheduled ones keep following retention. If teardown fails part-way the site is left `error`
   rather than `deleting`, so Delete can be retried.
+- **Delete its existing backups too** (off by default, `?deleteBackups=true`) queues a `backup.delete` for
+  the site's other backups once the site is gone — offsite copies included, in their own job lane rather
+  than the server's. The final backup is not among them, so with both switches on the site leaves
+  exactly one backup. Should a final backup be asked for when the files are already gone (a retry after
+  a teardown that removed them), the newest complete backup is kept instead. Nothing happens to the
+  backups while teardown can still fail.
 
 ## Status vs. health
 

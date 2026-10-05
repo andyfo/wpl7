@@ -210,11 +210,13 @@ export const useBackups = (slug: string) =>
   useQuery({
     queryKey: ['backups', slug],
     queryFn: () => api<{ items: BackupDto[] }>(`/api/sites/${slug}/backups`).then((r) => r.items),
+    // While a deletion job works through them, so they leave the list as they go.
+    refetchInterval: (q) => ((q.state.data ?? []).some((b) => b.deletingJobId !== null) ? 5000 : false),
   });
 
 /**
  * Every backup on every server, a page at a time. Quick to poll while one on screen is being
- * written or uploaded, so it turns into its outcome without a reload; slow otherwise.
+ * written, uploaded or deleted, so it turns into its outcome without a reload; slow otherwise.
  */
 export const useAllBackups = (filters: BackupFilters) =>
   useQuery({
@@ -222,7 +224,7 @@ export const useAllBackups = (filters: BackupFilters) =>
     queryFn: () => api<BackupListDto>(`/api/backups?${new URLSearchParams(backupListParams(filters))}`),
     refetchInterval: (q) =>
       (q.state.data?.items ?? []).some(
-        (b) => b.status === 'creating' || b.copies.some((c) => c.status === 'uploading'),
+        (b) => b.status === 'creating' || b.deletingJobId !== null || b.copies.some((c) => c.status === 'uploading'),
       )
         ? 5000
         : 30_000,

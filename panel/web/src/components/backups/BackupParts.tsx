@@ -1,8 +1,9 @@
 import { useState } from 'react';
+import { Link } from 'react-router';
 import type { BackupCopyDto, BackupDto } from '../../../../shared/types';
 import { api } from '../../api/client';
 import { formatDate } from '../../lib/format';
-import { Button, ConfirmDialog, Field, inputClass, Modal, Toggle } from '../ui';
+import { Button, ConfirmDialog, Field, inputClass, Modal, Spinner, Toggle } from '../ui';
 
 /**
  * The pieces a list of backups is made of, shared by a site's Backups tab and the Backups
@@ -42,7 +43,7 @@ export function OffsiteBadges({ copies }: { copies: BackupCopyDto[] }) {
  * What can be done with a backup where it is listed. Only a complete one has files to download,
  * restore or fetch: a failed one never had any, and one being written has none yet.
  * `canRestore` is false where there is no site to restore onto - the panel's own snapshots, and
- * a deleted site's backups.
+ * a deleted site's backups. One a deletion job is about to remove offers nothing but that job.
  */
 export function BackupActions({
   backup,
@@ -58,6 +59,17 @@ export function BackupActions({
   onDelete: () => void;
 }) {
   const complete = backup.status === 'complete';
+  if (backup.deletingJobId !== null) {
+    return (
+      <Link
+        to={`/jobs/${backup.deletingJobId}`}
+        className="inline-flex items-center gap-1.5 whitespace-nowrap text-xs text-neutral-500 hover:underline"
+      >
+        <Spinner />
+        Deleting…
+      </Link>
+    );
+  }
   return (
     // Stacked on a phone, where three buttons side by side push the table off the screen.
     <div className="flex flex-col items-end gap-1 sm:flex-row sm:justify-end sm:gap-1.5">
@@ -224,5 +236,55 @@ export function DeleteBackupDialog({
         <Toggle checked={keepOffsite} onChange={setKeepOffsite} label="Keep the remote copies" />
       )}
     </ConfirmDialog>
+  );
+}
+
+/**
+ * Deleting several backups at once. Always typed for (see bulkDeleteSafeguard), and said in
+ * full: how many, that their remote copies go too, and what a deleted site is left with.
+ */
+export function BulkDeleteBackupsDialog({
+  title,
+  remote,
+  warning,
+  confirmWord,
+  onConfirm,
+  onClose,
+}: {
+  title: string;
+  /**
+   * The completed remote copies of the backups selected. `destinations` is null where the
+   * selection reaches past this page and only the count is known.
+   */
+  remote: { copies: number; destinations: string[] | null };
+  warning?: string;
+  confirmWord: string;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <ConfirmDialog
+      title={title}
+      confirmLabel="Delete"
+      confirmWord={confirmWord}
+      message={
+        <>
+          {warning && <b className="mb-2 block">{warning}</b>}
+          {remote.copies === 0 ? (
+            'Their files are removed permanently.'
+          ) : (
+            <>
+              Their files are removed permanently, <b>including</b> the {remote.copies} remote copy/copies
+              {remote.destinations ? ` (${remote.destinations.join(', ')})` : ''}.
+            </>
+          )}
+          <span className="mt-2 block text-xs text-neutral-500">
+            One job deletes them in turn. A backup another job may be using is left alone, and the job names it.
+          </span>
+        </>
+      }
+      onConfirm={onConfirm}
+      onClose={onClose}
+    />
   );
 }

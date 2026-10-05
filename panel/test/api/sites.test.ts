@@ -268,6 +268,25 @@ describe('site delete query parsing', () => {
   });
 });
 
+describe('site delete: its backups', () => {
+  it('keeps the backups unless ?deleteBackups=true asks otherwise', async () => {
+    const { app, world, headers } = await authedApp();
+    await app.inject({ method: 'POST', url: '/api/sites', headers, payload: createBody });
+    settleCreate(world);
+
+    const def = await app.inject({ method: 'DELETE', url: '/api/sites/my-blog', headers });
+    const defRow = world.db.select().from(jobs).where(eq(jobs.id, def.json().job.id)).get()!;
+    expect(JSON.parse(defRow.payload)).toMatchObject({ finalBackup: true, deleteBackups: false });
+
+    world.worker.cancel(def.json().job.id);
+    const both = await app.inject({ method: 'DELETE', url: '/api/sites/my-blog?finalBackup=true&deleteBackups=true', headers });
+    expect(both.statusCode).toBe(202);
+    const bothRow = world.db.select().from(jobs).where(eq(jobs.id, both.json().job.id)).get()!;
+    expect(JSON.parse(bothRow.payload)).toMatchObject({ finalBackup: true, deleteBackups: true });
+    expect(bothRow.summary).toBe('Keeping only a final backup');
+  });
+});
+
 describe('site create: plugins', () => {
   /** A catalog of two defaults - a wordpress.org plugin and an upload - and one that is not. */
   function seedCatalog(world: Awaited<ReturnType<typeof makeWorld>>): void {

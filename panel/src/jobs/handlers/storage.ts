@@ -56,6 +56,13 @@ export async function serverRelocateBackups(
       skipped.push(`#${row.id} (job #${active.id} ${active.type} is using it)`);
       continue;
     }
+    // Moved while a deletion works on it, the copy would outlive the row: the deletion removes
+    // the files it last knew of and the row, and the copy stays behind, known to nothing.
+    const deleting = s.backup.deletionJobFor(row.id);
+    if (deleting) {
+      skipped.push(`#${row.id} (job #${deleting.id} is deleting it)`);
+      continue;
+    }
     const ts = path.basename(row.path);
     const source = s.backup.backupDir(row);
     if (!(await handle.files.exists(source))) {

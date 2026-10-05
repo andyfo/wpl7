@@ -291,9 +291,12 @@ export class OffsiteService {
   tick(): { created: number; enqueued: number } {
     this.releaseOrphanedUploads();
     let created = 0;
+    // Nothing is copied that a deletion job is about to remove: the upload would be reading
+    // files on their way out, and an object it finished would be one more for the job to purge.
+    const doomed = this.backup.pendingDeletion();
     const destinations = this.list().filter((d) => d.enabled === 1);
-    for (const dest of destinations) created += this.reconcileDestination(dest);
-    const enqueued = this.enqueueDue();
+    for (const dest of destinations) created += this.reconcileDestination(dest, doomed);
+    const enqueued = this.enqueueDue(doomed);
     return { created, enqueued };
   }
 
@@ -358,7 +361,7 @@ export class OffsiteService {
     }
   }
 
-  private reconcileDestination(dest: BackupDestinationRow): number {
+  private reconcileDestination(dest: BackupDestinationRow, doomed: ReadonlyMap<number, unknown>): number {
     const types = this.copyTypesOf(dest);
     if (types.length === 0) return 0;
     const already = new Set(
@@ -386,7 +389,7 @@ export class OffsiteService {
 
     let created = 0;
     for (const backup of candidates) {
-      if (already.has(backup.id)) continue;
+      if (already.has(backup.id) || doomed.has(backup.id)) continue;
       // A deleted site's final backup is exactly the one most worth having offsite, so a
       // missing site row means eligible rather than skipped; only a living site that has
       // opted out is excluded.
@@ -401,7 +404,7 @@ export class OffsiteService {
   }
 
   /** Backups with a pending copy (or a failed one whose retry is due) and no job running. */
-  private enqueueDue(): number {
+  private enqueueDue(doomed: ReadonlyMap<number, unknown>): number {
     if (!this.worker) return 0;
     const now = Date.now();
     const due = this.db
@@ -425,7 +428,7 @@ export class OffsiteService {
     const perServer = new Map<number, number>();
     let enqueued = 0;
     for (const backup of rows) {
-      if (active.has(backup.id)) continue;
+      if (active.has(backup.id) || doomed.has(backup.id)) continue;
       if (backup.filesPresent === 0) continue; // nothing left locally to upload
       const server = this.servers.rowById(backup.serverId);
       if (!server || server.status === 'unreachable') continue; // next tick
@@ -715,6 +718,22 @@ export class OffsiteService {
   }
 
   // ------------------------------------------------------------------ deletion
+
+  /**
+   * Delete a backup everywhere: its remote copies, then its files and its row. A copy that
+   * cannot be removed keeps the backup - dropping the row would forget an object still in the
+   * bucket, with nothing left that knows it is there. Whether the backup may be deleted at all
+   * is the caller's to check first (BackupService.deletionBlocker).
+   */
+  async deleteEverywhere(row: BackupRow, ctx: CopyLog = silentLog): Promise<{ purgeFailed: number; keptByPolicy: number }> {
+    const { failed, keptByPolicy } = await this.purgeCopies(this.copiesOf(row.id), ctx);
+    if (failed > 0) return { purgeFailed: failed, keptByPolicy };
+    // Read again: purging can take minutes, and it is the row as it is now that says where the
+    // files are. One gone meanwhile is deleted already.
+    const current = this.db.select().from(backups).where(eq(backups.id, row.id)).get();
+    if (current) await this.backup.deleteBackup(current);
+    return { purgeFailed: 0, keptByPolicy };
+  }
 
   /**
    * Remove this panel's objects for the given copies, then the copy rows. Destination-level

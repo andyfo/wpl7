@@ -889,9 +889,20 @@ function BackupsTab({ slug }: { slug: string }) {
       <Card
         title="Backups"
         action={
-          <Button small onClick={() => run.mutate({ path: `/api/sites/${slug}/backups`, body: {} })}>
-            Back up now
-          </Button>
+          <span className="flex items-center gap-3">
+            {(backups.data ?? []).length > 1 && (
+              // Ticking several and deleting them at once is the Backups list's, filtered to this site.
+              <Link
+                to={`/backups?siteSlug=${encodeURIComponent(slug)}`}
+                className="text-xs text-neutral-500 transition-colors hover:text-neutral-900 hover:underline"
+              >
+                Bulk delete
+              </Link>
+            )}
+            <Button small onClick={() => run.mutate({ path: `/api/sites/${slug}/backups`, body: {} })}>
+              Back up now
+            </Button>
+          </span>
         }
       >
         <div className="mb-3">
@@ -1008,6 +1019,7 @@ function SettingsTab({ slug }: { slug: string }) {
   const [domainsText, setDomainsText] = useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [finalBackup, setFinalBackup] = useState(true);
+  const [deleteBackups, setDeleteBackups] = useState(false);
   const s = site.data;
   if (!s) return <Spinner />;
 
@@ -1072,7 +1084,8 @@ function SettingsTab({ slug }: { slug: string }) {
       <Card title="Danger zone">
         <div className="flex items-center justify-between">
           <div className="text-sm text-neutral-600">
-            Deleting removes the container, database and files{finalBackup ? ' (after a final backup)' : ''}.
+            Deleting removes the container, database and files{finalBackup ? ' (after a final backup)' : ''}
+            {deleteBackups ? (finalBackup ? ', and every other backup' : ', and every backup') : ''}.
           </div>
           <Button variant="danger" onClick={() => setDeleteOpen(true)}>
             Delete site
@@ -1090,11 +1103,64 @@ function SettingsTab({ slug }: { slug: string }) {
           }
           confirmWord={s.slug}
           confirmLabel="Delete site"
-          onConfirm={() => run.mutate({ path: `/api/sites/${slug}?finalBackup=${finalBackup}`, method: 'DELETE' })}
+          onConfirm={() =>
+            run.mutate({
+              path: `/api/sites/${slug}?finalBackup=${finalBackup}&deleteBackups=${deleteBackups}`,
+              method: 'DELETE',
+            })
+          }
           onClose={() => setDeleteOpen(false)}
         >
-          <Toggle checked={finalBackup} onChange={setFinalBackup} label="Take a final backup first (kept until you delete it)" />
+          <div className="space-y-3">
+            <Toggle checked={finalBackup} onChange={setFinalBackup} label="Take a final backup first (kept until you delete it)" />
+            <DeleteBackupsToggle
+              slug={slug}
+              checked={deleteBackups}
+              onChange={setDeleteBackups}
+              finalBackup={finalBackup}
+            />
+          </div>
         </ConfirmDialog>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The delete dialog's second switch: the backups the site already has go too. Off by default -
+ * a site's backups outliving it is the safe way round. With a final backup, that one stays, and
+ * is the one backup the site leaves behind. Counted from the site's Backups tab, which lists up
+ * to 200; not offered at all to a site that has none.
+ */
+function DeleteBackupsToggle({
+  slug,
+  checked,
+  onChange,
+  finalBackup,
+}: {
+  slug: string;
+  checked: boolean;
+  onChange: (on: boolean) => void;
+  finalBackup: boolean;
+}) {
+  const backups = useBackups(slug);
+  const items = backups.data ?? [];
+  if (backups.data && items.length === 0) return null;
+  const n = items.length;
+  const remote = items.filter((b) => b.copies.some((c) => c.status === 'complete')).length;
+  const label =
+    n === 0
+      ? 'Delete its existing backups too'
+      : `Delete its ${n}${n >= 200 ? '+' : ''} existing backup${n === 1 ? '' : 's'} too${remote > 0 ? ', remote copies included' : ''}`;
+  return (
+    <div className="space-y-1.5">
+      <Toggle checked={checked} onChange={onChange} label={label} />
+      {checked && (
+        <p className={`ml-11 text-xs ${finalBackup ? 'text-neutral-500' : 'font-medium text-red-700'}`}>
+          {finalBackup
+            ? 'The final backup is kept: it is the one backup the site leaves behind.'
+            : 'Nothing of the site is left afterwards — no files, no database, no backup.'}
+        </p>
       )}
     </div>
   );

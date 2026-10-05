@@ -18,8 +18,9 @@ on demand too. Both live under **Automations** in the sidebar: *All jobs* and *S
 - **Named lanes** run beside that, for work that must not hold a server up: offsite uploads
   (`offsite:<server>`, one at a time per server), commands in a site (`exec:<server>`, see
   [below](#commands-in-a-site)), malware scans (`scan:<server>`, see
-  [security.md](security.md#malware-scans)) and the nightly housekeeping (`housekeeping`). A
-  malware scan carries no site, so the site's other jobs are not held up by it.
+  [security.md](security.md#malware-scans)), the nightly housekeeping (`housekeeping`) and bulk
+  backup deletions (`backup-delete`, see [backup-restore.md](backup-restore.md#deleting-several-at-once)).
+  A malware scan carries no site, so the site's other jobs are not held up by it.
 - A job that outlives its time limit is failed and asked to stop at its next safe step. Every
   type has its own limit (`GET /api/jobs/types`).
 - Finished jobs are kept `jobsRetentionDays` days (default 90; the footer of the Jobs list

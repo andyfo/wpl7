@@ -192,7 +192,7 @@ Dolly — removed right after the install, before the requested plugins go on.
 search engines from indexing this site" (Settings → Reading) switched on. Pass `false` for a site
 that should be indexed from the start — nothing else turns it off later, go-live included.
 | `GET /sites/:slug` | – | `SiteDetail` (incl. `containerState` — `unknown` when the hosting server cannot be reached; the rest is served from the registry — `url`, monitoring snapshot) |
-| `DELETE /sites/:slug` | `?finalBackup=true\|false` (default true; `false` skips the final backup) | `202 {job}` |
+| `DELETE /sites/:slug` | `?finalBackup=true\|false` (default true; `false` skips the final backup) `&deleteBackups=true\|false` (default false) | `202 {job}` — `deleteBackups=true` also deletes the backups the site already has, offsite copies included: once the site is gone, its job queues a `backup.delete` for them (`result.backupDeleteJobId`). The final backup is not among them, so with both the site leaves exactly one backup behind (`result.finalBackupId`); when a final backup was asked for but the files were already gone, its newest complete backup stays instead |
 | `POST /sites/:slug/start` · `/stop` · `/restart` | – | `202 {job}` |
 | `PUT /sites/:slug/php` | `{phpVersion}` | `202 {job}` — auto-rollback if the site stops responding |
 | `POST /sites/:slug/go-live` | `{domains: [primary, ...aliases], keepDevAlias?: true, manageDns?: false}` | `202 {job}` — `manageDns: true` creates the A records via the DNS provider first (zone must be in the account) |
@@ -210,13 +210,15 @@ that should be indexed from the start — nothing else turns it off later, go-li
 | Method & path | Body / query | Returns |
 |---|---|---|
 | `GET /backups` | `?siteSlug=&deleted=true\|false&type=&serverId=&limit=&offset=` (`type` a comma list; `siteSlug=panel` = the panel's own snapshots) | `{items, total, deletedSites}` — every backup, newest first, each a `Backup` plus `siteTitle` and `siteDeleted` (no site of that slug exists any more). `deleted=true` keeps only those; `false`, everything else. `deletedSites: [{slug, backups, complete, lastBackupAt, sizeBytes}]` names every deleted site that still has backups, whatever the filters (`complete` leaves out failed ones, which have no files) |
-| `GET /sites/:slug/backups` | – | `{items: Backup[]}` — each carries `filesPresent`, `rootPath` and `copies[]` (one per offsite destination) |
+| `GET /backups/ids` | the filters of `GET /backups`, without paging | `{items: [{id, siteSlug, siteDeleted, status, remoteCopies}], total}` — every backup they match that a bulk delete could take, newest first: not one still being written, nor one a `backup.delete` already names. At most 5000 items; `total` counts them all. This is what **Select all** ticks |
+| `GET /sites/:slug/backups` | – | `{items: Backup[]}` — each carries `filesPresent`, `rootPath`, `copies[]` (one per offsite destination) and `deletingJobId` (the `backup.delete` job about to remove it, else null) |
 | `POST /sites/:slug/backups` | `{note?}` | `202 {job}` |
-| `POST /backups/:id/restore` | `{skipPreRestoreBackup?: false}` | `202 {job}`; `409` when the backup is offsite-only (fetch it back first) or lives on another server |
+| `POST /backups/:id/restore` | `{skipPreRestoreBackup?: false}` | `202 {job}`; `409` when the backup is offsite-only (fetch it back first), lives on another server, or a `backup.delete` job names it (as do copy, fetch and delete) |
 | `GET /backups/:id/download` | – | tar stream; `409` when the backup is offsite-only |
 | `POST /backups/:id/offsite` | `{destinationId?}` | `202 {job}` — copy now, or retry a copy that gave up (resets its attempt counter). `400` when every destination already has it |
 | `POST /backups/:id/fetch` | `{destinationId}` | `202 {job}` — download an offsite copy back onto the site's **current** server, checksums verified |
 | `DELETE /backups/:id` | `?keepOffsite=true\|false` (default false) | `204`; `409` while the backup is being written, being copied offsite, or a restore/backup/move/delete job for its site is queued or running. Default deletes the offsite copies too; `keepOffsite=true` removes only the local files and answers `200 {keptOffsite}` |
+| `POST /backups/bulk-delete` | `{ids: [...]}` (at most 5000) | `202 {job, count}` — one `backup.delete` job deletes exactly these, oldest first, each everywhere, offsite copies included (a destination that manages its own retention keeps its copy, as for one delete). Always ids, never a filter: which site counts as deleted, or which server a backup is on, can change between reading a list and confirming it, so `GET /backups/ids` turns filters into ids first. Unknown ids are skipped; `404` when nothing is left. A backup a job may be using (its site being backed up, restored, moved or deleted; the backup being copied offsite; its server's backups being moved to a new location) is skipped when the job reaches it, and the job then fails naming each one it kept — `result: {requested, deleted, alreadyGone, notDeleted, freedBytes}` |
 
 ### Offsite destinations (docs/backup-restore.md#offsite-copies)
 
