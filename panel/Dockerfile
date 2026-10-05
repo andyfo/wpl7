@@ -43,7 +43,7 @@ COPY deploy/sftpgo-image /app/sftpgo-image
 # ("Add server" with provisioning). Baked from the same revision as the panel itself,
 # so worker stacks always match the panel's version.
 COPY provision /app/bundle/provision
-COPY deploy/docker-compose.yml deploy/docker-compose.dns.yml deploy/docker-compose.worker.yml deploy/.env.example /app/bundle/deploy/
+COPY deploy/docker-compose.yml deploy/docker-compose.worker.yml deploy/.env.example /app/bundle/deploy/
 COPY deploy/wordpress-image /app/bundle/deploy/wordpress-image
 # What this build is. Last, so changing it rebuilds one layer rather than the whole image.
 # .dockerignore drops .git, so the panel cannot work out its own revision at runtime - the

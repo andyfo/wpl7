@@ -406,7 +406,11 @@ if docker inspect ceo-panel >/dev/null 2>&1 || docker inspect ceo-traefik >/dev/
 fi
 
 log "Starting the stack"
-grep -q '^DNS_PROVIDER=..*' "$ENV_FILE" && echo "DNS_PROVIDER set -> including docker-compose.dns.yml (wildcard dev certs)"
+# LEGACY - delete in 0.4.0. The DNS overlay's resolvers are in docker-compose.yml now, and Traefik
+# reads Cloudflare's token from the file the panel keeps (docs/dns.md). An update copies the new
+# bundle over the old one without deleting, so the overlay would stay - and a compose run that
+# still named it would hand Traefik .env's token, which wins over the panel's.
+rm -f "$DEPLOY_DIR/docker-compose.dns.yml"
 grep -q '^SERVER_ROLE=worker' "$ENV_FILE" && echo "Worker role -> including docker-compose.worker.yml (no panel container)"
 if [ "$SOURCE_MODE" = image ]; then
   # Pull before the recreate rather than during it: `up` would do it anyway, but a registry

@@ -205,8 +205,9 @@ the panel's envelope and add a hint: wait for the named job on `job_conflict`, t
 
 Never reachable through MCP, whatever the level: signing in and the rest of `/api/auth`, admin
 accounts, API keys and the activity log (a connection must not mint panel credentials that outlive
-it, or erase its own trail), binary downloads, uploads and the terminal, the feedback form (it
-leaves the box), and the MCP page's own endpoints.
+it, or erase its own trail), the Cloudflare token in Settings → DNS (setting, checking and removing
+it - a credential, which a check sends to Cloudflare), binary downloads, uploads and the terminal,
+the feedback form (it leaves the box), and the MCP page's own endpoints.
 
 ## Plugins' own WP-CLI commands
 

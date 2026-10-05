@@ -32,6 +32,7 @@ import { registerScheduleRoutes } from './routes/schedules.js';
 import { registerMiscRoutes } from './routes/misc.js';
 import { registerSystemRoutes } from './routes/system.js';
 import { registerServerRoutes } from './routes/servers.js';
+import { registerDnsRoutes } from './routes/dns.js';
 import { registerTerminalRoutes } from './routes/terminal.js';
 import { registerMailRoutes } from './routes/mail.js';
 import { registerSecurityRoutes } from './routes/security.js';
@@ -118,6 +119,7 @@ export async function buildServer(
   registerMiscRoutes(app, deps);
   registerSystemRoutes(app, deps);
   registerServerRoutes(app, deps);
+  registerDnsRoutes(app, deps);
   registerTerminalRoutes(app, deps);
   registerMailRoutes(app, deps);
   registerSecurityRoutes(app, deps);

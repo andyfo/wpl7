@@ -796,7 +796,7 @@ export class FtpService {
       if (!ftpOnly) throw err;
       const reason =
         `Port ${taken} is already in use on "${row.name}", so it offers SFTP only. Free the port, or pick ` +
-        `another in Settings -> FTP & SFTP.`;
+        `another in Settings -> Sites -> FTP & SFTP.`;
       this.ftpBlocked.set(row.id, reason);
       this.log.warn(`FTP on "${row.name}": ${reason}`);
       outcome = await startGateway({ sftp: ports.sftp, ftp: null });
@@ -1078,7 +1078,7 @@ function describeDockerError(err: unknown, serverName: string): string {
   const message = err instanceof Error ? err.message : String(err);
   const port = /(?:0\.0\.0\.0|\[::\]|\*):(\d+)/.exec(message)?.[1];
   if (port && /already allocated|address already in use/i.test(message)) {
-    return `port ${port} is already in use on "${serverName}" - free it, or pick another port in Settings -> FTP & SFTP`;
+    return `port ${port} is already in use on "${serverName}" - free it, or pick another port in Settings -> Sites -> FTP & SFTP`;
   }
   return message.slice(0, 400);
 }

@@ -82,9 +82,10 @@ rolled back.
 | Update check | hourly | new panel releases go unnoticed ("Check now" still works) | background |
 | Recipe catalog | hourly | new recipes stop arriving ("Fetch now" still works) | background |
 | Mail log | every minute | *cannot be paused*: it enforces the outbound mail limits | background |
-| Site network repair | every minute | *cannot be paused*: a redeployed stack could leave sites unreachable. Also rebuilds, once, a site container made before its protection moved inside it | background |
+| Site network repair | every minute | *cannot be paused*: a redeployed stack could leave sites unreachable. Also rebuilds, once, a site container made before its protection moved inside it, and a dev site still on a wildcard certificate its server can no longer renew | background |
 | Site protection | every minute, and right after each change | *cannot be paused*: it puts a site's rules back on a server that lost them, and takes them off a site switched to Off | background |
 | Blocked addresses | every minute, and right after each change | *cannot be paused*: it ends blocks on time, runs the attack detection and loads the list on every server | background |
+| Wildcard certificate token | every minute, and right after each change | *cannot be paused*: it gives each server's Traefik the Cloudflare token in Settings → DNS, and restarts Traefik where a token it may hold was replaced or removed (docs/dns.md) | background |
 | FTP upkeep | every minute | *cannot be paused*: it switches off expired FTP logins | background |
 | Update watchdog | every 30 seconds | *cannot be paused*: a failed update would leave the panel read-only | background |
 

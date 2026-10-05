@@ -15,7 +15,9 @@ import { StorageService } from './services/storage.js';
 import { LocalHostExec } from './servers/hostExec.js';
 import { SystemInfoService } from './servers/systemInfo.js';
 import { FeedbackService } from './services/feedback.js';
-import { createDnsProvider, DnsService } from './services/dns.js';
+import { DnsService } from './services/dns.js';
+import { DnsAccount } from './services/dnsAccount.js';
+import { TraefikDnsSync } from './services/traefikDns.js';
 import { MonitorService } from './services/monitor.js';
 import { SettingsService } from './services/settings.js';
 import { SitesService } from './services/sites.js';
@@ -91,9 +93,14 @@ async function main(): Promise<void> {
   const settings = new SettingsService(db);
   const backup = new BackupService(db, config, servers);
   const monitor = new MonitorService(db, config, servers);
-  const dns = new DnsService(createDnsProvider(config), log);
-  // The mail setup guide publishes SPF/DKIM/DMARC through the same provider token the
-  // wildcard-certificate overlay uses, when there is one.
+  // The Cloudflare token in Settings -> DNS: the panel's own records from the first request on,
+  // and every server's Traefik given a copy for the wildcard certificate's DNS challenges.
+  const dns = new DnsService(null, log);
+  const dnsAccount = new DnsAccount(settings, dns, servers, config, log);
+  dnsAccount.load();
+  const traefikDns = new TraefikDnsSync(config, servers, () => dnsAccount.token(), log);
+  dnsAccount.onChange = () => void traefikDns.kickAll();
+  // The mail setup guide publishes SPF/DKIM/DMARC through the same token, when there is one.
   const mail = new MailService(db, config, servers, settings, log, undefined, dns);
   const geoip = new GeoIpService(config, log);
   // The country table sits on disk from the last weekly download, but nothing read it in
@@ -122,7 +129,7 @@ async function main(): Promise<void> {
 
   // A new release is worth an email: an operator does not live in the panel, and an update
   // that sits unnoticed for weeks is what a checker exists to prevent. Silently skipped when
-  // no alert address is configured (Settings -> Alerts).
+  // no alert address is configured (Settings -> Mail).
   updates.onNewRelease = (release) => {
     void mail
       .notifyOperator(
@@ -181,6 +188,8 @@ async function main(): Promise<void> {
     monitor,
     settings,
     dns,
+    dnsAccount,
+    traefikDns,
     mail,
     traffic,
     geoip,
@@ -232,11 +241,11 @@ async function main(): Promise<void> {
 
   installCrashHandlers(log);
 
-  if (config.dnsProvider && !dns.enabled) {
+  if (config.dnsProvider && config.dnsProvider !== 'cloudflare' && !dns.enabled) {
     log.warn(
-      `DNS_PROVIDER=${config.dnsProvider} is set but no panel DNS client exists for it ` +
-        `(only "cloudflare" is implemented, and it also needs DNS_API_TOKEN). Per-site records ` +
-        `will not be created or flipped on move - manage them by hand, or see docs/dns.md.`,
+      `DNS_PROVIDER=${config.dnsProvider}: Traefik answers DNS challenges with it, but the panel ` +
+        `writes records through Cloudflare only, and Settings -> DNS has no Cloudflare token. Per-site ` +
+        `records will not be created or flipped on move - manage them by hand, or see docs/dns.md.`,
     );
   }
 

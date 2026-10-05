@@ -122,9 +122,10 @@ sudo docker logs wpl7-panel | grep -A2 'First boot'
 Change it under **Users → your account**. Create a site: it serves at
 `<name>.dev.example.com` within a minute.
 
-**4. Before real customer traffic**, set `SMTP_RELAYHOST` (deliverable email) and
-`DNS_PROVIDER` with its API token (one wildcard certificate for all dev sites) in
-`/opt/wpl7/deploy/.env`, then apply with `sudo /opt/wpl7/provision/setup.sh`.
+**4. Before real customer traffic**, set `SMTP_RELAYHOST` (deliverable email) in
+`/opt/wpl7/deploy/.env`, then apply with `sudo /opt/wpl7/provision/setup.sh`. And add a Cloudflare
+API token under **Settings → DNS**: one wildcard certificate for all dev sites, and the DNS records
+written for you.
 
 Flags, reading the script before running it, and adding servers:
 [docs/install.md](docs/install.md).

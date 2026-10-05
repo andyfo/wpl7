@@ -82,7 +82,7 @@ export function ftpOffBanner(f: SiteFtpDto): { tone: 'amber' | 'red'; text: stri
   if (f.users.length === 0 || confirmedOff(f.status)) {
     return {
       tone: 'amber',
-      text: 'FTP and SFTP are switched off for every server (Settings → FTP & SFTP). The logins below are kept, and work again once it is switched back on.',
+      text: 'FTP and SFTP are switched off for every server (Settings → Sites → FTP & SFTP). The logins below are kept, and work again once it is switched back on.',
     };
   }
   return {

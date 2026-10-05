@@ -5,7 +5,7 @@ import { backups, moveCleanups, sites, type MoveCleanupRow } from '../../db/sche
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
-import { buildSiteContainerSpec, sitePaths, siteRuntimeFrom } from '../../services/siteSpec.js';
+import { buildSiteContainerSpec, sitePaths, siteRuntimeFrom, siteTlsFor } from '../../services/siteSpec.js';
 import { ensureSiteNetwork, removeSiteNetwork } from '../../services/siteNetwork.js';
 import {
   ensureSiteMountSources,
@@ -283,7 +283,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     releaseProtection = s.security.pin(target.id, site.id);
     await s.security.kick(target.id);
     await target.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, domains, target.row, siteRuntimeFrom(s.settings)),
+      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, target.row), siteRuntimeFrom(s.settings)),
     );
     ctx.pushCompensation('remove container on target', async () => {
       await target.docker.removeContainer(site.containerName);
@@ -436,7 +436,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
           tlsMode: s.config.tlsMode,
           acmeResolver: s.config.acmeResolver,
           devDomain: source.row.devDomain,
-          dnsProvider: source.row.dnsProvider,
+          dnsProvider: s.dns.wildcardProvider(source.row.dnsProvider),
         }),
       );
     } catch (err) {

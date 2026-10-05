@@ -5,6 +5,7 @@ import { servers, sites } from '../../db/schema.js';
 import type { CoreServices } from '../../services/index.js';
 import type { JobContext } from '../context.js';
 import { PluginSyncService } from '../../services/pluginSync.js';
+import { CLOUDFLARE } from '../../services/dns.js';
 import { limitsChange, siteRuntimeFrom, type SiteRuntime } from '../../services/siteSpec.js';
 import { ServerUnreachableError, SshConnection } from '../../servers/sshConnection.js';
 import { shellQuote } from '../../servers/sshExec.js';
@@ -178,7 +179,6 @@ export function releaseIdentity(config: CoreServices['config']): string {
 const BUNDLE_ENTRIES = [
   'provision',
   'deploy/docker-compose.yml',
-  'deploy/docker-compose.dns.yml',
   'deploy/docker-compose.worker.yml',
   'deploy/.env.example',
   'deploy/wordpress-image',
@@ -328,7 +328,11 @@ async function provisionOverSsh(
     // had died before writing .env; omitting it lets setup.sh reuse the .env it already has,
     // and fail with its own clear prompt when there is none.
     if (ctx.payload.acmeEmail) args.push(`--acme-email=${ctx.payload.acmeEmail}`);
-    const dnsToken = s.config.dnsApiToken;
+    // Not Cloudflare's token: the panel gives every server's Traefik a copy of its own, kept in
+    // step with Settings -> DNS (services/traefikDns.ts, below). Another provider's still goes
+    // into the worker's .env - when it is the provider this install's .env has a token for.
+    const dnsToken =
+      row.dnsProvider && row.dnsProvider !== CLOUDFLARE && row.dnsProvider === s.config.dnsProvider ? s.config.otherDnsToken : '';
     if (row.dnsProvider) {
       args.push(`--dns-provider=${row.dnsProvider}`);
       if (dnsToken) args.push('--dns-token-stdin');
@@ -382,6 +386,14 @@ async function provisionOverSsh(
   const { pushed } = await sync.syncAllToServer(row.id, (m) => ctx.info(m));
 
   s.db.update(servers).set({ status: 'ok', updatedAt: Date.now() }).where(eq(servers.id, row.id)).run();
+  // In the server's queue of syncs, so a token changed meanwhile cannot restart Traefik twice.
+  await s.traefikDns.kick(row.id);
+  const traefik = s.traefikDns.statusOf(row.id);
+  if (traefik.state === 'error') {
+    ctx.warn(`Traefik's copy of the Cloudflare token could not be put in place (${traefik.message}); the panel tries again every minute.`);
+  } else if (s.dnsAccount.token()) {
+    ctx.info('Traefik has its copy of the Cloudflare token, for the wildcard certificate (Settings -> DNS).');
+  }
   const fresh = s.servers.rowById(row.id)!;
   ctx.info(`Server "${row.name}" is ready (${fresh.publicIp}).`);
   ctx.setResult({ serverId: row.id, publicIp: fresh.publicIp, pluginsPushed: pushed, checks });

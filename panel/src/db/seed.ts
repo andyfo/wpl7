@@ -4,6 +4,7 @@ import type { Db } from './index.js';
 import { plugins, servers, sessions, settings } from './schema.js';
 import type { Config } from '../config.js';
 import { SettingsService } from '../services/settings.js';
+import { seedCloudflareToken } from '../services/dnsAccount.js';
 import { UsersService, type TotpEnrollment, type TotpState } from '../services/users.js';
 import { generatePassword } from '../lib/crypto.js';
 import { DEFAULT_DETECTION_RULES, DEFAULT_TRUSTED_PROXIES } from '../../shared/security.js';
@@ -24,6 +25,9 @@ export interface SeedResult {
  */
 const LEGACY_ADMIN_KEYS = ['admin.username', 'admin.passwordHash', 'admin.totp', 'admin.totpEnrollment'];
 
+/** Server 1's DNS provider has been taken from DNS_PROVIDER, the one time it is. */
+const LOCAL_DNS_SEEDED = 'dns.localProviderSeeded';
+
 /**
  * First-boot seeding: the owner account + default settings + default plugin catalog.
  * Idempotent - existing values are never overwritten, so a stale PANEL_ADMIN_PASSWORD
@@ -42,7 +46,12 @@ export async function seed(db: Db, config: Config): Promise<SeedResult> {
     const patch: Record<string, unknown> = {};
     if (!local.publicIp && config.serverPublicIp) patch.publicIp = config.serverPublicIp;
     if (!local.devDomain) patch.devDomain = config.devDomain;
-    if (!local.dnsProvider && config.dnsProvider) patch.dnsProvider = config.dnsProvider;
+    // Really once, unlike the sentinels around it: Settings -> DNS switches the wildcard
+    // certificate off by emptying this, and a restart must not switch it back on.
+    if (s.getRaw(LOCAL_DNS_SEEDED) === undefined) {
+      if (!local.dnsProvider && config.dnsProvider) patch.dnsProvider = config.dnsProvider;
+      s.setRaw(LOCAL_DNS_SEEDED, true);
+    }
     // BACKUP_ROOT is what the compose overlay mounts into the panel container, so it has
     // to agree with the row: adopting it once keeps "the operator edited .env" working,
     // while later edits in the panel stay authoritative.
@@ -59,6 +68,8 @@ export async function seed(db: Db, config: Config): Promise<SeedResult> {
   const d = config.seedDefaults;
   s.seedRaw('site.defaultServerId', 1);
   s.seedRaw('dns.wildcardServerId', 1);
+  // Once, like the values below: Settings -> DNS owns the token from then on.
+  seedCloudflareToken(s, config.cloudflareTokenSeed);
   s.seedRaw('backup.cron', d.backupCron);
   s.seedRaw('backup.retention', d.backupRetention);
   s.seedRaw('monitor.uptimeIntervalSec', 60);

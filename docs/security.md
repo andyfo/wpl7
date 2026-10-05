@@ -135,7 +135,7 @@ connection itself comes from that proxy's addresses, so a header sent by anyone 
 nothing. Limits, blocks and the visitor statistics all use it, and so does Jetpack's way past
 the XML-RPC rules - only for a header that holds one of Jetpack's addresses and nothing else.
 
-**Settings → Trusted proxies**: Cloudflare is built in and on (`Cf-Connecting-Ip`, its ranges
+**Settings → Security → Trusted proxies**: Cloudflare is built in and on (`Cf-Connecting-Ip`, its ranges
 kept current weekly by the panel, and harmless for a site that is not behind it). Your own
 proxies need a name, the addresses they connect from, and their header: `True-Client-Ip` or
 `Fastly-Client-Ip`. A proxy that only sends `X-Forwarded-For` cannot be trusted this way: anyone
@@ -200,7 +200,7 @@ the history and for counting repeats.
 
 ### One scan
 
-Every site is scanned every 24 hours (**Settings → Malware scans**), or on **Scan now**. A scan
+Every site is scanned every 24 hours (**Settings → Security → Malware scans**), or on **Scan now**. A scan
 is three short-lived containers, each with that one site's files mounted read-only and nothing
 else - no network, no capabilities, a read-only root, one CPU, a memory ceiling, the site's own
 user:
@@ -281,7 +281,7 @@ to whatever holds the file, not an unknown file among WordPress's own; a differe
 
 ### On a finding
 
-**Settings → Malware scans → On a finding** (and per site, in the settings on its **Security** tab):
+**Settings → Security → Malware scans → On a finding** (and per site, in the settings on its **Security** tab):
 
 - **Report and alert** (the default): nothing is moved.
 - **Quarantine confirmed malware**: a file matching a known-malware signature or hash is moved
@@ -386,17 +386,17 @@ part is for and over backdoor samples: the one stays quiet, the other is caught.
 |---|---|---|
 | `security.level`, `security.overrides` | Standard, none | Sites → Security → Settings |
 | `security.bypassPrivate` | on | Sites → Security → Settings |
-| `security.trustedProxies` | Cloudflare on, none of your own | Settings → Trusted proxies |
+| `security.trustedProxies` | Cloudflare on, none of your own | Settings → Security → Trusted proxies |
 | `security.autoBlock` | on | Servers → Security → Detection |
 | `security.rules` | the table [above](#detection) | Servers → Security → Detection |
 | `security.blockMinutes`, `…blockMultiplier`, `…blockMaxDays` | 60, 4, 30 | Servers → Security → Detection |
 | `security.maxActiveBlocks` | 10,000 | Servers → Security → Detection |
 | `security.enforcement` | on | Servers → Security → Enforcement |
 | `security.historyDays` | 30 | API |
-| `scan.enabled`, `scan.signatures` | on, on | Settings → Malware scans |
-| `scan.intervalHours`, `scan.onFinding` | 24, report | Settings → Malware scans |
-| `scan.memoryMb`, `scan.timeoutMin` | 512, 30 | Settings → Malware scans |
-| `scan.quarantineKeepDays` | 0 (until deleted) | Settings → Malware scans |
+| `scan.enabled`, `scan.signatures` | on, on | Settings → Security → Malware scans |
+| `scan.intervalHours`, `scan.onFinding` | 24, report | Settings → Security → Malware scans |
+| `scan.memoryMb`, `scan.timeoutMin` | 512, 30 | Settings → Security → Malware scans |
+| `scan.quarantineKeepDays` | 0 (until deleted) | Settings → Security → Malware scans |
 
 ## Switching it off
 

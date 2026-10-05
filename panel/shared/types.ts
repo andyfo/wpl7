@@ -800,6 +800,73 @@ export interface ServerDto {
   createdAt: number;
 }
 
+/**
+ * How a server's Traefik answers the DNS challenges behind the wildcard certificate, read off
+ * its container: `file` = the panel's copy of the Cloudflare token; `env` = CF_DNS_API_TOKEN
+ * from that server's deploy/.env (a stack started from a compose file older than Settings ->
+ * DNS); `other` = another provider, credentials in that .env; `none` = no DNS resolver at all;
+ * `stopped` = not running.
+ */
+export type TraefikDnsMode = 'file' | 'env' | 'other' | 'none' | 'stopped';
+
+/** One server in Settings -> DNS. */
+export interface DnsServerDto {
+  id: number;
+  name: string;
+  devDomain: string;
+  status: ServerStatus;
+  /** The server's setting: non-empty = its dev sites share one wildcard certificate, from this provider. */
+  dnsProvider: string;
+  /** What new dev sites there actually get: '' when the setting names Cloudflare and there is no token. */
+  wildcardProvider: string;
+  /** Its Traefik and the panel's token, as last checked. */
+  traefik: {
+    state: 'ok' | 'error' | 'unknown';
+    mode: TraefikDnsMode | null;
+    /** The provider its DNS resolver is started with. */
+    provider: string | null;
+    /** `env` only: whether that .env holds a token at all. */
+    envToken: boolean;
+    /** Traefik was restarted to read a changed token. */
+    restartedAt: number | null;
+    checkedAt: number | null;
+    message: string | null;
+  };
+}
+
+export interface DnsStatusDto {
+  /** The provider the panel writes records with. */
+  provider: 'cloudflare';
+  token: {
+    configured: boolean;
+    setAt: number | null;
+    /** deploy/.env holds a CF_DNS_API_TOKEN that is not this one: read once, on first boot, and not since. */
+    envDiffers: boolean;
+  };
+  /** Where `*.<dev domain>` points; sites on other servers get a record of their own. */
+  wildcardServerId: number;
+  servers: DnsServerDto[];
+}
+
+/** What Settings -> DNS -> Check found a token reaches. */
+export interface DnsTokenCheckDto {
+  /** Cloudflare took the token and it reads at least one zone. */
+  ok: boolean;
+  /** What Cloudflare said when it refused the token, or why it could not be reached. */
+  error: string | null;
+  /** The zones it can read, at most the first 50. */
+  zones: string[];
+  zoneCount: number;
+  /** Every dev domain the fleet uses, with the zone it is in and whether the token reads its records. */
+  devDomains: {
+    domain: string;
+    servers: string[];
+    zone: string | null;
+    records: 'readable' | 'refused' | null;
+    detail: string | null;
+  }[];
+}
+
 /** One filesystem the server has mounted, offered as a quick pick in the Storage form. */
 export interface MountOption {
   target: string;
@@ -1578,7 +1645,7 @@ export interface SiteFtpUserDto {
 }
 
 export interface SiteFtpDto {
-  /** The fleet-wide switch (Settings -> FTP & SFTP). */
+  /** The fleet-wide switch (Settings -> Sites -> FTP & SFTP). */
   enabled: boolean;
   serverId: number;
   serverName: string;
@@ -1715,7 +1782,7 @@ export interface BlockedRequestDto {
   ts: number;
   /** `files`, `limit-login`, `block-<id>`, `blocked-address`... */
   rule: string;
-  /** null while addresses are not stored (Settings -> Visitor statistics). */
+  /** null while addresses are not stored (Settings -> Monitoring -> Visitor statistics). */
   ip: string | null;
   country: string | null;
   via: string | null;

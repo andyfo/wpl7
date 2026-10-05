@@ -119,16 +119,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     acmeResolver: e.ACME_RESOLVER,
     panelDomain: e.PANEL_DOMAIN,
     devDomain: e.DEV_DOMAIN || 'dev.localtest.me',
+    /** The provider Traefik's DNS-01 resolver uses on this server; empty means Cloudflare (deploy/docker-compose.yml). */
     dnsProvider: e.DNS_PROVIDER,
-    // Same token the Traefik DNS-01 overlay uses; the panel manages per-site records with it.
-    dnsApiToken:
-      e.DNS_PROVIDER === 'cloudflare'
-        ? e.CF_DNS_API_TOKEN
-        : e.DNS_PROVIDER === 'hetzner'
-          ? e.HETZNER_API_KEY
-          : e.DNS_PROVIDER === 'digitalocean'
-            ? e.DO_AUTH_TOKEN
-            : '',
+    /**
+     * deploy/.env's Cloudflare token. Read once, into Settings -> DNS on the first boot that
+     * finds it (db/seed.ts); from then on the panel owns the token, as it owns the backup
+     * schedule, and editing .env changes nothing.
+     */
+    cloudflareTokenSeed: e.DNS_PROVIDER === '' || e.DNS_PROVIDER === 'cloudflare' ? e.CF_DNS_API_TOKEN.trim() : '',
+    /**
+     * Another provider's token (hetzner, digitalocean), which the panel does not manage: handed
+     * to a worker server provisioned for the same provider, whose Traefik reads it from that
+     * server's own .env.
+     */
+    otherDnsToken:
+      e.DNS_PROVIDER === 'hetzner' ? e.HETZNER_API_KEY : e.DNS_PROVIDER === 'digitalocean' ? e.DO_AUTH_TOKEN : '',
     serverPublicIp: e.SERVER_PUBLIC_IP,
     channel: e.WPL7_CHANNEL,
     source: e.WPL7_SOURCE,

@@ -565,26 +565,42 @@ export function Tabs({
   active,
   onChange,
 }: {
-  tabs: { id: string; label: string }[];
+  /** A label is text, or text with a marker after it (a tab holding changes not saved yet). */
+  tabs: { id: string; label: ReactNode }[];
   active: string;
   onChange: (id: string) => void;
 }) {
+  // A row wider than the page - Settings' seven on a phone - scrolls sideways on its own instead
+  // of making the whole page wider. The scroller overlaps the outer border by a pixel, so the
+  // active tab's underline still covers it: a scroller clips at its own edge.
+  const row = useRef<HTMLDivElement>(null);
+  // ...and keeps the active tab in view, a link to the last one included. Sideways only: the
+  // page itself may be on its way to an anchor further down.
+  useEffect(() => {
+    const el = row.current;
+    const tab = el?.querySelector<HTMLElement>('[data-active]');
+    if (!el || !tab || el.scrollWidth <= el.clientWidth) return;
+    el.scrollLeft = tab.offsetLeft - (el.clientWidth - tab.offsetWidth) / 2;
+  }, [active]);
   return (
-    <div className="flex gap-1 border-b border-neutral-200">
-      {tabs.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          onClick={() => onChange(t.id)}
-          className={`-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
-            active === t.id
-              ? 'border-neutral-900 text-neutral-900'
-              : 'border-transparent text-neutral-500 hover:text-neutral-800'
-          }`}
-        >
-          {t.label}
-        </button>
-      ))}
+    <div className="border-b border-neutral-200">
+      <div ref={row} className="relative -mb-px flex gap-1 overflow-x-auto">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            data-active={active === t.id ? '' : undefined}
+            onClick={() => onChange(t.id)}
+            className={`shrink-0 whitespace-nowrap border-b-2 px-4 py-2 text-sm font-medium transition-colors ${
+              active === t.id
+                ? 'border-neutral-900 text-neutral-900'
+                : 'border-transparent text-neutral-500 hover:text-neutral-800'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

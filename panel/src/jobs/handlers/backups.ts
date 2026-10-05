@@ -112,13 +112,13 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
         await ensureSiteImage(ctx, server, s.config, manifest.phpVersion);
         await server.docker.removeContainer(site.containerName);
         updateSiteRow(s.db, site.id, { phpVersion: manifest.phpVersion });
-        const { buildSiteContainerSpec, siteRuntimeFrom } = await import('../../services/siteSpec.js');
+        const { buildSiteContainerSpec, siteRuntimeFrom, siteTlsFor } = await import('../../services/siteSpec.js');
         await server.docker.createSiteContainer(
           buildSiteContainerSpec(
             s.config,
             loadSite(s.db, site.id),
             siteDomains(site),
-            server.row,
+            siteTlsFor(s.dns, server.row),
             siteRuntimeFrom(s.settings),
           ),
         );

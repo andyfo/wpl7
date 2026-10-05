@@ -195,7 +195,7 @@ that should be indexed from the start — nothing else turns it off later, go-li
 | `DELETE /sites/:slug` | `?finalBackup=true\|false` (default true; `false` skips the final backup) `&deleteBackups=true\|false` (default false) | `202 {job}` — `deleteBackups=true` also deletes the backups the site already has, offsite copies included: once the site is gone, its job queues a `backup.delete` for them (`result.backupDeleteJobId`). The final backup is not among them, so with both the site leaves exactly one backup behind (`result.finalBackupId`); when a final backup was asked for but the files were already gone, its newest complete backup stays instead |
 | `POST /sites/:slug/start` · `/stop` · `/restart` | – | `202 {job}` |
 | `PUT /sites/:slug/php` | `{phpVersion}` | `202 {job}` — auto-rollback if the site stops responding |
-| `POST /sites/:slug/go-live` | `{domains: [primary, ...aliases], keepDevAlias?: true, manageDns?: false}` | `202 {job}` — `manageDns: true` creates the A records via the DNS provider first (zone must be in the account) |
+| `POST /sites/:slug/go-live` | `{domains: [primary, ...aliases], keepDevAlias?: true, manageDns?: false}` | `202 {job}` — `manageDns: true` creates the A records first, through the Cloudflare token in Settings → DNS, for the domains whose zone it reaches |
 | `PUT /sites/:slug/domains` | `{domains}` | `202 {job}` — general domain edit |
 | `POST /sites/:slug/move` | `{targetServerId, quiesce?: "maintenance"\|"stop"\|"none"}` | `202 {job}` — default quiesce: live site `maintenance`, dev site `none`; see docs/multi-server.md |
 | `POST /sites/:slug/move/finalize` | – | `202 {job}` — tear down the source copy of a moved site now instead of waiting for DNS verification |
@@ -311,11 +311,25 @@ fetched onto the current one (docs/backup-restore.md).
 | `GET /servers/:id/info` | `?refresh=true` skips the one-minute cache | what the machine is: `{reachable, error, os, kernel, arch, hostname, cpuModel, cpus, memTotalBytes, uptimeSeconds, dockerVersion, readAt}`. Every field is independently nullable; `reachable: false` means the server could not be asked at all. Server 1 is read over the panel's host shell, so `os` is the host's, not the container's |
 | `POST /servers/:id/test` | – | `{ok, checks}` — synchronous re-verification |
 | `POST /servers/:id/update` | `{rootUser?: "root"}` | `202 {job}` — re-push the provision bundle + re-run setup.sh (this is how worker stacks are upgraded) |
-| `PATCH /servers/:id` | any of `name, sshHost, sshPort, sshUser, publicIp, devDomain, dnsProvider`; `retrustHostKey: true` clears the pinned SSH host key after a legitimate reinstall (allowed for server 1 too); `backupRoot: string\|null` sets where this server keeps its backups (`null` = the default) | updated `Server` |
+| `PATCH /servers/:id` | any of `name, sshHost, sshPort, sshUser, publicIp, devDomain, dnsProvider`; `retrustHostKey: true` clears the pinned SSH host key after a legitimate reinstall (allowed for server 1 too); `backupRoot: string\|null` sets where this server keeps its backups (`null` = the default) | updated `Server`. `dnsProvider` is the server's wildcard certificate, as `PUT /dns/servers/:id/wildcard` switches it: `409` where its Traefik cannot answer the challenge (or, for `cloudflare`, the token does not reach the dev domain's zone and its records); emptying it rebuilds the dev sites that shared it |
 | `GET /servers/:id/storage` | `?path=` validates a candidate instead of describing the current location | `{backupRoot, defaultRoot, isDefault, exists, writable, visibleInPanel, reason, mountInstructions, disk, backups: {count, bytes}, mounts[]}` |
 | `POST /servers/:id/backups/relocate` | `{to}` | `202 {job}` — copy every backup on this server to `to`, verify each one, remove the originals, then set the location |
 | `GET /servers/:id/terminal` | WebSocket upgrade; `?cols=&rows=` initial size; same-origin `Origin` required when present; Bearer keys accepted | interactive **root shell**. Binary frames = terminal bytes both ways; text frames = JSON control: client sends `{"t":"resize","cols","rows"}`, server sends `{"t":"status"\|"ready"\|"exit"\|"error", …}` |
 | `DELETE /servers/:id` | `?force=true` also drops backup *records* still pointing at the server (files untouched) | `{removed, note}` — refused (409) while sites live there or while a moved site still has its old copy parked there; server 1 can never be removed |
+
+### DNS (see docs/dns.md)
+The Cloudflare token the panel writes records with, and every server's Traefik answers the wildcard
+certificate's DNS challenges with. No answer ever contains it; changing it needs Full, and an API key
+of any level can see whether there is one. Over MCP, only `GET /dns` is reachable: a token is a
+credential, and checking one sends it to Cloudflare.
+
+| Method & path | Body / query | Returns |
+|---|---|---|
+| `GET /dns` | – | `{provider: "cloudflare", token: {configured, setAt, envDiffers}, wildcardServerId, servers[]}` — each server's `dnsProvider` (its setting), `wildcardProvider` (what new dev sites get: `""` when the setting is `cloudflare` and there is no token) and `traefik: {state, mode, provider, envToken, restartedAt, checkedAt, message}`, how its Traefik answers DNS challenges (`file` = the panel's copy of the token, `env` = the server's own `.env` until it is updated, `other`, `none`, `stopped`) |
+| `POST /dns/check` | `{token?}` — left out: the stored one | `{ok, error, zones[], zoneCount, devDomains: [{domain, servers[], zone, records: "readable"\|"refused"\|null, detail}]}`. Reads only |
+| `PUT /dns/token` | `{token}` | the `GET /dns` answer plus `check`. Checked first: `400` with Cloudflare's own words when it refuses the token, or when the token reaches no zone. Every server's Traefik gets the new one within seconds, restarting where it held the old one |
+| `DELETE /dns/token` | – | the `GET /dns` answer plus `rebuilding[]` and `busy[]`: the dev sites that shared a wildcard certificate from Cloudflare get a `site.reconcile` each, onto certificates of their own |
+| `PUT /dns/servers/:id/wildcard` | `{on: boolean}` | the `GET /dns` answer plus `rebuilding[]` and `busy[]`. On: from the provider the server's Traefik runs (Cloudflare unless its `.env` names another), for dev sites created or rebuilt from then on; `409` when its Traefik cannot answer the challenge, or the token does not reach the dev domain's zone and its records. Off: the dev sites sharing it are rebuilt onto their own |
 
 ### WordPress management (see docs/updates.md)
 Every plugin and theme change the panel makes — install, activate, deactivate, update, delete, one

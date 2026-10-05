@@ -55,6 +55,7 @@ const DESTRUCTIVE = [
   'DELETE /api/api-keys/activity',
   'DELETE /api/backup-destinations/:id',
   'DELETE /api/backups/:id',
+  'DELETE /api/dns/token',
   'DELETE /api/mail/dkim/:domain',
   'DELETE /api/mail/queue/:serverId/:queueId',
   'DELETE /api/mcp/connections/:id',
@@ -112,6 +113,8 @@ const DESTRUCTIVE = [
   'POST /api/sites/:slug/wp/users/reset-password',
   'POST /api/system/update',
   'POST /api/wp/bulk',
+  'PUT /api/dns/servers/:id/wildcard',
+  'PUT /api/dns/token',
   'PUT /api/recipes/:id/inputs/:input',
   'PUT /api/settings',
   'PUT /api/sites/:slug/backups-enabled',
@@ -163,6 +166,10 @@ const NOT_THROUGH_MCP = [
   'POST /api/plugins/upload',
   // Leaves the box.
   'POST /api/feedback',
+  // The Cloudflare token: a credential, and checking one sends it to Cloudflare.
+  'POST /api/dns/check',
+  'PUT /api/dns/token',
+  'DELETE /api/dns/token',
   // MCP's own connections and sign-in: a connection must never manage itself.
   'GET /api/mcp',
   'POST /api/mcp/connect-window',
@@ -195,6 +202,7 @@ describe('access levels in the API catalog', () => {
       schedules: 'manage',
       destinations: 'full',
       servers: 'full',
+      dns: 'full',
       blocklist: 'full',
       mail: 'full',
       plugins: 'full',

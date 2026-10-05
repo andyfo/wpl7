@@ -80,7 +80,7 @@ import {
   sameHostname,
   type RelayHostnames,
 } from './mailHostname.js';
-import type { DnsService } from './dns.js';
+import { CLOUDFLARE, type DnsService } from './dns.js';
 import type {
   MailDkimKeyDto,
   MailDomainDto,
@@ -1438,11 +1438,11 @@ export class MailService {
       mode: this.config.mailMode,
       dns: {
         configured: this.dns?.enabled ?? false,
-        provider: this.config.dnsProvider,
+        provider: this.dns?.enabled ? CLOUDFLARE : '',
         hint:
-          'Set DNS_PROVIDER=cloudflare and CF_DNS_API_TOKEN in deploy/.env (a token with Zone → DNS → Edit on the zones you host), ' +
-          'then re-run provisioning. The panel then publishes SPF, DKIM and DMARC for any domain whose zone is in that account — ' +
-          'the same token the wildcard-certificate overlay already uses.',
+          'Add a Cloudflare API token under Settings → DNS (Zone → Zone → Read and Zone → DNS → Edit on the zones you host). ' +
+          'The panel then publishes SPF, DKIM and DMARC for any domain whose zone that token reaches — ' +
+          'the same token the wildcard certificate and the per-site records use.',
       },
       servers,
       // Reverse DNS is set where the IP was rented, not in the domain's zone, so no DNS

@@ -26,6 +26,8 @@ for a reason; remove one once there is nothing left to watch.
 | [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-09-30 07:23 UTC | Both answer as expected |
 | [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-09-30 09:51 UTC | All six as listed |
 | [AI assistants' address lists](#ai-assistants-address-lists) | Medium | 2026-09-30 10:46 UTC | All 12 lists pass the checks |
+| [Traefik: the Cloudflare token from a file](#traefik-the-cloudflare-token-from-a-file) | Medium | 2026-10-04 18:36 UTC | lego v5.4.1 reads the file; Traefik keeps the client |
+| [Cloudflare: API tokens as the panel takes them](#cloudflare-api-tokens-as-the-panel-takes-them) | Medium | 2026-10-04 18:36 UTC | Formats and permissions as validated |
 | [Cloudflare's and Jetpack's address lists](#cloudflares-and-jetpacks-address-lists) | Low | 2026-09-30 07:23 UTC | All three answer |
 | [Ubuntu's `nftables.service`](#ubuntus-nftablesservice) | Low | 2026-09-29 | Disabled by default on 26.04 |
 
@@ -238,6 +240,54 @@ for a reason; remove one once there is nothing left to watch.
   company: a new entry and an `AI_SOURCES` key), run the script again, and commit
   `aiRanges.ts` with it. A list refused for a range wider than `AI_WIDEST` needs a look before
   the limit moves: never blocking a whole /15 is a lot to take on trust.
+
+## Traefik: the Cloudflare token from a file
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-04 18:36 UTC. Traefik v3.7.13 (commit fc92cc1), what `traefik:v3.7`
+  runs, imports lego v5.4.1. There `GetOrFile` (`platform/env/env.go`) returns `CF_DNS_API_TOKEN`
+  when it has a value and only otherwise reads the file `CF_DNS_API_TOKEN_FILE` names, trailing
+  newline trimmed; the Cloudflare provider asks for its token through it (`NewDNSProvider`,
+  `providers/dns/cloudflare/cloudflare.go`). Traefik builds its ACME client, DNS provider and all,
+  once per process: `getClient` in `pkg/provider/acme/provider.go` keeps `p.client`, and calls
+  itself only to get or renew a certificate.
+- **The problem:** Settings → DNS keeps the Cloudflare token in the panel, and every server's
+  Traefik reads it from `${SRV_ROOT}/traefik/dns/cloudflare-api-token` through
+  `CF_DNS_API_TOKEN_FILE` (`deploy/docker-compose.yml`). Two upstream behaviours carry that. The
+  `_FILE` variable is read only while `CF_DNS_API_TOKEN` is empty, which is why compose must not
+  pass that one (`panel/test/unit/composeFlags.test.ts` holds it). And the token is read once, so
+  `services/traefikDns.ts` restarts Traefik where a token it may hold was replaced or removed.
+- **Check:** the go.mod of the latest v3.7 release (`gh release list -R traefik/traefik --limit 5`,
+  then `gh api 'repos/traefik/traefik/contents/go.mod?ref=<tag>' --jq .content | base64 -d | grep lego`),
+  that lego version's `GetOrFile` and Cloudflare `NewDNSProvider`, and Traefik's `getClient`.
+- **When it changes:**
+  - **lego stops reading `_FILE`:** hand the token over another way - a panel-written `env_file`
+    for Traefik and a recreate, as `relay.env` is for the mail container - and change
+    `traefikDnsMode`.
+  - **Traefik reads credentials again per certificate:** drop the restart in
+    `TraefikDnsSync.syncServer`, and the downtime it warns of in Settings → DNS and docs/dns.md.
+
+## Cloudflare: API tokens as the panel takes them
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-04 18:36 UTC. Cloudflare's
+  [token formats](https://developers.cloudflare.com/fundamentals/api/get-started/token-formats/):
+  since 2026 a prefix - `cfut_` for a user's token, `cfat_` for an account's - then 40 characters
+  and a checksum; older tokens are 40 characters and keep working; `cfk_` is a Global API Key. The
+  API reference accepts Zone Read for List Zones (`per_page` 5 to 50) and DNS Read or DNS Write for
+  List DNS Records.
+- **The problem:** `cloudflareTokenSchema` (`panel/shared/schemas.ts`) refuses what does not look
+  like a token: not one word of letters, digits, `-` and `_`, shorter than 30 or longer than 200
+  characters, or a `cfk_` key. Settings → DNS asks for **Zone → Zone → Read** and **Zone → DNS →
+  Edit**, and `DnsAccount.check` proves the first by listing zones and the DNS half by reading one
+  record per dev domain's zone - the read a server's wildcard certificate waits for before it is
+  switched on (`DnsAccount.reach`). It does not ask `/user/tokens/verify`, which an account's token
+  fails. A valid token refused by the schema is an operator who cannot save one.
+- **Check:** the token formats page for a new prefix or character set, and the API reference's
+  accepted permissions for [List Zones](https://developers.cloudflare.com/api/resources/zones/methods/list/)
+  and [List DNS Records](https://developers.cloudflare.com/api/resources/dns/subresources/records/methods/list/).
+- **When it changes:** widen `cloudflareTokenSchema`, and follow with `DnsAccount.check`, the hint
+  in `web/src/components/settings/DnsTab.tsx`, docs/dns.md and `deploy/.env.example`.
 
 ## Cloudflare's and Jetpack's address lists
 

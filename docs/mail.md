@@ -188,19 +188,13 @@ One block per sending domain, with a live check of each record and the exact val
 
 ## Letting the panel publish the records
 
-Give the panel a DNS API token and the Setup guide stops printing values to copy and starts
-writing them:
+Give the panel a Cloudflare API token under **Settings → DNS** — with **Zone → Zone → Read** and
+**Zone → DNS → Edit** on the zones you host — and the Setup guide stops printing values to copy
+and starts writing them. It is the **same token** the wildcard certificate and the per-site
+records use ([dns.md](dns.md#cloudflare-settings--dns)), so on an install with wildcard dev
+certificates it is usually there already. It works from the moment it is saved.
 
-```
-DNS_PROVIDER=cloudflare
-CF_DNS_API_TOKEN=<token with Zone → DNS → Edit on the zones you host>
-```
-
-This is the **same token** the wildcard-certificate overlay already uses (docs/dns.md), so on
-an install with wildcard dev certificates it is usually configured. Re-run provisioning after
-adding it.
-
-The panel then publishes SPF, DKIM and DMARC for any domain whose zone is in that account.
+The panel then publishes SPF, DKIM and DMARC for any domain whose zone that token reaches.
 These records are shared with mail this platform never sent, so a set of rules governs what it
 will and will not do:
 

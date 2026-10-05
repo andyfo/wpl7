@@ -57,7 +57,7 @@ export const JOB_TYPE_INFO = {
   'site.reconcile': {
     label: 'Recreate site container',
     description:
-      "Recreates the site's container so it runs under the current isolation policy: its networks, its container capabilities and what it may send mail as.",
+      "Recreates the site's container so it runs under the current isolation policy - its networks, its container capabilities and what it may send mail as - and with the certificate its server gives it now.",
     category: 'sites',
   },
   'site.updateDomains': {

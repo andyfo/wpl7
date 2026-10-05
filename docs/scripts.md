@@ -277,7 +277,6 @@ key is set:
 
 | Overlay | Added when | What it does |
 |---|---|---|
-| `docker-compose.dns.yml` | `DNS_PROVIDER=…` | DNS-01 resolver, so dev sites share one wildcard certificate |
 | `docker-compose.worker.yml` | `SERVER_ROLE=worker` | drops the panel container (the central panel drives this machine over SSH) |
 | `docker-compose.backup-root.yml` | `BACKUP_ROOT=…` | mounts the chosen backup directory into the panel at the identical path |
 

@@ -4,6 +4,19 @@ import { FakeDnsProvider } from '../helpers.js';
 
 const noLog = { info: () => undefined, warn: () => undefined, error: () => undefined };
 
+/** Holds a provider's zone lookups - each answered as of when it was asked - until let go. */
+function holdLookups(provider: FakeDnsProvider): () => void {
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  const findZone = provider.findZone.bind(provider);
+  provider.findZone = async (fqdn) => {
+    const answer = await findZone(fqdn);
+    await held;
+    return answer;
+  };
+  return release;
+}
+
 describe('DnsService', () => {
   it('is disabled without a provider - every call is a safe no-op', async () => {
     const dns = new DnsService(null, noLog);
@@ -63,5 +76,92 @@ describe('DnsService', () => {
     expect(await dns.canManage('customer.other.net')).toBe(false);
     expect(await dns.canManage('customer.other.net')).toBe(false);
     expect(provider.calls.filter((c) => c.method === 'findZone')).toHaveLength(1);
+  });
+});
+
+describe('DnsService, account changes', () => {
+  it('works in another account once told to, and forgets the zones it knew', async () => {
+    const first = new FakeDnsProvider();
+    first.zones = ['example.com'];
+    const dns = new DnsService(first, noLog);
+    expect(await dns.canManage('a.example.com')).toBe(true);
+
+    const second = new FakeDnsProvider();
+    second.zones = ['other.net'];
+    dns.use(second);
+    expect(dns.enabled).toBe(true);
+    // The first account's zone id means nothing in the second: asked again, not served from cache.
+    expect(await dns.canManage('a.example.com')).toBe(false);
+    expect(await dns.upsertA('x.other.net', '203.0.113.9')).toBe('updated');
+    expect(first.records.size).toBe(0);
+    expect(second.records.get('x.other.net')).toBe('203.0.113.9');
+
+    dns.use(null);
+    expect(dns.enabled).toBe(false);
+    expect(await dns.upsertA('x.other.net', '203.0.113.9')).toBe('unmanaged');
+  });
+
+  it('finds a zone added to the account once asked to look again', async () => {
+    const provider = new FakeDnsProvider();
+    const dns = new DnsService(provider, noLog);
+    expect(await dns.canManage('shop.new.example')).toBe(false);
+    provider.zones = ['new.example'];
+    expect(await dns.canManage('shop.new.example')).toBe(false);
+    dns.forgetZones();
+    expect(await dns.canManage('shop.new.example')).toBe(true);
+  });
+
+  it('asks the new token when the old one is replaced under a lookup, not trusting the old one’s answer', async () => {
+    const before = new FakeDnsProvider();
+    const after = new FakeDnsProvider();
+    after.zones = ['example.com'];
+    const dns = new DnsService(before, noLog);
+    const release = holdLookups(before);
+    // The old token reaches no zone; the new one, saved while Cloudflare was being asked, does.
+    const writing = dns.upsertA('go.example.com', '203.0.113.9');
+    const asking = dns.canManage('mail.example.com');
+    dns.use(after);
+    release();
+    expect(await writing).toBe('updated');
+    expect(await asking).toBe(true);
+    expect(after.records.get('go.example.com')).toBe('203.0.113.9');
+    expect(before.records.size).toBe(0);
+  });
+
+  it('writes nothing once the token is removed under a lookup', async () => {
+    const provider = new FakeDnsProvider();
+    provider.zones = ['example.com'];
+    const dns = new DnsService(provider, noLog);
+    const release = holdLookups(provider);
+    const writing = dns.upsertA('go.example.com', '203.0.113.9');
+    dns.use(null);
+    release();
+    expect(await writing).toBe('unmanaged');
+    expect(provider.records.size).toBe(0);
+  });
+
+  it('keeps nothing a lookup still out learnt once told to look again', async () => {
+    const provider = new FakeDnsProvider();
+    const dns = new DnsService(provider, noLog);
+    const release = holdLookups(provider);
+    // Asked before the zone was added to the account, answered after Check looked again.
+    const asking = dns.canManage('shop.new.example');
+    provider.zones = ['new.example'];
+    dns.forgetZones();
+    release();
+    expect(await asking).toBe(false);
+    expect(await dns.canManage('shop.new.example')).toBe(true);
+  });
+
+  it('gives a server the wildcard certificate only from a provider with credentials behind it', () => {
+    const without = new DnsService(null, noLog);
+    // Cloudflare's token is the panel's: none, and a site labelled for the wildcard gets no certificate.
+    expect(without.wildcardProvider('cloudflare')).toBe('');
+    // Another provider's credentials are in that server's .env, which the panel cannot see.
+    expect(without.wildcardProvider('hetzner')).toBe('hetzner');
+    expect(without.wildcardProvider('')).toBe('');
+    const withToken = new DnsService(new FakeDnsProvider(), noLog);
+    expect(withToken.wildcardProvider('cloudflare')).toBe('cloudflare');
+    expect(withToken.wildcardProvider('')).toBe('');
   });
 });

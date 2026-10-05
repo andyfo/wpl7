@@ -4,7 +4,6 @@
 # discovers them through labels. Config values come from ./.env (see .env.example).
 #
 # Production:            docker compose up -d
-# With wildcard DNS-01:  docker compose -f docker-compose.yml -f docker-compose.dns.yml up -d
 # Local dev (macOS):     docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.build.yml up -d
 name: wpl7
 
@@ -64,6 +63,33 @@ services:
       - "--certificatesresolvers.letsencrypt-staging.acme.storage=/letsencrypt/acme-staging.json"
       - "--certificatesresolvers.letsencrypt-staging.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
       - "--certificatesresolvers.letsencrypt-staging.acme.httpchallenge.entrypoint=web"
+      # DNS-01: the one *.${DEV_DOMAIN} certificate a server's dev sites share when its wildcard
+      # certificate is on (Settings -> DNS). Always here, and inert until a site is labelled for
+      # it: Traefik only builds the client when it has a certificate to get or renew. The
+      # provider is DNS_PROVIDER, or Cloudflare - whose token the panel looks after - when that
+      # is empty. The staging twin keeps ACME_RESOLVER=letsencrypt-staging off the production CA.
+      - "--certificatesresolvers.letsencrypt-dns.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt-dns.acme.storage=/letsencrypt/acme-dns.json"
+      - "--certificatesresolvers.letsencrypt-dns.acme.dnschallenge.provider=${DNS_PROVIDER:-cloudflare}"
+      - "--certificatesresolvers.letsencrypt-dns.acme.dnschallenge.propagation.delayBeforeChecks=30s"
+      - "--certificatesresolvers.letsencrypt-dns-staging.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt-dns-staging.acme.storage=/letsencrypt/acme-dns-staging.json"
+      - "--certificatesresolvers.letsencrypt-dns-staging.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+      - "--certificatesresolvers.letsencrypt-dns-staging.acme.dnschallenge.provider=${DNS_PROVIDER:-cloudflare}"
+      - "--certificatesresolvers.letsencrypt-dns-staging.acme.dnschallenge.propagation.delayBeforeChecks=30s"
+    environment:
+      # Cloudflare's token is the panel's (Settings -> DNS): it writes a copy to this file on
+      # every server, under ${SRV_ROOT}/traefik, and restarts Traefik when it changes. lego,
+      # Traefik's ACME library, reads a `_FILE` variable only while the plain one is empty -
+      # which is why CF_DNS_API_TOKEN from .env must NOT be passed here: it would win over the
+      # panel's copy, and a token replaced in Settings would never reach this server.
+      CF_DNS_API_TOKEN_FILE: /letsencrypt/dns/cloudflare-api-token
+      # Any other provider's credentials come from .env (https://doc.traefik.io/traefik/https/acme/#providers).
+      HETZNER_API_KEY: ${HETZNER_API_KEY:-}
+      DO_AUTH_TOKEN: ${DO_AUTH_TOKEN:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ${SRV_ROOT:-/srv}/traefik:/letsencrypt
@@ -255,8 +281,9 @@ services:
       # the recipes bundled with this version, anything else = a fork's own index + key.
       WPL7_CATALOG_URL: ${WPL7_CATALOG_URL:-}
       WPL7_CATALOG_PUBLIC_KEY: ${WPL7_CATALOG_PUBLIC_KEY:-}
-      # DNS provider tokens: same credentials the Traefik DNS-01 overlay uses; the panel
-      # additionally manages per-site A records with them (multi-server dev routing).
+      # Cloudflare's token seeds Settings -> DNS on the panel's first boot, and is not read again:
+      # the panel owns it from then on. Another provider's token is handed on to worker servers
+      # provisioned for that provider.
       CF_DNS_API_TOKEN: ${CF_DNS_API_TOKEN:-}
       HETZNER_API_KEY: ${HETZNER_API_KEY:-}
       DO_AUTH_TOKEN: ${DO_AUTH_TOKEN:-}

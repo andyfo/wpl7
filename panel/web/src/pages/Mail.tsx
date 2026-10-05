@@ -1182,8 +1182,10 @@ function AutomationNote({ configured, provider, hint }: { configured: boolean; p
   }
   return (
     <p className="rounded-lg bg-neutral-100 px-3 py-2 text-sm text-neutral-700">
-      <strong>Everything below can be automated.</strong> Give the panel a DNS API token and it publishes SPF,
-      DKIM and DMARC for you. {hint}
+      <strong>Everything below can be automated.</strong> {hint}{' '}
+      <Link className="font-medium underline" to="/settings?tab=dns">
+        Settings → DNS
+      </Link>
     </p>
   );
 }

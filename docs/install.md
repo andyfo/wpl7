@@ -99,12 +99,13 @@ Re-running it is safe: it never overwrites an existing `.env`.
 - **`SMTP_RELAYHOST`** (with `SMTP_USERNAME` and `SMTP_PASSWORD`) — mail is delivered directly
   by default, which most VPS providers block or get filed as spam. Point it at a relay
   (Mailgun, Postmark, SES, your own). [mail.md](mail.md).
-- **`DNS_PROVIDER`** and the provider's API token — Traefik then gets one wildcard certificate
-  for every dev site instead of one per site. [dns.md](dns.md).
 
-Also worth doing on day one: set an alert address in **Settings** (mail suspensions and new
-releases are sent there), and open **Mail → Setup guide**, which checks SPF, DKIM, DMARC and
-reverse DNS against live DNS and tells you what is missing.
+Also worth doing on day one, in the panel: add a Cloudflare API token under **Settings → DNS**
+and switch on the server's wildcard certificate — every dev site then shares one certificate
+instead of getting one each, and the panel writes DNS records itself ([dns.md](dns.md)); set an
+alert address under **Settings → Mail** (mail suspensions and new releases are sent there); and
+open **Mail → Setup guide**, which checks SPF, DKIM, DMARC and reverse DNS against live DNS and
+tells you what is missing.
 
 ## Adding a second server
 
