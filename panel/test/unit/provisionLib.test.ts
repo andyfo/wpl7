@@ -65,6 +65,60 @@ describe('wpl7_wait_healthy', () => {
   });
 });
 
+describe('wpl7_mail_hostname_set', () => {
+  /** A deploy/.env and a /srv/mail, as `setup.sh --mail-hostname=` finds them. */
+  function install(env: string, relayEnv: string | null) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-mailhost-'));
+    stubs.push(dir);
+    const envFile = path.join(dir, '.env');
+    const relayFile = path.join(dir, 'relay.env');
+    fs.writeFileSync(envFile, env);
+    if (relayEnv !== null) fs.writeFileSync(relayFile, relayEnv);
+    const run = (name: string) =>
+      runShell(`wpl7_mail_hostname_set ${JSON.stringify(envFile)} ${JSON.stringify(relayFile)} ${name}`, dir);
+    return { envFile, relayFile, run };
+  }
+  const PANEL_FILE = '# Written by the WPL7 panel (Mail -> Setup guide).\nPOSTFIX_myhostname=srv.example.com\n';
+
+  it('clears the name set in the panel even when .env already holds the one asked for', () => {
+    // The override in relay.env wins over .env, so with .env already saying the name, it is
+    // the one thing in the way - and a check on .env alone left it there, silently winning.
+    const box = install('DEV_DOMAIN=dev.example.com\nMAIL_HOSTNAME=mail.example.com\n', PANEL_FILE);
+
+    const res = box.run('mail.example.com');
+
+    expect(res.status).toBe(0);
+    expect(fs.existsSync(box.relayFile)).toBe(false);
+    expect(fs.readFileSync(box.envFile, 'utf8')).toBe('DEV_DOMAIN=dev.example.com\nMAIL_HOSTNAME=mail.example.com\n');
+    expect(res.stdout).toContain('Cleared the hostname set in the panel (srv.example.com)');
+    expect(res.stdout).toContain('Next: add an A record for mail.example.com');
+  });
+
+  it('changes .env, and keeps the panel settings that are not the hostname', () => {
+    const box = install('MAIL_HOSTNAME=mail.example.com\n', `${PANEL_FILE}POSTFIX_smtp_tls_loglevel=1\n`);
+
+    const res = box.run('smtp.example.com');
+
+    expect(res.status).toBe(0);
+    expect(fs.readFileSync(box.envFile, 'utf8')).toBe('MAIL_HOSTNAME=smtp.example.com\n');
+    const kept = fs.readFileSync(box.relayFile, 'utf8');
+    expect(kept).toContain('POSTFIX_smtp_tls_loglevel=1');
+    expect(kept).not.toContain('POSTFIX_myhostname');
+    expect(res.stdout).toContain('MAIL_HOSTNAME: mail.example.com -> smtp.example.com');
+  });
+
+  it('says so when there is nothing to change', () => {
+    const box = install('MAIL_HOSTNAME=mail.example.com\n', null);
+
+    const res = box.run('mail.example.com');
+
+    expect(res.status).toBe(0);
+    expect(fs.existsSync(box.relayFile)).toBe(false);
+    expect(res.stdout).toContain('already announces mail.example.com');
+    expect(res.stdout).not.toContain('Next:');
+  });
+});
+
 describe('wpl7_stamp', () => {
   it('falls back instead of dying when there is no panel to read a version from', () => {
     // A worker server is a real caller: the bundle the panel pushes it is provision/ +

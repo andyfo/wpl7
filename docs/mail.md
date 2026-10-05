@@ -117,7 +117,7 @@ working":
 | Check | Meaning |
 |---|---|
 | `relay` | `wpl7-mail` is running. If it is not, `mail()` fails for **every** site on that server. |
-| `dkim` | `wpl7-dkim` is running. Mail still goes out if it is down, just unsigned. |
+| `dkim` | Every domain the server's sites send from has a key, its own or one above it (a key at `example.com` signs `shop.example.com`). Amber while some do not: their mail goes out unsigned, and DMARC can then pass only on SPF. Red when `wpl7-dkim` is down while keys exist. Mail still goes out either way, just unsigned. |
 | `hostname` | The name postfix announces. Reverse DNS should match it. |
 | `mode` | Smarthost (with the relay host) or direct. |
 | `milter` | Postfix is actually wired to the signer. |
@@ -309,9 +309,11 @@ defaults to `mail.<the panel's domain>` — `panel.example.com` gives `mail.exam
 be any name you control: `smtp.` instead of `mail.`, or a different domain entirely. It is
 per-server, so each machine in a fleet can have its own.
 
-Change it in **Mail → Setup guide → step 1 → Change hostname**: type the new name and
-press the button. It takes effect immediately — postfix is reloaded rather than restarted, so
-nothing queued is lost — and it survives the container being recreated.
+Change it in **Mail → Setup guide → step 1 → Change hostname**. The dialog shows the name in
+use and the default, `MAIL_HOSTNAME`; type a new name and **Apply**, or **Reset to default** to
+drop a name set in the panel. Either takes effect immediately — postfix is reloaded rather than
+restarted, so nothing queued is lost — and is kept when the relay restarts or is recreated.
+Typing the default name is the same as resetting to it.
 
 <details>
 <summary>How that persists, and the command-line equivalent</summary>
@@ -322,19 +324,26 @@ nothing queued is lost — and it survives the container being recreated.
 optional `env_file`. `POSTFIX_*` settings are applied after the image's own configuration, so
 it wins over the `MAIL_HOSTNAME` default without the two having to agree.
 
-From a shell instead — either edit `.env` and recreate the relay:
+A container keeps the environment it was created with, and the relay image applies it again
+every time it starts. A restart that is not a recreate (a reboot, Docker restarting) therefore
+brings back the name the container was created with. The panel checks every minute and puts
+the right one back, with a reload.
+
+From a shell, let the provisioner do it. A hostname passed explicitly is applied even on an
+existing install, where `.env` is otherwise left alone, and it clears any name set in the
+panel, even when `.env` already holds the one you pass:
+
+```bash
+sudo /opt/wpl7/provision/setup.sh --mail-hostname=smtp.example.com
+```
+
+Editing `MAIL_HOSTNAME` in `.env` by hand changes the default only. It takes effect when the
+relay is recreated, and only while no name is set in the panel; reset that first, or the
+override keeps winning:
 
 ```bash
 sudo sed -i 's|^MAIL_HOSTNAME=.*|MAIL_HOSTNAME=smtp.example.com|' /opt/wpl7/deploy/.env
 sudo /opt/wpl7/provision/compose.sh up -d mail
-```
-
-…or let the provisioner do it. A hostname passed explicitly is applied even on an existing
-install, where `.env` is otherwise left alone, and it clears any panel override so the two
-cannot disagree:
-
-```bash
-sudo /opt/wpl7/provision/setup.sh --mail-hostname=smtp.example.com
 ```
 
 </details>
@@ -418,8 +427,8 @@ and DKIM material in the same pass ([updating.md](updating.md#what-the-panel-doe
 step there failed, the Updates page has a **Re-run** button; **Sites → Recreate container** (or
 `POST /api/sites/reconcile-all`) still does the same thing by hand.
 
-Afterwards, Panel → **Mail → Overview** should show `relay`, `dkim` and `milter` all green; then
-enable DKIM per customer domain from the **DKIM & DMARC** tab. Existing traffic history starts from
+Afterwards, Panel → **Mail → Overview** should show `relay` and `milter` green, and `dkim` amber
+until every sending domain has a key: create them from the **DKIM & DMARC** tab. Existing traffic history starts from
 the upgrade — the panel reads each relay's log from the point it first looks.
 
 ## Troubleshooting

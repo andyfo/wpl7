@@ -16,6 +16,8 @@ import { autoFinalizeMoves } from '../../src/services/housekeeping.js';
 import { demuxToStreams } from '../../src/lib/demux.js';
 import { withDeadline } from '../../src/services/docker.js';
 import { proxyConfigYaml } from '../../src/jobs/handlers/moveHelpers.js';
+import { ensureSiteMountSources, waitForWordPressFiles } from '../../src/jobs/handlers/shared.js';
+import type { FilesPort } from '../../src/lib/files.js';
 
 function seedCoreFilesOnStart(w: TestWorld): void {
   w.docker.onStart = (name) => {
@@ -515,5 +517,77 @@ describe('review regressions: plugin licenses', () => {
     expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()).toBeUndefined();
     const messages = w.db.select().from(jobLogs).where(eq(jobLogs.jobId, job.id)).all().map((l) => l.message);
     expect(messages.some((m) => m.startsWith('Could not release plugin licenses before deleting'))).toBe(true);
+  });
+});
+
+// What a server's file adapter now does when a check could not be made (test/unit/fileChecks):
+// it throws. Before, it answered "not there", and each of these acted on that.
+describe('a check that failed is not a missing file', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  /** Server 1's checks of this one path fail, as one that timed out on a server would. */
+  const failCheckOf = (w: TestWorld, target: string) => {
+    const files = w.servers.handleFor(1).files;
+    const real = files.exists.bind(files);
+    vi.spyOn(files, 'exists').mockImplementation((file) =>
+      file === target ? Promise.reject(new Error(`test -e ${file} failed (exit 124)`)) : real(file),
+    );
+  };
+
+  it('site.delete: keeps a site whose files it could not check, rather than deleting it without its final backup', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await createSite(w);
+    const p = sitePaths(w.config, site.slug);
+    failCheckOf(w, p.wordpress);
+
+    const failed = await runJob(w, w.deps.sites.delete(site.slug, true).id);
+    expect(failed.status).toBe('failed');
+    expect(failed.error).toMatch(/site NOT deleted/);
+    expect(w.deps.sites.bySlug(site.slug).status).toBe('error');
+    expect(fs.existsSync(p.wordpress)).toBe(true);
+
+    vi.restoreAllMocks();
+    expect((await runJob(w, w.deps.sites.delete(site.slug, true).id)).status).toBe('succeeded');
+    expect(w.db.select().from(backups).where(eq(backups.siteSlug, site.slug)).all().map((b) => b.type)).toEqual(['final']);
+  });
+
+  it('backup: fails, rather than archiving without the files it could not check', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await createSite(w);
+    failCheckOf(w, sitePaths(w.config, site.slug).wordpress);
+
+    await expect(w.core.backup.create(site, 'manual', {})).rejects.toThrow(/exit 124/);
+    expect(w.db.select().from(backups).where(eq(backups.siteSlug, site.slug)).all().map((b) => b.status)).toEqual(['failed']);
+  });
+
+  it("site start: leaves an operator's uploads.ini alone when it could not check for it", async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await createSite(w);
+    const p = sitePaths(w.config, site.slug);
+    fs.writeFileSync(p.uploadsIni, 'upload_max_filesize = 512M\n');
+    failCheckOf(w, p.uploadsIni);
+
+    await expect(ensureSiteMountSources(w.servers.handleFor(1), w.core, site)).rejects.toThrow(/exit 124/);
+    expect(fs.readFileSync(p.uploadsIni, 'utf8')).toBe('upload_max_filesize = 512M\n');
+  });
+
+  it('waiting for WordPress files: a failed check is "not yet", not the end of the wait', async () => {
+    vi.useFakeTimers();
+    let checks = 0;
+    const files = {
+      exists: async () => {
+        checks++;
+        if (checks === 1) throw new Error('test -e failed (exit 124)');
+        return true;
+      },
+    } as unknown as FilesPort;
+
+    const waiting = waitForWordPressFiles(files, '/srv/sites/x/wordpress', { checkCanceled: () => undefined } as never, 10_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(waiting).resolves.toBeUndefined();
+    expect(checks).toBe(3);
   });
 });

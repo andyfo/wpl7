@@ -145,7 +145,8 @@ export async function panelSnapshot(ctx: JobContext<Record<string, never>>, s: C
     const sum = await handle.files.sha256(gz);
     await handle.files.writeFile(path.join(dir, 'sha256sums'), `${sum}  panel.db.gz\n`);
 
-    const sizeBytes = (await handle.files.stat(gz))?.sizeBytes ?? 0;
+    // Best effort: the snapshot is written and summed by now, and its size is only shown.
+    const sizeBytes = (await handle.files.stat(gz).catch(() => null))?.sizeBytes ?? 0;
     s.db.update(backups).set({ status: 'complete', sizeBytes }).where(eq(backups.id, row.id)).run();
     ctx.info(`Panel snapshot complete (${(sizeBytes / 1024).toFixed(0)} KiB).`);
     ctx.setResult({ backupId: row.id, sizeBytes });

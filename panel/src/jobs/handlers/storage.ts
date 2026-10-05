@@ -65,13 +65,11 @@ export async function serverRelocateBackups(
     }
     const ts = path.basename(row.path);
     const source = s.backup.backupDir(row);
-    if (!(await handle.files.exists(source))) {
-      skipped.push(`#${row.id} (files missing at ${source})`);
-      continue;
-    }
     const finalDir = safeJoin(to, row.siteSlug, ts);
     const staging = `${finalDir}.relocating`;
     try {
+      // In here, so that a check that failed is a skip with its own reason, like any other.
+      if (!(await handle.files.exists(source))) throw new Error(`files missing at ${source}`);
       await handle.files.rm(staging);
       await handle.files.mkdirp(safeJoin(to, row.siteSlug), { mode: 0o700 });
       const cp = await handle.exec.run('cp', ['-a', '--', source, staging], { timeoutMs: 6 * 3600_000 });

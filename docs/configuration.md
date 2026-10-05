@@ -69,8 +69,8 @@ SPF, DKIM and DMARC from **Mail → Setup guide**. [dns.md](dns.md).
 direct mode. `SMTP_RELAYHOST` (plus username and password) switches to smarthost mode, which
 is what you want unless you have a reason not to — see [mail.md](mail.md).
 
-After the first boot, the hostname is owned by **Mail → Setup guide**, which writes
-`/srv/mail/relay.env`; that file wins over `.env`. `setup.sh --mail-hostname=` is the way to
+A name set in **Mail → Setup guide** is written to `/srv/mail/relay.env`, and that file wins
+over `.env`; **Reset to default** there removes it. `setup.sh --mail-hostname=` is the way to
 overrule it from the command line, and it clears the override so the two cannot fight.
 
 ### Storage and database

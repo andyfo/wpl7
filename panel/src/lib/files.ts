@@ -41,6 +41,13 @@ export interface FileStat {
   id: string;
 }
 
+/**
+ * The checks below - exists, isDirectory, stat, readOptional - answer "not there" only when
+ * that is what the path is. A check that could not be made throws: on a server, a command that
+ * timed out or a shell that never ran answers no differently from a missing file, and callers
+ * act on absence - write a default over a file, leave a folder out of a backup, delete a site
+ * without its final one. A caller to whom a guess is good enough says so with a `.catch`.
+ */
 export interface FilesPort {
   exists(path: string): Promise<boolean>;
   /**
@@ -54,6 +61,8 @@ export interface FilesPort {
   mkdirExclusive(path: string): Promise<'created' | 'exists'>;
   writeFile(path: string, content: string | Buffer, opts?: WriteOpts): Promise<void>;
   readFile(path: string): Promise<string>;
+  /** The file's contents, or null when it is not there; something there that cannot be read throws. */
+  readOptional(path: string): Promise<string | null>;
   /**
    * A file a site controls, read the way such a file must be: only a regular file, never
    * through a link as its last step, and at most `maxBytes` of it. Null for anything else. A
@@ -70,19 +79,32 @@ export interface FilesPort {
   sha256(path: string): Promise<string>;
 }
 
+/** Not there: the path itself is missing, or something on the way to it is not a directory. */
+const isAbsent = (err: unknown): boolean => {
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === 'ENOENT' || code === 'ENOTDIR';
+};
+
 export class LocalFiles implements FilesPort {
   /** Only root can give a file to another uid. */
   private readonly canChown = process.getuid?.() === 0;
 
   async exists(path: string): Promise<boolean> {
-    return fs.existsSync(path);
+    try {
+      await fsp.stat(path);
+      return true;
+    } catch (err) {
+      if (isAbsent(err)) return false;
+      throw err;
+    }
   }
 
   async isDirectory(path: string): Promise<boolean> {
     try {
       return (await fsp.stat(path)).isDirectory();
-    } catch {
-      return false;
+    } catch (err) {
+      if (isAbsent(err)) return false;
+      throw err;
     }
   }
 
@@ -126,6 +148,15 @@ export class LocalFiles implements FilesPort {
     return fsp.readFile(path, 'utf8');
   }
 
+  async readOptional(path: string): Promise<string | null> {
+    try {
+      return await fsp.readFile(path, 'utf8');
+    } catch (err) {
+      if (isAbsent(err)) return null;
+      throw err;
+    }
+  }
+
   async readUntrusted(path: string, maxBytes: number): Promise<string | null> {
     let handle: fsp.FileHandle | undefined;
     try {
@@ -164,8 +195,9 @@ export class LocalFiles implements FilesPort {
     try {
       const st = await fsp.stat(path);
       return { sizeBytes: st.size, mtimeMs: st.mtimeMs, id: `${st.dev}:${st.ino}` };
-    } catch {
-      return null;
+    } catch (err) {
+      if (isAbsent(err)) return null;
+      throw err;
     }
   }
 
@@ -190,17 +222,29 @@ export class LocalFiles implements FilesPort {
   }
 }
 
+/**
+ * The exit code that means "not there", and nothing else. `test` says no with 1, but sudo and
+ * `cat` fail with 1 too, and the `timeout` SshExec wraps every command in ends with 124: read as
+ * "no", any of them makes a check that never ran look like a missing file.
+ */
+const NOT_THERE = 3;
+
 export class ExecFiles implements FilesPort {
   constructor(private readonly exec: ExecPort) {}
 
   async exists(path: string): Promise<boolean> {
-    const res = await this.exec.run('test', ['-e', path]);
-    return res.exitCode === 0;
+    return this.test('-e', path);
   }
 
   async isDirectory(path: string): Promise<boolean> {
-    const res = await this.exec.run('test', ['-d', path]);
-    return res.exitCode === 0;
+    return this.test('-d', path);
+  }
+
+  private async test(flag: '-e' | '-d', path: string): Promise<boolean> {
+    const res = await this.exec.run('sh', ['-c', `[ ${flag} "$1" ] && exit 0; exit ${NOT_THERE}`, 'sh', path]);
+    if (res.exitCode === 0) return true;
+    if (res.exitCode === NOT_THERE) return false;
+    throw new Error(`test ${flag} ${path} failed (exit ${res.exitCode}): ${res.stderr.trim()}`);
   }
 
   async mkdirp(path: string, opts: WriteOpts = {}): Promise<void> {
@@ -257,6 +301,13 @@ export class ExecFiles implements FilesPort {
     return res.stdout;
   }
 
+  async readOptional(path: string): Promise<string | null> {
+    const res = await this.exec.run('sh', ['-c', `[ -e "$1" ] || exit ${NOT_THERE}; exec cat -- "$1"`, 'sh', path]);
+    if (res.exitCode === NOT_THERE) return null;
+    if (res.exitCode !== 0) throw new Error(`read ${path} failed (exit ${res.exitCode}): ${res.stderr.trim()}`);
+    return res.stdout;
+  }
+
   async readUntrusted(path: string, maxBytes: number): Promise<string | null> {
     // The same checks in the shell. A link or a FIFO swapped in after the test is still held:
     // head stops at the cap, and the timeout ends a read that never gets any.
@@ -290,12 +341,19 @@ export class ExecFiles implements FilesPort {
   }
 
   async stat(path: string): Promise<FileStat | null> {
-    const res = await this.exec.run('stat', ['-c', '%s %Y %d %i', '--', path]);
-    if (res.exitCode !== 0) return null;
+    // `-L` too: `stat` describes a link itself, so a link to nowhere is still something there.
+    const res = await this.exec.run(
+      'sh',
+      ['-c', `[ -e "$1" ] || [ -L "$1" ] || exit ${NOT_THERE}; exec stat -c "%s %Y %d %i" -- "$1"`, 'sh', path],
+    );
+    if (res.exitCode === NOT_THERE) return null;
+    if (res.exitCode !== 0) throw new Error(`stat ${path} failed (exit ${res.exitCode}): ${res.stderr.trim()}`);
     const [size, mtime, dev, ino] = res.stdout.trim().split(/\s+/);
     const sizeBytes = Number(size);
     const mtimeSec = Number(mtime);
-    if (!Number.isFinite(sizeBytes) || !Number.isFinite(mtimeSec)) return null;
+    if (!Number.isFinite(sizeBytes) || !Number.isFinite(mtimeSec)) {
+      throw new Error(`stat ${path} answered "${res.stdout.trim().slice(0, 80)}"`);
+    }
     return { sizeBytes, mtimeMs: mtimeSec * 1000, id: `${dev}:${ino}` };
   }
 

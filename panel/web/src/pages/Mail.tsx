@@ -70,10 +70,14 @@ export function Mail() {
 // ---------------------------------------------------------------------------
 // Overview: is mail working, and a test send
 
-function CheckRow({ ok, name, detail }: { ok: boolean; name: string; detail: string }) {
+/** `warn`: working, but not the setup it should be - amber rather than a green tick. */
+function CheckRow({ ok, warn = false, name, detail }: { ok: boolean; warn?: boolean; name: string; detail: string }) {
+  const [glyph, color] = !ok ? ['✗', 'text-red-600'] : warn ? ['!', 'font-bold text-amber-600'] : ['✓', 'text-emerald-600'];
   return (
     <li className="flex items-start gap-2">
-      <span className={ok ? 'text-emerald-600' : 'text-red-600'}>{ok ? '✓' : '✗'}</span>
+      <span className={`inline-block w-3 shrink-0 text-center ${color}`} aria-label={!ok ? 'failed' : warn ? 'warning' : 'ok'}>
+        {glyph}
+      </span>
       <span>
         <span className="font-medium">{name}</span>
         <span className="ml-2 text-neutral-500">{detail}</span>
@@ -121,7 +125,7 @@ function OverviewTab() {
         >
           <ul className="space-y-1.5 text-sm">
             {server.checks.map((c) => (
-              <CheckRow key={c.name} ok={c.ok} name={c.name} detail={c.detail} />
+              <CheckRow key={c.name} ok={c.ok} warn={c.warn} name={c.name} detail={c.detail} />
             ))}
           </ul>
         </Card>
@@ -1196,9 +1200,9 @@ function ServerSetupPanel({
   const [guideId, setGuideId] = useState(rdnsGuides[0]?.id ?? 'other');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  // Owned here rather than inside HostnameEditor so the trigger can sit on the check line,
-  // where it reads as an action, while the form opens below it.
   const [editingHostname, setEditingHostname] = useState(false);
+  // What the dialog did, said here once it has closed: by then the checks below are about the new name.
+  const [hostnameNote, setHostnameNote] = useState<string | null>(null);
   const guide = rdnsGuides.find((g) => g.id === guideId) ?? rdnsGuides[0];
 
   const publishHostname = async () => {
@@ -1228,14 +1232,26 @@ function ServerSetupPanel({
         verdict={server.hostnameA.verdict}
         title="Point the mail hostname at this server"
         action={
-          <Button small variant="secondary" onClick={() => setEditingHostname((v) => !v)}>
-            {editingHostname ? 'Cancel' : 'Change hostname'}
+          <Button small variant="secondary" onClick={() => setEditingHostname(true)}>
+            Change hostname
           </Button>
         }
       >
         <p className="text-neutral-600">
           The relay announces itself as <code>{server.hostname || '(not reported yet)'}</code>, which needs an A
           record here before reverse DNS is trusted.
+          {server.hostnameOverride !== null && (
+            <>
+              {' '}
+              It was set in the panel
+              {server.defaultHostname && (
+                <>
+                  ; the default is <code>{server.defaultHostname}</code>
+                </>
+              )}
+              .
+            </>
+          )}
         </p>
         <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
           <CopyField
@@ -1249,7 +1265,18 @@ function ServerSetupPanel({
           )}
         </div>
         <p className="mt-1 text-xs text-neutral-500">{server.hostnameA.detail}</p>
-        {editingHostname && <HostnameEditor server={server} onChanged={onChanged} />}
+        {hostnameNote && <p className="mt-2 text-xs text-emerald-700">{hostnameNote}</p>}
+        {editingHostname && (
+          <HostnameDialog
+            server={server}
+            onClose={() => setEditingHostname(false)}
+            onDone={(detail) => {
+              setEditingHostname(false);
+              setHostnameNote(detail);
+              onChanged();
+            }}
+          />
+        )}
       </SetupCheck>
 
       <SetupCheck
@@ -1438,61 +1465,100 @@ function SetupStepBlock({ n, step }: { n: number; step: MailSetupStep }) {
 
 
 /**
- * Changing the name the relay announces. The value is per-server: `MAIL_HOSTNAME` in
- * `deploy/.env` supplies it at provisioning, and anything set here overrides that from then
- * on (the panel cannot reach the checkout on its own server, so it persists the override
+ * Changing the name the relay announces, or going back to the default. The value is
+ * per-server: `MAIL_HOSTNAME` in `deploy/.env` is the default, and a name set here overrides it
+ * from then on (the panel cannot reach the checkout on its own server, so it keeps the override
  * under /srv instead, where compose reads it back).
  */
-function HostnameEditor({ server, onChanged }: { server: MailServerSetupDto; onChanged: () => void }) {
+function HostnameDialog({
+  server,
+  onClose,
+  onDone,
+}: {
+  server: MailServerSetupDto;
+  onClose: () => void;
+  onDone: (detail: string) => void;
+}) {
   const [value, setValue] = useState(server.hostname);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
+  const [busy, setBusy] = useState<'apply' | 'reset' | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   const next = value.trim().toLowerCase();
   const changed = next !== '' && next !== server.hostname;
+  const overridden = server.hostnameOverride !== null;
 
-  const save = async () => {
-    setBusy(true);
+  const send = async (action: 'apply' | 'reset') => {
+    setBusy(action);
     setError(null);
-    setResult(null);
     try {
       const res = await api<{ effective: string; applied: boolean; detail: string }>(
         `/api/mail/servers/${server.serverId}/hostname`,
-        { method: 'PUT', body: { hostname: next } },
+        action === 'apply' ? { method: 'PUT', body: { hostname: next } } : { method: 'DELETE' },
       );
-      setResult(res.detail);
-      onChanged();
+      onDone(res.detail);
     } catch (err) {
       setError(err);
-    } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
   return (
-    <div className="mt-3 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
-      <div className="space-y-2 text-xs text-neutral-600">
-        <p>Any name you control and can resolve. It need not be the panel&apos;s domain.</p>
-        <div className="flex flex-wrap items-center gap-2">
+    <Modal title={`Mail hostname: ${server.name}`} onClose={onClose} dismissible={!changed && busy === null}>
+      <form
+        className="space-y-4 text-sm"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (changed && busy === null) void send('apply');
+        }}
+      >
+        <Field label="Hostname" hint="Any name you control and can resolve. It need not be the panel's domain.">
           <input
-            className={`${inputClass} max-w-sm py-1 font-mono text-xs`}
+            className={`${inputClass} font-mono`}
             value={value}
             placeholder="smtp.example.com"
             onChange={(e) => setValue(e.target.value)}
+            autoFocus
           />
-          <Button small disabled={!changed || busy} onClick={() => void save()}>
-            {busy ? <Spinner /> : 'Apply'}
+        </Field>
+
+        <div className="rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-2.5">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="text-xs font-medium uppercase tracking-wide text-neutral-500">Default</span>
+            <code className="text-xs">{server.defaultHostname ?? 'unknown'}</code>
+            {!overridden && server.defaultHostname !== null && <span className="text-xs text-neutral-500">· in use</span>}
+            {overridden && (
+              <span className="ml-auto">
+                <Button small variant="secondary" disabled={busy !== null} onClick={() => void send('reset')}>
+                  {busy === 'reset' ? <Spinner /> : 'Reset to default'}
+                </Button>
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-xs text-neutral-500">
+            <code>MAIL_HOSTNAME</code> in <code>deploy/.env</code>.{' '}
+            {server.defaultHostname === null && 'The relay did not say which name that is: it is not running, or not answering. '}
+            {overridden && (
+              <>
+                The name in use, <code>{server.hostnameOverride}</code>, was set in the panel and wins over it.
+              </>
+            )}
+          </p>
+        </div>
+
+        <ErrorNote error={error} />
+        <p className="text-xs text-neutral-500">
+          Applied immediately, and kept when the relay restarts. Receivers treat a new name as a new sender, and
+          the A record and reverse DNS read red until they point at it.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={!changed || busy !== null}>
+            {busy === 'apply' ? <Spinner /> : 'Apply'}
           </Button>
         </div>
-        <ErrorNote error={error} />
-        {result && <p className="text-emerald-700">{result}</p>}
-        <p>
-          Applied immediately and kept across restarts. The A record and reverse DNS above read red until you
-          point them at the new name.
-        </p>
-        <p className="text-neutral-500">Receivers treat a new HELO name as a new sender.</p>
-      </div>
-    </div>
+      </form>
+    </Modal>
   );
 }

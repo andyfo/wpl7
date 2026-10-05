@@ -143,6 +143,10 @@ services:
       # the provisioning default. POSTFIX_* settings are applied after the image's own
       # config, so a value here wins over HOSTNAME without the two fighting.
       #
+      # Read only when compose creates the container. A restart applies the environment of
+      # that moment again, so the panel puts the hostname back after one
+      # (panel/src/services/mailHostname.ts).
+      #
       # Compose resolves `environment:` over `env_file:` for the same key, so anything the
       # panel is expected to own at runtime must NOT also be listed above - adding
       # POSTFIX_myhostname there would silently pin the hostname and make the panel's field

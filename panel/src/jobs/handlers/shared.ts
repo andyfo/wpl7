@@ -74,9 +74,10 @@ export async function waitForWordPressFiles(
   timeoutMs = 120_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  const ready = async () =>
-    (await files.exists(`${wordpressDir}/wp-config.php`)) &&
-    (await files.exists(`${wordpressDir}/wp-includes/version.php`));
+  // A check that failed counts as "not yet": nothing is done on a "no" here but to look again,
+  // and the deadline below still ends the wait.
+  const there = (file: string) => files.exists(`${wordpressDir}/${file}`).catch(() => false);
+  const ready = async () => (await there('wp-config.php')) && (await there('wp-includes/version.php'));
   while (!(await ready())) {
     if (Date.now() > deadline) {
       const entries = await files.readdir(wordpressDir).catch(() => []);

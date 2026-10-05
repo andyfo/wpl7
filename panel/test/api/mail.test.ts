@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { mailMessages, sites } from '../../src/db/schema.js';
+import { mailDkimKeys, mailMessages, sites } from '../../src/db/schema.js';
 import { MAIL_CONTAINER, DKIM_CONTAINER, mailPaths } from '../../src/services/mail.js';
 import { makeApp, makeWorld, type TestWorld } from '../helpers.js';
 import type { DnsResolver } from '../../src/services/mailDns.js';
@@ -254,6 +254,71 @@ describe('mail API', () => {
     const server = res.json().servers[0];
     expect(server).toMatchObject({ relayRunning: true, dkimRunning: true, hostname: 'mail.acme.test', mode: 'direct' });
     expect(server.checks.find((c: { name: string }) => c.name === 'milter').ok).toBe(true);
+  });
+
+  describe('the DKIM row', () => {
+    /** A key row only: what the check reads is which domains have one. */
+    const keyFor = (world: TestWorld, domain: string) =>
+      world.db
+        .insert(mailDkimKeys)
+        .values({ domain, selector: 'wpl7', privateKeyPem: 'x', publicKeyB64: 'x', createdAt: Date.now() })
+        .run();
+    const dkimRow = async (world: TestWorld) => {
+      const { app, headers } = await authedApp(world);
+      const server = (await app.inject({ method: 'GET', url: '/api/mail/status', headers })).json().servers[0];
+      return { server, row: server.checks.find((c: { name: string }) => c.name === 'dkim') };
+    };
+
+    it('warns, rather than ticking, while sites send from domains that no key signs', async () => {
+      const world = await makeWorld({ resolver: emptyResolver });
+      relayRunning(world);
+      seedSite(world, 'acme', 'acme.test');
+      seedSite(world, 'shop', 'shop.example.test');
+
+      const { server, row } = await dkimRow(world);
+      expect(row).toMatchObject({ ok: true, warn: true });
+      expect(row.detail).toMatch(/No DKIM key for 2 of 2 sending domain\(s\)/);
+      expect(row.detail).toContain('acme.test, shop.example.test');
+      // Mail is still delivered: the row is amber, and the server is not marked down for it.
+      expect(server.checks.filter((c: { ok: boolean }) => !c.ok).map((c: { name: string }) => c.name)).not.toContain('dkim');
+    });
+
+    it('ticks once every sending domain has a key of its own or above it', async () => {
+      const world = await makeWorld({ resolver: emptyResolver });
+      relayRunning(world);
+      seedSite(world, 'acme', 'acme.test');
+      seedSite(world, 'shop', 'shop.example.test');
+      keyFor(world, 'acme.test');
+      // One key at example.test signs shop.example.test too, as the signing policy does.
+      keyFor(world, 'example.test');
+
+      const { row } = await dkimRow(world);
+      expect(row).toEqual({ name: 'dkim', ok: true, detail: `${DKIM_CONTAINER} is running, signing for all 2 sending domain(s)` });
+    });
+
+    it('counts the domains of the sites on that server only', async () => {
+      const world = await makeWorld({ resolver: emptyResolver });
+      relayRunning(world);
+      const other = world.addSshServer('other');
+      seedSite(world, 'elsewhere', 'elsewhere.test');
+      world.db.update(sites).set({ serverId: other.id }).run();
+
+      const { row } = await dkimRow(world);
+      expect(row).toEqual({ name: 'dkim', ok: true, detail: `${DKIM_CONTAINER} is running; no site on this server sends mail yet` });
+    });
+
+    it('still fails a signer that is down while keys exist', async () => {
+      const world = await makeWorld({ resolver: emptyResolver });
+      relayRunning(world);
+      world.docker.containers.set(DKIM_CONTAINER, 'exited');
+      seedSite(world, 'acme', 'acme.test');
+      keyFor(world, 'acme.test');
+
+      const { server, row } = await dkimRow(world);
+      expect(row).toMatchObject({ ok: false });
+      expect(row.warn).toBeUndefined();
+      expect(server.ok).toBe(false);
+    });
   });
 
   it('surfaces a stopped relay as a failed check instead of an error page', async () => {
