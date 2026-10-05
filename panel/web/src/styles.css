@@ -254,10 +254,12 @@
  * two background layers clipped to the glyphs, no extra element and no JS. The @supports
  * guard is not decoration: without background-clip the browser would paint `color:
  * transparent` and the wordmark would disappear. The reduced-motion block at the end of
- * this file drops both sweeps and leaves the gradient.
+ * this file drops both sweeps and leaves the gradient. The not-found page's 404 wears the
+ * same paint: it is the only other display type in the panel.
  */
 @supports ((-webkit-background-clip: text) or (background-clip: text)) {
-  .brand-name-accent {
+  .brand-name-accent,
+  .error-code {
     --l7-sheen: color-mix(in oklab, var(--accent) 26%, white);
     background-image:
       linear-gradient(115deg, transparent 42%, var(--l7-sheen) 50%, transparent 58%),
@@ -273,14 +275,16 @@
     color: transparent;
     animation: l7-sheen 1.2s cubic-bezier(0.25, 0.6, 0.25, 1) 0.45s 1;
   }
-  :root[data-theme='dark'] .brand-name-accent {
+  :root[data-theme='dark'] .brand-name-accent,
+  :root[data-theme='dark'] .error-code {
     /* The dark accent is already light, so the highlight has to go nearly white to read. */
     --l7-sheen: color-mix(in oklab, var(--accent) 12%, white);
   }
   .brand:hover .brand-name-accent,
   .brand:focus-visible .brand-name-accent,
   .about-wordmark:hover .brand-name-accent,
-  .login-wordmark:hover .brand-name-accent {
+  .login-wordmark:hover .brand-name-accent,
+  .error-code:hover {
     background-position: 0 0, 0 0;
     transition: background-position 0.9s cubic-bezier(0.25, 0.6, 0.25, 1);
   }
@@ -507,6 +511,15 @@
   letter-spacing: -3px;
   line-height: 1;
   text-indent: -1.5px;
+}
+/* The not-found page's 404, cut like the wordmark above: its weight, its tracking scaled to
+   this size, and the same centring fix. */
+.error-code {
+  font-size: 104px;
+  font-weight: 750;
+  letter-spacing: -0.05em;
+  line-height: 1;
+  text-indent: -0.025em;
 }
 .about-tagline {
   /* .main-content caps every paragraph at a readable measure; without auto margins that box
