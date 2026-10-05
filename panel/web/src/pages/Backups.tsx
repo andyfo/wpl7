@@ -1,11 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { BackupListItemDto } from '../../../shared/types';
-import type { BackupType } from '../../../shared/schemas';
+import type { BackupIdsDto, BackupListItemDto } from '../../../shared/types';
+import { MAX_BULK_BACKUP_DELETE, type BackupType } from '../../../shared/schemas';
+import { api } from '../api/client';
 import { useAllBackups, useMeta, useRunJob, useSites } from '../api/hooks';
 import {
   BackupActions,
+  BulkDeleteBackupsDialog,
   DeleteBackupDialog,
   FetchBackDialog,
   OffsiteBadges,
@@ -16,10 +18,14 @@ import { Icon } from '../components/Icon';
 import { Button, Card, EmptyState, ErrorNote, Field, inputClass, Spinner, StatusBadge } from '../components/ui';
 import {
   BACKUPS_PAGE_SIZE,
+  backupFilterParams,
+  bulkDeleteSafeguard,
   deletedSiteSafeguard,
   hasBackupFilters,
+  matchingPhrase,
   parseBackupFilters,
   patchBackupParams,
+  siteOnly,
   type BackupFilters,
 } from '../lib/backupFilters';
 import { formatBytes, formatDate, timeAgo } from '../lib/format';
@@ -53,12 +59,24 @@ export function Backups() {
   const meta = useMeta();
   const sites = useSites();
   const list = useAllBackups(filters);
-  const run = useRunJob([['all-backups']]);
+  // ['backups'] too: a bulk delete empties the sites' own Backups tabs as well.
+  const run = useRunJob([['all-backups'], ['backups']]);
   const qc = useQueryClient();
   const [restoreFor, setRestoreFor] = useState<BackupListItemDto | null>(null);
   const [fetchFor, setFetchFor] = useState<BackupListItemDto | null>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [actionError, setActionError] = useState<unknown>(null);
+  /** Backups ticked: on this page, or - after "Select all" - on every page. */
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  /**
+   * What "Select all" fetched: every backup the filters matched at that moment, by id. Kept as
+   * it was until the selection is cleared. The list goes on refreshing underneath, and a backup
+   * taken since - or the backups of a site deleted since, which "deleted" now matches - were
+   * never shown to anybody, so they must not join a selection made before them.
+   */
+  const [snapshot, setSnapshot] = useState<Map<number, BackupIdsDto['items'][number]> | null>(null);
+  const [selectingAll, setSelectingAll] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   const data = list.data;
   const items = data?.items ?? [];
@@ -74,6 +92,66 @@ export function Backups() {
   // Resolved from the list rather than held, so a refetch that drops the row closes the dialog.
   const deleteTarget = items.find((b) => b.id === deleteId);
   const selectedDeleted = filters.siteSlug ? deletedSites.find((d) => d.slug === filters.siteSlug) : undefined;
+
+  // What can be ticked: not a backup still being written, nor one a deletion already has.
+  const selectable = useMemo(() => items.filter((b) => b.status !== 'creating' && b.deletingJobId === null), [items]);
+  const clearSelection = () => {
+    setSelected(new Set());
+    setSnapshot(null);
+  };
+  // A selection is made under these filters, on this page: either changing starts it over.
+  const listKey = params.toString();
+  const listKeyNow = useRef(listKey);
+  listKeyNow.current = listKey;
+  useEffect(clearSelection, [listKey]);
+  // Ticked on this page, a row a refetch dropped (deleted elsewhere, pruned) leaves the
+  // selection, so nothing ticked out of sight travels into the next Delete. "Select all" is a
+  // list of ids fetched once, most of them out of sight by design: it stays as it was fetched.
+  useEffect(() => {
+    if (snapshot) return;
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(selectable.map((b) => b.id));
+      const kept = new Set([...prev].filter((id) => visible.has(id)));
+      return kept.size === prev.size ? prev : kept;
+    });
+  }, [selectable, snapshot]);
+  const ticked = selectable.filter((b) => selected.has(b.id)).length;
+  const pageTick = ticked === 0 ? 'none' : ticked === selectable.length ? 'all' : 'some';
+  const tick = (b: BackupListItemDto, on: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(b.id);
+      else next.delete(b.id);
+      return next;
+    });
+  // Everything a filter matches, beyond this page: offered once the whole page is ticked. Never
+  // with no filter at all - "every backup there is" is not a thing to select by accident.
+  const canSelectAll = !snapshot && filtered && pageTick === 'all' && total > items.length;
+  const selectAll = async () => {
+    const asked = listKey;
+    setSelectingAll(true);
+    setActionError(null);
+    try {
+      const res = await api<BackupIdsDto>(`/api/backups/ids?${new URLSearchParams(backupFilterParams(filters))}`);
+      if (listKeyNow.current !== asked) return; // the filters moved on while it was asked
+      if (res.total > res.items.length) {
+        throw new Error(
+          `These filters match ${res.total.toLocaleString()} backups; one bulk delete takes at most ${MAX_BULK_BACKUP_DELETE.toLocaleString()}. Narrow them first.`,
+        );
+      }
+      setSnapshot(new Map(res.items.map((item) => [item.id, item])));
+      setSelected(new Set(res.items.map((item) => item.id)));
+    } catch (err) {
+      setActionError(err);
+    } finally {
+      setSelectingAll(false);
+    }
+  };
+  // "All 312 of shop" while the selection is still exactly what Select all fetched.
+  const wholeSnapshot =
+    snapshot !== null && selected.size === snapshot.size && [...snapshot.keys()].every((id) => selected.has(id));
+  const bulkCount = selected.size;
 
   const siteValue = filters.siteSlug ?? (filters.deleted ? DELETED : '');
   const pickSite = (value: string) =>
@@ -287,6 +365,21 @@ export function Backups() {
             <table className={`w-full text-sm transition-opacity ${list.isPlaceholderData ? 'opacity-60' : ''}`}>
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-neutral-400">
+                  <th className="w-7 pb-2 pr-2">
+                    <input
+                      type="checkbox"
+                      aria-label="Select every backup on this page"
+                      disabled={selectable.length === 0}
+                      checked={pageTick === 'all'}
+                      ref={(el) => {
+                        if (el) el.indeterminate = pageTick === 'some';
+                      }}
+                      onChange={(e) => {
+                        if (!e.target.checked) clearSelection();
+                        else setSelected((prev) => new Set([...prev, ...selectable.map((b) => b.id)]));
+                      }}
+                    />
+                  </th>
                   <th className="pb-2 pr-3">When</th>
                   <th className="pb-2 pr-3">Site</th>
                   <th className="hidden pb-2 pr-3 sm:table-cell">Type</th>
@@ -298,7 +391,19 @@ export function Backups() {
               </thead>
               <tbody>
                 {items.map((b) => (
-                  <tr key={b.id} className="border-t border-neutral-100 align-top">
+                  <tr key={b.id} className={`border-t border-neutral-100 align-top ${selected.has(b.id) ? 'bg-neutral-50' : ''}`}>
+                    <td className="py-2 pr-2">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select backup #${b.id}`}
+                        disabled={!selectable.includes(b)}
+                        title={
+                          b.status === 'creating' ? 'Still being written' : b.deletingJobId !== null ? 'Being deleted' : undefined
+                        }
+                        checked={selected.has(b.id)}
+                        onChange={(e) => tick(b, e.target.checked)}
+                      />
+                    </td>
                     <td className="py-2 pr-3">
                       <span className="whitespace-nowrap" title={formatDate(b.createdAt)}>
                         {timeAgo(b.createdAt)}
@@ -358,6 +463,38 @@ export function Backups() {
         </div>
       </Card>
 
+      {/* Sticky, like the bulk WordPress page's: there only while something is ticked. */}
+      {bulkCount > 0 && (
+        <div className="sticky bottom-4 z-20 rounded-xl border border-neutral-300 bg-surface p-4 shadow-lg">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="text-sm font-medium">
+              {wholeSnapshot
+                ? `All ${bulkCount.toLocaleString()} backups ${matchingPhrase(filters)} selected`
+                : `${bulkCount.toLocaleString()} ${bulkCount === 1 ? 'backup' : 'backups'} selected`}
+            </span>
+            {canSelectAll && (
+              <button
+                type="button"
+                className="inline-flex items-center gap-1.5 text-sm underline disabled:opacity-60"
+                disabled={selectingAll}
+                onClick={() => void selectAll()}
+              >
+                Select all {total.toLocaleString()} backups {matchingPhrase(filters)}
+                {selectingAll && <Spinner />}
+              </button>
+            )}
+            <Button small variant="ghost" onClick={clearSelection}>
+              Clear
+            </Button>
+            <span className="ml-auto">
+              <Button small variant="danger" onClick={() => setBulkOpen(true)}>
+                Delete {bulkCount.toLocaleString()}
+              </Button>
+            </span>
+          </div>
+        </div>
+      )}
+
       {restoreFor && (
         <RestoreBackupDialog
           site={restoreFor.siteTitle ?? restoreFor.siteSlug}
@@ -386,6 +523,33 @@ export function Backups() {
           }}
         />
       )}
+      {bulkOpen && bulkCount > 0 && (
+        <BulkDelete
+          ids={[...selected]}
+          snapshot={snapshot}
+          allFetched={wholeSnapshot}
+          // Everything the filters match now - not only at Select all: a backup taken since means
+          // the site is not left with none.
+          everything={selected.size === total && (snapshot ? wholeSnapshot : total === items.length)}
+          items={items}
+          filters={filters}
+          deletedSites={deletedSites}
+          onClose={() => setBulkOpen(false)}
+          onConfirm={(ids) => {
+            setActionError(null);
+            run.mutate(
+              { path: '/api/backups/bulk-delete', body: { ids } },
+              {
+                onSuccess: () => {
+                  clearSelection();
+                  // Now, not when the job ends: the rows it has yet to reach say so meanwhile.
+                  refresh();
+                },
+              },
+            );
+          }}
+        />
+      )}
       {deleteTarget && (
         <DeleteBackupDialog
           backup={deleteTarget}
@@ -396,6 +560,71 @@ export function Backups() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The bulk delete's dialog. It deletes exactly the ids selected - ticked here, or fetched by
+ * "Select all" - and says what they are from what is known of each: the row on this page, or
+ * what Select all was told about the ones elsewhere.
+ */
+function BulkDelete({
+  ids,
+  snapshot,
+  allFetched,
+  everything,
+  items,
+  filters,
+  deletedSites,
+  onConfirm,
+  onClose,
+}: {
+  ids: number[];
+  snapshot: Map<number, BackupIdsDto['items'][number]> | null;
+  /** The selection is still exactly what Select all fetched. */
+  allFetched: boolean;
+  /** The selection is every backup the filters match, as the list reads now. */
+  everything: boolean;
+  items: BackupListItemDto[];
+  filters: BackupFilters;
+  deletedSites: { slug: string; complete: number }[];
+  onConfirm: (ids: number[]) => void;
+  onClose: () => void;
+}) {
+  const onPage = new Map(items.map((b) => [b.id, b]));
+  const known = ids.map((id) => snapshot?.get(id) ?? onPage.get(id)).filter((b) => b !== undefined);
+  const completeCopies = (b: BackupListItemDto) => b.copies.filter((c) => c.status === 'complete');
+  const remote = snapshot
+    ? {
+        copies: ids.reduce((n, id) => {
+          const b = snapshot.get(id) ?? onPage.get(id);
+          return n + (b === undefined ? 0 : 'remoteCopies' in b ? b.remoteCopies : completeCopies(b).length);
+        }, 0),
+        destinations: null,
+      }
+    : (() => {
+        const copies = ids.flatMap((id) => (onPage.has(id) ? completeCopies(onPage.get(id)!) : []));
+        return { copies: copies.length, destinations: [...new Set(copies.map((c) => c.destinationName))] };
+      })();
+  // A site that still exists has no summary to count against; "every backup of it" is known
+  // only from the filters, when the selection is all of what they match.
+  const wholeSite =
+    everything && siteOnly(filters) && !deletedSites.some((d) => d.slug === filters.siteSlug) ? filters.siteSlug : null;
+  const guard = bulkDeleteSafeguard(known, deletedSites, wholeSite);
+  const n = ids.length;
+  return (
+    <BulkDeleteBackupsDialog
+      title={
+        allFetched
+          ? `Delete all ${n.toLocaleString()} backups ${matchingPhrase(filters)}`
+          : `Delete ${n.toLocaleString()} ${n === 1 ? 'backup' : 'backups'}`
+      }
+      remote={remote}
+      warning={guard.warning}
+      confirmWord={guard.confirmWord}
+      onClose={onClose}
+      onConfirm={() => onConfirm(ids)}
+    />
   );
 }
 

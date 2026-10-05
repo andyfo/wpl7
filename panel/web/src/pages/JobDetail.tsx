@@ -299,8 +299,8 @@ const isChecks = (v: unknown): v is Check[] =>
 
 const ACRONYMS: Record<string, string> = { id: 'ID', ip: 'IP', url: 'URL', php: 'PHP', dns: 'DNS', wp: 'WP' };
 
-/** A backup or a server named by id, shown as a link to it. */
-const LINKED_ID = /(^b|B)ackupId$|(^s|S)erverId$/;
+/** A backup, a server or another job named by id, shown as a link to it. */
+const LINKED_ID = /(^b|B)ackupId$|(^s|S)erverId$|(^j|J)obId$/;
 
 /**
  * `backupsPruned` -> "Backups pruned", `publicIp` -> "Public IP", `sizeBytes` -> "Size",
@@ -347,12 +347,23 @@ function ScalarValue({
   if (typeof value === 'number') {
     if (/bytes$/i.test(name)) return <span title={`${value.toLocaleString()} bytes`}>{formatBytes(value)}</span>;
     if (/(^b|B)ackupId$/.test(name)) {
-      return job.siteSlug ? (
+      if (!job.siteSlug) return <>#{value}</>;
+      // A deleted site has no Backups tab; the Backups list still has its backups.
+      return job.type === 'site.delete' ? (
+        <Link to={`/backups?siteSlug=${encodeURIComponent(job.siteSlug)}`} className="hover:underline">
+          #{value} · Backups
+        </Link>
+      ) : (
         <Link to={`/sites/${job.siteSlug}?tab=backups`} className="hover:underline">
           #{value} · Backups tab
         </Link>
-      ) : (
-        <>#{value}</>
+      );
+    }
+    if (/(^j|J)obId$/.test(name)) {
+      return (
+        <Link to={`/jobs/${value}`} className="hover:underline">
+          #{value}
+        </Link>
       );
     }
     if (/(^s|S)erverId$/.test(name)) {

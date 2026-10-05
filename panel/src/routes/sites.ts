@@ -67,7 +67,7 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
     '/api/sites/:slug',
     { schema: { params: slugParams, querystring: siteDeleteQuery } },
     async (req, reply) => {
-      const job = deps.sites.delete(req.params.slug, req.query.finalBackup);
+      const job = deps.sites.delete(req.params.slug, req.query.finalBackup, req.query.deleteBackups);
       return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
     },
   );

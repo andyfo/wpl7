@@ -70,6 +70,15 @@ describe('summarizeJob', () => {
     expect(summarizeJob('wp.scanAll', { siteIds: [1, 2] })).toBe('2 sites');
   });
 
+  it('says what a deletion of sites and backups keeps', () => {
+    expect(summarizeJob('site.delete', { siteId: 1, finalBackup: true })).toBe('After a final backup');
+    expect(summarizeJob('site.delete', { siteId: 1, finalBackup: false, deleteBackups: false })).toBe('Without a final backup');
+    expect(summarizeJob('site.delete', { siteId: 1, finalBackup: true, deleteBackups: true })).toBe('Keeping only a final backup');
+    expect(summarizeJob('site.delete', { siteId: 1, finalBackup: false, deleteBackups: true })).toBe('With its backups, no final one');
+    expect(summarizeJob('backup.delete', { backupIds: [4, 5, 6] })).toBe('3 backups');
+    expect(summarizeJob('backup.delete', { backupIds: [4], parentJobId: 40 })).toBe('1 backup, after job #40 deleted the site');
+  });
+
   it('names the target server of a move by name when it can', () => {
     expect(summarizeJob('site.move', { targetServerId: 3 }, { server: () => 'fra-2' })).toBe('To fra-2');
     expect(summarizeJob('site.move', { targetServerId: 3 })).toBe('To server #3');

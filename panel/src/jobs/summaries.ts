@@ -155,6 +155,9 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
         return plugins > 0 ? `With ${plural(plugins, 'plugin')}` : null;
       }
       case 'site.delete':
+        if (p.deleteBackups === true) {
+          return p.finalBackup === true ? 'Keeping only a final backup' : 'With its backups, no final one';
+        }
         return p.finalBackup === true ? 'After a final backup' : p.finalBackup === false ? 'Without a final backup' : null;
       case 'site.changePhp':
         return str(p.phpVersion) ? `To PHP ${str(p.phpVersion)}` : null;
@@ -185,6 +188,12 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
         return num(p.backupId) !== null ? `Backup #${num(p.backupId)}` : null;
       case 'backup.offsitePurge':
         return num(p.destinationId) !== null ? `Destination #${num(p.destinationId)}` : null;
+      case 'backup.delete': {
+        const ids = Array.isArray(p.backupIds) ? p.backupIds.length : null;
+        if (ids === null) return null;
+        const parent = num(p.parentJobId);
+        return parent !== null ? `${plural(ids, 'backup')}, after job #${parent} deleted the site` : plural(ids, 'backup');
+      }
       case 'wp.pluginTask': {
         const action = str(p.action);
         if (!action) return null;

@@ -137,6 +137,9 @@ export const jobTypes = [
   'backup.offsite',
   'backup.fetch',
   'backup.offsitePurge',
+  // Several backups at once, everywhere: the Backups list's bulk delete, and what a site's
+  // deletion leaves of its old backups when asked to take them along.
+  'backup.delete',
   'panel.snapshot',
   'wp.coreUpdate',
   'wp.pluginTask',
@@ -371,6 +374,12 @@ export const phpUpdateBody = z.object({
 export const siteDeleteQuery = z.object({
   // stringbool, not coerce.boolean: z.coerce.boolean() is Boolean(input), so "false" would be true.
   finalBackup: z.stringbool().default(true),
+  /**
+   * Also delete the backups the site already has, offsite copies included. With a final backup,
+   * that one is kept: the site is left with exactly one backup. Off by default - a site's old
+   * backups outliving it is the safe way round.
+   */
+  deleteBackups: z.stringbool().default(false),
 }).strict();
 
 export const siteMoveBody = z.object({
@@ -465,8 +474,8 @@ export const backupFetchBody = z.object({
   destinationId: z.number().int().positive(),
 }).strict();
 
-/** GET /api/backups: every backup the panel knows of, newest first. */
-export const backupsListQuery = z.object({
+/** The filters of `GET /api/backups`, shared with `GET /api/backups/ids`. */
+const backupFilterShape = {
   /** One site's backups - a deleted site's too. `panel` is the panel's own snapshots. */
   siteSlug: z.string().max(64).optional(),
   /**
@@ -477,9 +486,34 @@ export const backupsListQuery = z.object({
   type: commaList(backupTypes),
   /** Backups whose files are on this server - or were, for one that is only offsite now. */
   serverId: queryNumber(z.coerce.number().int().positive().optional()),
+};
+
+/** GET /api/backups: every backup the panel knows of, newest first. */
+export const backupsListQuery = z.object({
+  ...backupFilterShape,
   limit: queryNumber(z.coerce.number().int().min(1).max(200).default(50)),
   offset: queryNumber(z.coerce.number().int().min(0).default(0)),
 }).strict();
+
+/** The most backups one bulk delete takes. */
+export const MAX_BULK_BACKUP_DELETE = 5000;
+
+/**
+ * GET /api/backups/ids: the backups those filters match that a bulk delete could take, in one
+ * answer - what "Select all" ticks across every page of the list.
+ */
+export const backupIdsQuery = z.object(backupFilterShape).strict();
+
+/**
+ * POST /api/backups/bulk-delete: exactly these backups. Always named one by one, never by a
+ * filter resolved when the request arrives: which site counts as deleted, or which server a
+ * backup is on, can change between reading a list and confirming it, and a filter would then
+ * take backups nobody was shown. `GET /api/backups/ids` turns filters into ids first.
+ */
+export const backupBulkDeleteBody = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(MAX_BULK_BACKUP_DELETE),
+}).strict();
+export type BackupBulkDeleteBody = z.infer<typeof backupBulkDeleteBody>;
 
 export const offsiteEnabledBody = z.object({
   /** false = this site's backups are never copied offsite. */

@@ -107,6 +107,12 @@ export const JOB_TYPE_INFO = {
     description: "Deletes this panel's copies from an offsite destination.",
     category: 'backups',
   },
+  'backup.delete': {
+    label: 'Delete backups',
+    description:
+      'Deletes several backups at once: their files on the server and their copies at the remote destinations. A backup that is in use is left alone and named in the log.',
+    category: 'backups',
+  },
   'panel.snapshot': {
     label: 'Panel snapshot',
     description:

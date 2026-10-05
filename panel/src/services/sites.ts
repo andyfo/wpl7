@@ -153,7 +153,7 @@ export class SitesService {
     }
   }
 
-  delete(slug: string, finalBackup: boolean): JobRow {
+  delete(slug: string, finalBackup: boolean, deleteBackups = false): JobRow {
     const site = this.bySlug(slug);
     // A recently-moved site still has a parked copy on its old server, and site.delete
     // tears that down too. Claim the source lane as well, or that teardown races whatever
@@ -165,7 +165,7 @@ export class SitesService {
       .get();
     return this.worker.enqueue(
       'site.delete',
-      { siteId: site.id, finalBackup },
+      { siteId: site.id, finalBackup, deleteBackups },
       { id: site.id, slug, serverId: site.serverId },
       pending && pending.sourceServerId !== site.serverId
         ? { serverId: site.serverId, auxServerId: pending.sourceServerId }

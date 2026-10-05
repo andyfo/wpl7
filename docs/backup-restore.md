@@ -28,7 +28,9 @@ The **backup root** defaults to `${SRV_ROOT}/backups` and is set per server — 
   keeps pruning them.
 - **manual** — "Back up now"; kept until you delete them.
 - **final** — taken on site deletion (optional, default on); kept until you delete them, survives the site
-  (see [Backups of deleted sites](#backups-of-deleted-sites)).
+  (see [Backups of deleted sites](#backups-of-deleted-sites)). Deleting a site can take its other backups
+  with it (**Delete its existing backups too**, off by default): with a final backup as well, that one is
+  the site's only backup afterwards.
 - **pre_restore** — automatic safety backup before every restore.
 - **pre_update** — taken before a WordPress update run when "Back up first" is ticked (it is, by
   default, for live sites). The job's result carries the id, and a failed health check afterwards names
@@ -56,8 +58,8 @@ A deleted site has no page any more, but its backups outlive it. The final backu
 the newest N are kept, locally and at each destination, so lowering retention thins them out too. The
 Backups list is where they are — each deleted site is named under **Deleted sites** at the top, and
 its rows say **deleted**. They can be downloaded, fetched back from a
-remote destination, and deleted; deleting the last complete one asks for the site's name to be typed,
-like deleting the site did.
+remote destination, and deleted — one at a time or [in bulk](#deleting-several-at-once); deleting the
+last complete one asks for the site's name to be typed, like deleting the site did.
 
 Restoring needs a site to restore onto. A backup belongs to its site by name (slug), so a new site
 created with the same name owns the old backups: create it on the server the backup is on, then
@@ -234,9 +236,33 @@ permission — which is what makes a copy survive an attacker who reaches the pa
   in the dialog) frees the disk and leaves the archive; the backup stays listed as offsite-only.
 - A backup that is being uploaded right now cannot be deleted (409) — the upload would fail halfway
   and leave a partial object behind.
+- **Several at once**: see [below](#deleting-several-at-once).
 - **Remove a destination** forgets the copies and **leaves the objects in place** by default. The
   checkbox — or `?deleteRemote=true` — purges them first, as a job, and only ever touches the paths
   this panel wrote: never the whole prefix, which may be shared.
+
+### Deleting several at once
+
+Tick backups in the **Backups** list and **Delete** them together. Ticking the whole page of a
+filtered list offers **Select all N** — every backup the filters match, on every page: all of one
+site's (also reachable as **Bulk delete** on the site's Backups tab), all of a deleted site's, every
+*Before an update* backup of the fleet. With no filter at all there is no such offer.
+
+- Each backup goes as **Delete** takes one: offsite copies first, then the files and the record. A
+  remote copy that cannot be removed keeps its backup, rather than leaving an object in the bucket that
+  nothing knows about.
+- One `backup.delete` job does it, oldest first, in a lane of its own (`backup-delete`), so purging
+  remote copies never holds up a server's site work. Rows it has yet to reach say **Deleting…**, and
+  nothing can restore, fetch or copy them meanwhile.
+- A backup a job may be using is skipped: one whose site is being backed up, restored, moved or
+  deleted, one being copied offsite, or one on a server whose backups are being moved to a new
+  location. The job finishes the rest, then fails naming what it kept. A move to a new location, in
+  turn, leaves alone whatever a deletion names.
+- **Select all** takes the backups the filters match at that moment, by id, and keeps exactly those
+  until the selection is cleared: a backup taken afterwards, or the backups of a site deleted
+  afterwards, are not among them however the list refreshes (`GET /api/backups/ids`, docs/api.md).
+- It is always typed for: `delete`, or the site's name where it takes everything a site has — every
+  backup of a site, or the last complete ones of a deleted site.
 
 ### Fetching a backup back
 
