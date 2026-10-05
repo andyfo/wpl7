@@ -151,10 +151,10 @@ for a reason; remove one once there is nothing left to watch.
 
 - **Priority:** Medium
 - **Last checked:** 2026-10-04 18:10 UTC. `boky/postfix:latest` is v5.1.0 (2026-01-04, digest
-  `sha256:aafc7723…`), which the live box runs. There and on upstream `master`,
-  `postfix_set_hostname` falls back to `$HOSTNAME` when `POSTFIX_myhostname` is unset, and
-  `run.sh` applies every `POSTFIX_*` setting after it, on every start. `master` has since
-  replaced OpenDKIM with rspamd (2026-07-23); no release has that yet.
+  `sha256:aafc7723…`). There and on upstream `master`, `postfix_set_hostname` falls back to
+  `$HOSTNAME` when `POSTFIX_myhostname` is unset, and `run.sh` applies every `POSTFIX_*` setting
+  after it, on every start. `master` has since replaced OpenDKIM with rspamd (2026-07-23); no
+  release has that yet.
 - **The problem:** `deploy/docker-compose.yml` runs `boky/postfix:latest`, unpinned, and an update
   pulls whatever release `latest` is then. The panel relies on how the image picks
   `myhostname`: `MAIL_HOSTNAME` reaches it as `HOSTNAME`, a name set in the panel as
