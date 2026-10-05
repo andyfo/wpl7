@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Link, NavLink, Outlet, matchPath, useLocation } from 'react-router';
+import { Link, NavLink, Outlet, matchPath, useLocation, useMatches } from 'react-router';
 import { useMe, useMeta } from '../api/hooks';
 import { ApiError, api } from '../api/client';
+import { NOT_FOUND_ROUTE } from '../pages/ErrorPages';
 import { GodmodeBolt } from './Godmode';
 import { Icon, type IconName } from './Icon';
 import { ThemeSwitch } from './ThemeSwitch';
@@ -115,6 +116,7 @@ export function Layout() {
   const me = useMe();
   const meta = useMeta();
   const location = useLocation();
+  const notFound = useMatches().some((match) => match.id === NOT_FOUND_ROUTE);
   const [open, setOpen] = useState(false);
   useEffect(() => {
     setOpen(false);
@@ -285,7 +287,7 @@ export function Layout() {
             </button>
             <span className="text-neutral-500">Workspace</span>
             <span className="text-neutral-300">/</span>
-            <span className="font-medium">{page}</span>
+            <span className="font-medium">{notFound ? 'Not found' : page}</span>
           </div>
           <div className="version-tag">
             {/*

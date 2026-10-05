@@ -14,6 +14,12 @@ export class ApiError extends Error {
 let unsavedWork = 0;
 
 /**
+ * The sign-in page, with the trailing slash react-router also accepts. A 401 there is an answer
+ * (a wrong password) to show; anywhere else, /login/x included, it means signing in.
+ */
+const SIGN_IN_PAGE = /^\/login\/?$/;
+
+/**
  * Say the page holds work that is not saved (the file editor's text) until the returned
  * function is called. Meanwhile a 401 does not send the browser to /login - a background
  * poll finding the session expired must not throw the work away, or ask "Leave site?" every
@@ -47,7 +53,7 @@ export async function api<T>(
 
   const res = await fetch(path, { method, headers, body, credentials: 'same-origin' });
 
-  if (res.status === 401 && !location.pathname.startsWith('/login')) {
+  if (res.status === 401 && !SIGN_IN_PAGE.test(location.pathname)) {
     // The approval page an AI app sent its admin to comes back after the sign-in, request
     // and all; every other page starts again from the dashboard.
     if (unsavedWork === 0) location.href = loginFor(location.pathname, location.search);
