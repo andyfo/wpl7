@@ -756,6 +756,11 @@ export interface ServerCheck {
   name: string;
   ok: boolean;
   detail: string;
+  /**
+   * Working, but not the setup it should be - mail going out unsigned, say. Shown amber, and
+   * unlike `ok: false` it does not count against the server as a whole.
+   */
+  warn?: boolean;
 }
 
 export interface ServerDto {

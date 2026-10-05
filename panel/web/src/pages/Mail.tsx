@@ -70,10 +70,14 @@ export function Mail() {
 // ---------------------------------------------------------------------------
 // Overview: is mail working, and a test send
 
-function CheckRow({ ok, name, detail }: { ok: boolean; name: string; detail: string }) {
+/** `warn`: working, but not the setup it should be - amber rather than a green tick. */
+function CheckRow({ ok, warn = false, name, detail }: { ok: boolean; warn?: boolean; name: string; detail: string }) {
+  const [glyph, color] = !ok ? ['✗', 'text-red-600'] : warn ? ['!', 'font-bold text-amber-600'] : ['✓', 'text-emerald-600'];
   return (
     <li className="flex items-start gap-2">
-      <span className={ok ? 'text-emerald-600' : 'text-red-600'}>{ok ? '✓' : '✗'}</span>
+      <span className={`inline-block w-3 shrink-0 text-center ${color}`} aria-label={!ok ? 'failed' : warn ? 'warning' : 'ok'}>
+        {glyph}
+      </span>
       <span>
         <span className="font-medium">{name}</span>
         <span className="ml-2 text-neutral-500">{detail}</span>
@@ -121,7 +125,7 @@ function OverviewTab() {
         >
           <ul className="space-y-1.5 text-sm">
             {server.checks.map((c) => (
-              <CheckRow key={c.name} ok={c.ok} name={c.name} detail={c.detail} />
+              <CheckRow key={c.name} ok={c.ok} warn={c.warn} name={c.name} detail={c.detail} />
             ))}
           </ul>
         </Card>

@@ -696,13 +696,14 @@ export class MailService {
    * sites under it. Listing them individually would be fifty rows asking for fifty DNS
    * records that a single record already covers.
    */
-  sendingDomains(): { domain: string; sites: string[] }[] {
+  sendingDomains(serverId?: number): { domain: string; sites: string[] }[] {
     const devDomains = this.servers.listRows().map((s) => s.devDomain).filter(Boolean);
     const collapse = (host: string): string =>
       devDomains.find((dev) => host === dev || host.endsWith(`.${dev}`)) ?? host;
 
     const byDomain = new Map<string, Set<string>>();
     for (const site of this.db.select().from(sites).all()) {
+      if (serverId !== undefined && site.serverId !== serverId) continue;
       for (const host of JSON.parse(site.domains) as string[]) {
         const domain = collapse(host);
         const list = byDomain.get(domain) ?? new Set<string>();
@@ -715,10 +716,23 @@ export class MailService {
       .map(([domain, slugs]) => ({ domain, sites: [...slugs].sort() }));
   }
 
+  /**
+   * How many domains the sites on one server send from, and which of them no key signs for:
+   * neither the domain nor any domain above it has one - the signer's own rule
+   * (renderSigningPolicy). Mail from those goes out without a signature.
+   */
+  private dkimCoverage(serverId: number): { sending: number; unsigned: string[] } {
+    const keyDomains = this.listDkimKeys().map((k) => k.domain.toLowerCase());
+    const signed = (domain: string) => keyDomains.some((k) => domain === k || domain.endsWith(`.${k}`));
+    const domains = this.sendingDomains(serverId).map((d) => d.domain.toLowerCase());
+    return { sending: domains.length, unsigned: domains.filter((d) => !signed(d)) };
+  }
+
   async statusFor(serverId: number): Promise<MailServerStatusDto> {
     const handle = this.servers.handleFor(serverId);
     const checks: ServerCheck[] = [];
-    const add = (name: string, ok: boolean, detail: string) => checks.push({ name, ok, detail });
+    const add = (name: string, ok: boolean, detail: string, warn = false) =>
+      checks.push(warn ? { name, ok, detail, warn } : { name, ok, detail });
 
     let relayState: string;
     try {
@@ -745,15 +759,31 @@ export class MailService {
     const dkimState = await handle.docker.containerState(DKIM_CONTAINER).catch(() => 'missing' as const);
     const dkimRunning = dkimState === 'running';
     const keyCount = this.listDkimKeys().length;
-    add(
-      'dkim',
-      dkimRunning || keyCount === 0,
-      dkimRunning
-        ? `${DKIM_CONTAINER} is running, signing ${keyCount} domain(s)`
-        : keyCount === 0
-          ? `${DKIM_CONTAINER} is ${dkimState}; no DKIM keys configured yet`
-          : `${DKIM_CONTAINER} is ${dkimState} but ${keyCount} key(s) exist — mail is going out unsigned`,
-    );
+    const { sending, unsigned } = this.dkimCoverage(serverId);
+    if (!dkimRunning && keyCount > 0) {
+      add('dkim', false, `${DKIM_CONTAINER} is ${dkimState} but ${keyCount} key(s) exist — mail is going out unsigned`);
+    } else if (unsigned.length > 0) {
+      // Not broken - the mail is delivered - but unsigned mail is what receivers trust least,
+      // and with no signature DMARC can only pass on SPF, which forwarding breaks.
+      const names = unsigned.length > 3 ? `${unsigned.slice(0, 3).join(', ')} and ${unsigned.length - 3} more` : unsigned.join(', ');
+      add(
+        'dkim',
+        true,
+        `No DKIM key for ${unsigned.length} of ${sending} sending domain(s), so their mail goes out unsigned: ${names}. ` +
+          'Create keys in DKIM & DMARC.',
+        true,
+      );
+    } else if (dkimRunning) {
+      add(
+        'dkim',
+        true,
+        sending > 0
+          ? `${DKIM_CONTAINER} is running, signing for all ${sending} sending domain(s)`
+          : `${DKIM_CONTAINER} is running; no site on this server sends mail yet`,
+      );
+    } else {
+      add('dkim', true, `${DKIM_CONTAINER} is ${dkimState}; no DKIM keys configured yet`);
+    }
 
     let hostname = '';
     let relayhost = '';

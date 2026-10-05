@@ -117,7 +117,7 @@ working":
 | Check | Meaning |
 |---|---|
 | `relay` | `wpl7-mail` is running. If it is not, `mail()` fails for **every** site on that server. |
-| `dkim` | `wpl7-dkim` is running. Mail still goes out if it is down, just unsigned. |
+| `dkim` | Every domain the server's sites send from has a key, its own or one above it (a key at `example.com` signs `shop.example.com`). Amber while some do not: their mail goes out unsigned, and DMARC can then pass only on SPF. Red when `wpl7-dkim` is down while keys exist. Mail still goes out either way, just unsigned. |
 | `hostname` | The name postfix announces. Reverse DNS should match it. |
 | `mode` | Smarthost (with the relay host) or direct. |
 | `milter` | Postfix is actually wired to the signer. |
@@ -427,8 +427,8 @@ and DKIM material in the same pass ([updating.md](updating.md#what-the-panel-doe
 step there failed, the Updates page has a **Re-run** button; **Sites → Recreate container** (or
 `POST /api/sites/reconcile-all`) still does the same thing by hand.
 
-Afterwards, Panel → **Mail → Overview** should show `relay`, `dkim` and `milter` all green; then
-enable DKIM per customer domain from the **DKIM & DMARC** tab. Existing traffic history starts from
+Afterwards, Panel → **Mail → Overview** should show `relay` and `milter` green, and `dkim` amber
+until every sending domain has a key: create them from the **DKIM & DMARC** tab. Existing traffic history starts from
 the upgrade — the panel reads each relay's log from the point it first looks.
 
 ## Troubleshooting
