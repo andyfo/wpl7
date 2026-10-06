@@ -1,3 +1,4 @@
+// @docs automations/jobs, get-started/how-it-works, help/troubleshooting
 import { EventEmitter } from 'node:events';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';

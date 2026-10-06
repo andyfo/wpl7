@@ -1,3 +1,4 @@
+// @docs security/blocked-addresses, security/site-protection
 import { useEffect, useState } from 'react';
 import type { SecurityCheckDto } from '../../../../shared/types';
 import { checkAddress, useBlockAddress } from '../../api/security';

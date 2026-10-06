@@ -1,0 +1,13 @@
+{
+  "latest": "v0.3.0-beta.1",
+  "releases": [
+    {
+      "tag": "v0.3.0-beta.1",
+      "name": "v0.3.0-beta.1",
+      "publishedAt": "2026-10-04T07:25:27Z",
+      "prerelease": false,
+      "url": "https://github.com/andyfo/wpl7/releases/tag/v0.3.0-beta.1",
+      "body": "<!-- Release notes generated using configuration in .github/release.yml at v0.3.0-beta.1 -->\n\n\n\n**Full Changelog**: https://github.com/andyfo/wpl7/compare/edge...v0.3.0-beta.1"
+    }
+  ]
+}

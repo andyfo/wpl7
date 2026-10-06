@@ -1,0 +1,77 @@
+---
+title: Support
+description: "Where to ask, how to report a bug or a security issue, and the Enterprise package."
+sidebar:
+  order: 3
+sources:
+  - panel/web/src/pages/Support.tsx
+  - SECURITY.md
+  - ".github/ISSUE_TEMPLATE/*"
+  - panel/src/config.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+Help comes from the community, from the Enterprise package, or from the issue tracker for a
+bug. The panel lists the same places on its **Support** page, at the foot of the sidebar.
+
+<Screenshot name="support" alt="The Support page with the Community support and Enterprise package cards" />
+
+## Ask the community
+
+The [community forum](https://wpl7.com/community) is free. People who run WPL7 and its
+maintainers answer questions, share fixes and setups, and discuss what WPL7 should do next.
+**Open community forum** on the Support page goes there. Questions and ideas are also welcome in
+[GitHub Discussions](https://github.com/andyfo/wpl7/discussions).
+
+## Get the Enterprise package
+
+The [Enterprise package](https://wpl7.com/enterprise/) is paid support for agencies and
+businesses that run WPL7 in production:
+
+- Hotfixes for your installation, without waiting for the next release.
+- Priority email support.
+- A dedicated engineer who investigates and helps in an emergency.
+
+**Explore Enterprise** on the Support page opens its page.
+
+## Report a bug
+
+Open an issue at [github.com/andyfo/wpl7/issues](https://github.com/andyfo/wpl7/issues) with the
+"Bug report" form. It asks for:
+
+- What you did, what you expected, and what happened instead.
+- The version, shown in the panel's header, which opens **About**, and on **Settings → Updates**.
+- Relevant output: `docker logs --tail 100 wpl7-panel`, the failing job's log, or the output of
+  the script that failed.
+- Whether the install pulls its panel or builds it from a checkout, as `WPL7_SOURCE` in
+  `deploy/.env` says.
+
+Remove passwords, API keys and customer domains from logs before you paste them. To suggest a
+feature, use the "Feature or change" form and describe the problem rather than the solution.
+
+## Report a security problem
+
+Do not open a public issue. Report it privately through
+[GitHub's vulnerability reporting](https://github.com/andyfo/wpl7/security/advisories/new).
+If GitHub is not an option, email the address in the repository owner's GitHub profile with
+`WPL7 SECURITY` in the subject.
+
+WPL7 has one maintainer, so expect an acknowledgement within a few days. A report that puts
+other people's servers at risk goes first. The security policy says what is in scope and what is
+deliberate, such as the panel being root-equivalent on its own host. Read it in
+[SECURITY.md](https://github.com/andyfo/wpl7/blob/main/SECURITY.md).
+
+## Limits
+
+- Only the newest release gets fixes. There is no backporting while WPL7 is at 0.x.
+- The bug and security links on the Support page follow `WPL7_REPO`, so an install from a fork
+  sends its people to the fork's repository.
+
+## Related
+
+- [Troubleshooting](/docs/help/troubleshooting/)
+- [FAQ](/docs/help/faq/)
+- [Appearance, Support and About](/docs/panel/appearance/)
+- [Contributing](/docs/help/contributing/)
+- [Updating WPL7](/docs/panel/updating/)

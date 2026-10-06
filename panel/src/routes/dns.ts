@@ -1,3 +1,4 @@
+// @docs integrations/cloudflare
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';

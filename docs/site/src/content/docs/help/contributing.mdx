@@ -1,0 +1,59 @@
+---
+title: Contributing
+description: "Work on WPL7 itself: where the contributor docs are, and the CLA."
+sidebar:
+  order: 5
+sources:
+  - CONTRIBUTING.md
+  - docs/development.md
+  - docs/local-dev.md
+---
+
+WPL7 is open source and maintained by one person. The documents for working on it live in the
+repository, next to the code.
+
+## Where to start
+
+| Document | What it covers |
+|---|---|
+| [CONTRIBUTING.md](https://github.com/andyfo/wpl7/blob/main/CONTRIBUTING.md) | What gets merged, what a good pull request looks like, and the parts that need extra care |
+| [docs/development.md](https://github.com/andyfo/wpl7/blob/main/docs/development.md) | How WPL7 is built, versioned and released, and how to develop on a server |
+| [docs/local-dev.md](https://github.com/andyfo/wpl7/blob/main/docs/local-dev.md) | The whole stack on your own machine with Docker Desktop |
+
+## Before you write code
+
+Open an issue first for anything that adds a feature, changes a default, or touches how sites,
+mail or updates work. A bug fix with an obvious shape can go straight to a pull request.
+CONTRIBUTING.md lists what will not be merged, so nobody spends an evening on it.
+
+## Run the tests
+
+The panel's type check and tests are what CI runs. From the repository:
+
+```bash
+cd panel && npm ci
+```
+
+```bash
+npm run typecheck && npm test
+```
+
+The tests never touch the network or a real Docker daemon. A change in behavior comes with a test
+and updates the documentation in the same pull request. These pages are in `docs/site/`, and
+`docs/site/README.md` has their writing rules.
+
+## The CLA
+
+Before your first pull request is merged, you sign a contributor license agreement. A bot
+comments on the pull request with the link, and it takes a minute. WPL7 is AGPL-3.0, and the
+maintainer wants to keep a commercial edition possible, which needs the right to relicense
+contributions. Your contribution stays yours, and you grant the maintainer a license to use it
+under other terms as well. If you would rather not sign, open an issue that describes the change
+instead.
+
+## Related
+
+- [Support](/docs/help/support/)
+- [Architecture](/docs/reference/architecture/)
+- [Installer and scripts](/docs/reference/installer-and-scripts/)
+- [Changelog](/docs/help/changelog/)

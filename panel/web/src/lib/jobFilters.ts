@@ -1,3 +1,4 @@
+// @docs automations/jobs
 import {
   jobCategories,
   jobOrigins,

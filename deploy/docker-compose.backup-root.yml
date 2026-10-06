@@ -14,6 +14,7 @@
 #
 # The zero-config alternative, and the better one if the disk is not in use yet: mount it at
 # ${SRV_ROOT}/backups and leave BACKUP_ROOT unset. Then nothing here is needed at all.
+# @docs backups/storage, reference/architecture, reference/third-party
 services:
   panel:
     environment:

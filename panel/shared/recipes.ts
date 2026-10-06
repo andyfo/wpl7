@@ -1,3 +1,4 @@
+// @docs reference/recipe-format
 import { z } from 'zod';
 
 /**

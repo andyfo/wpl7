@@ -15,6 +15,7 @@
  * them, settings, and the backup policy.
  */
 
+// @docs integrations/api
 export const accessLevels = ['read', 'manage', 'full'] as const;
 export type AccessLevel = (typeof accessLevels)[number];
 

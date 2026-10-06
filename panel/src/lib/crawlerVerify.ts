@@ -4,6 +4,7 @@
  * Googlebot. The engines' own answer is reverse DNS, confirmed forward: the address names a
  * host of theirs, and that host names the address back.
  */
+// @docs security/blocked-addresses, security/privacy
 import dns from 'node:dns/promises';
 import { normalizeIp } from '../../shared/cidr.js';
 

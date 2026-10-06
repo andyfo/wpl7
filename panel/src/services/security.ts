@@ -16,6 +16,7 @@
  * cannot be rendered keeps its previous file, and a missing file only means the site is served
  * by its own router, as it was before Security existed.
  */
+// @docs help/troubleshooting, security/overview, security/site-protection
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { and, eq } from 'drizzle-orm';

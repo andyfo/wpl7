@@ -1,0 +1,101 @@
+---
+title: Servers and monitoring
+description: "See every server's load, memory and disk, which sites answer, and what a server's own page shows."
+sidebar:
+  order: 1
+sources:
+  - panel/web/src/pages/Servers.tsx
+  - panel/web/src/pages/ServerDetail.tsx
+  - panel/web/src/pages/Dashboard.tsx
+  - panel/web/src/components/ResourceCharts.tsx
+  - panel/src/services/monitor.ts
+  - panel/src/servers/systemInfo.ts
+  - panel/src/servers/registry.ts
+  - panel/src/lib/httpProbe.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+**Servers → All servers** lists every machine the panel manages: the one it runs on, and each
+one you added. The panel samples every server's load, memory and disk, and asks every site
+whether it still answers.
+
+<Screenshot name="servers-list" alt="Servers → All servers with three servers, their status, load and disk" />
+
+## Read the server list
+
+Each row shows the server's **Status**, its **Dev domain**, how many **Sites** it runs, its
+**Load** and its **Disk**. The line under the name says how the panel reaches it: `this machine`
+for the panel's own server, or the SSH user, host and port of an added one.
+
+| Status | Means |
+|---|---|
+| **ok** | The panel reached the server at its last check or sample. |
+| **unreachable** | The panel could not reach it over SSH. The server's page shows the **Last error**. |
+| **provisioning** | **Add server** is still setting it up. |
+| **error** | Setting it up failed or was canceled. **Update stack** on its page tries again. |
+
+**Test** runs the panel's checks against the server and lists each result, such as SSH, the MariaDB
+and Traefik containers, the mail relay, the folders under `/srv`, the public IP and the wildcard DNS
+record. An unreachable server that passes them is **ok** again.
+
+## What the panel measures
+
+| What | How often, by default | Where it shows |
+|---|---|---|
+| Each server's load, memory and disk | Every minute | **Server resources** on the dashboard and on the server's page |
+| Whether each site answers | Every minute | The site's status, and **Response time** on its **Overview** tab |
+| Each site's CPU and memory | Every minute | The site's **Overview** tab, and CPU in the dashboard's site list |
+| Each site's disk use | About every 30 minutes | **Disk** on the site's **Overview** tab and on the server's page |
+
+The uptime check asks each running site for its home page through its server's Traefik, under
+the site's own hostname. An answer below 400, a 401 or a 403 counts as up. A 404, a 5xx or no
+answer within five seconds counts as down. CPU is a percentage of one core, averaged since the
+previous sample. **Load** is the Linux load average, not CPU use.
+
+## Open a server's page
+
+Choose a server's name. The buttons at the top act on the whole machine: **Terminal**, **Test
+connection**, **Backup storage** and **Edit settings**, plus **Update stack** and **Remove server**
+on an added server.
+
+<Screenshot name="server-detail" alt="A server's page with its resource charts and the Configuration and Machine cards" />
+
+- **Configuration** is what the panel knows about the server: its role, SSH address, **Public
+  IP**, **Dev domain**, certificate setup, pinned **Host key** and backup location.
+- **Machine** is what the server says about itself: operating system, kernel, CPU, memory, uptime
+  and Docker version. The panel keeps the answer for a minute.
+- The last card lists the sites on the server, with their status, PHP version, CPU and disk.
+
+**Edit settings** changes how the panel addresses the server, never the machine itself. After a
+reinstall changed the server's SSH host key, switch on **Forget the pinned SSH host key (only
+after a legitimate reinstall)**. Until then, every connection to it fails.
+
+## Change how often the panel looks
+
+**Settings → Monitoring** holds three intervals. A change takes effect the next time the panel
+starts, for example after an update. **Container stats (seconds)** sets the server samples too.
+
+| Setting | Default | Lowest |
+|---|---|---|
+| **Uptime check (seconds)** | 60 | 15 |
+| **Container stats (seconds)** | 60 | 15 |
+| **Disk scan (minutes)** | 30 | 5 |
+
+## Limits
+
+- The panel sends no email when a site or a server goes down. You see it in the lists and on the
+  dashboard only.
+- The uptime check runs from the server itself, through its Traefik. It does not test DNS, or
+  the route a visitor takes from outside.
+- The disk figures cover the filesystem that holds `/srv`. A backup location on another disk
+  shows under **Backups → Storage** instead.
+- Resource samples are kept for seven days. The charts show at most the last 24 hours.
+
+## Related
+
+- [Add a server](/docs/servers/add/)
+- [Disk, logs and housekeeping](/docs/servers/resources/)
+- [Terminal](/docs/servers/terminal/)
+- [The Sites list](/docs/sites/overview/)
+- [Settings](/docs/panel/settings/)

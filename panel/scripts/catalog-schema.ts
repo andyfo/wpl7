@@ -5,6 +5,7 @@
  *
  *   npx tsx scripts/catalog-schema.ts > ../../wpl7-catalog/schema/plugin-recipe.v1.schema.json
  */
+// @docs reference/recipe-format
 import { z } from 'zod';
 import { pluginRecipe } from '../shared/recipes.js';
 

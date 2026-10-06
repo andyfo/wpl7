@@ -1,0 +1,134 @@
+---
+title: "Disk, logs and housekeeping"
+description: "Where disk space goes on a server, where the logs are, what the nightly housekeeping removes, and how the firewall is set up."
+sidebar:
+  order: 4
+sources:
+  - panel/src/services/housekeeping.ts
+  - panel/src/jobs/handlers/housekeeping.ts
+  - panel/src/services/monitor.ts
+  - panel/src/services/backup.ts
+  - provision/daemon.json
+  - provision/setup.sh
+  - "provision/firewall/**"
+---
+
+Each server keeps what it hosts under `/srv`. One nightly job removes most of what grows there,
+on every server. This page says where the space goes, where to read the logs, what that job
+removes, and how the firewall is set up.
+
+## Find where disk goes
+
+| Path | Holds |
+|---|---|
+| `/srv/sites/<slug>` | A site's files, the files a restore set aside, and its quarantine |
+| `/srv/mysql` | Every database on the server |
+| `/srv/backups` | Backups, unless the server's backup location is elsewhere |
+| `/srv/plugins` | The plugin catalog's zips |
+| `/srv/traefik` | Certificates |
+| `/srv/mail` | The mail relay's settings and DKIM keys |
+| `/srv/panel` | The panel's database and SSH key, on the panel's server only |
+
+**Disk** on a server's page and on a site's **Overview** tab is the site's folder under
+`/srv/sites`. Its database is not counted. To see the whole picture, run these in the
+[Terminal](/docs/servers/terminal/):
+
+```bash
+df -h /srv
+```
+
+```bash
+sudo du -sh /srv/*
+```
+
+Backups usually grow fastest. Keep fewer of them locally and more [offsite](/docs/backups/offsite/),
+or give them a disk of their own under [Backup storage](/docs/backups/storage/).
+
+## Read the logs
+
+Every part of the stack is a Docker container. Read a container's log in the Terminal:
+
+```bash
+sudo docker logs --tail 100 wp-northwind-bakery
+```
+
+| Container | What its log says |
+|---|---|
+| `wpl7-panel` | The panel and its jobs, on the panel's server only |
+| `wpl7-traefik` | Routing and certificates |
+| `wpl7-mariadb` | The database server |
+| `wpl7-mail` | Mail delivery and the queue, also shown under **Mail → Traffic** |
+| `wpl7-dkim` | DKIM signing |
+| `wp-<slug>` | A site's Apache and PHP errors |
+| `wpl7-ftp` | FTP and SFTP logins and transfers, on servers with FTP logins |
+
+Docker rotates these logs and keeps three files of 10 MB per container. The panel's own work is
+in each job's log, under [Jobs](/docs/automations/jobs/).
+
+## What the nightly housekeeping removes
+
+The **Nightly housekeeping** schedule starts at 04:00 on the panel's clock. Under **Automations →
+Schedules** you can choose **Run now**, or pause it. While it is paused, nothing in this table is
+removed, and disks keep growing.
+
+| What | How much is kept | Where to change it |
+|---|---|---|
+| Scheduled backups and panel snapshots | The newest 10 per site | **Keep last N scheduled backups per site** in **Settings → Backups** |
+| Offsite copies of those two kinds | The newest 30 per site, at each destination | The destination's **Keep last N scheduled per site** |
+| Files a restore set aside | At least a day | |
+| A moved site's old copy | Until its hostnames point only at the new server, and at least a day | **Finalize now** on the site's page |
+| Resource samples | 7 days | |
+| Mail traffic | 30 days | **Keep traffic history for (days)** in **Settings → Mail** |
+| Visitor statistics, and visitor addresses | 90 days, and 7 days | **Settings → Monitoring** |
+| The API request log | 30 days | **Keep requests for** on the API keys' **Activity** tab |
+| Malware scan history | The last 100 scans per site, and a year of resolved findings | |
+| Quarantined files | Until someone deletes them | **Keep quarantined files (days)** in **Settings → Security** |
+| Finished jobs | 90 days | **Finished jobs are kept for**, below the job list |
+
+The same job refreshes the vulnerability data for what your sites run. Once a week it also
+refreshes the country lookup data and the address lists Cloudflare, Jetpack and the AI companies
+publish.
+
+## How the firewall is set up
+
+`setup.sh` turns on UFW. It refuses every incoming connection except SSH, 80 and 443, and it limits
+how quickly SSH connections may be opened. Ports that Docker publishes go past UFW. Only two
+containers publish any: Traefik on 80 and 443, and the FTP gateway once a site on that server has
+an FTP login. A cloud firewall in front of the server has to allow the FTP ports set under **FTP &
+SFTP** in **Settings**.
+
+[Blocked addresses](/docs/security/blocked-addresses/) have an nftables table of their own,
+`inet wpl7`. It drops connections to 80 and 443 from a blocked address before Docker forwards
+them, and leaves UFW's and Docker's rules alone. The `wpl7-firewall` helper controls it on each
+server. This command prints what is loaded, as one line of JSON:
+
+```bash
+sudo wpl7-firewall status
+```
+
+This one empties the table and keeps it empty, whatever the panel sends, until you run
+`sudo wpl7-firewall on`:
+
+```bash
+sudo wpl7-firewall off
+```
+
+A systemd unit of its own loads the last list at boot. Leave `nftables.service` disabled: its
+default configuration starts by deleting every rule, Docker's and UFW's included.
+
+## Limits
+
+- A site's disk figure counts its files, not its database.
+- A backup needs free disk of one and a half times the site's size. With less, it fails.
+- Docker publishes its ports past UFW. A UFW rule does not close 80, 443 or the FTP ports.
+- The FTP ports are published on IPv4 only.
+- Housekeeping runs once a night. It does nothing about a disk that fills up during the day.
+- The panel shows no container logs. Read them in the Terminal.
+
+## Related
+
+- [Servers and monitoring](/docs/servers/overview/)
+- [Terminal](/docs/servers/terminal/)
+- [Backup storage](/docs/backups/storage/)
+- [Blocked addresses](/docs/security/blocked-addresses/)
+- [Schedules](/docs/automations/schedules/)

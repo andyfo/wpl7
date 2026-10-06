@@ -1,3 +1,4 @@
+// @docs panel/updating, servers/add
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { servers, systemUpdates } from '../../db/schema.js';

@@ -2,11 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { backups, jobs, moveCleanups, sites } from '../../src/db/schema.js';
+import { backups, jobs, moveCleanups, servers, sites } from '../../src/db/schema.js';
 import { FakeDnsProvider, makeWorld, waitFor, type TestWorld } from '../helpers.js';
 import { sitePaths } from '../../src/services/siteSpec.js';
 import { hostExec } from '../../src/lib/exec.js';
 import { autoFinalizeMoves } from '../../src/services/housekeeping.js';
+import { wildcardCovers } from '../../src/jobs/handlers/sites.js';
 
 function seedCoreFilesOnStart(w: TestWorld): void {
   w.docker.onStart = (name) => {
@@ -324,5 +325,74 @@ describe('site.move', () => {
     const queued = w.db.select().from(jobs).where(eq(jobs.type, 'site.moveFinalize')).all();
     expect(queued).toHaveLength(1);
     expect(JSON.parse(queued[0]!.payload)).toEqual({ cleanupId: oldRow.id });
+  });
+});
+
+describe('dev hostname records when a site moves back to the wildcard server', () => {
+  const PANEL_IP = '198.51.100.7';
+
+  /** The first half of the round trip: to s2, and finalized once DNS points there. */
+  async function moveToS2AndFinalize(w: TestWorld, slug: string, s2Id: number): Promise<void> {
+    expect((await runJob(w, w.deps.sites.move(slug, { targetServerId: s2Id }).id)).status).toBe('succeeded');
+    w.db.update(moveCleanups).set({ createdAt: Date.now() - 25 * 3600_000 }).run();
+    await autoFinalizeMoves(w.core, w.worker, w.core.log, { resolve4: async () => ['203.0.113.9'], resolve6: async () => [] });
+    const fin = w.db.select().from(jobs).where(eq(jobs.type, 'site.moveFinalize')).get()!;
+    expect((await runJob(w, fin.id)).status).toBe('succeeded');
+    w.db.update(servers).set({ publicIp: PANEL_IP }).where(eq(servers.id, 1)).run();
+  }
+
+  async function moveHome(w: TestWorld, slug: string) {
+    const done = await runJob(w, w.deps.sites.move(slug, { targetServerId: 1 }).id);
+    expect(done.status).toBe('succeeded');
+    return JSON.parse(done.result!) as { dns: { updated: string[]; manual: { host: string; ip: string }[] } };
+  }
+
+  it('covers only names under DEV_DOMAIN, on the wildcard server', async () => {
+    const w = await makeWorld();
+    expect(wildcardCovers(w.core, 1, 'shop.dev.example.test')).toBe(true);
+    expect(wildcardCovers(w.core, 2, 'shop.dev.example.test')).toBe(false);
+    expect(wildcardCovers(w.core, 1, 'shop.s2.example.test')).toBe(false);
+    expect(wildcardCovers(w.core, 1, 'shop.notdev.example.test')).toBe(false);
+  });
+
+  it('with a token, deletes the record the wildcard makes redundant', async () => {
+    const dns = new FakeDnsProvider();
+    dns.zones = ['dev.example.test'];
+    const w = await makeWorld({ exec: hostExec, dnsProvider: dns });
+    const site = await makeSiteOnServer1(w);
+    const s2 = w.addSshServer('s2', { real: true, publicIp: '203.0.113.9' });
+    await moveToS2AndFinalize(w, site.slug, s2.id);
+    expect(dns.records.get(site.devHostname!)).toBe('203.0.113.9');
+
+    const result = await moveHome(w, site.slug);
+    expect(dns.records.has(site.devHostname!)).toBe(false);
+    expect(result.dns.updated).toEqual([site.devHostname]);
+  });
+
+  it('with a token, re-points a name under another server’s dev domain instead of deleting it', async () => {
+    const dns = new FakeDnsProvider();
+    dns.zones = ['dev.example.test', 's2.example.test'];
+    const w = await makeWorld({ exec: hostExec, dnsProvider: dns });
+    const site = await makeSiteOnServer1(w);
+    const s2 = w.addSshServer('s2', { real: true, publicIp: '203.0.113.9', devDomain: 's2.example.test' });
+    await moveToS2AndFinalize(w, site.slug, s2.id);
+    // As if it had been created on s2: a site keeps its dev hostname wherever it moves.
+    const host = `${site.slug}.s2.example.test`;
+    w.db.update(sites).set({ devHostname: host, domains: JSON.stringify([host]) }).where(eq(sites.id, site.id)).run();
+
+    await moveHome(w, site.slug);
+    // *.dev.example.test points at the panel's server, but it does not cover this name.
+    expect(dns.records.get(host)).toBe(PANEL_IP);
+    expect(dns.calls.some((c) => c.method === 'deleteA' && c.fqdn === host)).toBe(false);
+  });
+
+  it('without a token, lists the name: a record made by hand still beats the wildcard', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSiteOnServer1(w);
+    const s2 = w.addSshServer('s2', { real: true, publicIp: '203.0.113.9' });
+    await moveToS2AndFinalize(w, site.slug, s2.id);
+
+    const result = await moveHome(w, site.slug);
+    expect(result.dns.manual).toEqual([{ host: site.devHostname, ip: PANEL_IP }]);
   });
 });

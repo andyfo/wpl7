@@ -1,3 +1,4 @@
+// @docs security/blocked-addresses
 import { useSearchParams } from 'react-router';
 import { BlockedTab, DetectionTab, EnforcementTab, NeverBlockTab } from '../components/security/ServerTabs';
 import { Tabs } from '../components/ui';

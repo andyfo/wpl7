@@ -1,3 +1,4 @@
+// @docs security/site-protection
 import {
   FIELD_OPS,
   HTTP_METHODS,

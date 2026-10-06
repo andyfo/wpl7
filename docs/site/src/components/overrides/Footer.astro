@@ -1,0 +1,60 @@
+---
+/**
+ * Starlight's page footer (Edit this page, Last updated, Previous and Next), then the site's:
+ * the licence, the project's links, and the commit the site was built from. The publish smoke
+ * test reads the build id back from the live page.
+ */
+import Default from '@astrojs/starlight/components/Footer.astro';
+import { BUILD_ID } from '../../lib/build';
+import { COMMUNITY_URL, ENTERPRISE_URL, REPO_URL, SECURITY_POLICY_URL } from '../../lib/site';
+---
+
+<Default />
+<div class="site-footer">
+  <nav class="site-footer-links" aria-label="Project">
+    <a href={REPO_URL}>GitHub</a>
+    <a href={COMMUNITY_URL}>Community</a>
+    <a href={ENTERPRISE_URL}>Enterprise</a>
+    <a href={SECURITY_POLICY_URL}>Security policy</a>
+  </nav>
+  <p>
+    WPL7 is free software under the <a href={`${REPO_URL}/blob/main/LICENSE`}>AGPL-3.0</a>.
+    <span class="build-id" data-build-id={BUILD_ID}>Built from {BUILD_ID}</span>
+  </p>
+</div>
+
+<style>
+  .site-footer {
+    margin-top: 3rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--sl-color-hairline);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-3);
+  }
+  .site-footer p {
+    margin: 0.5rem 0 0;
+  }
+  .site-footer-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.25rem;
+  }
+  .site-footer a {
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+  }
+  /* A link inside the sentence is underlined, so it does not rely on colour alone. */
+  .site-footer p a {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .site-footer a:hover {
+    color: var(--sl-color-white);
+    text-decoration: underline;
+  }
+  .build-id {
+    margin-inline-start: 0.5rem;
+    color: var(--sl-color-gray-3);
+    font-variant-numeric: tabular-nums;
+  }
+</style>

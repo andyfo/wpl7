@@ -1,3 +1,4 @@
+// @docs plugins/updates, security/privacy
 import { and, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { siteWpComponents, siteWpStatus, vulnFeed, type VulnFeedRow } from '../db/schema.js';

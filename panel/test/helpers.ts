@@ -745,6 +745,9 @@ export class MappedFiles implements FilesPort {
   readOptional(p: string) {
     return this.inner.readOptional(this.m(p));
   }
+  readUntrusted(p: string, maxBytes: number) {
+    return this.inner.readUntrusted(this.m(p), maxBytes);
+  }
   rm(p: string) {
     return this.inner.rm(this.m(p));
   }
@@ -1075,7 +1078,7 @@ export class FakeGitHub {
       prerelease: opts.prerelease ?? manifest.channel === 'edge',
       assets: [{ name: 'manifest.json', url: assetUrl }],
     };
-    const headers = opts.etag ? { etag: opts.etag } : {};
+    const headers: Record<string, string> = opts.etag ? { etag: opts.etag } : {};
     this.on('/releases?per_page', { status: 200, body: [release], headers });
     this.on('/releases/tags/', { status: 200, body: release, headers });
     this.on('/releases/assets/', { status: 200, body: manifest });
@@ -1385,7 +1388,7 @@ export async function makeWorld(
     panelFiles,
     quarantine,
     log,
-  } as CoreServices;
+  } as unknown as CoreServices;
   core.wpInventory = new WpInventoryService(core, vulnerabilities);
   const worker = new JobWorker(db, core);
   offsite.attachWorker(worker);

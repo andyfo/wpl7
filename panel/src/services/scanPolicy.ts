@@ -16,6 +16,7 @@
  * MAX_AUTO_QUARANTINE files in one scan and nothing moves at all: that many is a site to look
  * at, not to empty.
  */
+// @docs security/malware-scans
 import type { FindingConfidence, FindingKind, ScanOnFinding } from '../../shared/security.js';
 
 export const MAX_AUTO_QUARANTINE = 25;

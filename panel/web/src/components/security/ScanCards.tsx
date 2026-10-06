@@ -1,3 +1,4 @@
+// @docs security/malware-scans, security/site-protection
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { FINDING_KIND_INFO, type FindingStatus } from '../../../../shared/security';

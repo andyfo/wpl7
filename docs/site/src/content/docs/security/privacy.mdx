@@ -1,0 +1,115 @@
+---
+title: What leaves your server
+description: "Every outbound request the panel makes, what it sends, and how to switch it off."
+sidebar:
+  order: 6
+sources:
+  - panel/src/services/updates.ts
+  - panel/src/services/catalogSync.ts
+  - panel/src/services/vulnerabilities.ts
+  - panel/src/services/integrityManifests.ts
+  - panel/src/services/wporg.ts
+  - panel/src/services/proxyRanges.ts
+  - panel/src/services/aiRanges.ts
+  - panel/src/services/geoip.ts
+  - panel/src/services/dns.ts
+  - panel/src/services/feedback.ts
+  - panel/src/services/mail.ts
+  - panel/src/services/mailDns.ts
+  - panel/src/services/housekeeping.ts
+  - panel/src/lib/crawlerVerify.ts
+  - panel/src/config.ts
+  - deploy/docker-compose.yml
+---
+
+import UiPath from '~/components/UiPath.astro';
+
+The panel sends no telemetry, and there is no control plane. Your sites, their data and the panel's
+database stay on your servers. This page lists every request the panel makes to anyone else, what
+each one sends, and the switch that stops it. Like any request, each one shows the service your
+server's address.
+
+## On its own
+
+| Request | When | What it sends | Switch |
+|---|---|---|---|
+| GitHub, `api.github.com`: is there a new release? | Hourly | The channel you follow, by the release it asks for. `WPL7_GITHUB_TOKEN` when you set one. | Pause **Update check** on **Automations → Schedules**. **Check now** still asks. |
+| GitHub Pages: the signed recipe catalog | Hourly | Nothing but the request | `WPL7_CATALOG_URL=off` in `deploy/.env`, or pause **Recipe catalog** |
+| wpvulnerability.net: known vulnerabilities | Once a day per slug, from the inventory scan and the nightly housekeeping | The slug of every installed plugin and theme, custom ones included, and each WordPress version. Never a site, a domain or an address. | **Rate installed plugins and themes against known vulnerabilities** in **Settings → Security** |
+| wordpress.org: published checksums | During malware scans, the first time a scan meets each WordPress or plugin version | WordPress's version and language. Each plugin's folder name and version, custom ones included. | **Scan every site** off in **Settings → Security**, with no site switched on by itself |
+| Cloudflare, Jetpack, OpenAI, Anthropic, Google, Perplexity, Mistral and DuckDuckGo: published address lists | Weekly, from the nightly housekeeping | Nothing but the request | None of its own. Pausing **Nightly housekeeping** stops it, and all pruning with it. |
+| RIPE NCC, ARIN, APNIC, LACNIC and AFRINIC: tables of which country holds which addresses | Weekly, from the nightly housekeeping | Nothing but the request. Every country lookup happens on your server. | As for the address lists |
+| Your DNS resolver: crawler checks | When an address that claims to be a search engine's crawler crosses a detection rule | That visitor's address, as a reverse DNS lookup | **Automatic blocking** set to **Off** |
+| Google's mail server, on port 25 | Direct delivery only, at most every 5 minutes while the Mail page or the API asks for the relays' status | A connection, closed at once. No message. | A smarthost: the check does not run then. |
+
+## When you use a feature
+
+| Request | When | What it sends | Switch |
+|---|---|---|---|
+| wordpress.org's plugin directory | You search it, or add a plugin from it | Your search words, or the plugin's slug | Only when you use it |
+| Cloudflare's API | With a Cloudflare token: checking it, site records, going live through Cloudflare, mail records, wildcard certificates. Each server's Traefik also uses it for the wildcard certificate's DNS check. | The token, zone and record names, and record values such as a server's address | Remove the token |
+| Your DNS resolver | Mail checks, going live, moving a site | The names and addresses being checked | Only when you use them |
+| The project's community, `wpl7.com/community` | You choose **Send to community** for **A question or an idea**, under **Send feedback** on the About page | What you typed, and the build and machine details while **Include what this install is** is on | None. Nothing is sent until you choose it. |
+
+A bug report or a feature request from the same dialog opens on GitHub in your browser, under your
+own account. The panel sends nothing for it.
+
+## Mail the panel sends
+
+The panel hands its own mail to your [relay](/docs/reference/glossary/#relay), like your sites do:
+
+- Alerts go to **Send alerts to** in <UiPath href="/docs/panel/settings/">Settings → Mail</UiPath>:
+  a site's mail suspended, malware found or moved, failing offsite copies, a catalog zip that
+  matches known malware, and a new release. Leave the address empty to only log them.
+- Account mail goes to an account's recovery address, or to a new one being confirmed, and only
+  when someone asks: a password reset link, a confirmation link, and the notice that a password
+  changed.
+
+## Your own servers and destinations
+
+The panel connects to every server you add over SSH. It asks every running site for its home page
+for the uptime check, and a new domain for its home page when the site goes live. Offsite copies go
+to the destinations you add.
+
+## Installing and updating
+
+The installer and every update download the release from GitHub. Servers pull container images from
+GitHub's container registry and from Docker Hub, and packages from Ubuntu's mirrors and Docker's
+repository. A server pulls the scanner image for its first scan, rclone for its first offsite copy,
+and the FTP server image for its first FTP login.
+
+## The rest of the stack
+
+- Certificates: Traefik asks Let's Encrypt for each certificate, naming its domains, and gives
+  the `ACME_EMAIL` address for the account. Certificates are published in public Certificate
+  Transparency logs, so every name with a certificate of its own becomes public. A wildcard
+  certificate shows only the wildcard.
+- Traefik's version check: Traefik asks `update.traefik.io` now and then whether it is out of
+  date, and sends its version and the server's public address. WPL7 does not switch it off.
+- Mail: the relays deliver what your sites send, to the recipients' mail servers or to your
+  smarthost.
+
+## Your sites
+
+Sites reach the internet, and the panel does not filter what they send. WordPress checks
+wordpress.org for updates and downloads from it, and plugins and themes call their own services.
+The inventory scan and the WordPress cron the panel runs both let WordPress check for updates. A
+[recipe](/docs/reference/glossary/#recipe) activates a pro plugin's license through the plugin's own
+code, so the plugin contacts its vendor to activate the key for the site's address.
+
+In your browser, the panel loads everything from your own panel. When you search the wordpress.org
+directory, your browser loads the plugins' icons from wordpress.org.
+
+## Limits
+
+- The published address lists and the country tables have no switch of their own.
+- Traefik's version check has no switch in the panel.
+- Ubuntu itself, such as its package updates, is outside this list.
+
+## Related
+
+- [Security in WPL7](/docs/security/overview/)
+- [Blocked addresses](/docs/security/blocked-addresses/)
+- [Updates and known vulnerabilities](/docs/plugins/updates/)
+- [Schedules](/docs/automations/schedules/)
+- [Third-party components](/docs/reference/third-party/)

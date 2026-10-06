@@ -1,3 +1,4 @@
+// @docs security/blocked-addresses, security/site-protection
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';

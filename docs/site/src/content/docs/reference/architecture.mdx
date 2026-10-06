@@ -1,0 +1,209 @@
+---
+title: Architecture
+description: "How the pieces fit: networks, names, files on disk, site containers, TLS and the panel itself."
+sidebar:
+  order: 3
+sources:
+  - "deploy/docker-compose*.yml"
+  - panel/src/services/siteSpec.ts
+  - panel/src/services/siteNetwork.ts
+  - panel/src/services/labels.ts
+  - panel/src/services/docker.ts
+  - panel/src/services/ftpConfig.ts
+  - panel/src/lib/slug.ts
+  - panel/src/jobs/lanes.ts
+  - panel/src/server.ts
+---
+
+import Since from '~/components/Since.astro';
+
+Every server runs the same small stack of containers, and every site is one more container
+beside it. The panel runs on the first server and drives the others over SSH. This page is the
+map: what runs, what it is called, where it keeps its files, and what can reach what.
+
+## The containers
+
+| Container | Image | What it does |
+|---|---|---|
+| `wpl7-traefik` | `traefik:v3.7` | Takes ports 80 and 443, gets certificates, routes each hostname to its site, applies [site protection](/docs/reference/glossary/#site-protection) and writes the access log |
+| `wpl7-mariadb` | `mariadb:11.4` | The database server, with one database and one user per site |
+| `wpl7-mail` | `boky/postfix` | The mail [relay](/docs/reference/glossary/#relay): takes every site's mail, queues it and delivers it |
+| `wpl7-dkim` | `instrumentisto/opendkim` | Signs outgoing mail for the relay |
+| `wpl7-panel` | `ghcr.io/andyfo/wpl7/panel` | The API, the web interface and the job queue. On the panel's server only |
+| `wp-<slug>` | `wpl7-wordpress:php<version>` | One WordPress site |
+| `wpl7-ftp` | `wpl7-sftpgo` | The FTP and SFTP gateway. Only on a server with FTP logins |
+| `wpl7-ftp-<slug>` | `wpl7-sftpgo` | The file server behind one site's FTP logins |
+
+Malware scans, offsite copies and database imports run in throwaway containers that exist for
+one task.
+
+## Several servers
+
+- A [worker](/docs/reference/glossary/#worker) runs the same stack without the panel container.
+- Each site lives on one server, with its files, database, mail and certificates.
+- The panel reaches a worker over SSH only, as the `wpl7-panel` user, which can use Docker and
+  `sudo`. A server's SSH host key is pinned on the first connection.
+- Adding a server pushes the panel's own copy of `provision/` and `deploy/`, then runs
+  `setup.sh --role=worker`. After a panel update, the panel does the same on every worker.
+
+## Networks
+
+| Network | Internal | Members |
+|---|---|---|
+| `wpl7_proxy` | no | Traefik, the panel, the relay and the signer. No sites |
+| `wpl7_db` | yes | MariaDB and the panel. No sites |
+| `wpl7_site_<slug>` | yes | One site, plus Traefik, the relay as `mail` and MariaDB as `mariadb` |
+| `wpl7_egress` | no, with traffic between containers switched off | Every site container. Its only use is the way out to the internet |
+| `wpl7_ftp` | yes | The FTP gateway and the file servers |
+| `wpl7_ftp_edge` | no, with traffic between containers switched off | The FTP gateway alone, for its published ports |
+
+A site can reach the infrastructure it needs and the internet. It cannot reach another site or
+the panel. A `docker compose up` recreates Traefik, MariaDB and the relay without the site
+networks, so the panel attaches them again at boot and every minute.
+
+## Names
+
+All names follow from the site's [slug](/docs/reference/glossary/#slug), 3 to 32 lowercase
+letters, digits and dashes.
+
+| Thing | Pattern | For `northwind-bakery` |
+|---|---|---|
+| Container | `wp-<slug>` | `wp-northwind-bakery` |
+| Database and database user | `wp_` and the slug with dashes turned into underscores | `wp_northwind_bakery` |
+| Site network | `wpl7_site_<slug>` | `wpl7_site_northwind-bakery` |
+| Traefik router and service | `wp-<slug>` | `wp-northwind-bakery` |
+| Redirect from extra domains | `wp-<slug>-canonical` | `wp-northwind-bakery-canonical` |
+| Relay login | `<slug>@wpl7` | `northwind-bakery@wpl7` |
+| FTP file server | `wpl7-ftp-<slug>` | `wpl7-ftp-northwind-bakery` |
+
+Site containers carry the labels `wpl7.managed=true`, `wpl7.site=<slug>`, `wpl7.role=wordpress`
+and `wpl7.php=<version>`. To list one site's containers:
+
+```bash
+docker ps -a --filter label=wpl7.site=northwind-bakery
+```
+
+## Files on disk
+
+Everything lives under `/srv`, the `SRV_ROOT` in `deploy/.env`. The panel container mounts it
+at the same path, so every path the panel hands to Docker is valid on the host.
+
+| Path | What it holds |
+|---|---|
+| `/srv/sites/<slug>/wordpress/` | The site's files, owned by uid 33 |
+| `/srv/sites/<slug>/config/` | The site's PHP limits in `uploads.ini`, its relay login and its protection settings |
+| `/srv/sites/<slug>/quarantine/` | Files a malware scan moved out of the site. Mounted into no site |
+| `/srv/sites/<slug>/site.json` | A description of the site, for recovery by hand |
+| `/srv/backups/<slug>/<timestamp>/` | Backups, unless the server's backup location was moved |
+| `/srv/backups/panel/<timestamp>/` | Nightly copies of the panel's database, on the panel's server |
+| `/srv/plugins/` | Uploaded plugin zips, mounted read-only into every site |
+| `/srv/mysql/` | MariaDB's data |
+| `/srv/mail/` | The relay's sender maps and logins, and the DKIM keys and settings |
+| `/srv/traefik/acme*.json` | Certificates and ACME accounts, mode 600 |
+| `/srv/traefik/dynamic/` | Rules Traefik reads from files: `sec-<slug>.yml` for site protection, `wpl7-blocked.yml`, and `move-<slug>.yml` while a moved site waits for DNS |
+| `/srv/wpl7-ftp/` | The FTP gateway's and file servers' settings |
+| `/srv/wpl7-firewall/` | The block list for the firewall and its status. Root only |
+| `/srv/wpl7-scan/<scan-id>/` | A running malware scan's input |
+| `/srv/panel/panel.db` | The panel's state, in SQLite, mode 600 |
+| `/srv/panel/ssh/id_ed25519` | The panel's SSH key, on the panel's server |
+| `/srv/panel/geoip/` | The internet registries' country tables, refreshed weekly |
+| `/srv/panel/update/` | The state and log of the last update |
+
+## Site containers
+
+The image `wpl7-wordpress:php<version>` is the official `wordpress:php<version>-apache` image
+with msmtp, so PHP's `mail()` reaches the relay, and WP-CLI. PHP 8.2 to 8.5 are offered.
+
+| Mounted from the host | Inside the container |
+|---|---|
+| `/srv/sites/<slug>/wordpress` | `/var/www/html` |
+| `/srv/sites/<slug>/config/uploads.ini` | `/usr/local/etc/php/conf.d/zz-site.ini`, read-only |
+| `/srv/sites/<slug>/config/msmtprc` | `/etc/msmtprc`, read-only |
+| `/srv/sites/<slug>/config/security-apache.conf` | `/etc/apache2/conf-enabled/zz-wpl7-security.conf`, read-only |
+| `/srv/sites/<slug>/config/security/` | `/etc/wpl7`, read-only |
+| `/srv/plugins` | `/srv/plugins`, read-only |
+
+- `wp-config.php` reads the database settings from the container's `WORDPRESS_DB_*` variables.
+- `WORDPRESS_CONFIG_EXTRA` turns HTTPS on behind Traefik, sets `DISABLE_WP_CRON`, and loads the
+  site's protection from `/etc/wpl7/wp-config-extra.php`.
+- The panel runs each running site's due cron events every five minutes instead.
+- WP-CLI runs inside the site's container as uid 33, so the PHP version and mail settings
+  always match the site.
+- The panel keeps two must-use plugins in the site: `wpl7-login.php` for one-click login, and
+  `wpl7-licenses.php` for recipe constants.
+- The panel opens single files inside the site's container, as the site's user. Backups,
+  restores and moves copy whole folders with `tar` on the host, which never follows a link.
+
+## Containment
+
+| Measure | What it is |
+|---|---|
+| Networks | Its own network and the way out, nothing else |
+| Capabilities | Docker's defaults without `NET_RAW`, `MKNOD`, `SYS_CHROOT`, `AUDIT_WRITE`, `SETFCAP` and `SETPCAP` |
+| `no-new-privileges` | Set, so setuid programs cannot raise privileges |
+| CPU, memory and processes | Per-site ceilings from **Settings**, by default 2 cores, 512 MB and 512 processes |
+| Mail | Its own relay login, which may only send from the site's own domains |
+
+The ceilings change on running containers when you save them. Removing a CPU ceiling is the one
+change Docker cannot make live, so it recreates each site.
+
+## TLS
+
+| Resolver | Challenge | Used for |
+|---|---|---|
+| `letsencrypt` | HTTP | Custom domains, the panel, and dev sites without the wildcard |
+| `letsencrypt-staging` | HTTP | The same, against Let's Encrypt's test service |
+| `letsencrypt-dns` | DNS | One [wildcard certificate](/docs/reference/glossary/#wildcard-certificate) for `*.<dev domain>`, shared by a server's dev sites |
+| `letsencrypt-dns-staging` | DNS | The same, against the test service |
+
+- A site on a custom domain always gets its own certificates through the HTTP check.
+- `ACME_RESOLVER=letsencrypt-staging` moves every certificate to the test service, the wildcard
+  included. `TLS_MODE` only chooses between `https` and plain `http`.
+- The DNS resolvers use `DNS_PROVIDER`, or Cloudflare when it is empty.
+
+<Since v="0.3.0-beta.2" /> The wildcard certificate is a switch per server in **Settings → DNS**.
+With Cloudflare, dev sites share it only while the panel has a token to answer the DNS check. Traefik
+reads the token from `/srv/traefik/dns/cloudflare-api-token`, which the panel writes on every
+server, and the panel restarts Traefik when the token changes.
+
+## The panel
+
+- One Node 22 process serves the REST API and the web interface, and keeps its state in
+  SQLite.
+- It holds the Docker socket and the SSH key for every server, so it is root-equivalent on its
+  host by design.
+- Long operations are [jobs](/docs/reference/glossary/#job) with a log. A server runs one job at
+  a time. Some jobs take a [lane](/docs/reference/glossary/#lane) of their own instead, so they
+  run beside that server's site work.
+- Everything recurring runs through one scheduler, listed on **Automations → Schedules**.
+- Mail traffic and visitor statistics are read from the relay's and Traefik's logs every minute.
+- AI apps use the same API through `/mcp`.
+
+| Lane | What runs in it |
+|---|---|
+| The server's own | Work on its sites, such as creating, backing up, restoring, moving and deleting them |
+| `offsite:<server>` | Uploads of offsite copies, one at a time per server |
+| `exec:<server>` | WP-CLI commands, shell commands and REST requests run in sites |
+| `scan:<server>` | Malware scans, and checks of plugin catalog zips |
+| `housekeeping` | The nightly housekeeping job |
+| `backup-delete` | Deleting backups in bulk |
+
+## Limits
+
+- Each site has a Docker network of its own, and the panel creates it from Docker's default
+  address pools. On Docker 29 these hold 31 networks.
+- The stack's own networks and Docker's default bridge take four of them, and FTP two more on a
+  server with FTP logins. That leaves room for about 25 sites per server.
+- `setup.sh` replaces `/etc/docker/daemon.json` with `provision/daemon.json` whenever they
+  differ, so a larger address pool added there by hand does not survive the next run.
+- The panel is root-equivalent on its own host. Anyone who can sign in to it can run anything
+  on its servers.
+
+## Related
+
+- [How WPL7 works](/docs/get-started/how-it-works/)
+- [Security in WPL7](/docs/security/overview/)
+- [Add a server](/docs/servers/add/)
+- [Third-party components](/docs/reference/third-party/)
+- [Manual recovery without the panel](/docs/reference/manual-recovery/)
+- [Configuration](/docs/reference/configuration/)

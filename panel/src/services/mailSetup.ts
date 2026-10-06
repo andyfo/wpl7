@@ -10,6 +10,7 @@
  *
  * Everything here is pure. `MailService` does the DNS reads and writes.
  */
+// @docs mail/records, mail/setup
 import type { MailRecordCheck, MailSetupStep, MailStepAutomation } from '../../shared/types.js';
 import { dkimRecordName, dkimRecordValue } from './mailDkim.js';
 import { suggestedDmarc } from './mailDns.js';

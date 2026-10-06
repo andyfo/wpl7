@@ -1,3 +1,4 @@
+// @docs plugins/overview, sites/wordpress
 import type { WpComponentDto } from '../../../../shared/types';
 import { Button, EmptyState, StatusBadge } from '../ui';
 import { CoverageNote, SeverityBadge } from './severity';

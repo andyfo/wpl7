@@ -1,3 +1,4 @@
+// @docs security/privacy, servers/resources, sites/move
 import dns from 'node:dns/promises';
 import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 import { batches, jobs, moveCleanups, serverStats, sessions, siteStats } from '../db/schema.js';

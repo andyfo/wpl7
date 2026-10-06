@@ -4,6 +4,7 @@
  * and `effectivePolicy` - the one function that decides what a site actually gets. The rules
  * generator, the API and the pages all go through it, so they cannot disagree about a site.
  */
+// @docs security/overview, security/site-protection
 import { z } from 'zod';
 import { WIDEST_PREFIX, parseCidr } from './cidr.js';
 

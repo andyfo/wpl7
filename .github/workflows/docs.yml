@@ -1,0 +1,380 @@
+# The documentation site (docs/site, published at https://wpl7.com/docs/).
+#
+# Jobs, and what each is for:
+#   changes      which parts of the repository a run touches, for the jobs below to decide on
+#   build        a pull request that changes the site builds, with every internal link checked
+#   check        the generated pages match their sources, and every page and @docs marker maps
+#   screenshots  a pull request that changes the panel's look gets its screenshots retaken
+#   publish      main, a release or a manual run goes live at wpl7.com/docs
+#
+# The `docs-sync` check has a workflow of its own, docs-sync.yml. A release starts `publish`
+# from release.yml. docs/site/README.md is the contributor side of all of this.
+name: Docs
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # Also how release.yml starts a publish once a release is out.
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Publish the site (the first publish, or again after setting up the host)'
+        type: boolean
+        default: true
+      screenshots:
+        description: 'Retake every screenshot and open a pull request with them'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  # One diff for every job, so they cannot disagree about what a run changed. A manual run has
+  # no diff: it counts as changing everything.
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      site: ${{ steps.diff.outputs.site }}
+      screens: ${{ steps.diff.outputs.screens }}
+      files: ${{ steps.diff.outputs.files }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request) files="$(git diff --name-only "$PR_BASE"...HEAD)" ;;
+            # A push that created the branch has no "before"; treat it as changing everything.
+            push) if git cat-file -e "$PUSH_BEFORE^{commit}" 2>/dev/null; then
+                    files="$(git diff --name-only "$PUSH_BEFORE" HEAD)"
+                  else files='*'; fi ;;
+            *) files='*' ;;
+          esac
+          {
+            if [ "$files" = '*' ] || grep -q '^docs/site/' <<<"$files"; then echo site=true; else echo site=false; fi
+            # What the screenshots show: the web app, the strings it takes from panel/shared, the
+            # demo world and its fakes, and the shot list.
+            if grep -Eq '^(panel/web/|panel/shared/|panel/scripts/demo|panel/test/helpers\.ts$|docs/site/scripts/(shoot|shots|compare-shots)\.ts$)' <<<"$files"
+            then echo screens=true; else echo screens=false; fi
+            echo 'files<<EOF'
+            echo "$files"
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build the docs
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.site == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # "Last updated" on every page comes from each file's git history.
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+      - run: npm ci
+        working-directory: docs/site
+      # The generated pages are committed; the `check` job holds them to their sources. The
+      # build fails on a broken internal link or anchor (starlight-links-validator).
+      - run: npm run build
+        working-directory: docs/site
+        env:
+          DOCS_BUILD_ID: ${{ github.sha }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: docs-site
+          path: docs/site/dist
+          retention-days: 7
+
+  # The generated pages (the API reference, MCP tools, deploy/.env, job types, levels and the
+  # changelog) are committed. This writes them again from their sources and fails on any
+  # difference, so a change to panel/shared/apiDocs.ts cannot merge without its pages. Then
+  # docs:map holds every page and @docs marker to its rules.
+  check:
+    name: Generated pages and the docs map
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      # The generators import panel modules: the API catalog, the MCP tools, the job types.
+      - uses: ./.github/actions/panel-deps
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+      - run: npm ci
+        working-directory: docs/site
+      # From the committed releases.json: refreshing it from GitHub is the publishing side's.
+      - run: npm run docs:generate
+        working-directory: docs/site
+      # git status rather than git diff alone: a page the generators add or remove counts too.
+      - name: The generated pages match their sources
+        run: |
+          if [ -n "$(git status --porcelain -- docs/site/src/content/docs)" ]; then
+            git status --short -- docs/site/src/content/docs
+            git --no-pager diff -- docs/site/src/content/docs
+            echo "::error::The generated docs pages differ from their sources. Run npm run docs:generate in docs/site and commit the result."
+            exit 1
+          fi
+      - run: npm run docs:map
+        working-directory: docs/site
+
+  # The screenshots in docs/site/screens follow the panel's look. On a pull request that changes
+  # it, this takes every shot again (docs/site/scripts/shoot.ts, from the demo world) in the
+  # Playwright image pinned to the package's version, so two runs of the same code give the same
+  # bytes. A capture that differs in more than 0.1 % of its pixels replaces the committed file;
+  # the rest stay as they are. A branch of this repository gets the new files pushed to it as
+  # "Update docs screenshots", a fork's pull request gets them as an artifact. By hand
+  # (screenshots: true) it retakes everything onto a branch of its own and opens a pull request.
+  #
+  # A push or a pull request made with the workflow's own token starts no workflow, so neither
+  # gets its checks until something else pushes. A fine-grained token with read and write access
+  # to this repository's contents and pull requests, as the secret SCREENSHOTS_PUSH_TOKEN, makes
+  # them run.
+  screenshots:
+    name: Screenshots
+    needs: changes
+    if: >-
+      (github.event_name == 'pull_request' && needs.changes.outputs.screens == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.screenshots)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container:
+      image: mcr.microsoft.com/playwright:v1.63.0-noble
+    # In a container, `run` steps default to sh.
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The pull request's branch itself, so the new files can go on top of it.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref || '' }}
+          token: ${{ secrets.SCREENSHOTS_PUSH_TOKEN || github.token }}
+      # The container runs as root and the checkout belongs to the runner's user. Git refuses a
+      # folder someone else owns ("not in a git directory") unless it is marked safe, and
+      # actions/checkout marks it for its own step only.
+      - name: Let git use the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      # The image has no compiler, and better-sqlite3 compiles during the panel's npm ci (as in
+      # panel/Dockerfile). Nor has it the GitHub CLI, which opens the manual run's pull request.
+      - name: Build tools and the GitHub CLI
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends make g++ gh > /dev/null
+      # Ubuntu has no oxipng package. The upstream release, pinned by version and checksum like
+      # the image (docs/internal/watchlist.md).
+      - name: oxipng
+        env:
+          OXIPNG_VERSION: 10.2.1
+          OXIPNG_SHA256: 46e3c4beb9aae57290ad809dd3374b07153579d3322a3778c53900633618b7c6
+        run: |
+          name="oxipng-$OXIPNG_VERSION-x86_64-unknown-linux-gnu"
+          curl -fsSL -o "$RUNNER_TEMP/oxipng.tar.gz" \
+            "https://github.com/shssoichiro/oxipng/releases/download/v$OXIPNG_VERSION/$name.tar.gz"
+          echo "$OXIPNG_SHA256  $RUNNER_TEMP/oxipng.tar.gz" | sha256sum -c --quiet
+          tar -xzf "$RUNNER_TEMP/oxipng.tar.gz" -C "$RUNNER_TEMP"
+          install -m 755 "$RUNNER_TEMP/$name/oxipng" /usr/local/bin/oxipng
+          oxipng --version
+      # Inside the image, not from the runner's cache: the panel's native modules are built for
+      # the system that runs them.
+      - run: npm ci
+        working-directory: panel
+      - run: npm ci
+        working-directory: docs/site
+      - name: Take the screenshots
+        working-directory: docs/site
+        run: |
+          mkdir -p screens
+          cp -R screens "$RUNNER_TEMP/screens-before"
+          rm -rf screens
+          npm run shoot
+          npx tsx scripts/compare-shots.ts --before "$RUNNER_TEMP/screens-before" --report "$RUNNER_TEMP/screens.md"
+          cat "$RUNNER_TEMP/screens.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Push them to the pull request
+        if: github.event_name == 'pull_request' && env.SAME_REPO == 'true'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A docs/site/screens
+          if git diff --cached --quiet; then echo 'No screenshot changed.'; exit 0; fi
+          git commit -q -m 'Update docs screenshots'
+          git push origin "HEAD:$GITHUB_HEAD_REF"
+      - name: Hand them to the fork's author
+        if: github.event_name == 'pull_request' && env.SAME_REPO != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-screenshots
+          path: docs/site/screens
+          retention-days: 14
+      - name: Open a pull request with them
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.SCREENSHOTS_PUSH_TOKEN || github.token }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A docs/site/screens
+          if git diff --cached --quiet; then echo 'No screenshot changed.'; exit 0; fi
+          branch="docs/screenshots-$GITHUB_RUN_ID"
+          git switch -q -c "$branch"
+          git commit -q -m 'Update docs screenshots'
+          git push -q origin "$branch"
+          # The workflow's own token may only open it when the repository allows GitHub Actions to
+          # create pull requests (Settings → Actions → General); the push token needs no setting.
+          gh pr create --base main --head "$branch" --label docs \
+            --title 'Update the docs screenshots' \
+            --body-file "$RUNNER_TEMP/screens.md" || {
+            echo "::error::Pushed $branch but could not open its pull request. Open it by hand: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/compare/main...$branch?expand=1"
+            exit 1
+          }
+
+  # Publishes docs/site to the website's /docs directory: on every merge to main that changes the
+  # docs or the code they document, after every release, and by hand. A release creates its
+  # GitHub release with the workflow's own token, which starts no workflow, so release.yml runs
+  # this one by hand once the release is out; the Edge badges of what it ships then fall away.
+  # rsync over SSH, with a key the website's server only lets write that one directory, and the
+  # server's host key pinned; then a look at the live site. Until the secrets exist
+  # (docs/site/hosting/README.md) it builds, says so, and stops.
+  publish:
+    name: Publish
+    needs: changes
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.publish) ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # One publish at a time, and never one cut off half-way.
+    concurrency:
+      group: docs-publish
+      cancel-in-progress: false
+    env:
+      PUBLIC_URL: ${{ vars.DOCS_PUBLIC_URL || 'https://wpl7.com/docs/' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+      - run: npm ci
+        working-directory: docs/site
+      # A merge publishes when it changed the site or a file one of its pages documents.
+      - name: Does this change the docs?
+        id: relevant
+        working-directory: docs/site
+        env:
+          EVENT: ${{ github.event_name }}
+          FILES: ${{ needs.changes.outputs.files }}
+        run: |
+          if [ "$EVENT" != push ] || [ "$FILES" = '*' ]; then echo publish=true >> "$GITHUB_OUTPUT"; exit 0; fi
+          npm run --silent docs:map > /dev/null || true
+          node -e '
+            const map = require("./.docs-map.json");
+            const files = process.env.FILES.split("\n").filter(Boolean);
+            const hit = files.find((f) => f.startsWith("docs/site/") || map.files[f]);
+            console.log(hit ? `publish=true` : `publish=false`);
+            if (hit) console.error(`Publishing: ${hit} changed.`); else console.error("Nothing the docs show changed.");
+          ' >> "$GITHUB_OUTPUT"
+      - name: Refresh the release notes
+        if: steps.relevant.outputs.publish == 'true'
+        working-directory: docs/site
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          npm run docs:releases
+          npm run docs:generate -- --only changelog
+      - name: Build
+        if: steps.relevant.outputs.publish == 'true'
+        working-directory: docs/site
+        env:
+          DOCS_BUILD_ID: ${{ github.sha }}
+        run: npm run build
+      - name: Copy to the website
+        id: rsync
+        if: steps.relevant.outputs.publish == 'true'
+        env:
+          HOST: ${{ secrets.DOCS_DEPLOY_HOST }}
+          USER: ${{ secrets.DOCS_DEPLOY_USER }}
+          PORT: ${{ secrets.DOCS_DEPLOY_PORT }}
+          DEST: ${{ secrets.DOCS_DEPLOY_PATH }}
+          KEY: ${{ secrets.DOCS_DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DOCS_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [ -z "$HOST" ] || [ -z "$KEY" ] || [ -z "$KNOWN_HOSTS" ]; then
+            echo '::notice::The site was built but not published: the DOCS_DEPLOY_* secrets are not set (docs/site/hosting/README.md).'
+            echo deployed=false >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          umask 077
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/docs_key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$RUNNER_TEMP/docs_known_hosts"
+          # --delay-updates and --delete-delay: every new file lands under a temporary name and
+          # everything is swapped in at the end, so a transfer that fails leaves the old site.
+          rsync -az --delete --delete-delay --delay-updates --stats \
+            -e "ssh -p ${PORT:-22} -i $RUNNER_TEMP/docs_key -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/docs_known_hosts" \
+            docs/site/dist/ "${USER:-docs}@$HOST:${DEST:-.}/" 2>&1 | tee "$RUNNER_TEMP/rsync.log"
+          echo deployed=true >> "$GITHUB_OUTPUT"
+      # The live site, not the build: the new build id on the start page, a deep page, the
+      # search index, and a missing page answered by the docs' own 404.
+      - name: Check the live site
+        if: steps.rsync.outputs.deployed == 'true'
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          base="${PUBLIC_URL%/}"
+          id="${SHA:0:7}"
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS "$base/?v=$id" | grep -q "data-build-id=\"$id\""; then break; fi
+            [ "$attempt" = 6 ] && { echo "::error::$base/ does not carry build $id"; exit 1; }
+            sleep 10
+          done
+          curl -fsS -o /dev/null "$base/get-started/quick-start/"
+          type="$(curl -fsS -o /dev/null -w '%{content_type}' "$base/pagefind/pagefind-entry.json")"
+          case "$type" in application/json*) ;; *) echo "::error::pagefind-entry.json is served as '$type'"; exit 1 ;; esac
+          curl -fsS -o /dev/null "$base/pagefind/wasm.en.pagefind"
+          status="$(curl -s -o "$RUNNER_TEMP/404.html" -w '%{http_code}' "$base/does-not-exist/")"
+          [ "$status" = 404 ] || { echo "::error::a missing page answers $status, not 404"; exit 1; }
+          grep -q 'Page not found' "$RUNNER_TEMP/404.html" || { echo '::error::a missing page is not the docs 404 page'; exit 1; }
+          echo "Live: $base/ (build $id)"
+      - name: Summary
+        if: always() && steps.relevant.outputs.publish == 'true'
+        run: |
+          {
+            echo '### Docs publish'
+            if [ '${{ steps.rsync.outputs.deployed }}' = true ]; then echo "Published build \`${GITHUB_SHA:0:7}\` to $PUBLIC_URL"; else echo 'Built, not published (no DOCS_DEPLOY_* secrets, or a step failed).'; fi
+            if [ -f "$RUNNER_TEMP/rsync.log" ]; then echo; echo '```'; tail -n 20 "$RUNNER_TEMP/rsync.log"; echo '```'; fi
+          } >> "$GITHUB_STEP_SUMMARY"

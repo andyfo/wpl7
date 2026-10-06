@@ -1,3 +1,4 @@
+// @docs integrations/cloudflare, integrations/dns, sites/move
 import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -19,7 +20,7 @@ import {
   updateSiteRow,
   writeSiteJson,
 } from './shared.js';
-import { ensureSiteImage } from './sites.js';
+import { ensureSiteImage, wildcardCovers } from './sites.js';
 import { pipeBetweenServers, proxyConfigPathFor, proxyConfigYaml, rmOn } from './moveHelpers.js';
 
 export const siteMovePayload = z.object({
@@ -367,25 +368,32 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     await s.security.kick(p.sourceServerId);
 
     const dns = { updated: [] as string[], manual: [] as { host: string; ip: string }[] };
+    // The source and the target are different servers, so the wildcard covers the site on one of
+    // them at most: landing where it does means leaving a server where it needed a record of its own.
+    const covered = site.devHostname !== null && wildcardCovers(s, p.targetServerId, site.devHostname);
     if (site.devHostname && !s.dns.enabled) {
       // Silence here used to mean the dev hostname kept resolving to the old server right
-      // up until finalizeCleanup destroyed it.
-      const wildcardServerId = s.settings.get('dnsWildcardServerId') ?? 1;
-      if (p.targetServerId !== wildcardServerId) {
-        dns.manual.push({ host: site.devHostname, ip: target.row.publicIp });
-        ctx.warn(
-          `DNS management is off, so ${site.devHostname} still points at "${source.name}". ` +
-            `Create an A record to ${target.row.publicIp}; the old server forwards traffic until then.`,
-        );
-      }
+      // up until finalizeCleanup destroyed it. Landing where the wildcard covers it is no
+      // exception: a record made by hand for the old server still beats the wildcard.
+      dns.manual.push({ host: site.devHostname, ip: target.row.publicIp });
+      ctx.warn(
+        covered
+          ? `DNS management is off. If ${site.devHostname} has an A record of its own, point it at ` +
+              `${target.row.publicIp} or delete it; the old server forwards traffic until then.`
+          : `DNS management is off, so ${site.devHostname} still points at "${source.name}". ` +
+              `Create an A record to ${target.row.publicIp}; the old server forwards traffic until then.`,
+      );
     }
     if (site.devHostname && s.dns.enabled) {
-      const wildcardServerId = s.settings.get('dnsWildcardServerId') ?? 1;
       try {
-        if (p.targetServerId === wildcardServerId) {
-          await s.dns.deleteA(site.devHostname); // wildcard covers it again
-          dns.updated.push(site.devHostname);
-          ctx.info(`DNS: removed explicit record for ${site.devHostname} (wildcard server covers it)`);
+        if (covered) {
+          if ((await s.dns.deleteA(site.devHostname)) === 'deleted') {
+            dns.updated.push(site.devHostname);
+            ctx.info(`DNS: removed explicit record for ${site.devHostname} (wildcard server covers it)`);
+          } else {
+            // Not in the token's zones: a record made by hand would still beat the wildcard.
+            dns.manual.push({ host: site.devHostname, ip: target.row.publicIp });
+          }
         } else if (target.row.publicIp) {
           const res = await s.dns.upsertA(site.devHostname, target.row.publicIp);
           if (res === 'updated') {

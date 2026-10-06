@@ -1,3 +1,4 @@
+// @docs servers/overview
 import { Link } from 'react-router';
 import type { SiteSummary } from '../../../shared/types';
 import { useJobs, useMeta, useMonitor, useOffsiteOverview, useSites } from '../api/hooks';

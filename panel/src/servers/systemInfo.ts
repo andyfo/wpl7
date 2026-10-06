@@ -1,3 +1,4 @@
+// @docs servers/overview
 import type { ServerSystemInfoDto } from '../../shared/types.js';
 import type { ExecPort } from '../lib/exec.js';
 import { notFound } from '../lib/errors.js';

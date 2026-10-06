@@ -1,0 +1,95 @@
+---
+title: "SPF, DKIM and DMARC explained"
+description: What the three mail records do, what WPL7 suggests for each, and why a sending domain needs all of them.
+sidebar:
+  order: 4
+sources:
+  - panel/src/services/mailDns.ts
+  - panel/src/services/mailDkim.ts
+  - panel/src/services/mailSetup.ts
+---
+
+Receivers decide how far to trust a message by three TXT records in the sending domain's DNS:
+[SPF](/docs/reference/glossary/#spf), [DKIM](/docs/reference/glossary/#dkim) and
+[DMARC](/docs/reference/glossary/#dmarc). They go in the customer's zone, beside the domain's other
+records. **Mail → Setup guide** checks all three against public DNS and gives the values to publish.
+
+## SPF: which servers may send
+
+SPF is one TXT record on the domain itself. It names the servers that may send mail for the domain.
+
+```txt
+northwindbakery.example.  TXT  "v=spf1 ip4:203.0.113.10 ip4:203.0.113.20 ~all"
+```
+
+- For direct delivery, the panel suggests every server's address. A site that moves to another
+  server then needs no change to SPF.
+- With a smarthost, the record names your provider's servers, in the form your provider gives.
+  The panel does not guess it.
+- A domain has exactly one SPF record. With two, receivers treat SPF as broken, and the panel
+  warns.
+- A domain that already sends through another service has a record. Add the server addresses to
+  it rather than publishing a second one.
+- SPF allows at most 10 terms that need a DNS lookup, such as `include:`. The panel counts them.
+- `~all` asks receivers to distrust every other sender. A record ending in `+all` allows the whole
+  internet, and the panel flags it.
+
+SPF fails when a message is forwarded, because the forwarding server is not on the list.
+
+## DKIM: a signature on every message
+
+DKIM signs each message with a private key that only your relays hold. The public half is in DNS,
+so a receiver can check that the message comes from the domain and was not changed on the way.
+
+**Enable DKIM** on **Mail → DKIM & DMARC** creates a 2048-bit key, keeps it in the panel and copies
+it to every server. The record usually goes under the selector `wpl7`:
+
+```txt
+wpl7._domainkey.northwindbakery.example.  TXT  "v=DKIM1; h=sha256; k=rsa; p=MIIBIjANBgkqh..."
+```
+
+- A key at `northwindbakery.example` also signs mail from `shop.northwindbakery.example`. One
+  record covers a whole customer.
+- **Records** shows the exact name and value. **Zone-file form (BIND)** has the value split into
+  the short strings a zone file needs.
+- **Rotate key** makes a new key under the same name, and the relays sign with it at once.
+  Publish the new value right away: until then, receivers fail the signature.
+- **Remove key** stops signing at once. Delete the `_domainkey` record as well.
+- The panel checks that the published key is the one it signs with.
+
+DKIM survives forwarding, which is why DMARC leans on it.
+
+## DMARC: what receivers do when both fail
+
+DMARC is a TXT record at `_dmarc` under the domain. It tells receivers what to do with mail that
+fails SPF and DKIM, and where to send their reports.
+
+```txt
+_dmarc.northwindbakery.example.  TXT  "v=DMARC1; p=none; rua=mailto:dmarc@northwindbakery.example; adkim=r; aspf=r"
+```
+
+Publish it last. A strict policy on a domain whose SPF and DKIM do not pass yet sends real mail to
+the spam folder.
+
+- Start with `p=none`, which only collects reports at the `rua=` address. Without `rua=` nothing is
+  learned, and the panel warns.
+- Once the reports look clean, move to `p=quarantine`, then to `p=reject`.
+- `adkim=r` and `aspf=r` let a signature for `northwindbakery.example` cover mail from
+  `shop.northwindbakery.example`.
+- A record without a `p=` tag is ignored by receivers. The panel reports it as wrong.
+
+The panel never changes a DMARC record that is already published, so a policy someone chose stays.
+
+## How the three work together
+
+A message passes DMARC when SPF or DKIM passes for the domain in its `From:` header. A relay signs
+only mail whose `From:` domain belongs to the site that sent it. A hacked site therefore cannot
+borrow another customer's signature. Its forged mail fails DMARC, and the owner's policy decides what
+receivers do with it.
+
+## Related
+
+- [Setup guide](/docs/mail/setup/)
+- [How mail works](/docs/mail/overview/)
+- [Cloudflare DNS](/docs/integrations/cloudflare/)
+- [Troubleshooting](/docs/help/troubleshooting/)

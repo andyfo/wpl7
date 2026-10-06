@@ -1,3 +1,4 @@
+// @docs panel/updating
 import type { JobContext } from '../jobs/context.js';
 import type { CoreServices } from '../services/index.js';
 import { asc } from 'drizzle-orm';

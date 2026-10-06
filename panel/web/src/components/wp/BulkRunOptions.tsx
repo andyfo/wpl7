@@ -1,3 +1,4 @@
+// @docs plugins/updates, sites/bulk, sites/wordpress
 import { Toggle } from '../ui';
 
 export interface BulkRunOptionsValue {

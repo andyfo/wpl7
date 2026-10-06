@@ -1,3 +1,4 @@
+// @docs plugins/recipes
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { RecipeDto, RecipeInputDto } from '../../../shared/types';

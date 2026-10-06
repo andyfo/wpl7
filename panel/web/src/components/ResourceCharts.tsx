@@ -1,3 +1,4 @@
+// @docs servers/overview
 import { useId, useState } from 'react';
 import { chartSegments, type ResourcePoint as Point } from '../lib/resourceChart';
 import type { ServerHistoryDto, ServerMonitorDto } from '../../../shared/types';

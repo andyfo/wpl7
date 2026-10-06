@@ -5,6 +5,7 @@
  * finding, whatever a signature thinks of it; a changed one is "WPL7 file changed", which the
  * Findings card puts back.
  */
+// @docs security/malware-scans
 import { and, desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { sitePanelFiles } from '../db/schema.js';

@@ -1,0 +1,90 @@
+---
+title: Manage WordPress
+description: "One-click admin login, password resets, maintenance mode, the WP-CLI console, and plugin changes on one site."
+sidebar:
+  order: 4
+sources:
+  - panel/web/src/components/wp/WordPressTab.tsx
+  - panel/web/src/components/wp/ComponentTable.tsx
+  - panel/web/src/components/wp/BulkRunOptions.tsx
+  - panel/web/src/pages/SiteDetail.tsx
+  - panel/src/routes/wp.ts
+  - panel/src/services/wp.ts
+  - panel/src/services/adminLogin.ts
+  - panel/src/services/wpInventory.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A site's **WordPress** tab manages that site's WordPress: updates, plugins and themes,
+maintenance mode, passwords and WP-CLI. Signing in to its dashboard is a button on the
+**Overview** tab.
+
+<Screenshot name="site-wordpress" alt="A site's WordPress tab with its updates, plugins and themes" />
+
+## Log in to WordPress
+
+On the **Overview** tab, choose **Log in to WordPress**. A new tab opens the site's dashboard,
+signed in as its administrator: the account the panel created, or the oldest administrator if
+that one is gone. The link behind the button works once, within two minutes. If the browser
+blocks the new tab, the panel shows the link instead.
+
+## Update the site
+
+The **Updates** card shows the WordPress version, and how many plugins and themes have updates
+or known vulnerabilities. The numbers come from the last scan, which the panel repeats every
+six hours and after every WordPress job. **Check now** scans the site again.
+
+**Update all** runs every available update in one job, with WordPress last. **Update core**
+updates WordPress alone. When something installed has a known vulnerability, a **Security**
+card lists it. **Fix vulnerable** updates only what a newer release fixes.
+
+Before an update runs, choose **Back up first** and **Check the site answers afterwards**. The
+backup is on by default for a live site. If the site stops answering, the job fails, and the
+backup is on the **Backups** tab.
+
+## Manage plugins and themes
+
+The **Plugins** and **Themes** cards list what is installed, with status, version and update.
+Install a plugin with the wordpress.org search box above the list. Each row offers
+**Update**, **Activate** or **Deactivate**, and **Delete** where they apply. Deleting asks you
+to type `delete`. Must-use plugins and drop-ins are listed but cannot be changed, and the
+active theme and its parent cannot be deleted.
+
+A plugin with a [recipe](/docs/reference/glossary/#recipe) adds a **Recipes** card, which shows
+its license and offers **Check** and **Activate all**.
+
+## Show the maintenance page
+
+In **Maintenance mode**, switch on **Show the maintenance page to visitors**. Visitors see
+WordPress's maintenance page instead of the site. WordPress stops showing it ten minutes after
+it was switched on.
+
+## Reset a password or test mail
+
+In **Reset a user's password**, enter a WordPress username or email and choose **Reset**. The
+new password is shown once. **Send test email** sends a message through the site's own
+`wp_mail()` and says whether WordPress accepted it.
+
+## Run a WP-CLI command
+
+Open **WP-CLI console (advanced)** with **show**. Type a command without the leading `wp`, such
+as `option get siteurl`, and choose **Run**. It runs inside the site's container as
+`www-data`, and stops after 55 seconds.
+
+## Limits
+
+- Changes need the site to be running. A stopped site shows its last scan.
+- The panel does not renew the maintenance page, and **Log in to WordPress** does not work
+  while it shows.
+- A failed update is not rolled back. Restore the backup from the **Backups** tab.
+- Deleting a plugin leaves its database tables and options behind.
+- Longer commands belong in [your own scheduled jobs](/docs/automations/custom-jobs/).
+
+## Related
+
+- [Updates and known vulnerabilities](/docs/plugins/updates/)
+- [Bulk management](/docs/sites/bulk/)
+- [Recipes and pro-plugin licenses](/docs/plugins/recipes/)
+- [Restore and download](/docs/backups/restore/)
+- [Files](/docs/sites/files/)

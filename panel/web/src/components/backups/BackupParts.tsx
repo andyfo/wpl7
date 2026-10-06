@@ -1,3 +1,4 @@
+// @docs backups/delete, backups/offsite, backups/restore
 import { useState } from 'react';
 import { Link } from 'react-router';
 import type { BackupCopyDto, BackupDto } from '../../../../shared/types';

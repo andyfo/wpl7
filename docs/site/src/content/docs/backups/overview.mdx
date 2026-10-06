@@ -1,0 +1,104 @@
+---
+title: How backups work
+description: "What a backup holds, the kinds of backup and how long each is kept, when they are taken, and where to find one."
+sidebar:
+  order: 1
+sources:
+  - panel/src/services/backup.ts
+  - panel/src/services/dbAdmin.ts
+  - panel/src/jobs/handlers/backups.ts
+  - panel/src/jobs/handlers/offsite.ts
+  - panel/src/jobs/schedulers.ts
+  - panel/src/routes/backups.ts
+  - panel/web/src/pages/Backups.tsx
+  - panel/web/src/pages/SiteDetail.tsx
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A backup is a full copy of one site, its files and its database, kept on the server that hosts the
+site. The panel takes backups on a schedule, before risky changes, and whenever you ask. Each
+scheduled run also backs up the panel's own database.
+
+<Screenshot name="backups-all" alt="Backups → All backups listing every site's backups, a deleted site's included" />
+
+## What a backup holds
+
+Each backup is a folder under `<backup location>/<slug>/`, named after the time it was taken, in
+UTC. It holds four files:
+
+| File | Holds |
+|---|---|
+| `db.sql.gz` | The site's database, dumped in one consistent transaction |
+| `files.tar.gz` | The site's `wordpress/` folder, its `config/` folder and `site.json` |
+| `manifest.json` | The site's name, domains, PHP and WordPress versions, language and database |
+| `sha256sums` | Checksums of both archives, checked before every restore |
+
+The panel archives the files while the site keeps running. The four files are enough to rebuild
+the site without the panel, as [Manual recovery](/docs/reference/manual-recovery/) shows.
+
+## Kinds, and how long each is kept
+
+| Kind | Shown as | Taken | Kept |
+|---|---|---|---|
+| **Scheduled** | `scheduled` | By the backup schedule, and by backup or update schedules of your own | The newest 10 per site |
+| **Manual** | `manual` | **Back up now** on the site's **Backups** tab | Until you delete it |
+| **Final, taken on deletion** | `final` | When you delete a site, unless you switch it off | Until you delete it |
+| **Before an update** | `pre_update` | When an update runs with **Back up first** | Until you delete it |
+| **Before a restore** | `pre_restore` | Before every restore | Until you delete it |
+| **Server move** | `move` | At both ends of a move to another server | Until you delete it |
+| **Panel database** | `panel` | After each scheduled run, of the panel's own database | The newest 10 |
+
+**Keep last N scheduled backups per site** in **Settings → Backups** sets the
+[retention](/docs/reference/glossary/#retention). The nightly housekeeping removes the older ones.
+A scheduled backup with a complete offsite copy gives up its local files instead, and stays listed
+as **remote only**. The other kinds are yours to prune: every bulk update with **Back up first**
+adds one backup per site.
+
+## When backups are taken
+
+**Schedule (cron)** in **Settings → Backups** sets the scheduled run, every day at 03:00 by default,
+on the panel server's clock. Each run backs up every running site, then the panel's own database.
+To leave one site out of that run, switch off **Include this site in the periodic backups** on its
+**Backups** tab. Every other kind is still taken for it.
+
+Pausing **Scheduled backups** under **Automations → Schedules** stops the run for every site.
+Before any backup starts, the panel checks for free space of one and a half times the site's size,
+and the backup fails without it.
+
+## Find a backup
+
+**Backups → All backups** lists every backup on every server, newest first. Filter it by **Site**,
+**Kind** and, with several servers, **Server**. A site's own **Backups** tab lists that site's.
+
+The backups of a deleted site stay. **Deleted sites** above the list names those sites, and their
+rows say **deleted**. Their final backup and every other kind are kept until you delete them, while
+scheduled ones still follow retention. To bring such a site back, create a site with the same name
+on the server its backup is on. Then restore the backup from the new site's **Backups** tab.
+
+## Backups on several servers
+
+A backup stays on the server where it was taken, even after its site moves. A download comes from
+that server, and a restore has to run there. So a backup left behind by a move cannot be restored
+onto the moved site, unless it has an [offsite copy](/docs/backups/offsite/). **Fetch back** then
+brings it onto the site's current server. One offsite destination serves every server: each server
+uploads its own backups.
+
+## Limits
+
+- A backup reads the files while the site serves visitors. A file changed meanwhile may not match
+  the database dump.
+- A stopped site is not backed up on schedule.
+- A backup restores onto a site of the same name only. There is no restore into a new site under
+  another name.
+- The panel's SSH key is not in the panel's own backup. Keep a copy of `/srv/panel/ssh` somewhere
+  else.
+- Only scheduled backups and panel snapshots are pruned. Everything else stays until you delete it.
+
+## Related
+
+- [Restore and download](/docs/backups/restore/)
+- [Backup storage](/docs/backups/storage/)
+- [Offsite copies](/docs/backups/offsite/)
+- [Delete backups](/docs/backups/delete/)
+- [Manual recovery without the panel](/docs/reference/manual-recovery/)

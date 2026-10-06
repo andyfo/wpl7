@@ -1,3 +1,4 @@
+// @docs get-started/first-site, sites/wordpress
 import crypto from 'node:crypto';
 import type { Config } from '../config.js';
 import type { SiteRow } from '../db/schema.js';

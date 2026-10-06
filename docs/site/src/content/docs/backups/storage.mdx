@@ -1,0 +1,77 @@
+---
+title: Backup storage
+description: "See where each server keeps its backups and how full that disk is, and move the backups to another disk."
+sidebar:
+  order: 3
+sources:
+  - panel/web/src/pages/BackupStorage.tsx
+  - panel/web/src/components/StorageModal.tsx
+  - panel/src/services/storage.ts
+  - panel/src/jobs/handlers/storage.ts
+  - panel/shared/backupRoot.ts
+  - deploy/docker-compose.backup-root.yml
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+Each server writes its backups to its own disk, in its backup location: `/srv/backups` unless you
+choose another. **Backups → Storage** shows every server's location, and moves the backups to
+another disk.
+
+<Screenshot name="backups-storage" alt="Backups → Storage with each server's backup location and an offsite destination" />
+
+## See where backups are stored
+
+Under **Where backups are stored**, each server shows its location and how many backups it holds.
+Choose **Storage** beside a server, or **Backup storage** on its page, to open its dialog. It shows
+the disk the location is on, how much is free, and the backups already there. **Disks on this
+server** lists every other filesystem the server has.
+
+## Move backups to another disk
+
+1. Open the server's **Storage** dialog.
+2. Under **Disks on this server**, choose a disk, or type a path under **Location**. The panel
+   checks the path as you type.
+3. Leave the switch that moves the existing backups on, to take them along.
+4. Choose **Apply and move backups**, or **Apply** when there is nothing to move.
+
+On an added server, any valid path works at once. The panel creates the folder and checks that it
+can write there before it keeps the new location.
+
+The **Move backups** job copies each backup, checks its checksums, points the panel at the copy,
+and only then deletes the original. An interrupted move leaves each backup whole, in one place or
+the other, and running it again finishes the job. A backup that another job is using stays where
+it is, and the log names it. New backups go to the new location once the move is done.
+
+## Move them on the panel's own server
+
+The panel runs in a container that sees only the folders it was started with. A new location
+outside them takes two steps on the server, and the dialog shows both. First, add a line such as
+`BACKUP_ROOT=/mnt/data/backups` to `/opt/wpl7/deploy/.env`. Then recreate the panel, which creates
+the folder and mounts it:
+
+```bash
+sudo /opt/wpl7/provision/compose.sh up -d panel
+```
+
+If the server had no location of its own yet, the panel takes `BACKUP_ROOT` as its location when it
+starts. Otherwise, come back to the dialog and apply the new path.
+
+Or mount the new disk at `/srv/backups` and change nothing in the panel. Copy the backups already
+there onto the disk first: once it is mounted over the folder, the files in it are hidden.
+
+## Limits
+
+- A location may not be `/`, a system folder, or inside or around the live data under `/srv`:
+  `sites`, `mysql`, `panel`, `mail`, `traefik` and `plugins`.
+- When the panel takes `BACKUP_ROOT` at start, it moves nothing. Backups taken before stay where
+  they were, listed and restorable, until retention removes them or you delete them.
+- The location of a server the panel cannot reach cannot be changed.
+- Backups stay on their server when a site moves to another one.
+
+## Related
+
+- [How backups work](/docs/backups/overview/)
+- [Offsite copies](/docs/backups/offsite/)
+- [Disk, logs and housekeeping](/docs/servers/resources/)
+- [Configuration](/docs/reference/configuration/)

@@ -17,6 +17,7 @@
  * restart the buckets are rebuilt from the last ten minutes of log, so a restart is no pause
  * for an attacker.
  */
+// @docs security/blocked-addresses
 import { CidrSet, isPrivateIp, parseCidr, visitorKey } from '../../shared/cidr.js';
 import {
   DEFAULT_DETECTION_RULES,

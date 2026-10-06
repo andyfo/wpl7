@@ -15,6 +15,7 @@
  *   on it without running its EXIT trap, and a half-written temporary file would stay behind.
  */
 
+// @docs sites/files
 export const FILE_EXIT = {
   notFound: 10,
   /** A folder where a file was expected, a link where chmod cannot go, and so on. */

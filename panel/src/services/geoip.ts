@@ -1,3 +1,4 @@
+// @docs security/privacy, sites/visitors
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type { Config } from '../config.js';

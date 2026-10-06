@@ -1,3 +1,4 @@
+// @docs automations/custom-jobs, automations/schedules
 import type { ScheduleDto } from '../../../shared/types';
 import { MIN_SCHEDULE_GAP_MS, type ScheduleAction, type ScheduleTarget } from '../../../shared/scheduleActions';
 import { splitRestRoute, WP_REST_MAX_BODY, wpRestRoute } from '../../../shared/schemas';

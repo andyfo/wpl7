@@ -1,3 +1,4 @@
+// @docs sites/files
 import { PassThrough, Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';

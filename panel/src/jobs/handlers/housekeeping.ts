@@ -1,3 +1,4 @@
+// @docs servers/resources
 import { z } from 'zod';
 import type { CoreServices } from '../../services/index.js';
 import { runHousekeeping } from '../../services/housekeeping.js';

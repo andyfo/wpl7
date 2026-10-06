@@ -1,0 +1,84 @@
+---
+title: Delete backups
+description: "Delete one backup, several at once, or all of a site's, and what deleting a site does with its backups."
+sidebar:
+  order: 5
+sources:
+  - panel/src/routes/backups.ts
+  - panel/src/jobs/handlers/backups.ts
+  - panel/src/jobs/handlers/sites.ts
+  - panel/src/services/backup.ts
+  - panel/web/src/pages/Backups.tsx
+  - panel/web/src/lib/backupFilters.ts
+  - panel/web/src/components/backups/BackupParts.tsx
+---
+
+import Since from '~/components/Since.astro';
+
+Deleting a backup removes it everywhere: its files on the server and its offsite copies. A deleted
+backup cannot be brought back, so the panel always asks first.
+
+## Delete one backup
+
+1. Find the backup on the site's **Backups** tab or under **Backups → All backups**.
+2. Choose **Delete**. The dialog says which remote copies go with it.
+3. To free the server's disk but keep the remote copies, switch on **Keep the remote copies**. The
+   backup then stays listed as **remote only**.
+4. Choose **Delete**.
+
+A destination with **Retention is managed by the provider** switched on keeps its copy, and the
+panel says so. If a remote copy cannot be removed, the backup is kept, so nothing stays in a bucket
+without the panel knowing.
+
+## Delete several backups
+
+<Since v="0.3.0-beta.2" /> On **Backups → All backups**, tick the backups to delete. The box at the
+top of the list ticks the whole page. A bar then shows how many are selected. Choose **Delete** on
+it, type `delete`, and confirm.
+
+With a filter on, ticking the whole page also offers **Select all**: every backup the filters match,
+on every page. Set **Kind** to **Before an update**, for example, to clear those out on every site.
+The selection is fixed when you make it, and holds at most 5,000 backups. Without a filter, **Select
+all** is not offered.
+
+## Delete all of a site's backups
+
+<Since v="0.3.0-beta.2" /> On the site's **Backups** tab, choose **Bulk delete**. It opens **Backups →
+All backups** filtered to that site. Tick the page, choose **Select all** if the list runs over
+several pages, then **Delete**. Type the site's name to confirm.
+
+## What a bulk deletion does
+
+<Since v="0.3.0-beta.2" /> One **Delete backups** job works through the selection, oldest first,
+without holding up any server's sites. Each backup goes the way **Delete** takes one. Rows the job
+has not reached yet say **Deleting…**, and cannot be restored, fetched or copied. A backup another
+job is using is left alone, and the job then ends as failed, naming it.
+
+## What deleting a site does with its backups
+
+When you delete a site, **Take a final backup first (kept until you delete it)** is on by default.
+The final backup and the site's other backups stay after the site is gone, under **Deleted sites**
+on **Backups → All backups**. Scheduled ones still follow retention. Deleting the last complete
+backup of a deleted site asks you to type its name.
+
+<Since v="0.3.0-beta.2" /> To take the site's backups along, switch on **Delete its existing backups
+too** as well. Once the site is gone, a **Delete backups** job removes them, remote copies
+included. The final backup is not among them, so with both switches on, the site leaves exactly one
+backup behind. With only the second switch on, nothing of the site is left.
+
+## Limits
+
+- A deleted backup cannot be recovered, from the server or from a destination the panel cleared.
+- A backup cannot be deleted while it is being written or uploaded, or while a job for its site may
+  be reading it.
+- A destination that manages its own retention keeps its copies. Remove them with the provider's
+  tools.
+- Deleting a backup's local files with **Keep the remote copies** leaves it restorable only after
+  **Fetch back**.
+
+## Related
+
+- [How backups work](/docs/backups/overview/)
+- [Offsite copies](/docs/backups/offsite/)
+- [Site settings](/docs/sites/settings/)
+- [Jobs](/docs/automations/jobs/)

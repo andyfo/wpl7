@@ -30,6 +30,8 @@ for a reason; remove one once there is nothing left to watch.
 | [Cloudflare: API tokens as the panel takes them](#cloudflare-api-tokens-as-the-panel-takes-them) | Medium | 2026-10-04 18:36 UTC | Formats and permissions as validated |
 | [Cloudflare's and Jetpack's address lists](#cloudflares-and-jetpacks-address-lists) | Low | 2026-09-30 07:23 UTC | All three answer |
 | [Ubuntu's `nftables.service`](#ubuntus-nftablesservice) | Low | 2026-09-29 | Disabled by default on 26.04 |
+| [The docs site's toolchain and its screenshot image](#the-docs-sites-toolchain-and-its-screenshot-image) | Low | 2026-10-05 12:21 UTC | Starlight 0.42.5, Astro 7.3.5, Playwright 1.63.0, oxipng 10.2.1 are the latest; `braces` advisory has no fix |
+| [The demo world's WordPress and plugin versions](#the-demo-worlds-wordpress-and-plugin-versions) | Medium | 2026-10-06 06:19 UTC | WordPress 7.1.2 and the newest plugins of the demo's date; Contact Form 7 6.2 left out |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -312,3 +314,61 @@ for a reason; remove one once there is nothing left to watch.
 - **Check:** `systemctl is-enabled nftables` on each new Ubuntu release and the cloud images
   people install on.
 - **When it changes:** if a common image enables it, make `setup.sh` handle it rather than warn.
+
+## The docs site's toolchain and its screenshot image
+
+- **Priority:** Low
+- **Last checked:** 2026-10-05 12:21 UTC. `@astrojs/starlight` 0.42.5, `astro` 7.3.5,
+  `@playwright/test` 1.63.0 and oxipng 10.2.1 (2026-09-02) are the latest releases.
+  `npm outdated` also lists newer patch and minor releases of `picomatch`, `tinyglobby`, `yaml`,
+  `@types/node` and `@types/picomatch`. `npm audit` in `docs/site` reports the `braces` advisory
+  (stack exhaustion on deeply nested patterns) through `starlight-llms-txt` → `micromatch`, with
+  no fixed version yet.
+- **The problem:** `docs/site/package.json` pins every package exactly, and the `screenshots` job
+  in `.github/workflows/docs.yml` runs in `mcr.microsoft.com/playwright:v1.63.0-noble`, the image
+  of the same Playwright version. The pin is what makes two runs give the same screenshots, byte
+  for byte; a Playwright in the package that differs from the image fails the job. The job also
+  installs oxipng, which Ubuntu does not package, from its GitHub release, pinned by version and
+  checksum (`OXIPNG_VERSION`, `OXIPNG_SHA256`). Dependabot does not watch `docs/site`, so nothing
+  moves on its own. The `braces` advisory is build-time only and the patterns are the site's own,
+  so nothing reachable from outside uses it.
+- **Check:** `npm outdated` in `docs/site`, and `npm audit` there.
+  `gh release list -R shssoichiro/oxipng --limit 3` for oxipng.
+- **When it changes:** bump Starlight and its plugins together, run `npm run build` and look at a
+  page or two. Bump `@playwright/test` and the image tag in the same change; every screenshot
+  will differ slightly, so run the workflow with **Retake every screenshot** and review the pull
+  request it opens. For oxipng, move `OXIPNG_VERSION` and `OXIPNG_SHA256` together; the checksum
+  is the `sha256` digest of the `x86_64-unknown-linux-gnu` tarball in
+  `gh release view -R shssoichiro/oxipng --json assets`. Read its changelog for changed flags:
+  `shoot.ts` runs it with `-o 4 --strip all`. It is lossless, and the job keeps a file whose
+  pixels did not change, so a new oxipng alone changes no committed screenshot. Once
+  `micromatch` or `braces` ships a fix, update the lockfile.
+
+## The demo world's WordPress and plugin versions
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-06 06:19 UTC. WordPress 7.1.2 (2026-09-22) is the newest release.
+  Every plugin and theme the demo sites run is at its newest release of 2026-10-05, the demo's
+  date, except where a site runs an older one on purpose. Contact Form 7 6.2 came out on
+  2026-10-06 and needs PHP 8.3 and WordPress 7.1, which three demo sites lack, so the demo keeps
+  6.1.7. `check-versions.ts` reports only that.
+- **The problem:** the docs' screenshots come from the demo world (`panel/scripts/demo/`), and it
+  names real versions of WordPress, plugins and themes (`plugins.ts`). Once a newer release is
+  out, a screenshot calls an old version up to date. An older version a demo site runs can also
+  get an advisory, and then a screenshot calls a vulnerable release safe.
+- **What we do about it:** `plugins.ts` holds each version once: `WORDPRESS`, the directory's
+  plugins (`WPORG_PLUGINS`, with their "tested up to"), `VENDOR_RELEASES` for the two premium
+  plugins and the Breakdance theme, and the two default themes in `LATEST`. A site runs the
+  newest release unless it names an older one, which then waits as its update. Older versions
+  are ones wpvulnerability.net has no advisory for. The two sites behind on WordPress run the
+  newest release of an older branch, which wordpress.org calls outdated, not insecure.
+- **Check:** `npx tsx scripts/demo/check-versions.ts` in `panel/`. It lists newer releases on
+  wordpress.org, older versions a site runs that are now insecure or have an advisory, and
+  newest releases that need a newer PHP or WordPress than a site runs. For the three vendor
+  releases it prints where to look; look there by hand.
+- **When it changes:** update the versions in `plugins.ts`. If a release is newer than the demo's
+  date (`DEMO_NOW` in `clock.ts`), move `DEMO_NOW` past it and the date in the demo's README. A
+  release some site cannot run stays out, and Status says why. Run the check again, then
+  `npm run shoot -- --out .screens-local --only site-wordpress,site-updates,sites-bulk,plugins-catalog`
+  in `docs/site` and look at the shots. The `screenshots` job retakes the committed ones on the
+  pull request.

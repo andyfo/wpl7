@@ -7,3 +7,4 @@ written down so they are not reconstructed from memory at the moment they matter
 | | |
 |---|---|
 | [watchlist.md](watchlist.md) | Upstream bugs we work around, versions we pin, services we call: each with a priority, when it was last checked, and what to do when it changes |
+| [docs-site-plan.md](docs-site-plan.md) | The public documentation site (wpl7.com/docs): structure, style, tooling, screenshots, the checks that keep it in step with the code, and the work packages to build it |

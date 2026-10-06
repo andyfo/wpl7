@@ -1,3 +1,4 @@
+// @docs help/troubleshooting, plugins/recipes, sites/domains
 import dns from 'node:dns/promises';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../../db/index.js';

@@ -11,6 +11,7 @@
  * a short-lived container on whichever server holds the backup — so the data never passes
  * through the panel and no server needs anything installed.
  */
+// @docs backups/offsite, reference/manual-recovery
 import { z } from 'zod';
 
 export type FieldKind = 'text' | 'password' | 'select' | 'number' | 'textarea';

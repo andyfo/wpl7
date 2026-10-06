@@ -1,0 +1,110 @@
+---
+title: Settings
+description: "Every Settings tab: defaults for new sites, backups, security, mail, DNS, monitoring and updates."
+sidebar:
+  order: 1
+sources:
+  - panel/web/src/pages/Settings.tsx
+  - panel/web/src/components/settings/DnsTab.tsx
+  - panel/web/src/components/security/SettingsCards.tsx
+  - panel/web/src/components/UpdatesCard.tsx
+  - panel/src/services/settings.ts
+  - panel/src/db/seed.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+import Since from '~/components/Since.astro';
+
+<Since v="0.3.0-beta.2" /> **Settings** holds what applies to the whole panel, in seven tabs. The
+first five are one form. **Save settings** saves the changes on every tab at once, and a dot marks
+a tab with changes not saved yet. **DNS** and **Updates** act at once, with buttons of their own.
+
+On the stable channel, the same settings are cards on one long page, without the DNS tab.
+
+<Screenshot name="settings-sites" alt="Settings → Sites with the site defaults and the container limits" />
+
+## Sites
+
+**Site defaults** prefill the New site wizard: PHP version, language, admin email and, with several
+servers, the server. An API request that leaves out the admin email uses this one too.
+
+**Site container limits** cap each site's CPU, memory and processes. Saved changes reach every site
+at once, without a restart, except lifting the CPU cap, which restarts each site once.
+
+| Limit | Default |
+|---|---|
+| **CPU cores per site** | 2 |
+| **Memory per site (MB)** | 512 |
+| **Processes per site** | 512 |
+
+**FTP & SFTP** allows or stops FTP and SFTP logins on every server, and sets their ports. See
+[FTP and SFTP logins](/docs/sites/ftp-sftp/).
+
+## Backups
+
+**Schedule (cron)** sets when the scheduled backups run, 03:00 by default.
+**Keep last N scheduled backups per site** sets how many stay, 10 by default. The card lists each
+server's backup location, which [Backup storage](/docs/backups/storage/) changes.
+
+## Security
+
+**WordPress updates & security** sets how often every site's plugins, themes and WordPress are read
+again, and whether they are rated against known vulnerabilities. See
+[Updates and known vulnerabilities](/docs/plugins/updates/).
+
+**Malware scans** and **Trusted proxies** are described in [Malware scans](/docs/security/malware-scans/)
+and [Site protection](/docs/security/site-protection/). The fleet's default protection is under
+**Sites → Security**, and blocking under **Servers → Security**.
+
+## Mail
+
+| Setting | Default |
+|---|---|
+| **Keep traffic history for (days)** | 30 |
+| **Flag a site above (messages / hour)** | 200 |
+| **Suspend a site above (messages / hour)** | 1,000 |
+| **Send alerts to** | Empty |
+
+**Send alerts to** is where the panel emails you about suspended mail, malware findings, failing
+offsite copies and new releases. Empty, alerts only go to the panel's log. The mail relay itself is
+set in `deploy/.env`, as [How mail works](/docs/mail/overview/) explains.
+
+## DNS
+
+<Since v="0.3.0-beta.2" /> This tab holds the Cloudflare token and each server's wildcard
+certificate, as [Cloudflare DNS](/docs/integrations/cloudflare/) describes.
+
+## Monitoring
+
+| Setting | Default |
+|---|---|
+| **Uptime check (seconds)** | 60 |
+| **Container stats (seconds)** | 60 |
+| **Disk scan (minutes)** | 30 |
+| **Keep visitor statistics for (days)** | 90 |
+| **Keep visitor addresses for (days)** | 7 |
+
+New intervals apply after a panel restart. Turning off **Record visitor addresses** deletes the
+addresses already stored. See [Visitor statistics](/docs/sites/visitors/).
+
+## Updates
+
+This tab shows the installed version, its channel and the last check, with **Check now** and the
+button that applies a new version. See [Updating WPL7](/docs/panel/updating/).
+
+## Limits
+
+- Settings apply to the whole panel. A site's own PHP version and protection are on its own page.
+- Every admin can change every setting.
+- The panel's domain, the mail relay and other values in `deploy/.env` are not here. See
+  [Configuration](/docs/reference/configuration/).
+- The backup schedule and other values read from `deploy/.env` on the first boot belong to the panel
+  afterwards. Editing the file changes nothing.
+
+## Related
+
+- [Updating WPL7](/docs/panel/updating/)
+- [Cloudflare DNS](/docs/integrations/cloudflare/)
+- [Configuration](/docs/reference/configuration/)
+- [Schedules](/docs/automations/schedules/)
+- [Users](/docs/panel/users/)

@@ -1,3 +1,4 @@
+// @docs security/privacy
 import type { Config } from '../config.js';
 import { AppError, badGateway, notFound } from '../lib/errors.js';
 import type { Logger } from './index.js';

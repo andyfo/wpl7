@@ -1,3 +1,4 @@
+// @docs plugins/catalog
 import { useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';

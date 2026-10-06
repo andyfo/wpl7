@@ -1,0 +1,125 @@
+---
+title: Offsite copies
+description: "Copy every backup to S3, an S3-compatible bucket, SFTP, FTP or WebDAV, optionally encrypted, on a retention of its own, and fetch it back."
+sidebar:
+  order: 4
+sources:
+  - panel/src/services/offsite.ts
+  - panel/src/jobs/handlers/offsite.ts
+  - panel/src/routes/backupDestinations.ts
+  - panel/shared/backupProviders.ts
+  - panel/web/src/pages/BackupStorage.tsx
+  - panel/web/src/components/backups/BackupParts.tsx
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+An [offsite copy](/docs/reference/glossary/#offsite-copy) puts each backup somewhere other than the
+site's server: in a bucket, or on another machine. Once you add a destination, every new backup is
+copied there.
+
+<Screenshot name="backups-storage" alt="Backups → Storage with an encrypted S3-compatible destination and its copy counts" />
+
+## Add a destination
+
+1. On **Backups → Storage**, choose **Add remote destination**.
+2. Enter a **Name**, pick the **Provider** and fill in its fields.
+3. Decide on **Encrypt these backups before uploading** now. Once the destination holds a backup,
+   it cannot be changed.
+4. Under **Existing backups**, choose whether to copy none, the newest of each site, or all.
+5. Choose **Test connection**, then **Add destination**.
+
+| Provider | For |
+|---|---|
+| **Amazon S3** | AWS S3 |
+| **S3-compatible storage** | Backblaze B2, Cloudflare R2, Wasabi, Hetzner Object Storage, DigitalOcean Spaces, Scaleway, MinIO and other S3 services |
+| **SFTP** | Any machine you can log into over SSH. **Host key** pins the server. |
+| **FTP / FTPS** | FTP hosting. Plain FTP sends the password and the backups unencrypted. |
+| **WebDAV** | Nextcloud, ownCloud and other WebDAV servers |
+| **Custom rclone remote** | Any other rclone backend |
+
+**Test connection** lists the destination, writes a test file and deletes it. A key that may not
+delete still passes. For S3, **Path prefix** starts as the panel's domain, so two panels can share a
+bucket.
+
+## How copies are made
+
+Each server uploads its own backups straight to the destination, one at a time, beside its other
+work. rclone checks every copy once it is up. By default, scheduled, manual, final and panel backups
+go, as set under **What gets copied, and for how long**. **Pause** stops a destination, and a site's
+**Copy this site's backups to a remote destination** switch leaves that site out.
+
+## Where copies go
+
+Each copy holds the backup's four files, under the bucket and prefix, or under the **Remote
+directory** for SFTP, FTP and WebDAV:
+
+```text
+my-backups/panel.example.com/northwind-bakery/20261005-030000/
+```
+
+## Encrypt the copies
+
+With encryption on, rclone encrypts each file and its name on your server. Only the bucket and the
+prefix stay readable. When you add the destination, **Save this passphrase now** shows a passphrase
+and a salt. Copy both into a password manager, then choose **I have saved it**. **Passphrase** on
+the destination shows them again later.
+
+:::danger
+If you lose both the passphrase and the panel's database, nobody can read those backups again.
+:::
+
+The setting is fixed once the destination holds a backup, because rclone cannot encrypt stored
+copies again. Add a second destination for the other setting. To set up a bucket again with a pair
+you saved, open **I already have a passphrase for this bucket** and paste both halves.
+
+## Keep copies for longer
+
+**Keep last N scheduled per site** is each destination's own retention: 30 by default, and 0 keeps
+all. On the server, a scheduled backup past local retention that has a complete copy only gives up
+its files, and stays listed as **remote only**. With **Retention is managed by the provider** on,
+the panel deletes nothing there. Pair it with lifecycle rules, Object Lock or a key that cannot
+delete.
+
+## Fetch a copy back
+
+**Fetch back** on a **remote only** backup downloads it onto the site's current server and checks
+its checksums. **Restore** and **Download** then work as usual, also for a backup taken before the
+site moved.
+
+## When a copy fails
+
+A failed copy is tried again after 10 minutes, an hour and 6 hours, then left. **Recent failures**
+on **Backups → Storage** lists it with **Retry**. The address in **Send alerts to**, in **Settings
+→ Mail**, gets one email a day at most per destination.
+
+## The panel's own database
+
+The panel snapshot taken with each scheduled run holds what a fleet is rebuilt from, without the
+panel's SSH key. It is copied like any other backup. [Manual recovery](/docs/reference/manual-recovery/) shows how to
+restore it.
+
+## Remove a destination
+
+**Remove** forgets the destination and leaves its copies in place. **Also delete the copies stored
+there** deletes only the folders the panel wrote, never the whole prefix. Save an encrypted
+destination's passphrase first.
+
+## Limits
+
+- The panel lists only the copies it made. Older backups in a bucket you set up again are read by
+  hand.
+- Removing a destination drops the backups kept only there from the panel's lists. Their files stay.
+- Credentials and the passphrase are stored in the panel's database in plain text. Encryption
+  protects the copies from the provider, not from someone who has the panel.
+- A panel snapshot holds every credential the panel has. Copy it only where you would keep them.
+- A **Custom rclone remote** takes its other settings through the API only. A **Provider** cannot be
+  changed after saving.
+- Copies are checked after upload, never test-restored.
+
+## Related
+
+- [How backups work](/docs/backups/overview/)
+- [Backup storage](/docs/backups/storage/)
+- [Delete backups](/docs/backups/delete/)
+- [Manual recovery without the panel](/docs/reference/manual-recovery/)

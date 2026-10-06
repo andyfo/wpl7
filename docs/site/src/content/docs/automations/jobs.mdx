@@ -1,0 +1,112 @@
+---
+title: Jobs
+description: "Every long task the panel runs is a job: follow its progress, read its log, see who started it, cancel it."
+sidebar:
+  order: 1
+sources:
+  - panel/web/src/pages/Jobs.tsx
+  - panel/web/src/pages/JobDetail.tsx
+  - panel/web/src/components/JobProgress.tsx
+  - panel/web/src/components/JobTriggeredBy.tsx
+  - panel/web/src/lib/jobFilters.ts
+  - panel/src/jobs/worker.ts
+  - panel/src/jobs/lanes.ts
+  - panel/src/jobs/actor.ts
+  - panel/src/routes/jobs.ts
+  - panel/shared/jobTypes.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+import Since from '~/components/Since.astro';
+
+Anything the panel does that takes longer than a page load runs as a
+[job](/docs/reference/glossary/#job): creating a site, a backup, an update, a command. Each job
+keeps a log you can read while it runs, and ends as succeeded, failed or canceled.
+
+<Screenshot name="jobs" alt="Automations → All jobs with running, failed and finished jobs" />
+
+## How jobs run
+
+A site has one active job at a time. A second change to a busy site is refused with
+`409 job_conflict`. Each server also runs one job at a time, so jobs for sites on the same server
+wait for each other. A site move holds both of its servers.
+
+Some work runs in a [lane](/docs/reference/glossary/#lane) of its own, beside the server's other
+jobs:
+
+| Lane | What runs there | At a time |
+|---|---|---|
+| `offsite:<server>` | Offsite copies | One per server |
+| `exec:<server>` | WP-CLI commands, shell commands and REST API requests | One per server |
+| `scan:<server>` | Malware scans and plugin zip checks | One per server |
+| `housekeeping` | The nightly housekeeping | One |
+| `backup-delete` | <Since v="0.3.0-beta.2" /> Deleting several backups at once | One |
+
+## Find a job
+
+Open **Automations → All jobs**. Each row shows the job, its site, a summary, its status, who
+started it and how long it took. The summary masks anything that looks like a password.
+
+- The search box finds `#123` as that job. Other text matches a summary, site, error, job type or
+  job name, so "inventory" finds the scans.
+- The status chips combine, such as **Failed** and **Canceled** together.
+- **Job**, **Site**, **Server**, **Triggered by** and **When** narrow the list further.
+
+The filters are part of the page's address, so you can bookmark a filtered list or share it.
+
+## See who started it
+
+| **Triggered by** | Shown as | Means |
+|---|---|---|
+| **In the panel** | The admin's username | Someone clicked something in the panel |
+| **API** | `API key "deploy-script"` | A request made with that key |
+| **AI apps (MCP)** | `Claude via MCP (approved by sam)` or `API key "deploy-script" via MCP` | An AI app's tool call |
+| **Schedule** | The schedule's name | A schedule fired on its own. **Run now** is credited to whoever pressed it |
+| **System** | Panel | Follow-up work the panel queued itself |
+
+## Follow a job
+
+A job's page shows its **Details**, **What this job does** and, once it ends, its **Result**. The
+**Log** follows the job live. Show only **Warnings & errors**, search it, **Copy** it or choose
+**Download .log**. On a failed job, **Show in log** jumps to the first error.
+
+<Screenshot name="job-detail" alt="A job's page with its details, result and log" />
+
+## Cancel a job
+
+Choose **Cancel job**. A queued job is canceled at once. A running job stops at its next safe step,
+once you confirm with **Cancel the job**. Most jobs keep what they already did. Creating a site and
+moving one undo their own steps instead.
+
+A WP-CLI command, shell command or REST API request that has started cannot be interrupted. It runs
+to its end or to its time limit.
+
+## Stuck and timed-out jobs
+
+Each job type has a time limit, listed in [Job types](/docs/reference/job-types/). A job past its
+limit fails with "Job timed out after" a number of minutes, and stops at its next safe step.
+
+A job that was running when the panel restarted fails with "Interrupted by panel restart". A site
+it was creating or deleting is marked as an error. Run the job again.
+
+## Keep finished jobs
+
+Finished jobs are kept for 90 days by default. Then the nightly
+[housekeeping](/docs/reference/glossary/#housekeeping) removes them with their logs. Change the
+period under the list, at **Finished jobs are kept for**.
+
+## Limits
+
+- A long job delays the other jobs on its server.
+- The panel runs at most eight jobs at the same time, across all servers.
+- A job stopped partway, by a cancel or a timeout, can leave its work half done. Its log shows how
+  far it got.
+- An interrupted job is not resumed.
+
+## Related
+
+- [Schedules](/docs/automations/schedules/)
+- [Your own scheduled jobs](/docs/automations/custom-jobs/)
+- [Job types](/docs/reference/job-types/)
+- [The REST API](/docs/integrations/api/)
+- [Troubleshooting](/docs/help/troubleshooting/)

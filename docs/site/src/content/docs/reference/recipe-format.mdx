@@ -1,0 +1,223 @@
+---
+title: Recipe format
+description: "Write a recipe for a plugin: the JSON, its inputs, when it runs, and how the catalog is signed."
+sidebar:
+  order: 6
+sources:
+  - panel/shared/recipes.ts
+  - "panel/catalog/**"
+  - panel/scripts/catalog-schema.ts
+  - panel/src/services/licenses.ts
+  - panel/src/services/catalog.ts
+  - panel/src/services/catalogSync.ts
+---
+
+A [recipe](/docs/reference/glossary/#recipe) is one JSON file for one plugin. It says what the
+operator enters once, such as a license key, and which commands run on every site with that
+plugin. This page is the format. Using recipes is on
+[Recipes and pro-plugin licenses](/docs/plugins/recipes/).
+
+## A recipe file
+
+```json
+{
+  "type": "plugin-recipe",
+  "typeVersion": 1,
+  "id": "example-pro",
+  "name": "Example Pro",
+  "plugin": "example-pro",
+  "version": "1.0",
+  "vendorUrl": "https://vendor.example/",
+  "description": "Activates your Example Pro license on every new site and releases it when the site is deleted.",
+  "inputs": [
+    { "id": "email", "label": "Account email", "secret": false, "hint": "The email you sign in to vendor.example with." },
+    { "id": "key", "label": "License key", "constant": "EXAMPLE_PRO_LICENSE", "hint": "Your key from vendor.example → Licenses." }
+  ],
+  "hooks": {
+    "afterInstall": [
+      { "run": "wp", "label": "Activating the Example Pro license", "args": ["example", "license", "activate", "{{inputs.key}}", "--email={{inputs.email}}"], "expect": "activated" },
+      { "run": "wp", "label": "Updating to the current release", "args": ["plugin", "update", "{{plugin}}"], "optional": true }
+    ],
+    "afterUrlChange": [
+      { "run": "wp", "args": ["example", "license", "activate", "{{inputs.key}}", "--email={{inputs.email}}"], "expect": "activated" }
+    ],
+    "beforeRemove": [
+      { "run": "wp", "args": ["example", "license", "deactivate"], "optional": true }
+    ],
+    "verify": [
+      { "run": "php", "label": "Checking the Example Pro license", "code": "if (example_license_is_active()) { echo \"OK\\n\"; exit(0); }\nfwrite(STDERR, \"not active\\n\");\nexit(1);", "expect": "^OK" }
+    ]
+  }
+}
+```
+
+The two recipes that ship with the panel, ACF PRO and Breakdance, are in
+`panel/catalog/recipes/` and make good starting points.
+
+## Top-level fields
+
+| Field | Required | Rules | What it is |
+|---|---|---|---|
+| `type` | yes | `plugin-recipe` | The kind of catalog entry |
+| `typeVersion` | yes | `1` | The version of this format |
+| `id` | yes | 2 to 61 lowercase letters, digits and dashes, starting with a letter or digit | The recipe's identity. Entered values are filed under it, so never change it once people use it |
+| `name` | yes | 1 to 100 characters | Shown on the Recipes page and in job logs |
+| `plugin` | yes | The plugin's folder name, as `wp plugin list` shows it | The plugin the recipe applies to |
+| `version` | no | Starts with a digit, up to 20 characters | For people. Raise it when the recipe changes |
+| `description` | no | Up to 500 characters | One plain sentence on what the recipe does for the operator. Without it, the panel makes one from the hooks |
+| `vendorUrl` | no | A URL | Links the recipe's name to the vendor |
+| `inputs` | no | Up to 10 | What the operator enters. See below |
+| `hooks` | no | Four lists of up to 20 steps each | What runs, and when. See below |
+
+A field the format does not know makes the recipe invalid.
+
+## Inputs
+
+Each input is one field on **Plugins → Recipes**, in the recipe's order.
+
+| Field | Required | Rules | What it does |
+|---|---|---|---|
+| `id` | yes | A lowercase letter, then up to 31 lowercase letters, digits and `_` | How steps refer to the value, and what it is filed under |
+| `label` | yes | 1 to 60 characters | The field's label |
+| `hint` | no | Up to 300 characters | Where to find the value. Shown in the empty field |
+| `secret` | no | `true` by default | A secret value is masked, never returned by the API and hidden in job logs. Set `false` for something like an account email |
+| `constant` | no | 3 to 61 uppercase letters, digits and `_`, starting with a letter | A PHP constant the panel defines with the value on each site |
+
+Ids and constants must be unique within a recipe. A recipe runs only once every input has a
+value. A recipe with no inputs still runs its steps, for a plugin that needs a cache cleared
+after a URL change, for example.
+
+Constants go into a must-use plugin, `wp-content/mu-plugins/wpl7-licenses.php`. The panel
+writes it only for plugins that are on the site and only when every input is entered. It
+rewrites the file when values change, and removes it when no plugin on the site needs it.
+
+## Hooks
+
+| Hook | When it runs |
+|---|---|
+| `afterInstall` | When a site is created, right after its plugins are installed. Also on **Activate** and **Activate all** on a site's **WordPress** tab |
+| `afterUrlChange` | After the site's URL changed: going live, changing domains, a restore under another address, a move to a server with another dev domain. It runs after the panel's own `wp search-replace` |
+| `beforeRemove` | Before a site is deleted, to release the activation |
+| `verify` | After `afterInstall` or `afterUrlChange` ran its steps without failing, and on **Check** on the site's **WordPress** tab. It decides the status the site shows |
+
+A recipe runs on a site only when it is installed and enabled on **Plugins → Recipes** and its
+plugin is on the site. The plugin must be active, except for `beforeRemove`. Every hook may be
+empty. Without `verify` steps, a hook that ran through counts as active.
+
+## Steps
+
+| Field | Applies to | What it does |
+|---|---|---|
+| `run` | all | `wp` for a WP-CLI command, `php` for PHP code |
+| `args` | `wp` | 1 to 30 arguments, passed as they are with no shell, up to 500 characters each |
+| `code` | `php` | PHP without an opening tag, run through `wp eval`. Exit with a non-zero code to fail |
+| `label` | all | Shown in the job log while the step runs, instead of the command. Up to 120 characters |
+| `optional` | all | `true` makes a failure a warning, and the run goes on |
+| `expect` | all | A JavaScript regular expression, multiline, that the step's output must match. Up to 300 characters |
+
+Use `expect` whenever a vendor's command exits with 0 whatever it concludes. A pattern that does
+not compile makes the recipe invalid.
+
+The values a step can use:
+
+| In `args` | In `php` code | Value |
+|---|---|---|
+| `{{inputs.<id>}}` | `WPL7_INPUT_<ID>` | What the operator entered for that input. The variable name has the id in capitals |
+| `{{plugin}}` | | The recipe's `plugin` |
+| `{{url}}` | `WPL7_SITE_URL` | The site's address |
+| `{{oldUrl}}`, `{{newUrl}}` | `WPL7_OLD_URL`, `WPL7_NEW_URL` | The address before and after, in `afterUrlChange` only |
+
+PHP code reads the values as environment variables, so a key is never pasted into code. A
+placeholder the panel cannot fill, such as a typo or an input the recipe does not declare, makes
+the recipe invalid when it loads.
+
+## How a run ends
+
+Steps run in order, inside the site's container, as the site's user. The first failing step
+that is not optional ends the run for that plugin, and its last lines of output become the
+message. A step that does not finish within three minutes has failed.
+
+| Status on the site | Meaning |
+|---|---|
+| **active** | The run, or the check after it, found the license active |
+| **failed** | A step or the check failed. The message says which |
+| **plugin inactive** | The plugin is installed but not active, so nothing ran |
+| **not set up** | An input has no value yet |
+| **released** | `beforeRemove` ran |
+| **not checked** | The recipe has never run on this site |
+
+A failing recipe never fails the job around it. Creating a site or going live finishes with a
+warning in the log. The job started by **Activate** or **Check** does fail, so it shows red on
+the Jobs page.
+
+## Try a recipe
+
+1. On **Plugins → Recipes**, choose **Add local recipe**, paste the JSON and choose **Add recipe**.
+   The panel checks it against the format and says what is wrong.
+2. Fill in its inputs on the same page.
+3. Install the plugin on a test site, open the site's **WordPress** tab and choose **Activate**
+   in the **Recipes** card.
+4. Read the job log.
+
+A local recipe is installed and enabled at once, and no catalog fetch ever changes it. It
+replaces any catalog or bundled recipe for the same plugin, and each plugin can have one local
+recipe. **Copy JSON** on an installed recipe gives you a copy to change. Uninstalling a local
+recipe deletes it, together with what was entered for it.
+
+To share a recipe with every panel, add it as `recipes/<id>.json` in the
+[catalog repository](https://github.com/andyfo/wpl7-catalog) through a pull request. The
+repository checks it against a JSON Schema printed from the panel's own format:
+
+```bash
+cd panel && npm run catalog:schema
+```
+
+## The catalog and its signature
+
+The panel knows recipes from three layers. A higher layer wins for the same plugin.
+
+| Layer | Where it comes from |
+|---|---|
+| Local | Added on **Plugins → Recipes** |
+| Catalog | The public catalog's last verified copy, kept in the panel's database |
+| Bundled | The files that ship with the panel version |
+
+The [catalog](/docs/reference/glossary/#catalog) is published at
+`https://andyfo.github.io/wpl7-catalog/v1/index.json`, with its signature beside it in
+`index.json.sig`. The panel fetches it every hour, 30 seconds after it starts, and when you
+choose **Fetch now** on the Recipes page.
+
+| File | Content |
+|---|---|
+| `index.json` | `format` is `wpl7-catalog`, `formatVersion` is `1`, then `generatedAt`, an optional `source` and `commit`, and `entries`, a list of recipes |
+| `index.json.sig` | `alg` is `ed25519`, then `keyId`, and `signature` in base64 |
+
+The signature covers the exact bytes of `index.json`. The panel checks it against the public
+key it carries before it reads anything in the index. An index that fails the check, cannot be
+reached or cannot be parsed is reported on the Recipes page, and the last verified copy stays
+in use. Entries of a type the panel does not know are counted as needing a newer panel, and
+the rest still load.
+
+| Variable in `deploy/.env` | What it does |
+|---|---|
+| `WPL7_CATALOG_URL` | Empty for the official catalog. `off` uses only the bundled recipes and fetches nothing. Any other URL is a fork's index |
+| `WPL7_CATALOG_PUBLIC_KEY` | The fork's Ed25519 public key, as PEM or its base64 body. Empty for the official key |
+
+## Limits
+
+- A step runs inside the site's container as `www-data`, so it can do what a site administrator
+  could do and nothing on the host.
+- Site administrators can read a license key once its plugin is on the site. That is what
+  licensing a site means.
+- Job logs hide a secret only where a step prints it exactly. A vendor's command that prints it
+  changed, such as in capitals or cut short, can reveal it. Callers with Read only access never
+  see a failed step's output.
+- Each plugin has one recipe at a time.
+
+## Related
+
+- [Recipes and pro-plugin licenses](/docs/plugins/recipes/)
+- [The plugin catalog](/docs/plugins/catalog/)
+- [Manage WordPress](/docs/sites/wordpress/)
+- [API reference](/docs/integrations/api-reference/)
+- [Configuration](/docs/reference/configuration/)

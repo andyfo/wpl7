@@ -1,0 +1,98 @@
+---
+title: Security in WPL7
+description: "The three layers that protect your sites, what one compromised site can and cannot reach, and why the panel itself is root-equivalent."
+sidebar:
+  order: 1
+sources:
+  - panel/shared/security.ts
+  - panel/src/services/security.ts
+  - panel/src/services/siteHardening.ts
+  - panel/src/services/siteNetwork.ts
+  - panel/src/services/docker.ts
+  - panel/src/services/mailAuth.ts
+  - provision/setup.sh
+---
+
+import UiPath from '~/components/UiPath.astro';
+
+WordPress sites get hacked. WPL7 works to keep attacks out, to notice the ones that got in, and to
+make sure one compromised site stays one compromised site. This page explains how, and says plainly
+what is not contained.
+
+## Three layers
+
+| Layer | What it does | Where |
+|---|---|---|
+| [Site protection](/docs/security/site-protection/) | Refuses requests no visitor makes, limits logins and request rates, and hardens each site from inside its container | **Sites → Security**, and each site's **Security** tab |
+| [Blocked addresses](/docs/security/blocked-addresses/) | Notices an address attacking your sites and blocks it on every server, at the firewall | **Servers → Security** |
+| [Malware scans](/docs/security/malware-scans/) | Holds every site's files to wordpress.org's published checksums, looks for known malware in the rest, and can move it out | Each site's **Security** tab |
+
+All three are on by default: every site gets **Standard** protection, automatic blocking is on, and
+every site is scanned once a day, reporting rather than moving anything. Each one has a switch that
+takes it away within a minute: the level **Off**, **Automatic blocking** set to **Off**,
+**Blocked addresses reach the servers** switched off, and **Scan every site** switched off.
+
+Three rules hold throughout:
+
+1. Fail open. A rule that cannot be applied leaves the site served as it was before. Nothing here
+   can take a site offline by failing, and the site's **Security** tab says **Not protected as set.**
+   with the reason. What a server already enforces stays enforced while the panel is down.
+2. Nothing the site can write switches a protection off. Rules live in Traefik and in files
+   mounted read-only into the site's container, never in `.htaccess`.
+3. Nothing running as root on the host follows a link inside a site's folder. Scans, quarantine
+   and the **Files** tab work in containers, as the site's own user, with only that site's files.
+
+## What one compromised site can reach
+
+A site container:
+
+- is on its own network with Traefik, the relay and MariaDB, and nothing else. It cannot open a
+  connection to another site, not even by container name, or to the panel. Outbound internet comes
+  from a shared network with traffic between containers disabled.
+- runs without `NET_RAW`, so it cannot forge packets or poison ARP caches on the networks it shares,
+  and with `no-new-privileges`, so setuid programs are not an escalation path.
+- is capped at 2 CPU cores, 512 MB and 512 processes by default, under **Site container limits** in
+  <UiPath href="/docs/panel/settings/">Settings → Sites</UiPath>. A miner or a fork bomb slows only
+  its own site.
+- has its own mail login, and the relay refuses any sender domain that belongs to another site. It
+  cannot send DKIM-signed phishing as one of your other customers.
+- cannot turn the panel against its neighbors through its files. A link it plants resolves inside
+  its own container, never on the host, where the panel is root. FTP and SFTP logins reach it through
+  a file server that has only that site's folder.
+- is stopped from sending mail at all once it crosses the abuse threshold, and you get an email.
+
+## What is not contained
+
+What a site still shares with its neighbors: the kernel, the MariaDB instance, with its own database
+and user within it, the server's disk and the server's IP reputation. A container escape or a
+MariaDB compromise is still fleet-level on that server.
+
+Other servers hold no credentials for each other, so nothing spreads between them except over the
+public internet. The panel's own server is the exception: the panel keeps the fleet's SSH key there,
+and that key opens every machine you own.
+
+The settings inside a container guard against a stolen admin login, not against code already running
+in the site. A scan reads files, not the database. Containers built before a protection existed keep
+the old one until they are recreated, which the panel does once, by itself.
+
+## The panel is root-equivalent
+
+The panel holds the Docker socket and an SSH key for root on its own host: it is root-equivalent on
+its own server by design. Its SSH key gives it the same power on every server it manages. Whoever can
+sign in to the panel can do anything those machines can.
+
+- Treat every admin account and every Full API key like a root SSH key. There are no lesser roles
+  for people.
+- Give each person their own login, and turn on two-factor authentication.
+- The **Terminal** is a root shell behind the panel's sign-in.
+- AI apps can connect only once you switch MCP on, and only with the level an admin approves.
+- Put the panel behind whatever you would put a root shell behind.
+
+## Related
+
+- [Site protection](/docs/security/site-protection/)
+- [Blocked addresses](/docs/security/blocked-addresses/)
+- [Malware scans](/docs/security/malware-scans/)
+- [Accounts and access to the panel](/docs/security/accounts/)
+- [What leaves your server](/docs/security/privacy/)
+- [Architecture](/docs/reference/architecture/)

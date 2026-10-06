@@ -1,0 +1,114 @@
+---
+title: Recipes and pro-plugin licenses
+description: "Enter a premium plugin's license key once, and every site with the plugin gets it activated, moved when its address changes, and released when it is deleted."
+sidebar:
+  order: 4
+sources:
+  - panel/web/src/pages/Recipes.tsx
+  - panel/web/src/components/wp/SiteRecipesCard.tsx
+  - panel/src/routes/recipes.ts
+  - panel/src/services/licenses.ts
+  - panel/src/services/catalog.ts
+  - panel/src/services/catalogSync.ts
+  - panel/src/jobs/handlers/shared.ts
+  - "panel/catalog/**"
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A [recipe](/docs/reference/glossary/#recipe) does what a premium plugin needs beyond its files: it
+activates the license for the site's address, does it again when the address changes, and releases
+it when the site is deleted. **Plugins → Recipes** is where you install recipes and enter their
+keys.
+
+<Screenshot name="recipes" alt="Plugins → Recipes with the ACF PRO and Breakdance recipes installed" />
+
+## Set up a recipe
+
+1. Open **Plugins → Recipes**. Under **Recipe catalog**, find the plugin and choose **Install**.
+2. Under **Installed recipes**, enter what the recipe asks for, usually the license key, and
+   choose **Save**.
+3. For sites that already have the plugin, open each site's **WordPress** tab and choose **Activate
+   all** in its **Recipes** card. New sites get the license on their own.
+
+## When a recipe runs
+
+| When | What the recipe does |
+|---|---|
+| A site is created, right after its plugins are installed | Activates the license, then checks it |
+| The site's address changes: going live, a new primary domain, a restore or a move under another address | Activates it again for the new address |
+| The site is deleted | Releases the activation |
+| **Activate all**, **Activate** or **Check** on the site's **WordPress** tab | Activates, or only checks, on demand |
+
+A recipe runs only where its plugin is installed and active, once every value it asks for is
+entered. A failure never stops the job it runs in, such as creating the site. It is a warning in
+that job's log, and **failed** on the site.
+
+## The bundled recipes
+
+| Plugin | Activation | After an address change |
+|---|---|---|
+| ACF PRO, `advanced-custom-fields-pro` | Defines `ACF_PRO_LICENSE` on the site and runs ACF's own license check | The same check, for the new address |
+| Breakdance, `breakdance` | `wp breakdance license` with your key | `wp breakdance replace_url` and `wp breakdance clear_cache`, then the license again |
+
+Their install step then updates the plugin to the vendor's current release. If that update fails,
+it is only a warning.
+
+## The signed recipe catalog
+
+The same recipes, and any added or corrected since, are published as a public
+[catalog](https://github.com/andyfo/wpl7-catalog). The panel fetches it every hour and checks its
+signature before reading it. An installed recipe follows the catalog's changes without a panel
+update. A failed fetch keeps the previous copy, and **Fetch now** fetches at once.
+
+Each fetch is two requests to GitHub Pages, carrying nothing about your sites. To stop them and use
+the bundled recipes only, set `WPL7_CATALOG_URL=off` in `deploy/.env` and run `setup.sh` again.
+
+## Add a local recipe
+
+For a plugin without a recipe, choose **Add local recipe** and paste one in the catalog's format.
+It is installed and enabled at once, and no fetch ever changes it. A local recipe with a catalog
+recipe's id replaces it: start from **Copy JSON** on the installed one. [Recipe
+format](/docs/reference/recipe-format/) explains how to write one.
+
+## Where the keys live
+
+The panel stores keys in its database as you entered them, and shows a key again as its last four
+characters at most. A key the recipe hands over as a PHP constant goes into
+`wp-content/mu-plugins/wpl7-licenses.php`, on sites that have that plugin only. Other recipes pass
+the key to the vendor's command. Job logs hide a key that a command prints back unchanged.
+
+## Read a site's status
+
+The **Recipes** card on a site's **WordPress** tab shows one word per recipe:
+
+| Status | Means |
+|---|---|
+| **active** | The last run or check found the license active, for the address shown |
+| **failed** | A step, or the check after it, failed. The message says which. |
+| **plugin inactive** | The plugin is installed but switched off, so nothing was done |
+| **not set up** | A value is missing. **Set up** leads to it. |
+| **released** | The activation was released while the site was being deleted |
+| **not checked** | The recipe has not run on this site yet |
+
+A job started from this card fails when a recipe fails, so the Jobs list shows it.
+
+## Limits
+
+- Every administrator of a site with the plugin can read its key. That is what licensing a site
+  means.
+- Release on delete is best effort. If the vendor cannot be reached, the activation stays.
+- Whether a dev address counts against a license is the vendor's rule.
+- Disabling or uninstalling a recipe leaves what it already activated. Its constants leave a site
+  at that site's next recipe run.
+- A command that prints a key in another form, cut short or in capitals, shows it in the job log.
+- A recipe step runs inside the site's container. It can do what a site administrator can, and
+  nothing on the server.
+
+## Related
+
+- [Recipe format](/docs/reference/recipe-format/)
+- [The plugin catalog](/docs/plugins/catalog/)
+- [Create a site](/docs/sites/create/)
+- [Domains and going live](/docs/sites/domains/)
+- [Manage WordPress](/docs/sites/wordpress/)

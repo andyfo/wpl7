@@ -3,6 +3,7 @@
  * download is: what an install that has never fetched them uses (services/proxyRanges.ts, which
  * names the lists). Written by `npx tsx scripts/ai-ranges.ts` - not by hand.
  */
+// @docs security/privacy
 import type { AiSource } from './proxyRanges.js';
 
 export const AI_BUILTIN: Record<AiSource, string[]> = {

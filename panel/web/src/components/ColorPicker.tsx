@@ -1,3 +1,4 @@
+// @docs panel/appearance
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
 

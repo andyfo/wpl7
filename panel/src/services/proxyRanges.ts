@@ -12,6 +12,7 @@
  * believing a forged visitor address from whoever holds it, and a wrong range for an AI
  * company means never blocking whoever holds it.
  */
+// @docs security/blocked-addresses, security/privacy
 import { CidrSet, isPrivateIp, parseCidr, WIDEST_PREFIX, type IpFamily } from '../../shared/cidr.js';
 import { CLOUDFLARE, DEFAULT_TRUSTED_PROXIES, type TrustedProxiesSetting } from '../../shared/security.js';
 import type { TrustedProxy } from '../lib/clientIp.js';

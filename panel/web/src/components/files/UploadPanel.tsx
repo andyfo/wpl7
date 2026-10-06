@@ -1,3 +1,4 @@
+// @docs sites/files
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FILE_LIMITS, joinSiteFilePath, newFileNameProblem } from '../../../../shared/siteFilePath';
 import { isAborted, uploadFile } from '../../api/files';

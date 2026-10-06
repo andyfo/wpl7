@@ -1,0 +1,132 @@
+---
+title: Quick start
+description: From a fresh server to your first WordPress site in about ten minutes.
+sidebar:
+  order: 1
+sources:
+  - install.sh
+  - provision/setup.sh
+  - deploy/.env.example
+  - panel/src/db/seed.ts
+  - panel/src/index.ts
+  - panel/web/src/pages/NewSite.tsx
+  - panel/web/src/pages/UserDetail.tsx
+  - panel/web/src/pages/Settings.tsx
+  - panel/web/src/components/settings/DnsTab.tsx
+---
+
+import ManagedInstall from '~/components/ManagedInstall.astro';
+import Since from '~/components/Since.astro';
+import { Steps } from '@astrojs/starlight/components';
+
+This page takes a fresh server to a running panel and a first WordPress site. Most of the ten
+minutes is the installer downloading images.
+
+## What you need
+
+- A fresh Ubuntu 26.04 server on x86-64, with root access and at least 2 GB of memory.
+- Ports 80 and 443 open to the internet, in your provider's firewall too.
+- A domain whose DNS you can edit. The steps below use `example.com`.
+
+WPL7 takes the whole machine. The installer sets up Docker and turns on a firewall.
+
+<ManagedInstall />
+
+## Install and create a site
+
+<Steps>
+
+1. Point DNS at the server: create two `A` records with its public IP address.
+
+   | Name | Value |
+   |---|---|
+   | `panel.example.com` | the server's IP address |
+   | `*.dev.example.com` | the server's IP address |
+
+   Wait until both resolve. This command prints the address twice once they do:
+
+   ```bash
+   dig +short panel.example.com test.dev.example.com
+   ```
+
+2. Install. Run this on the server, with your own domains and email address:
+
+   ```bash
+   curl -fsSL https://github.com/andyfo/wpl7/releases/latest/download/install.sh | sudo bash -s -- \
+     --panel-domain=panel.example.com \
+     --dev-domain=dev.example.com \
+     --acme-email=you@example.com
+   ```
+
+   Let's Encrypt writes to the `--acme-email` address about your certificates. The run ends
+   with `WPL7 is up.` and the panel's address.
+
+3. Sign in. Give the panel a minute to start, then read the password it generated:
+
+   ```bash
+   sudo docker logs wpl7-panel | grep -A2 'First boot'
+   ```
+
+   Open `https://panel.example.com` and sign in as `admin`, with the password from the
+   `Generated password:` line. Then choose your name at the foot of the sidebar and use
+   **Change password**.
+
+4. Create a site. Open **Sites** and choose **New site**. Enter a **Site title** and choose
+   **Continue**. On the **WordPress** step, fill in **Admin email**. Choose **Continue** twice,
+   then **Create site**.
+
+   When the job is done, copy the WordPress admin password. The panel shows it only this once.
+   The site answers at `<slug>.dev.example.com`. Choose **Open site page**, then **Log in to
+   WordPress** to open its dashboard.
+
+5. Before real traffic, set up three things.
+
+   - A mail relay. Mail goes out directly by default, and many providers block that or
+     file it as spam. Send it through an SMTP account instead. Open the configuration file:
+
+     ```bash
+     sudo nano /opt/wpl7/deploy/.env
+     ```
+
+     Fill in the three lines that are already there, empty, with your provider's details:
+
+     ```ini
+     SMTP_RELAYHOST=[smtp.example.com]:587
+     SMTP_USERNAME=wpl7@example.com
+     SMTP_PASSWORD=the-account-password
+     ```
+
+     Save the file, then apply it:
+
+     ```bash
+     sudo /opt/wpl7/provision/setup.sh
+     ```
+
+   - <Since v="0.3.0-beta.2" /> A [Cloudflare token](/docs/integrations/cloudflare/). If your domains are on Cloudflare, save
+     an API token under **Settings → DNS**. Give it **Zone → Zone → Read** and
+     **Zone → DNS → Edit**. The panel then writes DNS records for you, and dev sites can share
+     one wildcard certificate.
+
+   - An alert address. Under **Settings → Mail**, fill in **Send alerts to** and choose
+     **Save settings**. New releases, suspended mail, malware findings and failing offsite
+     copies are emailed there, through the relay above.
+
+</Steps>
+
+## Limits
+
+- The installer is for Ubuntu 26.04 on x86-64. The images are not built for ARM.
+- Piped into `bash`, the installer asks nothing. Every answer is a flag, and the panel
+  generates the admin password.
+- The generated password is printed once, on the first boot. Editing `PANEL_ADMIN_PASSWORD`
+  in `.env` afterwards changes nothing.
+- Without a Cloudflare token, each dev site gets a certificate of its own. Let's Encrypt
+  limits how many certificates one domain gets per week.
+
+## Related
+
+- [Installation](/docs/get-started/installation/)
+- [Your first site](/docs/get-started/first-site/)
+- [How WPL7 works](/docs/get-started/how-it-works/)
+- [DNS records](/docs/integrations/dns/)
+- [How mail works](/docs/mail/overview/)

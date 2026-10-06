@@ -1,3 +1,4 @@
+// @docs get-started/installation, get-started/quick-start
 import fsp from 'node:fs/promises';
 import { eq } from 'drizzle-orm';
 import { loadConfig } from './config.js';

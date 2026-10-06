@@ -1,3 +1,4 @@
+// @docs plugins/updates
 import type { FeedCoverage, VulnSeverity } from '../../../../shared/types';
 
 const SEVERITY_STYLES: Record<VulnSeverity, string> = {

@@ -1,3 +1,4 @@
+// @docs security/site-protection
 import { useState, type ReactNode } from 'react';
 import { SCAN_ON_FINDING_INFO, SECURITY_LEVEL_INFO, blockedRuleLabel, type CustomRule } from '../../../../shared/security';
 import type { SiteSecurityDto } from '../../../../shared/types';

@@ -1,0 +1,69 @@
+---
+title: Third-party components
+description: "The software WPL7 runs but does not include, with versions and licenses."
+sidebar:
+  order: 9
+sources:
+  - "deploy/docker-compose*.yml"
+  - "deploy/sftpgo-image/**"
+  - "deploy/wordpress-image/**"
+  - panel/src/services/scanEngines.ts
+  - panel/src/config.ts
+  - panel/Dockerfile
+  - "panel/web/src/fonts/**"
+---
+
+WPL7 is the panel and the scripts around it. Everything else on a server is someone else's
+software, run as its project publishes it. The versions below are the ones in the repository
+when these pages were built, read from the files in the last column.
+
+## Components
+
+| Component | What WPL7 uses it for | Version | License | Set in |
+|---|---|---|---|---|
+| Traefik | Routing, certificates, site protection and the access log | `traefik:v3.7`, the latest 3.7 patch release | MIT | `deploy/docker-compose.yml` |
+| MariaDB | One database server per server, with a database and a user per site | `mariadb:11.4`, the latest 11.4 patch release | GPL-2.0 | `deploy/docker-compose.yml`, `panel/src/config.ts` |
+| Postfix, in the `boky/postfix` image | The mail [relay](/docs/reference/glossary/#relay) on each server | `boky/postfix:latest`, not pinned | Postfix: EPL-2.0 or IPL-1.0. The image: MIT | `deploy/docker-compose.yml` |
+| OpenDKIM, in the `instrumentisto/opendkim` image | Signs outgoing mail with [DKIM](/docs/reference/glossary/#dkim) | `instrumentisto/opendkim:latest`, not pinned | OpenDKIM: BSD-3-Clause. The image: Blue Oak Model License 1.0.0 | `deploy/docker-compose.yml` |
+| SFTPGo | FTP and SFTP logins | 2.7.6 with one WPL7 patch, as `wpl7-sftpgo:2.7.6-wpl7.1` | AGPL-3.0 | `deploy/sftpgo-image/Dockerfile`, `deploy/sftpgo-image/VERSION` |
+| AMWScan, the PHP Antimalware Scanner | Malware scans | 0.21.12, pinned by digest | GPL-3.0 | `panel/src/services/scanEngines.ts` |
+| rclone | Offsite copies of backups | `rclone/rclone:1.71` | MIT | `panel/src/config.ts` |
+| The official WordPress image | The base of every site image, with PHP and Apache | `wordpress:php8.2-apache` to `wordpress:php8.5-apache` | WordPress: GPL-2.0-or-later. The image: GPL-2.0 | `deploy/wordpress-image/Dockerfile` |
+| WP-CLI | WordPress commands inside each site | The latest stable release when the site image is built | MIT | `deploy/wordpress-image/Dockerfile` |
+| msmtp | Hands PHP's `mail()` to the relay | Debian's package, in the site image | GPL-3.0 | `deploy/wordpress-image/Dockerfile` |
+| Node.js | Runs the panel | 22, from `node:22-bookworm-slim` | MIT | `panel/Dockerfile` |
+| Inter | The panel's typeface, served by the panel itself | 4.001 | SIL Open Font License 1.1 | `panel/web/src/fonts/` |
+
+## How they are run
+
+- Traefik, MariaDB, the relay, the signer, AMWScan, rclone and the WordPress base are pulled as
+  their projects publish them.
+- SFTPGo is the one modified component. WPL7 builds it from a fixed upstream commit with one
+  patch: an overwrite keeps the old file until the new one is complete. The patch ships inside
+  the image, in `/usr/share/doc/wpl7-sftpgo/`.
+- AMWScan runs unmodified. Each server pulls the official image, pinned by digest, and runs it
+  as a separate process in a throwaway container. WPL7 adjusts what it reports through the
+  scanner's own rules folder and by filtering its report.
+- The Inter font files come with their license in `panel/web/src/fonts/LICENSE.txt`. The logo
+  and screenshots on the panel's **WP Godmode** page belong to WP Godmode and are not covered by
+  WPL7's license.
+
+WPL7 itself is AGPL-3.0-only. Its name and logo are covered by `TRADEMARK.md` in the
+repository, not by that license.
+
+## Limits
+
+- The relay and the DKIM signer follow `latest`. An install that pulls its images gets their
+  newest release whenever `setup.sh` runs, which every update does.
+- Traefik and MariaDB follow their minor versions, so patch releases arrive the same way.
+- AMWScan runs with its signature updates switched off. Its signatures are the ones in the
+  pinned image, and they age until a WPL7 release moves the pin.
+
+## Related
+
+- [How WPL7 works](/docs/get-started/how-it-works/)
+- [Architecture](/docs/reference/architecture/)
+- [Malware scans](/docs/security/malware-scans/)
+- [FTP and SFTP logins](/docs/sites/ftp-sftp/)
+- [What leaves your server](/docs/security/privacy/)
+- [Updating WPL7](/docs/panel/updating/)

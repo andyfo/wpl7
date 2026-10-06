@@ -12,6 +12,7 @@
  * Kept free of backticks and dollar-brace, so each fits in a String.raw literal as it is.
  */
 
+// @docs security/malware-scans
 /** Findings a run prints at most; the rest are counted. Keeps the output well under 1 MiB. */
 export const MAX_REPORTED_FINDINGS = 500;
 

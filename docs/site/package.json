@@ -1,0 +1,49 @@
+{
+  "name": "wpl7-docs",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "description": "The WPL7 documentation site, published at https://wpl7.com/docs/",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "prepare-assets": "tsx scripts/prepare.ts",
+    "dev": "npm run prepare-assets && astro dev",
+    "build": "npm run prepare-assets && astro build",
+    "preview": "astro preview",
+    "typecheck": "tsc --noEmit -p scripts/tsconfig.json",
+    "docs:map": "tsx scripts/docs-map.ts",
+    "docs:markers": "tsx scripts/sync-markers.ts",
+    "docs:generate": "tsx scripts/generate.ts",
+    "docs:releases": "tsx scripts/refresh-releases.ts",
+    "docs:sync": "tsx scripts/docs-sync.ts",
+    "docs:check-flags": "tsx scripts/check-flags.ts",
+    "docs:check-ui-paths": "tsx scripts/check-ui-paths.ts",
+    "shoot": "tsx scripts/shoot.ts"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "0.42.5",
+    "astro": "7.3.5",
+    "picomatch": "4.0.4",
+    "semver": "7.8.5",
+    "sharp": "0.35.5",
+    "starlight-image-zoom": "0.16.0",
+    "starlight-links-validator": "0.26.0",
+    "starlight-llms-txt": "0.12.0",
+    "tinyglobby": "0.2.15",
+    "yaml": "2.8.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "26.4.0",
+    "@types/picomatch": "4.0.2",
+    "@types/pngjs": "6.0.5",
+    "@types/semver": "7.8.0",
+    "pixelmatch": "7.2.0",
+    "pngjs": "7.0.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  }
+}

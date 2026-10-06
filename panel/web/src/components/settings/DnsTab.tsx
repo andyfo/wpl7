@@ -1,3 +1,4 @@
+// @docs get-started/quick-start, integrations/cloudflare, panel/settings
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { DnsServerDto, DnsStatusDto, DnsTokenCheckDto } from '../../../../shared/types';

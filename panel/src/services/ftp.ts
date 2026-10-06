@@ -23,6 +23,7 @@
  * a server match it - files under ${SRV_ROOT}/ftp, then the containers - and is safe to run
  * any number of times. Changes kick it at once; a tick catches everything else.
  */
+// @docs help/troubleshooting, sites/ftp-sftp
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { isIPv4 } from 'node:net';

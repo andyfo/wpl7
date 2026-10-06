@@ -1,3 +1,4 @@
+// @docs automations/custom-jobs
 import { STATUS_CODES } from 'node:http';
 import { splitRestRoute, type WpRestMethod } from '../../shared/schemas.js';
 import type { Config } from '../config.js';

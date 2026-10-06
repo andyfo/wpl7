@@ -1,0 +1,101 @@
+---
+title: How WPL7 works
+description: "Containers per site, Traefik and certificates, the panel, jobs, servers and update channels in one page."
+sidebar:
+  order: 4
+sources:
+  - deploy/docker-compose.yml
+  - "deploy/wordpress-image/**"
+  - panel/src/services/siteSpec.ts
+  - panel/src/services/siteNetwork.ts
+  - panel/src/services/labels.ts
+  - panel/src/services/docker.ts
+  - panel/src/jobs/worker.ts
+  - panel/src/jobs/schedulers.ts
+  - panel/src/services/updates.ts
+---
+
+WPL7 is a set of containers on each server, and a panel that manages them. This page explains
+the parts and how they fit, so the rest of the docs make sense.
+
+## One container per site
+
+Each site runs in a container of its own, named `wp-<slug>` after the site's
+[slug](/docs/reference/glossary/#slug). Its image is the official WordPress image with Apache,
+plus WP-CLI and a mail client. Each site picks a PHP version, 8.2 to 8.5 by default, and can
+switch later.
+
+The site's files are in `/srv/sites/<slug>/wordpress` on its server. Its database and database
+user live on the server's shared MariaDB, one pair per site.
+
+Each site also has a Docker network of its own. Its only other members are Traefik, the mail
+relay and MariaDB, so a site cannot reach another site or the panel. A second, shared network
+gives sites a way out to the internet for updates, with traffic between containers dropped.
+Every site container runs with Linux capabilities removed, without privilege escalation, and
+under the CPU, memory and process limits set in **Settings → Sites**.
+
+WordPress's own cron is switched off. The panel runs each site's due cron events every five
+minutes instead. Mail from `wp_mail()` goes to the server's relay with the site's own login,
+so a site cannot send as another site's domain.
+
+## Traefik, certificates and domains
+
+Traefik answers on ports 80 and 443 and sends each request to the right site container. It
+finds the containers by their labels, so adding a site regenerates nothing. Certificates come
+from Let's Encrypt. Each hostname gets one on its first request, unless the server holds a
+[wildcard certificate](/docs/reference/glossary/#wildcard-certificate) for its dev sites.
+
+Every site starts on its [dev domain](/docs/reference/glossary/#dev-domain), such as
+`northwind-bakery.dev.example.com`. It works at once, because a wildcard DNS record points the
+whole dev domain at the server. [Going live](/docs/sites/domains/) adds the customer's domains
+and makes the first one the site's address. The others redirect to it, and so does the dev
+address if you keep it.
+
+## The panel and its jobs
+
+The panel is one Node process in a container on the first server. It keeps its state in a
+SQLite database, `/srv/panel/panel.db`. It drives Docker through the Docker socket, and other
+servers over SSH with a key of its own. That makes the panel root-equivalent on every server
+it manages. Protect its accounts and API keys like a root password.
+
+Work that changes a site runs as a [job](/docs/reference/glossary/#job) with a log: creating
+a site, going live, a move, a backup, an update. Each server runs one job at a time, and the
+rest wait their turn. A job that fails part-way undoes what it can and says what went wrong.
+Some work runs in a [lane](/docs/reference/glossary/#lane) of its own, such as offsite
+uploads, so it does not hold up the server's sites.
+
+## Servers and channels
+
+The first server runs the panel and hosts sites. Each further server is a
+[worker](/docs/reference/glossary/#worker): the same stack without the panel, driven over SSH.
+Every site lives entirely on one server, with its files, database, mail and certificates. A
+server that goes down takes only its own sites with it. The panel going down stops management,
+and the sites keep serving.
+
+An install follows a [channel](/docs/reference/glossary/#channel), set as `WPL7_CHANNEL` in
+`deploy/.env`. Stable follows releases. Edge follows the rolling build of `main`, which gets
+every change first. The panel checks GitHub once an hour and offers a new version under
+**Settings → Updates**. An update replaces the panel container and rolls back if the new panel
+does not come up. Site containers keep running throughout.
+
+## Where things are on disk
+
+| Path | What it holds |
+|---|---|
+| `/opt/wpl7` | The release bundle: compose files, scripts and `deploy/.env`. |
+| `/srv/sites/<slug>` | A site's WordPress files and the configuration its container mounts. |
+| `/srv/backups` | Backups, unless a server keeps them somewhere else. |
+| `/srv/mysql` | MariaDB's data. |
+| `/srv/panel` | The panel's database and SSH key. |
+| `/srv/traefik` | Certificates and Traefik's dynamic configuration. |
+
+[Architecture](/docs/reference/architecture/) has the full layout, the networks and the names.
+
+## Related
+
+- [Introduction](/docs/)
+- [Architecture](/docs/reference/architecture/)
+- [Security in WPL7](/docs/security/overview/)
+- [Jobs](/docs/automations/jobs/)
+- [Servers and monitoring](/docs/servers/overview/)
+- [Updating WPL7](/docs/panel/updating/)

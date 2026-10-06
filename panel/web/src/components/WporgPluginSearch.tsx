@@ -1,3 +1,4 @@
+// @docs plugins/catalog
 import { useEffect, useId, useRef, useState } from 'react';
 import type { WporgPluginDto } from '../../../shared/types';
 import { useWporgSearch } from '../api/hooks';

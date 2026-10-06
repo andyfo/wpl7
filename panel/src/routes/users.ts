@@ -1,3 +1,4 @@
+// @docs panel/users, security/accounts
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import argon2 from 'argon2';

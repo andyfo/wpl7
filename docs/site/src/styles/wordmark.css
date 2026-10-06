@@ -1,0 +1,56 @@
+/*
+ * The wordmark, copied from the panel (.brand-name and .brand-name-accent in
+ * panel/web/src/styles.css). Text, one weight, L7 in the accent with a sheen that sweeps once on
+ * load and again on hover. The panel's L7 follows its colour picker; here it is the fixed blue.
+ * Keep the two in step when the panel's changes.
+ */
+.brand-name {
+  font-family: 'Inter', var(--__sl-font);
+  font-size: 26px;
+  font-weight: 750;
+  letter-spacing: -0.9px;
+  line-height: 0.7;
+  color: var(--wpl7-text-strong);
+}
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .brand-name-accent {
+    --l7-sheen: color-mix(in oklab, var(--wpl7-accent) 26%, white);
+    background-image:
+      linear-gradient(115deg, transparent 42%, var(--l7-sheen) 50%, transparent 58%),
+      linear-gradient(100deg, var(--wpl7-accent) 0%, color-mix(in oklab, var(--wpl7-accent) 62%, var(--wpl7-text-strong)) 100%);
+    background-size: 260% 100%, 100% 100%;
+    background-position: 100% 0, 0 0;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: l7-sheen 1.2s cubic-bezier(0.25, 0.6, 0.25, 1) 0.45s 1;
+  }
+  :root:not([data-theme='light']) .brand-name-accent {
+    /* The dark accent is already light, so the highlight has to go nearly white to read. */
+    --l7-sheen: color-mix(in oklab, var(--wpl7-accent) 12%, white);
+  }
+  .wordmark-link:hover .brand-name-accent,
+  .wordmark-link:focus-visible .brand-name-accent {
+    background-position: 0 0, 0 0;
+    transition: background-position 0.9s cubic-bezier(0.25, 0.6, 0.25, 1);
+  }
+}
+@keyframes l7-sheen {
+  from {
+    background-position: 100% 0, 0 0;
+  }
+  to {
+    background-position: 0 0, 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-name-accent {
+    animation: none;
+  }
+  .wordmark-link:hover .brand-name-accent,
+  .wordmark-link:focus-visible .brand-name-accent {
+    transition: none;
+    background-position: 100% 0, 0 0;
+  }
+}

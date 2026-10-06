@@ -1,0 +1,81 @@
+---
+title: Create a site
+description: "The New site wizard: title, PHP version, server, plugins, recipes and the first admin account."
+sidebar:
+  order: 2
+sources:
+  - panel/web/src/pages/NewSite.tsx
+  - panel/src/routes/sites.ts
+  - panel/src/services/sites.ts
+  - panel/src/jobs/handlers/sites.ts
+  - panel/shared/schemas.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+The **New site** wizard creates a WordPress site in four steps: **Name & domain**,
+**WordPress**, **Plugins** and **Review**. A job then builds the site, which answers on its
+[dev domain](/docs/reference/glossary/#dev-domain) once the job is done.
+
+<Screenshot name="site-new" alt="The New site wizard's first step with a site title entered" />
+
+## Create a site
+
+1. Open **Sites** and choose **New site**.
+2. Enter a **Site title**. **Site name (slug)** follows the title. The
+   [slug](/docs/reference/glossary/#slug) names the container, the database and the dev
+   address. It is permanent, so change it now if you want another. On a fleet, pick the
+   **Server**. Choose **Continue**.
+3. Fill in **Admin username** and **Admin email**. Leave **Generate a strong admin password
+   (shown once after creation)** on, or turn it off and type a password of at least 10
+   characters.
+4. Pick the **Language** and the **PHP version**. Leave **Discourage search engines from
+   indexing this site** on while the site is not public yet. Choose **Continue**.
+5. Tick the **Catalog plugins** you want. The catalog's default plugins start ticked. Add
+   others under **More plugins from wordpress.org**, then choose **Continue**.
+6. Check the **Review** step and choose **Create site**. A recipe marked **Not set up** is
+   skipped, because a value it needs has not been entered yet.
+
+The wizard starts from the defaults under **Settings → Sites**: **Default PHP version**,
+**Default language**, **Default admin email**, and **Default server** on a fleet.
+
+## Start on the customer's domain
+
+Switch on **Use my own domain instead of a dev subdomain** and enter the domains under
+**Domains (first = primary)**. The site is then created live on those domains, with no dev
+address at all. Point their DNS at the server first. Until then, the site has no certificate.
+
+## What happens
+
+The wizard starts a `site.create` job and shows its log. In order:
+
+- It creates the site's folder, network and database.
+- It starts the container with no route to it, so no visitor can reach the WordPress installer.
+- It installs WordPress with your admin account, sets pretty permalinks, and removes Akismet
+  and Hello Dolly.
+- It installs the language pack and the plugins, then runs their
+  [recipes](/docs/reference/glossary/#recipe).
+- It makes the site reachable and checks that it answers.
+
+If a step fails, the job removes everything it created, and the slug is free again. A plugin
+that fails to install is a warning, and so is a recipe the vendor refuses. The site is created
+anyway. When the job is done, it shows the generated admin password once.
+
+## Limits
+
+- The slug cannot be changed later. A few names are reserved, such as `admin`, `api`, `www`,
+  `new` and `bulk`.
+- A site has at most ten domains, and a domain belongs to one site only.
+- Search engines stay discouraged until you untick the setting in WordPress. Going live does not
+  change it.
+- If the cleanup after a failure fails too, the site stays as **Error**. **Delete site** on its
+  **Settings** tab removes it.
+
+## Related
+
+- [Your first site](/docs/get-started/first-site/)
+- [Domains and going live](/docs/sites/domains/)
+- [The plugin catalog](/docs/plugins/catalog/)
+- [Recipes and pro-plugin licenses](/docs/plugins/recipes/)
+- [Settings](/docs/panel/settings/)
+- [API reference](/docs/integrations/api-reference/)

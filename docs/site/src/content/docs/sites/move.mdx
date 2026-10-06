@@ -1,0 +1,82 @@
+---
+title: Move a site to another server
+description: Move a site between your servers while the old one forwards visitors until DNS catches up.
+sidebar:
+  order: 9
+sources:
+  - panel/web/src/pages/SiteDetail.tsx
+  - panel/src/services/sites.ts
+  - panel/src/jobs/handlers/move.ts
+  - panel/src/jobs/handlers/moveHelpers.ts
+  - panel/src/services/housekeeping.ts
+  - panel/shared/schemas.ts
+---
+
+On a [fleet](/docs/reference/glossary/#fleet), a site can move to another of your servers. The
+panel copies its files and database, starts it there and switches the traffic over. The old
+server forwards visitors to the new one until DNS has caught up.
+
+## Before you start
+
+- A second, healthy server. **Move server** only appears on a fleet.
+- A site that is running or stopped, with no earlier move waiting to be finalized.
+- Free disk on the target, about 2.5 times the site's size.
+- DNS access for customer domains outside the panel's Cloudflare account, with their TTL
+  lowered to 300 seconds.
+
+## Move a site
+
+1. On the site's **Overview** tab, choose **Move server**.
+2. Pick the **Target server**.
+3. For a live site, choose **Freeze the site (maintenance page) — nothing gets lost** or
+   **Keep serving — changes made during the copy are lost**.
+4. Note the `A` records the dialog lists, if any, then choose **Move site**.
+
+## What happens
+
+1. The job checks the target: reachable, MariaDB running, enough disk. It removes what an
+   earlier attempt left there.
+2. FTP pauses for the whole move. A frozen site shows the maintenance page, which the job
+   renews until the copy is done.
+3. A snapshot of the site is streamed to the target and checked against its checksums. The
+   copy stays there as a backup.
+4. The site starts on the target, and the job checks that it answers there.
+5. The site now belongs to the target. The panel re-points its dev address, and the customer
+   domains whose zone the Cloudflare token reaches. The job log lists the records left to
+   change by hand.
+6. The old server keeps answering for every hostname and forwards each request to the new one.
+
+A stopped site is started on the target for the check, then stopped again.
+
+## Finalize the move
+
+The nightly [housekeeping](/docs/reference/glossary/#housekeeping) removes the old copy once
+the move is a day old and every hostname resolves only to the new server. To remove it sooner,
+choose **Finalize now** in the **Move cleanup pending** banner on the **Overview** tab. Wait
+until DNS points at the new server, because the old one stops forwarding then.
+
+## If a move fails
+
+Before step 5, a failure removes everything from the target, and the site keeps running on the
+old server. Running the move again is the recovery. After step 5, the site lives on the
+target, and the job log names the step that failed.
+
+## Limits
+
+- A dev site keeps serving while it is copied, so changes made meanwhile are lost.
+- A site keeps its dev address. One created under another server's dev domain keeps that domain,
+  so it needs an `A` record of its own on the new server.
+- Outgoing mail now leaves from the new server's address. With direct delivery, add that
+  address to each domain's SPF record.
+- A hostname with an `AAAA` record is never finalized automatically. Use **Finalize now**.
+- Older backups stay on the old server. Restoring one needs its offsite copy, fetched back
+  first.
+- The old server cannot be removed while a cleanup is pending.
+
+## Related
+
+- [Add a server](/docs/servers/add/)
+- [Domains and going live](/docs/sites/domains/)
+- [Cloudflare DNS](/docs/integrations/cloudflare/)
+- [How backups work](/docs/backups/overview/)
+- [Servers and monitoring](/docs/servers/overview/)

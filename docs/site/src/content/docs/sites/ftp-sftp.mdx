@@ -1,0 +1,97 @@
+---
+title: FTP and SFTP logins
+description: "Give a customer or developer an FTP or SFTP login that reaches one site's files and nothing else."
+sidebar:
+  order: 6
+sources:
+  - panel/web/src/components/ftp/FtpTab.tsx
+  - panel/web/src/lib/ftpStatus.ts
+  - panel/web/src/pages/Settings.tsx
+  - panel/src/routes/ftp.ts
+  - "panel/src/services/ftp*.ts"
+  - panel/src/db/seed.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A site can have [FTP and SFTP logins](/docs/reference/glossary/#ftp-and-sftp-login) of its own,
+for a customer or developer with FileZilla or WinSCP. A login reaches that site's files and
+nothing else. Nothing FTP runs on a server until one of its sites has a login.
+
+<Screenshot name="site-ftp" alt="A site's FTP tab with one login and its connection details" />
+
+## Add a login
+
+1. On the site's **FTP** tab, choose **Add login**.
+2. Keep or change the **Username**, which is unique across the panel.
+3. Under **Password**, choose **Generate one (24 characters, shown once)**, or **Choose one** of
+   at least 12 characters.
+4. Optional: a **Folder**, such as `wp-content/themes/child`, keeps the login inside it.
+5. Optional: **Expires** stops access at the end of that day, your time.
+6. Choose **Create login** and copy the password, or everything with **Copy all connection
+   details**. Close with **I have saved it**.
+
+The tab shows **Applying…** until the server has the change, then **Ready**.
+
+## Connect a client
+
+The **How to connect** card lists the server's address, and the fingerprints a client asks
+you to trust.
+
+| Client | SFTP | FTP |
+|---|---|---|
+| FileZilla | *Site Manager*: protocol *SFTP*, port 2222 | Protocol *FTP*, encryption *Require explicit FTP over TLS*, port 21 |
+| WinSCP | File protocol *SFTP*, port 2222 | *FTP* with *TLS/SSL Explicit encryption*, port 21 |
+| Command line | `sftp -P 2222 username@203.0.113.10` | Use SFTP |
+
+The host is the site's server, by IP address or a hostname that points straight at it. A name
+behind Cloudflare's proxy does not work. FTP runs only over TLS, with data connections on ports
+30000 to 30015.
+
+## What a login can reach
+
+Each server runs one FTP gateway, the only part with open ports, and it holds no site files.
+Each site with logins gets a file server that runs as the site's user and holds only its
+folder. A login can do nothing the site's own PHP cannot. Permissions can change, but links
+cannot be created. An upload replaces a file only once it is complete.
+
+## Change or remove a login
+
+Each login has **Edit**, for its folder and expiry, **Reset password** and **Delete**. Every
+change ends the FTP and SFTP sessions open on the site, and clients reconnect by themselves.
+
+## During restores, moves and deletes
+
+- A restore pauses the site's FTP until it ends, and the tab shows **Paused**.
+- A move pauses FTP and resumes it on the new server, with a new host, key and certificate.
+- Deleting the site deletes its logins.
+
+## Change the settings
+
+**Settings → Sites → FTP & SFTP** applies to every server. It holds **Allow FTP and SFTP
+logins**, the **SFTP port**, **Also offer FTP (explicit TLS; plain FTP is always refused)**, the
+**FTP port**, and the passive range in **Passive from** and **Passive to**. Switched off, the
+logins are kept for later.
+
+The gateway logs every login, failed login and transfer:
+
+```bash
+sudo docker logs wpl7-ftp
+```
+
+## Limits
+
+- A folder keeps work tidy, not people out. PHP uploaded there runs as the site and can read
+  all of it.
+- FTP needs the server's public IPv4 address. Without one, the server offers SFTP only.
+- A cloud firewall in front of the server has to allow the ports. Only IPv4 is served.
+- Repeated failed logins ban an address for 30 minutes, and longer each time.
+- An interrupted upload starts over instead of resuming.
+
+## Related
+
+- [Files](/docs/sites/files/)
+- [Settings](/docs/panel/settings/)
+- [Move a site to another server](/docs/sites/move/)
+- [Restore and download](/docs/backups/restore/)
+- [Troubleshooting](/docs/help/troubleshooting/)

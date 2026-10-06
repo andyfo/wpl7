@@ -1,3 +1,4 @@
+// @docs sites/files
 import { useMemo, useState, type MouseEvent } from 'react';
 import type { SiteFileEntryDto } from '../../../../shared/types';
 import { formatBytes, formatDate, timeAgo } from '../../lib/format';

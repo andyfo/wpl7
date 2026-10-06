@@ -1,3 +1,4 @@
+// @docs backups/offsite, backups/overview, reference/manual-recovery
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';

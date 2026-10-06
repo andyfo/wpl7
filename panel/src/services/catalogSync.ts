@@ -1,3 +1,4 @@
+// @docs plugins/recipes, reference/recipe-format, security/privacy
 import crypto from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';

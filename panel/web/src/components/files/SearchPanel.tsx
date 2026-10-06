@@ -1,3 +1,4 @@
+// @docs sites/files
 import { useState } from 'react';
 import type { SiteFileSearchDto, SiteFileSearchMatchDto } from '../../../../shared/types';
 import { search } from '../../api/files';

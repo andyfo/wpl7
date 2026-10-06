@@ -1,0 +1,112 @@
+---
+title: Blocked addresses
+description: "How attacking addresses are detected and blocked at the firewall of every server, who is never blocked, and how to unblock."
+sidebar:
+  order: 3
+sources:
+  - panel/src/services/blocklist.ts
+  - panel/src/services/attackDetector.ts
+  - panel/src/services/firewallSync.ts
+  - panel/src/services/firewallRender.ts
+  - panel/src/services/proxyRanges.ts
+  - panel/src/lib/crawlerVerify.ts
+  - panel/src/plugins/adminAddress.ts
+  - panel/web/src/pages/ServersSecurity.tsx
+  - panel/web/src/components/security/ServerTabs.tsx
+  - panel/web/src/components/security/BlockDialog.tsx
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+Attack detection notices an address that attacks your sites and puts it on the fleet's
+[block list](/docs/reference/glossary/#block-list), which every server enforces at its firewall.
+It lives on **Servers → Security**.
+
+<Screenshot name="servers-security" alt="Servers → Security with the blocked addresses, why each was blocked and until when" />
+
+## How detection decides
+
+Each minute, the panel counts what every visitor address did across all sites and servers. An IPv6
+visitor counts by its /64.
+
+| Rule | Counts | Blocks at |
+|---|---|---|
+| Login guessing | `POST wp-login.php` answered 200, 401, 403 or 429 | 20 in 10 minutes |
+| XML-RPC | `POST xmlrpc.php` | 60 in 10 minutes |
+| Probing | Paths only an attacker asks for, such as `/.env`, at 4 points, and requests a rule refused, at 1 | 12 points in 10 minutes |
+| Dead URLs | Different pages answered 404 | 60 in 5 minutes |
+| Flooding | Requests a rate limit answered 429 | 300 in 10 minutes |
+
+A first block lasts an hour. Each repeat within 30 days lasts four times as long, and never more
+than 30 days. A block lifted by hand is not a repeat. Every number can be changed on **Detection**,
+where **Automatic blocking** is **On**, **Observe** or **Off**. **Observe** writes down what it would
+block and blocks nothing.
+
+## Who is never blocked
+
+Neither detection nor a person can block these:
+
+- Private addresses, your own servers, and the panel as each server sees it.
+- Trusted proxies, by their address ranges.
+- Jetpack's servers, by the address list Jetpack publishes.
+- AI assistants, by the address lists their companies publish: OpenAI, Anthropic, Google's fetchers
+  and agents, Perplexity, Mistral and DuckDuckGo. Site protection still limits them.
+- Addresses on **Never block**.
+- Every address that signed in to the panel or used an API key in the last 30 days.
+
+The published lists are fetched weekly, and used only when they pass checks: about as many ranges as
+usual, none private and none too wide. Otherwise the last good copy stays.
+
+Detection also leaves two kinds of visitor alone:
+
+- A search engine's crawler, once its address names a host under the engine's own domain, such
+  as `googlebot.com`, and that host names the address back.
+- An address with three or more different browsers behind it, which looks like a shared
+  connection.
+
+## Block or unblock an address
+
+1. On **Blocked addresses**, choose **Block an address**. **Block** also appears beside an address
+   in a site's blocked requests and in its **Busiest addresses**.
+2. Enter the **Address or range**, pick how long under **For**, and add a **Note**.
+3. Choose **Block**. An address that is never blocked is refused, and the dialog says why.
+
+**Unblock** lifts a block on every server within a minute. **Never block** keeps an address or range
+off the list for good, and lifts the blocks it overlaps. Site protection does not rate-limit those
+addresses either, but its refusals still apply.
+
+## How blocks are enforced
+
+A block reaches every server within a minute, for ports 80 and 443 only.
+
+| Layer | For | How |
+|---|---|---|
+| Network | Direct visitors | The server's firewall drops their packets before Docker forwards them. Timed blocks end on time, with or without the panel, and stay through a reboot. |
+| HTTP | Visitors behind a trusted proxy | Traefik matches the proxy's header against the list and answers `403`. At most 5,000 addresses. |
+| HTTP fallback | Direct visitors, where the network layer is missing | The same, at most 2,000 addresses. |
+
+**Enforcement** shows each server as **In force**, **HTTP only**, **Off on the server** or
+**Not installed**. **Blocked addresses reach the servers** switches every block off and keeps the
+list. On a server, this empties the network layer and keeps it empty until
+`sudo wpl7-firewall on`:
+
+```bash
+sudo wpl7-firewall off
+```
+
+## Limits
+
+- Detection reacts within about two minutes, not seconds.
+- SSH and FTP are not covered. They keep their own protection.
+- A crawler on a domain the panel does not know is not verified, and can be blocked.
+- A bot whose company publishes no address list is blocked like any visitor when it crosses a rule.
+- Without IPv6 in Docker, direct IPv6 visitors arrive as one private address and are not detected
+  one by one.
+
+## Related
+
+- [Security in WPL7](/docs/security/overview/)
+- [Site protection](/docs/security/site-protection/)
+- [Visitor statistics](/docs/sites/visitors/)
+- [Disk, logs and housekeeping](/docs/servers/resources/)
+- [Troubleshooting](/docs/help/troubleshooting/)

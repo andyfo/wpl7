@@ -1,3 +1,4 @@
+// @docs automations/jobs
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { JobDto, JobLogLine } from '../../../shared/types';

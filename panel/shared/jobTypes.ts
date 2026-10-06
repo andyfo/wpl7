@@ -1,3 +1,4 @@
+// @docs automations/jobs
 import type { JobCategory, JobType } from './schemas.js';
 
 /**

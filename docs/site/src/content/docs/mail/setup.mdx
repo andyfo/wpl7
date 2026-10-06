@@ -1,0 +1,98 @@
+---
+title: Setup guide
+description: "Check SPF, DKIM, DMARC and reverse DNS against live DNS, let the panel publish the records, and change the mail hostname."
+sidebar:
+  order: 2
+sources:
+  - panel/src/services/mailSetup.ts
+  - panel/src/services/mailDns.ts
+  - panel/src/services/mailHostname.ts
+  - panel/src/services/mail.ts
+  - panel/src/routes/mail.ts
+  - panel/web/src/pages/Mail.tsx
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+import Since from '~/components/Since.astro';
+import UiPath from '~/components/UiPath.astro';
+
+**Mail → Setup guide** lists what delivery needs, in order, with your servers' addresses filled in.
+Every check runs against public DNS, so a green mark means the record is published.
+
+<Screenshot name="mail-setup" alt="Mail → Setup guide with a server's hostname, reverse DNS and port 25 checks, and a domain's SPF, DKIM and DMARC steps" />
+
+## Before you start
+
+- Access to the DNS of each sending domain, or a Cloudflare token that reaches its zone.
+- For direct delivery, access to the control panel where you rent each server.
+
+## Work through the guide
+
+1. **Servers**: give each server's mail hostname an A record. For direct delivery, also set the
+   server's reverse DNS to that name and get outbound port 25 opened.
+2. **Sending domains**: publish SPF, then DKIM, then DMARC, which acts on the other two.
+3. **Prove it works**: send a test message from the relay and from a site to a Gmail or Outlook
+   address. Its headers should show `DKIM-Signature`, `spf=pass` and `dkim=pass`.
+
+Choose **Check DNS again** after a change. All dev addresses count as one sending domain, since a
+key at the dev domain signs every site under it. Reverse DNS is set where you rent the server, and
+**Where did you rent this server?** gives the steps for common providers.
+
+## Let the panel publish the records
+
+With a DNS token, the guide writes the records instead of printing them: **Publish** on a domain,
+**Publish A record** on a mail hostname. It decides from the zone as it is at that moment, and
+reports what it did.
+
+- SPF is merged into a published record, never replaced.
+- Two SPF records, more than 10 DNS lookups, or a record that denies a server stop it. It says why.
+- A published DMARC record is never changed, even a broken one.
+- Other TXT records at the same name are kept.
+- DKIM is published only once its key is on every server.
+
+### Add the Cloudflare token
+
+<Since v="0.3.0-beta.2" /> Add a Cloudflare API token under
+<UiPath href="/docs/integrations/cloudflare/">Settings → DNS</UiPath>, with **Zone → Zone → Read** and
+**Zone → DNS → Edit**. It is the same token the wildcard certificate and the site records use.
+
+## Change the mail hostname
+
+Reverse DNS has to match the hostname the relay announces. Each server has its own:
+
+| Server | Default name |
+|---|---|
+| The panel's server | `mail.` and the panel's domain without `panel.`: `panel.example.com` gives `mail.example.com` |
+| A server added from the panel | `mail.` and the dev domain, the same on every such server |
+
+1. Under **Servers**, pick the server and choose **Change hostname**.
+2. Type a name you control and choose **Apply**. The relay reloads without losing queued mail.
+3. Point an A record for the name at the server, then change its reverse DNS to match.
+
+Receivers treat a new name as a new sender.
+
+### Go back to the default
+
+<Since v="0.3.0-beta.2" /> The dialog shows the default, `MAIL_HOSTNAME` from `deploy/.env`. A name
+set in the panel wins over it and is kept when the relay restarts. **Reset to default** removes it,
+and so does typing the default name. From a shell, this sets a new default and clears a name set in
+the panel:
+
+```bash
+sudo /opt/wpl7/provision/setup.sh --mail-hostname=smtp.example.com
+```
+
+## Limits
+
+- Reverse DNS and a smarthost's SPF value are always set by hand.
+- Without a token, or for a zone it cannot reach, you add the records by hand. The panel publishes
+  through Cloudflare only.
+- SPF is planned for the delivery mode of the panel's own server, and checked for IPv4 only.
+
+## Related
+
+- [How mail works](/docs/mail/overview/)
+- [SPF, DKIM and DMARC explained](/docs/mail/records/)
+- [Cloudflare DNS](/docs/integrations/cloudflare/)
+- [Traffic and queue](/docs/mail/traffic/)
+- [Troubleshooting](/docs/help/troubleshooting/)

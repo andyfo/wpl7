@@ -1,3 +1,4 @@
+// @docs panel/appearance
 import { useState } from 'react';
 import type { ServerSystemInfoDto, SystemVersionDto } from '../../../shared/types';
 import { api } from '../api/client';

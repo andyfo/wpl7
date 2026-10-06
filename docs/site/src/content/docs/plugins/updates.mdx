@@ -1,0 +1,111 @@
+---
+title: Updates and known vulnerabilities
+description: "See which plugins, themes and WordPress versions have updates or known vulnerabilities, what the vulnerability feed is sent, and update one site or many."
+sidebar:
+  order: 3
+sources:
+  - panel/src/services/vulnerabilities.ts
+  - panel/src/services/wpInventory.ts
+  - panel/src/jobs/handlers/wp.ts
+  - panel/shared/wpOps.ts
+  - panel/shared/scheduleActions.ts
+  - panel/web/src/components/wp/WordPressTab.tsx
+  - panel/web/src/components/wp/VulnerabilityList.tsx
+  - panel/web/src/components/wp/severity.tsx
+  - panel/web/src/components/wp/BulkRunOptions.tsx
+  - panel/web/src/components/wp/FeedFooter.tsx
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+The panel rates every plugin, theme and WordPress version on your sites against the advisories
+that [wpvulnerability.net](https://www.wpvulnerability.net/) publishes, a free feed. The ratings
+appear wherever updates do: on each site's **WordPress** tab and on **Sites → Bulk management**.
+
+<Screenshot name="site-updates" alt="A site's WordPress tab with updates waiting and a known vulnerability in its Security card" />
+
+## What is sent to wpvulnerability.net
+
+The panel asks the feed about each plugin and theme by its slug, and about WordPress by its version
+number. It asks from the panel's own server, at most once a day per slug, and keeps the answer.
+Whether an installed version is affected is worked out on the panel, so one answer serves every
+site. No site name, domain or visitor address is part of a request.
+
+## Switch the ratings off
+
+In **Settings → Security**, under **WordPress updates & security**, switch off **Rate installed
+plugins and themes against known vulnerabilities**. Then choose **Save settings**. The panel stops
+asking, and the ratings disappear. Updates keep working.
+
+## Read a rating
+
+A rating is the worst advisory that covers the installed version: **critical**, **high**,
+**medium** or **low**, with its CVSS score beside it. **unrated** means the advisory gives no
+severity. Each advisory names the release that fixes it, or says **no fix available**.
+
+| Shown | Means |
+|---|---|
+| **closed** | wordpress.org removed the plugin. It gets no more updates, so replace it. |
+| **no data** | The feed has no record of this slug, as with most premium plugins. That is not the same as safe. |
+| **not checked** | The slug has not been looked up yet. The next scan does it. |
+| **check overdue** | The saved answer is more than a day old. |
+| **check failed** | The last lookup failed, and the previous answer is shown. |
+| **range unclear** | The advisory names no version range the panel can evaluate. It may not apply. |
+
+## Update one site
+
+On the site's **WordPress** tab:
+
+- **Update all** updates everything that has an update, WordPress included.
+- **Update core** updates WordPress only.
+- **Fix vulnerable**, in the **Security** card, updates only what an available release fixes.
+- **Update** on a plugin's or theme's row updates that one at once.
+
+The first three ask first. Set the two switches, then choose **Run it**:
+
+- **Back up first** takes a backup before anything changes, kept until you delete it. It is on by
+  default for a live site.
+- **Check the site answers afterwards** fails the job if the site stops answering.
+
+A row's **Update** uses the switches as last set on the page, so by default a live site gets a
+backup first.
+
+## What the update job does
+
+One job per site works in this order: the backup, the plugin updates, the theme updates, WordPress
+last, then the check. It fails when an update fails or the site stops answering, and its message
+names the backup to go back to. Nothing is rolled back by itself: restore that backup from the
+site's **Backups** tab.
+
+## Update many sites
+
+On **Sites → Bulk management**, select rows and choose **Update**. Each site gets its own job, with
+the same two switches, as [Bulk management](/docs/sites/bulk/) explains.
+
+## Update on a schedule
+
+1. Open **Automations → Schedules** and choose **New schedule**.
+2. Under **What**, pick **Update plugins, themes and WordPress**. Under **On**, pick the sites.
+3. Under **Options**, tick **Plugins**, **Themes** or **WordPress core**. Tick **Only updates that
+   fix a known vulnerability** to apply only those.
+4. Set **Back up first** and **Check the site answers afterwards**, and under **When**, how often
+   it runs.
+
+Each run reads the site again and decides then what to update. Its backups count as scheduled
+backups, so retention removes the old ones.
+
+## Limits
+
+- A new advisory shows once the panel next refreshes that slug, up to a day later.
+- A failed update is not undone automatically. Restoring the backup also undoes every other change
+  made to the site since.
+- Where no fixed release exists, **Fix vulnerable** leaves the plugin as it is. Deactivating it is
+  your decision.
+
+## Related
+
+- [Plugins across your sites](/docs/plugins/overview/)
+- [Bulk management](/docs/sites/bulk/)
+- [Restore and download](/docs/backups/restore/)
+- [Schedules](/docs/automations/schedules/)
+- [What leaves your server](/docs/security/privacy/)

@@ -19,6 +19,7 @@
  * docs/internal/watchlist.md says what to run when AMWScan moves.
  */
 
+// @docs security/malware-scans
 export const TUNING_VERSION = 1;
 
 export interface ExploitOverride {

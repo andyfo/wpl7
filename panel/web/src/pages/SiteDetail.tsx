@@ -1,3 +1,4 @@
+// @docs backups/overview, get-started/first-site, sites/domains, sites/move, sites/overview, sites/settings, sites/visitors, sites/wordpress
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';

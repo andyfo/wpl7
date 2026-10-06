@@ -1,3 +1,4 @@
+// @docs get-started/how-it-works, help/faq, reference/architecture, sites/settings
 import path from 'node:path';
 import type { Config } from '../config.js';
 import type { ServerRow, SiteRow } from '../db/schema.js';

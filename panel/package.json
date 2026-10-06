@@ -11,13 +11,14 @@
     "build": "npm run build:server && npm run build:web",
     "build:server": "tsc -p tsconfig.server.json && cp -R src/db/migrations dist/src/db/",
     "build:web": "vite build --config web/vite.config.ts",
-    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p web/tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p web/tsconfig.json --noEmit && tsc -p tsconfig.scripts.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "locales:sync": "node scripts/sync-locales.mjs",
     "catalog:schema": "tsx scripts/catalog-schema.ts",
-    "start": "node dist/src/index.js"
+    "start": "node dist/src/index.js",
+    "demo": "tsx scripts/demo-world.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

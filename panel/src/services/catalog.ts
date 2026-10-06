@@ -1,3 +1,4 @@
+// @docs plugins/recipes, reference/recipe-format
 import fs from 'node:fs';
 import path from 'node:path';
 import { catalogEntry, knownCatalogTypes, type PluginRecipe } from '../../shared/recipes.js';

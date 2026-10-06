@@ -5,6 +5,7 @@
  * client) and the schedule editor, so both reject the same things with the same words.
  * The server-side half - turning an action into jobs - is src/jobs/actions.ts.
  */
+// @docs automations/custom-jobs, plugins/updates
 import { z } from 'zod';
 import {
   GODMODE_WAIT_REFUSAL,

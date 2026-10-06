@@ -17,6 +17,6 @@ this, not what you touched. Label the PR breaking / feature / fix / docs / inter
 
 - [ ] `npm run typecheck` and `npm test` pass (in `panel/`)
 - [ ] New behaviour has a test
-- [ ] `docs/` updated if behaviour changed
+- [ ] The docs pages the `docs-sync` comment lists are updated, or the PR says `Docs: not needed — <reason>`
 - [ ] Anything under `provision/` is idempotent and safe to re-run
 - [ ] No migration removes or rewrites data (there are no down-migrations)

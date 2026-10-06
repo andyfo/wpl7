@@ -1,3 +1,4 @@
+// @docs security/malware-scans, security/privacy
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { integrityManifests, type IntegrityManifestRow } from '../db/schema.js';

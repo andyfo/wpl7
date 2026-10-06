@@ -1,3 +1,4 @@
+// @docs security/privacy
 import type { WporgPluginDto } from '../../shared/types.js';
 import { badGateway } from '../lib/errors.js';
 

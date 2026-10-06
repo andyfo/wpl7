@@ -15,6 +15,7 @@
 # Opt-in, because an AI coding agent on a production host is a choice, not a default.
 #
 # Safe to re-run: every step is guarded and nothing is overwritten.
+# @docs reference/installer-and-scripts
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

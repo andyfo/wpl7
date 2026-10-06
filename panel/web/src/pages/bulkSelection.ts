@@ -1,3 +1,4 @@
+// @docs sites/bulk
 import type { WpComponentKind, WpBulkAction, WpInventoryFilter } from '../../../shared/schemas';
 import type { WpInventoryRow, WpInventorySiteRow } from '../../../shared/types';
 

@@ -1,3 +1,4 @@
+// @docs integrations/api
 import { and, count, desc, eq, gte, isNotNull, like, lt, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { apiEvents, type ApiEventRow } from '../db/schema.js';

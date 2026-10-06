@@ -1,3 +1,4 @@
+// @docs integrations/mcp
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';

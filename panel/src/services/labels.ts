@@ -1,3 +1,4 @@
+// @docs get-started/first-site, get-started/how-it-works, reference/architecture
 export interface TraefikLabelOpts {
   slug: string;
   /** Canonical hostname; requests to any alias 301 here. */

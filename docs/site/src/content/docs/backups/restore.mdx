@@ -1,0 +1,76 @@
+---
+title: Restore and download
+description: "Put a site back to one of its backups, see what a restore changes, and download a backup to keep elsewhere."
+sidebar:
+  order: 2
+sources:
+  - panel/src/jobs/handlers/backups.ts
+  - panel/src/routes/backups.ts
+  - panel/src/services/backup.ts
+  - panel/web/src/components/backups/BackupParts.tsx
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A restore puts a site's files and database back the way they were in a backup, in place. A
+download gives you the backup's four files, to keep somewhere else or to restore by hand.
+
+<Screenshot name="site-backups" alt="A site's Backups tab with its backups and the Back up now button" />
+
+## Restore a backup
+
+1. Open the site's **Backups** tab, or find the backup under **Backups → All backups**.
+2. Choose **Restore** on the backup, then **Restore** in the dialog.
+3. Follow the job. The site is briefly stopped.
+
+**Restore** appears on a complete backup whose files are on the site's server. A **remote only**
+backup needs **Fetch back** first, as [Offsite copies](/docs/backups/offsite/) explains.
+
+## What a restore does
+
+The job checks the backup's checksums, then takes a **Before a restore** backup of the site as it
+is now. If either step fails, nothing has changed and the site keeps running.
+
+Then it stops the site and pauses the site's FTP and SFTP logins. It replaces the database with the
+backup's and swaps in the files. The previous files stay next to the new ones, in
+`wordpress.pre-restore-<time>`, for at least a day. A backup taken on another PHP version moves the
+site back to that version, if the panel still offers it.
+
+Last, it starts the site. If the site's address changed since the backup, WordPress's URLs are
+rewritten to the current one, and the site's [recipes](/docs/plugins/recipes/) run for the new
+address. A site that does not answer afterwards is a warning in the log, not a failed job.
+
+A failure after the site was stopped leaves the site in **Error**. The job's log then says where
+the previous files are.
+
+## What changes for logins and jobs
+
+- WordPress accounts and their passwords are those in the backup.
+- FTP and SFTP logins work again once the restore is over, and see the restored files.
+- The site keeps its mail login: the panel writes the current one again.
+- No other job runs for the site while the restore does, and its backups cannot be deleted
+  meanwhile.
+
+## Download a backup
+
+Choose **Download** on a complete backup. You get one `.tar` file, named after the site and the
+backup's time, that holds the four backup files. It streams from the server that keeps the backup.
+To restore it without the panel, follow [Manual recovery without the
+panel](/docs/reference/manual-recovery/).
+
+## Limits
+
+- A restore replaces everything that changed since the backup: posts, orders, comments and uploads.
+- A backup restores only onto the site of the same name, on the server that holds the backup.
+  From another server, fetch it back from an offsite copy, or move the site back first.
+- A deleted site's backup has no **Restore**. Create a site with the same name first.
+- The panel's own database is restored by hand, never from the panel.
+- The files a restore set aside are deleted by the nightly housekeeping, a day or more later.
+- An API key needs Manage access to restore, and Full access to download the panel's own database.
+
+## Related
+
+- [How backups work](/docs/backups/overview/)
+- [Offsite copies](/docs/backups/offsite/)
+- [Manual recovery without the panel](/docs/reference/manual-recovery/)
+- [FTP and SFTP logins](/docs/sites/ftp-sftp/)

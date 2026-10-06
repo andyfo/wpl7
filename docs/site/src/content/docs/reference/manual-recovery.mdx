@@ -1,0 +1,234 @@
+---
+title: Manual recovery without the panel
+description: "Restore a site from a backup by hand, from a bucket, or from an encrypted bucket."
+sidebar:
+  order: 7
+sources:
+  - panel/src/services/backup.ts
+  - panel/src/services/offsite.ts
+  - panel/src/services/dbAdmin.ts
+  - panel/shared/backupProviders.ts
+  - panel/src/jobs/handlers/offsite.ts
+---
+
+A backup is a folder of plain files, and an offsite copy is the same folder in a bucket. You can
+restore one with a shell, Docker and rclone, with the panel stopped or gone. When the panel
+works, restore from it instead: it takes a safety backup first and checks the site afterwards.
+
+:::danger
+A restore replaces the site's database and files. The steps below keep the old files, but not
+the old database. Take a copy first if you may need it.
+:::
+
+## What a backup holds
+
+Each backup is a folder `<backup root>/<slug>/<YYYYMMDD-HHMMSS>/`, timestamped in UTC. The backup
+root is `/srv/backups` unless the server's location was moved on **Backups → Storage**.
+
+| File | Content |
+|---|---|
+| `db.sql.gz` | A `mariadb-dump --single-transaction` of the site's database |
+| `files.tar.gz` | The site's `wordpress/` folder, its `config/` folder and `site.json` |
+| `manifest.json` | The slug, title, domains, dev address, PHP and WordPress versions, locale, database name and user, and the table prefix `wp_` |
+| `sha256sums` | The SHA-256 checksums of the two archives |
+
+The names on the server follow from the slug. For Northwind Bakery, slug `northwind-bakery`:
+
+| Thing | Name |
+|---|---|
+| Container | `wp-northwind-bakery` |
+| Database | `wp_northwind_bakery`, the slug with dashes turned into underscores |
+| Files | `/srv/sites/northwind-bakery/wordpress` |
+| Database server | the `wpl7-mariadb` container on the same server |
+
+## Restore a site on its own server
+
+Run these as root on the server that holds the site.
+
+1. Go to the backup and check it:
+
+   ```bash
+   cd /srv/backups/northwind-bakery/20261004-030000
+   ```
+
+   ```bash
+   sha256sum -c sha256sums
+   ```
+
+2. Stop the site:
+
+   ```bash
+   docker stop wp-northwind-bakery
+   ```
+
+3. Empty the database. The site's database user keeps its rights:
+
+   ```bash
+   docker exec wpl7-mariadb sh -c 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" -e "DROP DATABASE IF EXISTS wp_northwind_bakery; CREATE DATABASE wp_northwind_bakery CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"'
+   ```
+
+4. Import the dump:
+
+   ```bash
+   zcat db.sql.gz | docker exec -i wpl7-mariadb sh -c 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" wp_northwind_bakery'
+   ```
+
+5. Move the current files aside and unpack the backup's:
+
+   ```bash
+   mv /srv/sites/northwind-bakery/wordpress /srv/sites/northwind-bakery/wordpress.before-restore
+   ```
+
+   ```bash
+   tar -xzf files.tar.gz -C /srv/sites/northwind-bakery wordpress
+   ```
+
+   ```bash
+   chown -R 33:33 /srv/sites/northwind-bakery/wordpress
+   ```
+
+6. Start the site:
+
+   ```bash
+   docker start wp-northwind-bakery
+   ```
+
+Delete `wordpress.before-restore` once the site works. The database password stays inside the
+`wpl7-mariadb` container, where the commands read it, so it never shows in the process list.
+
+If the site's address changed since the backup, the database still holds the old one. Replace it
+the way the panel does:
+
+```bash
+docker exec -u 33:33 wp-northwind-bakery wp search-replace 'https://northwind-bakery.dev.example.com' 'https://northwindbakery.example' --all-tables --skip-columns=guid
+```
+
+## Restore from a bucket
+
+An offsite copy has the same four files under
+`<bucket>/<prefix>/<slug>/<YYYYMMDD-HHMMSS>/`. The prefix defaults to the panel's domain. For an
+SFTP, FTP or WebDAV destination, the path starts at the remote directory you set instead.
+
+Describe the destination in rclone's config file, `~/.config/rclone/rclone.conf`:
+
+```ini
+[dest]
+type = s3
+provider = AWS
+access_key_id = <access key id>
+secret_access_key = <secret access key>
+region = eu-central-1
+```
+
+For an S3-compatible vendor, set its `provider` and `endpoint` as rclone documents them. Then copy
+the backup down and check it:
+
+```bash
+rclone copy dest:my-backups/panel.example.com/northwind-bakery/20261004-030000 ./restore
+```
+
+```bash
+cd restore && sha256sum -c sha256sums
+```
+
+Any S3 client works too, because the files are stored as they are. Continue with the steps above.
+
+## Restore from an encrypted bucket
+
+An encrypted destination stores every name and every byte below `<bucket>/<prefix>` as
+ciphertext. You need both halves of its secret: the passphrase and the salt. The panel shows them
+under **Backups → Storage**, with **Passphrase** on the destination.
+
+:::danger
+Without the passphrase and the salt, the encrypted copies cannot be read by you, the provider or
+anyone else. Keep both outside the panel.
+:::
+
+rclone's config stores both halves obscured. Obscure each one:
+
+```bash
+rclone obscure 'the-passphrase'
+```
+
+```bash
+rclone obscure 'the-salt'
+```
+
+Add a crypt remote to the config, anchored at the bucket and prefix as the panel anchors it:
+
+```ini
+[vault]
+type = crypt
+remote = dest:my-backups/panel.example.com
+filename_encryption = standard
+directory_name_encryption = true
+password = <obscured passphrase>
+password2 = <obscured salt>
+```
+
+`rclone lsd vault:` lists the site names, decrypted. Copy one backup down and check it:
+
+```bash
+rclone copy vault:northwind-bakery/20261004-030000 ./restore
+```
+
+```bash
+cd restore && sha256sum -c sha256sums
+```
+
+## Restore the panel's database
+
+The nightly panel backup is `<backup root>/panel/<YYYYMMDD-HHMMSS>/panel.db.gz`, on the panel's
+server, with a `manifest.json` and `sha256sums`. It does not contain the panel's SSH key. Restore
+it with the panel stopped:
+
+```bash
+docker stop wpl7-panel
+```
+
+```bash
+rm -f /srv/panel/panel.db-wal /srv/panel/panel.db-shm
+```
+
+```bash
+gunzip -c /srv/backups/panel/20261004-030000/panel.db.gz > /srv/panel/panel.db
+```
+
+```bash
+chmod 600 /srv/panel/panel.db
+```
+
+```bash
+docker start wpl7-panel
+```
+
+The panel then brings every server in line with that database. FTP logins created after the
+snapshot are gone, and logins deleted since come back.
+
+## Rebuild a site elsewhere
+
+`manifest.json` has what you need to run the site on any Docker host:
+
+- The official `wordpress:php<version>-apache` image, with the PHP version from the manifest.
+- A new database and user, with `db.sql.gz` imported into it.
+- The `wordpress/` folder from `files.tar.gz` as `/var/www/html`, owned by uid 33.
+- The database settings as the variables `WORDPRESS_DB_HOST`, `WORDPRESS_DB_NAME`,
+  `WORDPRESS_DB_USER` and `WORDPRESS_DB_PASSWORD`, because the site's `wp-config.php` reads them
+  from the environment. The table prefix is `wp_`.
+
+## Limits
+
+- The steps restore the files and the database. A site rebuilt on another host runs without what
+  the panel adds: its own mail login, its protection rules and its resource limits.
+- The database password of a site is not in its backup. On another host, the site gets a new
+  database user.
+- Restoring the panel's database rolls back everything the panel knows to that night, users and
+  API keys included.
+
+## Related
+
+- [Restore and download](/docs/backups/restore/)
+- [How backups work](/docs/backups/overview/)
+- [Offsite copies](/docs/backups/offsite/)
+- [Backup storage](/docs/backups/storage/)
+- [Architecture](/docs/reference/architecture/)

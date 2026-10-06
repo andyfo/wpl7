@@ -14,6 +14,7 @@
  *   panel from in the last 30 days. Locking out the person who would lift the block is the
  *   failure that matters most.
  */
+// @docs security/blocked-addresses
 import { and, count, desc, eq, gt, isNull, lt, lte, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import {

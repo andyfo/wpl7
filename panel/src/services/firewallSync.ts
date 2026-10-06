@@ -13,6 +13,7 @@
  * Changes are coalesced: a detector that blocks ten addresses in one pass causes one load and
  * one Traefik reload per server.
  */
+// @docs help/troubleshooting, security/blocked-addresses
 import crypto from 'node:crypto';
 import path from 'node:path';
 import type { Config } from '../config.js';

@@ -8,6 +8,7 @@
  *
  * The resolver is injected so the whole module is testable without a network.
  */
+// @docs mail/records, mail/setup, security/privacy
 import dnsPromises from 'node:dns/promises';
 import type { MailRecordCheck } from '../../shared/types.js';
 import { dkimRecordName, dkimRecordValue } from './mailDkim.js';

@@ -38,7 +38,9 @@ Desktop and about five minutes.
 - **Commented where it is surprising.** Comments in this codebase explain *why*, not what.
   If a line exists because of something that went wrong once, say so — that is the comment
   that saves the next person.
-- **Documented.** A change in behaviour updates `docs/` in the same PR.
+- **Documented.** The docs pages the `docs-sync` comment lists are updated, or the PR says
+  `Docs: not needed — <reason>`. The pages are in `docs/site/`, and
+  [docs/site/README.md](docs/site/README.md) says how to write them.
 
 Label your PR `breaking`, `feature`, `fix`, `docs` or `internal`; that is how the release
 notes group themselves.

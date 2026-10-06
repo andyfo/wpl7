@@ -1,6 +1,7 @@
 # Local-only override: remap edge/panel ports when 80/3000 are taken on the host
 # (e.g. LocalWP or another dev server). Combine AFTER docker-compose.dev.yml:
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.build.yml -f docker-compose.ports.yml up -d
+# @docs reference/architecture, reference/third-party
 services:
   traefik:
     ports: !override

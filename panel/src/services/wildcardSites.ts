@@ -1,3 +1,4 @@
+// @docs integrations/cloudflare
 import { asc } from 'drizzle-orm';
 import { sites, type ServerRow } from '../db/schema.js';
 import type { JobWorker } from '../jobs/worker.js';

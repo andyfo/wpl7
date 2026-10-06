@@ -1,3 +1,4 @@
+// @docs backups/delete
 import { backupTypes, type BackupType } from '../../../shared/schemas';
 import type { BackupListDto, BackupListItemDto } from '../../../shared/types';
 

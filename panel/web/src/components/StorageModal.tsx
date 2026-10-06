@@ -1,3 +1,4 @@
+// @docs backups/storage
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { MountOption, ServerStorageDto } from '../../../shared/types';

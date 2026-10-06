@@ -1,3 +1,4 @@
+// @docs help/troubleshooting, panel/updating
 import fs from 'node:fs';
 import path from 'node:path';
 import { desc, eq, inArray } from 'drizzle-orm';

@@ -1,0 +1,89 @@
+---
+title: Introduction
+description: "WPL7 turns an Ubuntu server into WordPress hosting, with a panel that runs your sites and servers."
+hero:
+  title: WP<span class="brand-name-accent">L7</span>
+  tagline: WPL7 turns an Ubuntu server into WordPress hosting, with a panel that runs your sites and servers.
+  actions:
+    - text: Quick start
+      link: /docs/get-started/quick-start/
+      variant: primary
+      icon: right-arrow
+    - text: Download
+      link: https://github.com/andyfo/wpl7/releases/latest
+      variant: secondary
+      icon: external
+sources:
+  - README.md
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+<Screenshot name="overview" alt="The panel's Dashboard: the servers, recent activity and the WordPress card" />
+
+## Who it is for
+
+WPL7 is for agencies and freelancers who host their clients' sites, and for anyone who would
+rather pay for a server than per site. The panel, the data and the sites all stay on your
+servers. There is no control plane and no telemetry.
+
+## What you get
+
+- [Sites](/docs/sites/overview/). Each site runs in its own container with its own PHP
+  version, and goes live on a customer's domain without downtime.
+- [Servers](/docs/servers/overview/). The panel sets up more servers over SSH, watches their
+  uptime and load, and moves sites between them.
+- [Plugins](/docs/plugins/overview/). One table shows every plugin, theme and WordPress version
+  on every site, rated against known vulnerabilities.
+- [Backups](/docs/backups/overview/). Backups run on a schedule or on demand, and offsite
+  copies can go to S3, SFTP, FTP or WebDAV storage.
+- [Mail](/docs/mail/overview/). `wp_mail()` works on every site, through a relay that signs
+  with DKIM, and the panel shows every message.
+- [Security](/docs/security/overview/). Rules and rate limits guard each site, an address that
+  attacks one is blocked on every server, and a daily scan looks for malware.
+- [Automations](/docs/automations/jobs/). Every change runs as a job with a log, and schedules
+  run backups, scans and your own commands.
+- [Integrations](/docs/integrations/api/). A REST API takes keys at three levels, and AI apps
+  connect over MCP.
+
+## How it works
+
+```text
+             ┌──────────────────── your server ─────────────────────┐
+ :80 :443 ───┤ Traefik: TLS, routing, access log                    │
+             │    │                                                 │
+             │    ├── wp-northwind-bakery   PHP 8.4  ─┐             │
+             │    ├── wp-harbor-yoga        PHP 8.3  ─┤ one network │
+             │    └── wp-blue-fern          PHP 8.2  ─┘ per site    │
+             │              │                 │                     │
+             │           MariaDB      mail relay + DKIM             │
+             │                                                      │
+             │ panel: Node + SQLite, /srv, Docker socket            │
+             └──────────────────────────────────────────────────────┘
+```
+
+Traefik receives every request and passes it to the site's own container. Each site shares a
+network only with Traefik, MariaDB and the mail relay, never with another site. The panel
+manages all of it through Docker, and long operations run as jobs with logs.
+[How WPL7 works](/docs/get-started/how-it-works/) explains each part.
+
+## What leaves your server
+
+On its own, the panel only fetches public data:
+
+- GitHub, every hour: new releases and the recipe catalog.
+- wpvulnerability.net, daily: plugin and theme slugs and the WordPress version, never a site's
+  name. You can switch this off.
+- wordpress.org: checksums for the malware scan, and the plugin searches you make.
+- Every week: the internet registries' address-to-country tables, and the address lists that
+  Cloudflare, Jetpack and AI companies publish.
+- DNS lookups, to check a visitor who claims to be a search engine's crawler.
+
+[What leaves your server](/docs/security/privacy/) lists every call, and how to switch it off.
+
+## Related
+
+- [Quick start](/docs/get-started/quick-start/)
+- [Installation](/docs/get-started/installation/)
+- [Your first site](/docs/get-started/first-site/)
+- [How WPL7 works](/docs/get-started/how-it-works/)

@@ -1,3 +1,4 @@
+// @docs plugins/overview, plugins/updates, sites/bulk, sites/wordpress
 import { and, asc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import {
   siteWpComponents,

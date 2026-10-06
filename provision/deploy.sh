@@ -13,6 +13,7 @@
 #
 # Run as the user that OWNS the checkout (`wp` after dev-access.sh, else root): pulling as
 # root into a wp-owned checkout leaves files wp can no longer edit.
+# @docs panel/updating, reference/installer-and-scripts
 set -euo pipefail
 
 # Usage needs no repo and no re-exec - answer it before anything else can fail.

@@ -1,3 +1,4 @@
+// @docs automations/schedules, backups/overview, get-started/how-it-works
 import { Cron } from 'croner';
 import { and, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { jobs, siteWpStatus, sites, type JobRow, type ScheduleRow } from '../db/schema.js';

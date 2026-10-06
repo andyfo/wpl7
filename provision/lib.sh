@@ -2,6 +2,7 @@
 # Shared helpers for the provision/ scripts. Sourced, never executed.
 #
 #   . "$REPO_DIR/provision/lib.sh"
+# @docs get-started/installation, reference/installer-and-scripts
 
 # --------------------------------------------------------------------- .env
 

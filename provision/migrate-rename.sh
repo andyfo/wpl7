@@ -14,6 +14,7 @@
 # minute between Traefik stopping and the new stack answering, and they stay on their old
 # networks afterwards - the panel queues one `site.reconcile` each to finish the job, with
 # the usual per-site rollback (services/legacyRename.ts).
+# @docs reference/installer-and-scripts
 set -euo pipefail
 
 case "${1:-}" in -h|--help) sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;; esac

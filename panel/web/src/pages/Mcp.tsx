@@ -1,3 +1,4 @@
+// @docs integrations/mcp
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';

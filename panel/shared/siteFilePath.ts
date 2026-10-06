@@ -11,6 +11,7 @@
  * name before sending it.
  */
 
+// @docs sites/files
 /** Where the site's WordPress folder is mounted inside its container. */
 export const SITE_FILES_ROOT = '/var/www/html';
 

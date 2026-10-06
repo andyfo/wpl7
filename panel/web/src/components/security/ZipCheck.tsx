@@ -1,3 +1,4 @@
+// @docs plugins/catalog, security/malware-scans, security/site-protection
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import type { PluginDto, PluginZipCheckDto, PluginZipFindingDto } from '../../../../shared/types';

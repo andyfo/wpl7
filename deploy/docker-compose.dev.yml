@@ -6,6 +6,7 @@
 # Mailpit replaces postfix: it catches all wp_mail() output, web UI at http://mail.localtest.me
 # Mailpit speaks no milter protocol, so the DKIM signer is switched off here - signing and the
 # traffic view (which parses postfix's log) are production-only.
+# @docs reference/architecture, reference/third-party
 services:
   traefik:
     command:

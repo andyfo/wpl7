@@ -1,0 +1,61 @@
+---
+title: Terminal
+description: "Open a root shell on any of your servers in the browser, and what the panel records about it."
+sidebar:
+  order: 3
+sources:
+  - panel/web/src/pages/Terminal.tsx
+  - panel/web/src/pages/terminalTarget.ts
+  - panel/src/routes/terminal.ts
+  - panel/src/servers/terminal.ts
+  - panel/src/plugins/apiActivity.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+**Servers → Terminal** opens a root shell on one of your servers, in the browser. Use it for what
+the panel has no button for: reading a container's log, checking a disk, or running the firewall
+helper.
+
+<Screenshot name="terminal" alt="Servers → Terminal with a root shell open on fra1" />
+
+## Open a shell
+
+1. Choose **Servers → Terminal**, or **Terminal** on a server's page.
+2. Pick the machine under **Connect to**. The address bar names the server your keystrokes go to.
+3. Wait for the prompt. The panel connects over SSH as root, with its own key.
+
+Picking another server under **Connect to** closes the shell and opens a new one. **Servers →
+Terminal** reopens the server you used last in this browser.
+
+## When it does not connect
+
+- If the server refuses root's login, the panel adds its key to root's `authorized_keys` and tries
+  once more. The terminal shows each step.
+- A server whose SSH host key changed is refused. After a reinstall, switch on **Forget the pinned
+  SSH host key (only after a legitimate reinstall)** under **Edit settings** on its page.
+- **Reconnect** appears when a session ends. The panel never reconnects by itself, because the
+  server's firewall limits how often SSH connections may be opened.
+
+## What is recorded
+
+The panel's log notes each terminal that opens, and on which server. A terminal opened with an
+API key also appears in the API activity log, under that key. What you type is not recorded.
+
+## Limits
+
+- At most ten terminals are open at once, across all servers and people.
+- A session closes after 30 minutes without input or output.
+- An open shell keeps running after you sign out, or after your account is removed, until it exits
+  or idles out.
+- On the panel's own server, the terminal connects to SSH on port 22. The SSH daemon must accept
+  root logins with a key.
+- An API key needs Full access to open a terminal, and AI apps over MCP cannot open one.
+- The shell is root. Nothing it does is checked, contained or undone by the panel.
+
+## Related
+
+- [Servers and monitoring](/docs/servers/overview/)
+- [Disk, logs and housekeeping](/docs/servers/resources/)
+- [Accounts and access to the panel](/docs/security/accounts/)
+- [The REST API](/docs/integrations/api/)

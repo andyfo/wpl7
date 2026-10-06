@@ -1,0 +1,96 @@
+---
+title: The Sites list
+description: "Every site at a glance, what its status means, and the tabs of a site's page."
+sidebar:
+  order: 1
+sources:
+  - panel/web/src/pages/Sites.tsx
+  - panel/web/src/pages/SiteDetail.tsx
+  - panel/web/src/lib/siteHealth.ts
+  - panel/src/lib/httpProbe.ts
+  - panel/src/services/sites.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+**Sites → All sites** lists every site on every server, with its state, its PHP version and
+its traffic. A row opens the site's page, whose tabs hold everything about that site.
+
+<Screenshot name="sites-list" alt="Sites → All sites with twelve sites over three servers" />
+
+## Read the list
+
+| Column | What it shows |
+|---|---|
+| **Site** | The title, and the site's address, which opens in a new tab. |
+| **Status** | One badge for the site's state, explained below. |
+| **Mode** | **dev** while the site is on its dev domain, **live** once it has gone live. |
+| **Server** | Where the site runs. Shown when there is more than one server. |
+| **PHP** | The site's PHP version. |
+| **Updates** | Plugin, theme and WordPress updates the last scan found, with the worst known vulnerability. A dash means not scanned yet. |
+| **Visitors** | Unique visitors in the last 24 hours. Hover for page views. |
+| **Disk** | The space the site uses. |
+| **Created** | How long ago the site was created. |
+
+With more than one server, a menu at the top shows the sites of one server only. Choose a row
+to open the site, or Cmd-click or Ctrl-click it to open the site in a new tab.
+
+## Status and health
+
+Two readings decide the **Status** badge. The panel records what the last job left the site
+as, such as running or stopped. An uptime check also requests the site through Traefik, every
+minute by default. A page, a redirect, a 401 or a 403 counts as an answer. Nothing, a 404 or
+a server error counts as down.
+
+| Badge | What it means |
+|---|---|
+| **Online** | Started, and the last check got an answer. |
+| **Checking** | Started, and no check has finished since the panel started. |
+| **Offline** | Started, but not serving: the check failed, or the container exited or never ran. |
+| **No container** | The panel expects the site to run, and Docker has no container for it. |
+| **Stopped** | Stopped on purpose. |
+| **Unknown** | The site's server could not be reached, so nothing shown is current. |
+| **Creating**, **Deleting** | A job is creating or removing the site. |
+| **Error** | A job failed and left the site half-changed. |
+
+The list only knows the check. The site page also asks Docker about the container, so only it
+shows **No container** and **Unknown**.
+
+For a bad state, the site page shows a red banner with the cause and the button that repairs
+it. **Start** is for a container that exited or never ran, and **Restart** for one that runs
+but fails. **Recreate container** is for a 404, a missing container or an **Error**. Files and
+the database stay as they are.
+
+## The site page
+
+The page's header shows the site's title, its badges and its address. The tabs:
+
+| Tab | What it holds |
+|---|---|
+| **Overview** | **Start**, **Stop**, **Restart**, **Recreate container**, **Log in to WordPress** and **Go live →**. Below them, the site's facts and its last 24 hours of response time, CPU and memory. |
+| **Visitors** | [Visitor statistics](/docs/sites/visitors/). |
+| **Backups** | The site's backups, and whether it is in the scheduled ones. See [How backups work](/docs/backups/overview/). |
+| **WordPress** | Updates, plugins, themes, maintenance mode and WP-CLI. See [Manage WordPress](/docs/sites/wordpress/). |
+| **Files** | The site's [files](/docs/sites/files/) in the browser. |
+| **FTP** | [FTP and SFTP logins](/docs/sites/ftp-sftp/) for the site. |
+| **Security** | The site's protection, its malware scans and the requests it blocked. See [Site protection](/docs/security/site-protection/). |
+| **Settings** | PHP version, domains and deleting the site. See [Site settings](/docs/sites/settings/). |
+
+On a fleet, **Overview** also offers **Move server**. Banners appear there when the site's
+outgoing mail is suspended, with **Resume mail**, and after a move, with **Finalize now**.
+
+## Limits
+
+- The list has no search and no selection. To change many sites at once, use
+  [Bulk management](/docs/sites/bulk/).
+- The uptime check asks for one page. A site that answers it can still be broken elsewhere.
+- **Mode** only says whether the site went live. It does not check that the domain's DNS
+  still points at the server.
+
+## Related
+
+- [Create a site](/docs/sites/create/)
+- [Site settings](/docs/sites/settings/)
+- [Bulk management](/docs/sites/bulk/)
+- [Servers and monitoring](/docs/servers/overview/)
+- [Troubleshooting](/docs/help/troubleshooting/)

@@ -1,3 +1,4 @@
+// @docs integrations/mcp
 import type { Config } from '../config.js';
 
 /**

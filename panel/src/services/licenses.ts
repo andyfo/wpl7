@@ -1,3 +1,4 @@
+// @docs plugins/recipes, reference/recipe-format
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import {

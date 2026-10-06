@@ -16,6 +16,7 @@
 # Everything else is passed straight to setup.sh (--role=worker, --dns-provider=, --ssh-port=,
 # --no-firewall, …).
 set -euo pipefail
+# @docs get-started/installation, get-started/quick-start, panel/updating, reference/installer-and-scripts
 
 REPO="${WPL7_REPO:-andyfo/wpl7}"
 DIR="/opt/wpl7"

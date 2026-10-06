@@ -146,3 +146,19 @@ jobs:
           flags=(--generate-notes --title "$TAG")
           if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
           gh release create "$TAG" "${flags[@]}" "${assets[@]}"
+
+  # A release created with the workflow's own token starts no workflow, so docs.yml never hears of
+  # it. A manual run can be started with that token: it publishes the docs from main with the new
+  # release notes, which takes the Edge badges off what this release ships.
+  docs:
+    name: Publish the docs
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: gh workflow run docs.yml --repo "$REPO" --ref main -f publish=true -f screenshots=false

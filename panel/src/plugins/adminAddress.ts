@@ -1,3 +1,4 @@
+// @docs security/blocked-addresses
 import type { FastifyInstance } from 'fastify';
 import { PROXY_HEADERS } from '../../shared/security.js';
 import { resolveClient, type ProxyHeaders } from '../lib/clientIp.js';

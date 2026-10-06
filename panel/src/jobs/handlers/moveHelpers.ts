@@ -1,3 +1,4 @@
+// @docs sites/move
 import { Transform } from 'node:stream';
 import type { ServerHandle } from '../../servers/registry.js';
 import { safeJoin } from '../../lib/slug.js';
