@@ -1,3 +1,4 @@
+// @docs servers/terminal
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { Terminal as XTerm } from '@xterm/xterm';

@@ -1,3 +1,4 @@
+// @docs sites/files
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useBlocker } from 'react-router';
 import { basicSetup } from 'codemirror';

@@ -1,0 +1,178 @@
+---
+/**
+ * The paid managed installation, offered next to the instructions for doing it yourself: a box in
+ * the page (`<ManagedInstall />`), and a compact one under "On this page" (`variant="aside"`).
+ */
+import { MANAGED_INSTALL_URL } from '../lib/site';
+
+interface Props {
+  variant?: 'page' | 'aside';
+}
+const { variant = 'page' } = Astro.props;
+const text =
+  variant === 'page'
+    ? 'Want your own hosting without doing the setup yourself? We install WPL7 on your server and hand it over ready to use. The server, the panel and every site on it stay yours.'
+    : "Want your own hosting without the setup work? We'll install WPL7 on your server for you.";
+---
+
+<div class:list={['managed-install', 'not-content', `is-${variant}`]}>
+  <span class="managed-install-icon" aria-hidden="true">
+    <!-- Lucide's `server-cog` (lucide-static 1.52, ISC). -->
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m10.852 14.772-.383.923" />
+      <path d="M13.148 14.772a3 3 0 1 0-2.296-5.544l-.383-.923" />
+      <path d="m13.148 9.228.383-.923" />
+      <path d="m13.53 15.696-.382-.924a3 3 0 1 1-2.296-5.544" />
+      <path d="m14.772 10.852.923-.383" />
+      <path d="m14.772 13.148.923.383" />
+      <path d="M4.5 10H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-.5" />
+      <path d="M4.5 14H4a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2h-.5" />
+      <path d="M6 18h.01" />
+      <path d="M6 6h.01" />
+      <path d="m9.228 10.852-.923-.383" />
+      <path d="m9.228 13.148-.923.383" />
+    </svg>
+  </span>
+  <div class="managed-install-body">
+    <p class="managed-install-title">Managed installation</p>
+    <p class="managed-install-text">{text}</p>
+    <a class="managed-install-button" href={MANAGED_INSTALL_URL}>
+      Get it installed
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M5 12h14 m-5-5 5 5-5 5" />
+      </svg>
+    </a>
+  </div>
+</div>
+
+<style>
+  .managed-install {
+    border-radius: 12px;
+    background: var(--sl-color-accent-low);
+  }
+  .managed-install-icon {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+    border-radius: 10px;
+    background: var(--sl-color-black);
+    color: var(--sl-color-text-accent);
+  }
+  .managed-install-title {
+    margin: 0;
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+  .managed-install-text {
+    margin: 0.3rem 0 1rem;
+    line-height: 1.55;
+    color: var(--sl-color-gray-2);
+  }
+  .managed-install-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    border-radius: 8px;
+    background: var(--wpl7-accent);
+    color: var(--wpl7-accent-foreground);
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .managed-install-button:hover {
+    background: var(--wpl7-accent-hover);
+    color: var(--wpl7-accent-foreground);
+  }
+  .managed-install-button svg {
+    width: 1em;
+    height: 1em;
+  }
+
+  /* In the page: the icon beside the text. */
+  .is-page {
+    display: flex;
+    gap: 1rem;
+    padding: 1.25rem 1.5rem;
+  }
+  .is-page .managed-install-icon {
+    width: 2.5rem;
+    height: 2.5rem;
+  }
+  .is-page .managed-install-icon svg {
+    width: 1.4rem;
+    height: 1.4rem;
+  }
+  .is-page .managed-install-title {
+    font-size: var(--sl-text-base);
+  }
+  .is-page .managed-install-text {
+    font-size: var(--sl-text-sm);
+  }
+  .is-page .managed-install-button {
+    height: 2.25rem;
+    padding-inline: 1rem;
+    font-size: var(--sl-text-sm);
+  }
+
+  /* Under "On this page", and on a phone: narrow, so the icon sits on the title's line. */
+  @media (max-width: 30rem) {
+    .is-page {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      column-gap: 0.75rem;
+      padding: 1.25rem;
+    }
+    .is-page .managed-install-body {
+      display: contents;
+    }
+    .is-page .managed-install-title {
+      align-self: center;
+    }
+    .is-page .managed-install-text,
+    .is-page .managed-install-button {
+      grid-column: 1 / -1;
+    }
+    .is-page .managed-install-text {
+      margin-top: 0.75rem;
+    }
+    .is-page .managed-install-button {
+      justify-self: start;
+    }
+  }
+  .is-aside {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 0.6rem;
+    margin-top: 1.75rem;
+    padding: 1rem;
+  }
+  .is-aside .managed-install-body {
+    display: contents;
+  }
+  .is-aside .managed-install-icon {
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 7px;
+  }
+  .is-aside .managed-install-icon svg {
+    width: 1.05rem;
+    height: 1.05rem;
+  }
+  .is-aside .managed-install-title {
+    align-self: center;
+    font-size: var(--sl-text-sm);
+  }
+  .is-aside .managed-install-text,
+  .is-aside .managed-install-button {
+    grid-column: 1 / -1;
+  }
+  .is-aside .managed-install-text {
+    margin-top: 0.6rem;
+    font-size: var(--sl-text-xs);
+  }
+  .is-aside .managed-install-button {
+    height: 2rem;
+    font-size: var(--sl-text-xs);
+  }
+</style>

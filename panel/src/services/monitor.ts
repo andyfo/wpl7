@@ -1,3 +1,4 @@
+// @docs servers/overview, servers/resources
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import { and, eq, gte, inArray, lte, sql } from 'drizzle-orm';

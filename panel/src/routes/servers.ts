@@ -1,3 +1,4 @@
+// @docs servers/add
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';

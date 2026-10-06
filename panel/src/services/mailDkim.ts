@@ -9,6 +9,7 @@
  * Everything in this module is pure (key generation aside); `MailService` performs the
  * file writes and the container restart.
  */
+// @docs mail/overview, mail/records
 import crypto from 'node:crypto';
 
 /** Same default selector the rest of the ecosystem uses; visible in the DNS record name. */

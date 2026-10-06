@@ -1,0 +1,119 @@
+---
+title: Updating WPL7
+description: "How the panel learns about new versions, and how an update is applied, checked and rolled back."
+sidebar:
+  order: 2
+sources:
+  - panel/src/services/updates.ts
+  - panel/src/services/systemUpdate.ts
+  - panel/src/jobs/handlers/systemUpdate.ts
+  - panel/src/updates/hooks.ts
+  - panel/web/src/components/UpdatesCard.tsx
+  - panel/web/src/components/UpdateProgress.tsx
+  - provision/update.sh
+  - provision/deploy.sh
+  - install.sh
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+The panel checks for a new version once an hour, and the header says when there is one. An update
+replaces the panel, checks that the new one is healthy, and puts everything back if it is not. Site
+containers keep running throughout.
+
+<Screenshot name="settings-updates" alt="Settings → Updates with a new version available" />
+
+## Channels
+
+Each install follows one [channel](/docs/reference/glossary/#channel), and the panel offers only
+that channel's versions.
+
+| Channel | Follows | For |
+|---|---|---|
+| `stable` | Published releases | Servers with customers on them |
+| `edge` | The rolling build of `main`, published after every merge | Trying what comes next, on a server you can afford to break |
+
+The installer follows stable unless given `--channel=edge`, and `update.sh --to=edge` moves an
+install to edge.
+
+## Check for a new version
+
+The hourly check runs at a minute picked for your install, and downloads nothing. **Check now** on
+**Settings → Updates** asks at once. With an alert address set in **Settings → Mail**, it also
+emails you once per new version.
+
+"Could not check for updates" means GitHub refused or did not answer, often because of its limit
+on anonymous requests. A read-only `WPL7_GITHUB_TOKEN` in `deploy/.env` lifts that limit.
+
+## Apply an update from the panel
+
+1. Open **Settings → Updates** and read the release notes.
+2. Choose **Update to** followed by the new version.
+3. Confirm with **Update now**.
+
+The update refuses to start while any job is queued or running. While it runs, every page shows a
+banner and the panel refuses changes. The page shows each step, goes quiet for a minute or two
+while the panel is replaced, then offers **Reload**.
+
+## Apply an update on the server
+
+```bash
+sudo /opt/wpl7/provision/update.sh --to=<version> --dry-run
+```
+
+```bash
+sudo /opt/wpl7/provision/update.sh --to=<version>
+```
+
+`--dry-run` changes nothing. Use `--to=edge` on the edge channel. The button in the panel runs the
+same script.
+
+## What happens
+
+1. An install too old for the release is told to update to an intermediate one first.
+2. The new images are pulled. The pre-flight warns about keys missing from `deploy/.env`, little
+   free disk, or a release that needs downtime.
+3. The panel stops, and its database is copied. Then the new version starts.
+4. The [health gate](/docs/reference/glossary/#health-gate) waits for the new panel to report healthy,
+   as the new version.
+5. On any failure, the [rollback](/docs/reference/glossary/#rollback) restores the previous images,
+   files and database copy.
+
+There are no down-migrations. A failed update goes back to the whole previous state. The log of
+the last update is `/srv/panel/update/current.log`.
+
+## Image mode and checkout mode
+
+| | Image mode | Checkout mode |
+|---|---|---|
+| `WPL7_SOURCE` | `image`, the default | `build` |
+| The panel comes from | The released image | The server's own checkout, compiled there |
+| Update with | **Settings → Updates**, or `update.sh` | `provision/deploy.sh` |
+| Rolls back to | The previous image and files | The previous commit |
+
+The button in the panel works in [image mode](/docs/reference/glossary/#image-mode) only.
+`update.sh --force` moves a checkout-mode install to image mode, replacing the panel built there.
+
+## What the panel does afterwards
+
+Once up, the new panel runs the **Finish panel update** job. It runs the steps each skipped release
+needs, updates every worker server, and lifts the read-only state.
+**Settings → Updates** shows how the post-update tasks went.
+
+A failed step is a failed job, never a rollback, because the new version is already running. Fix
+what it reports, then choose **Re-run**.
+
+## Limits
+
+- A panel that always has a job running keeps updates waiting.
+- The button needs the panel's SSH access as root to its own host. A host that refuses root logins
+  updates from the command line.
+- Existing sites keep their site image until their container is recreated.
+
+## Related
+
+- [Settings](/docs/panel/settings/)
+- [Installer and scripts](/docs/reference/installer-and-scripts/)
+- [How WPL7 works](/docs/get-started/how-it-works/)
+- [Changelog](/docs/help/changelog/)
+- [Troubleshooting](/docs/help/troubleshooting/)

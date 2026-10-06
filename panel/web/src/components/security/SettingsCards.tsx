@@ -1,3 +1,4 @@
+// @docs panel/settings, security/malware-scans, security/site-protection
 import { useState } from 'react';
 import { Link } from 'react-router';
 import {

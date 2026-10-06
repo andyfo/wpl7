@@ -1,0 +1,92 @@
+---
+title: Traffic and queue
+description: "Every message your sites sent, volume by site, the queue, and lifting a suspension."
+sidebar:
+  order: 3
+sources:
+  - panel/src/lib/mailLog.ts
+  - panel/src/services/mail.ts
+  - panel/src/services/mailAuth.ts
+  - panel/src/routes/mail.ts
+  - panel/web/src/pages/Mail.tsx
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+import UiPath from '~/components/UiPath.astro';
+
+**Mail → Traffic** lists every message the relays handled, one row per recipient. **Queue** shows
+what is still waiting, and the abuse guard stops a site that sends like a spam run.
+
+<Screenshot name="mail-traffic" alt="Mail → Traffic with the filters above a list of messages: site, sender, recipient, DKIM and status" />
+
+## Find a message
+
+1. Open **Mail → Traffic**.
+2. Narrow the list with **Status**, **Site**, **Window** or **Sender or recipient**.
+3. Choose a row for its details. **Server response** is what the receiving server said.
+
+New mail appears within a minute, and **Refresh now** reads the relays' logs at once. The site is
+taken from the connection, never from the `From:` header, so a hacked site cannot pin its mail on
+another one. History is kept for 30 days by default.
+
+| Status | Means |
+|---|---|
+| `sent` | The receiving server accepted it. It may still file it as spam. |
+| `deferred` | A temporary failure. The relay tries again. |
+| `bounced` | The receiving server refused it for good. |
+| `rejected` | The relay refused it, such as a sender domain the site does not own. |
+| `expired` | The relay tried until it gave up. |
+| `queued` | Accepted and not tried yet. |
+
+## Clear the queue
+
+**Queue** lists what each server's relay still holds, with the reason under each recipient. A few
+deferred messages are normal. A growing queue means delivery is failing.
+
+- **Retry all** asks the relay to try everything now, after you fixed DNS or a smarthost password.
+- **Delete** drops one message.
+- **Empty** discards every waiting message on that server, legitimate mail included. You type
+  `delete` to confirm.
+
+## Watch the volume by site
+
+The **Volume by site (24h)** card on **Mail → Overview** counts what each site sent in the last
+day. It marks the two signs of a hacked site:
+
+| Mark | When |
+|---|---|
+| **high volume** | More than **Flag a site above (messages / hour)**, averaged over the day. The default is 200. |
+| **many failures** | At least 20 messages, more than 40% of them bounced, rejected or expired. |
+| **mail suspended** | The abuse guard has stopped the site's mail. |
+
+Past **Suspend a site above (messages / hour)**, 1,000 by default, the relay refuses the site's
+mail and the panel emails the address in **Send alerts to**. The site keeps serving its pages. All
+three are in <UiPath href="/docs/panel/settings/">Settings → Mail</UiPath>, where 0 switches
+suspension off. Both limits count recipients, so a message to ten people counts ten.
+
+## Lift a suspension
+
+1. Find out why in **Traffic**, filtered to the site.
+2. Clean up the site, and empty what it left in the queue.
+3. On the site's page, choose **Resume mail** in the **Outbound mail suspended** notice.
+
+The count covers the last hour, refused attempts included. A site resumed while it is still over
+the limit is suspended again within a minute. With a Full API key,
+`PUT /api/sites/:slug/mail-suspension` suspends or resumes a site.
+
+## Limits
+
+- The panel suspends a site by itself but never resumes one. A person decides.
+- Mail the relay accepted before a suspension is still delivered, unless you empty the queue.
+- The guard looks at the last hour only. A slower run stays under it and shows only as a mark.
+- `sent` means the receiving server accepted the message, not that it reached the inbox.
+- Traffic comes from each relay's log. If the panel cannot read a log for longer than the server
+  keeps it, the messages in between never appear.
+
+## Related
+
+- [How mail works](/docs/mail/overview/)
+- [Setup guide](/docs/mail/setup/)
+- [Settings](/docs/panel/settings/)
+- [Security in WPL7](/docs/security/overview/)
+- [Troubleshooting](/docs/help/troubleshooting/)

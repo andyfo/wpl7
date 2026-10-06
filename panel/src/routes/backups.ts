@@ -1,3 +1,4 @@
+// @docs backups/delete, backups/overview, backups/restore
 import { PassThrough } from 'node:stream';
 import { and, asc, desc, eq, inArray, isNull, ne, not, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';

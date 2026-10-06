@@ -3,6 +3,7 @@
 # provision/compose.sh appends it when .env says WPL7_SOURCE=build, which is what a checkout
 # install and provision/build.sh both use. Local development on macOS needs it explicitly:
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.build.yml up -d --build
+# @docs reference/architecture, reference/third-party
 services:
   panel:
     build:

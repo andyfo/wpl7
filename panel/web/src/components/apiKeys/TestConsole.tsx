@@ -1,3 +1,4 @@
+// @docs integrations/api
 import { useState } from 'react';
 import { Link } from 'react-router';
 import type { ApiMethod } from '../../../../shared/apiDocs';

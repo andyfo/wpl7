@@ -1,3 +1,4 @@
+// @docs reference/architecture
 import path from 'node:path';
 import { RESERVED_SLUGS, SLUG_RE } from '../../shared/schemas.js';
 

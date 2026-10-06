@@ -1,3 +1,4 @@
+// @docs sites/files
 import { lazy, Suspense, useCallback, useMemo, useRef, useState, type DragEvent } from 'react';
 import { useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';

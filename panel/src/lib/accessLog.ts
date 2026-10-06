@@ -9,6 +9,7 @@
  *
  * Everything here is pure: `TrafficService` owns the I/O, the hashing and the database.
  */
+// @docs sites/visitors
 import { PROXY_HEADERS, parseSecurityName, type ProxyHeader } from '../../shared/security.js';
 import { resolveClient, type ProxyHeaders, type TrustedProxy } from './clientIp.js';
 

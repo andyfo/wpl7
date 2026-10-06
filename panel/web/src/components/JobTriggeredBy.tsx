@@ -1,3 +1,4 @@
+// @docs automations/jobs
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { JobDto } from '../../../shared/types';

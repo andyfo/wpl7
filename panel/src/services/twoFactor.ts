@@ -1,3 +1,4 @@
+// @docs help/troubleshooting, panel/users, security/accounts
 import { sha256Hex } from '../lib/crypto.js';
 import { badRequest, conflict } from '../lib/errors.js';
 import {

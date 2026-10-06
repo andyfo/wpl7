@@ -12,6 +12,7 @@
  * that is what makes a premium plugin's false match one alert, here, rather than one on every
  * site after every update. A zip is only ever trusted as far as that check and that review go.
  */
+// @docs plugins/catalog, security/malware-scans
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';

@@ -1,3 +1,4 @@
+// @docs integrations/mcp
 import crypto from 'node:crypto';
 import { and, count, eq, lt, notExists } from 'drizzle-orm';
 import type { Db } from '../db/index.js';

@@ -1,3 +1,4 @@
+// @docs integrations/mcp
 import { Readable } from 'node:stream';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';

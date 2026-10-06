@@ -1,0 +1,12 @@
+---
+/**
+ * Starlight's "On this page", then the managed installation offer, on every page that has one.
+ * Only the desktop column has it: a phone gets Starlight's own dropdown, which this leaves alone.
+ * Quick start and Installation carry the offer in their text as well.
+ */
+import Default from '@astrojs/starlight/components/TableOfContents.astro';
+import ManagedInstall from '../ManagedInstall.astro';
+---
+
+<Default />
+<ManagedInstall variant="aside" />

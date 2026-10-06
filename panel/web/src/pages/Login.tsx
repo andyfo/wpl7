@@ -1,3 +1,4 @@
+// @docs security/accounts
 import { useState } from 'react';
 import { ApiError, api } from '../api/client';
 import { Button, ErrorNote, Field, inputClass } from '../components/ui';

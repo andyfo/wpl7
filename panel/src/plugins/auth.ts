@@ -1,3 +1,4 @@
+// @docs integrations/api
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ApiKeysService } from '../services/apiKeys.js';
 import { userRef, type PanelUserRef, type UsersService } from '../services/users.js';

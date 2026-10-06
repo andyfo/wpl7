@@ -1,3 +1,4 @@
+// @docs get-started/quick-start, panel/users, security/accounts
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';

@@ -5,6 +5,7 @@
  * `location.href`, so a redirect URI this lets through as `javascript:` would be script running
  * in the panel's own origin.
  */
+// @docs integrations/mcp
 import { accessLevels, type AccessLevel } from './access.js';
 
 /** Custom schemes of the desktop apps that sign in with one. Exact names, nothing looser. */

@@ -1,3 +1,4 @@
+// @docs sites/create, sites/domains, sites/settings
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { z } from 'zod';

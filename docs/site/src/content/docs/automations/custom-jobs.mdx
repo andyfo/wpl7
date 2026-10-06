@@ -1,0 +1,107 @@
+---
+title: Your own scheduled jobs
+description: "Run WP-CLI commands, shell commands or REST API requests on your sites on a schedule, from the panel or the API."
+sidebar:
+  order: 3
+sources:
+  - panel/web/src/components/schedules/ScheduleEditor.tsx
+  - panel/web/src/lib/schedules.ts
+  - panel/shared/scheduleActions.ts
+  - panel/src/routes/schedules.ts
+  - panel/src/jobs/actions.ts
+  - panel/src/jobs/handlers/exec.ts
+  - panel/src/services/wpRest.ts
+  - panel/src/routes/wp.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A custom schedule runs one action on the sites you pick, repeatedly or once. Each run queues a
+[job](/docs/reference/glossary/#job) per site.
+
+<Screenshot name="schedule-new" alt="The New schedule dialog with a WP-CLI command for one site" />
+
+## Create a schedule
+
+1. Open **Automations → Schedules** and choose **New schedule**.
+2. Pick the action under **What**, and the sites under **On**.
+3. Fill in the command or request.
+4. Under **When**, choose **Repeat** and a **Cron schedule**, or **Once** and a date and time.
+5. Choose **Create schedule**.
+
+**Name** is optional. The icons on a schedule's row edit or delete it.
+
+| **What** | Each run |
+|---|---|
+| **Back up** | Backs up each site |
+| **Restart sites**, **Start sites**, **Stop sites** | Restarts, starts or stops each site's container |
+| **Scan WordPress inventory** | Scans the chosen sites in one job |
+| **Update plugins, themes and WordPress** | Scans each site, then updates what has an update, or only what fixes a known vulnerability |
+| **Panel snapshot** | Copies the panel's own database |
+| **WP-CLI command** | Runs a `wp` command in each site |
+| **Shell command** | Runs a shell command in each site |
+| **REST API request** | Sends one request to each site's WordPress REST API |
+
+## Run a WP-CLI or shell command
+
+For **WP-CLI command**, type what follows `wp`, such as `cache flush`. Both kinds of command run
+as www-data, the site's own user, in the WordPress folder of the site's container.
+
+**Stop it after (minutes)** kills a command that runs too long, after 10 minutes by default and 60
+at most. A timeout or a non-zero exit code fails the job. The output goes to the job log, up to
+1,000 lines. The command is stored as written, so keep passwords out of it.
+
+## Send a REST API request
+
+1. Pick the method and type the route after `/wp-json/`, such as `wp/v2/posts?status=draft`.
+2. For a method other than GET, add a JSON body if needed.
+3. To act as a WordPress user, tick **Sign in with an application password**, then fill in
+   **Username** and **Application password**.
+
+Create the application password in the site's WordPress admin, under
+**Users → Profile → Application Passwords**. The login password does not work. The panel stores
+the application password with the schedule and never shows it again.
+
+The request is sent from inside the site's container, so it works before the domain points at the
+server. Any answer outside 2xx fails the job.
+
+## When it runs
+
+Repeating schedules follow the panel's clock, with at least five minutes between runs.
+**All running sites** and **Server** take the sites running at each run, so new sites are included.
+
+A busy, stopped or deleted site is skipped, and the run says why. A schedule never starts a stopped
+site, except with **Start sites**. A run missed while the panel was down is made up once, if
+the panel is back within half an interval, and an hour at most.
+
+## From the API
+
+`POST /api/schedules` creates the same schedules, and `GET /api/schedules/actions` describes
+their options. This one flushes a cache every hour:
+
+```bash
+curl -sX POST "https://panel.example.com/api/schedules" \
+  -H "Authorization: Bearer wpl7_..." \
+  -H 'content-type: application/json' \
+  -d '{"name": "Hourly cache flush", "action": "wp.cli", "target": {"kind": "sites", "slugs": ["northwind-bakery"]}, "params": {"args": ["cache", "flush"]}, "cron": "0 * * * *"}'
+```
+
+A schedule that takes backups needs a Full key: **Back up**, **Panel snapshot**, or an update
+with a backup first. Others need Manage. To run a command once, see `wp/cli`, `shell`
+and `wp/rest` in the [API reference](/docs/integrations/api-reference/).
+
+## Limits
+
+- At most 100 custom schedules.
+- Each server runs one command at a time. A long command delays the other sites' commands there.
+- A started command cannot be canceled. Only its time limit stops it.
+- A `wp godmode` command that waits on a chat is refused.
+- Scheduled backups count toward the backup retention, so frequent runs push out older backups.
+
+## Related
+
+- [Schedules](/docs/automations/schedules/)
+- [Jobs](/docs/automations/jobs/)
+- [Manage WordPress](/docs/sites/wordpress/)
+- [The REST API](/docs/integrations/api/)
+- [How backups work](/docs/backups/overview/)

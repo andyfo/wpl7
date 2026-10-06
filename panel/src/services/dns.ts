@@ -1,3 +1,4 @@
+// @docs integrations/cloudflare, integrations/dns, security/privacy
 import type { Logger } from './index.js';
 
 /** The one provider the panel manages records with, and whose token it hands to Traefik. */

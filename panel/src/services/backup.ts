@@ -1,3 +1,4 @@
+// @docs backups/delete, backups/overview, backups/restore, help/troubleshooting, reference/manual-recovery, servers/resources
 import path from 'node:path';
 import { and, desc, eq, inArray, notInArray } from 'drizzle-orm';
 import type { Db } from '../db/index.js';

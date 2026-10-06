@@ -1,3 +1,4 @@
+// @docs sites/bulk
 import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import {
   batches,

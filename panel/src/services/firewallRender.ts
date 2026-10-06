@@ -14,6 +14,7 @@
  *   one router per trusted proxy matches that header against the list. And where the network
  *   layer is missing, a router refuses direct visitors too. The panel's own host is left out.
  */
+// @docs security/blocked-addresses
 import crypto from 'node:crypto';
 import { cidrBounds, cidrCovers, mergeCidrs, type Cidr } from '../../shared/cidr.js';
 import { BLOCKED_ROUTER_PREFIX } from '../../shared/security.js';

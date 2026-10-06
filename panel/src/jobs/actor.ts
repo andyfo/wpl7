@@ -1,3 +1,4 @@
+// @docs automations/jobs
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { FastifyRequest } from 'fastify';
 import type { JobOrigin } from '../../shared/schemas.js';

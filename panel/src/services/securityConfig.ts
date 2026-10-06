@@ -17,6 +17,7 @@
  * - every file is run through Go's template engine first, so `{{` and `}}` are refused in any
  *   value, and so is a backtick, which would end a rule's quoted string early.
  */
+// @docs security/site-protection
 import { CidrSet, isPrivateIp, normalizeIp, parseCidr, PRIVATE_RANGES } from '../../shared/cidr.js';
 import {
   MAX_CUSTOM_RULES,

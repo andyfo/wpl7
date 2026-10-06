@@ -14,6 +14,7 @@
  * access it needs, and the auth gate (src/plugins/auth.ts) holds every request to it.
  */
 
+// @docs integrations/api
 import { ACCESS_LABELS, allows, type AccessLevel } from './access.js';
 
 export type ApiMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -1967,7 +1968,7 @@ export const API_DOC_RECIPES: ApiDocRecipe[] = [
         comment: 'Later: the customer\'s domain, zero downtime, dev hostname 301s afterwards.',
         method: 'POST',
         path: '/api/sites/customer-shop/go-live',
-        body: { domains: ['customershop.com', 'www.customershop.com'], keepDevAlias: true },
+        body: { domains: ['customershop.example', 'www.customershop.example'], keepDevAlias: true },
       },
     ],
   },

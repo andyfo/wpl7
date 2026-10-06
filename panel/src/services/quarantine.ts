@@ -12,6 +12,7 @@
  * checks the copy, and only then removes the original. A restore is the same in reverse, and
  * never replaces a file that has appeared at that path since.
  */
+// @docs security/malware-scans
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { and, desc, eq, inArray, isNull, lt } from 'drizzle-orm';

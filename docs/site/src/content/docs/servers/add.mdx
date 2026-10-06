@@ -1,0 +1,103 @@
+---
+title: Add a server
+description: "Add a server to the panel: a blank Ubuntu VPS it sets up over SSH, or one you set up yourself."
+sidebar:
+  order: 2
+sources:
+  - panel/src/routes/servers.ts
+  - panel/src/jobs/handlers/servers.ts
+  - panel/src/jobs/handlers/systemUpdate.ts
+  - panel/src/servers/registry.ts
+  - panel/web/src/pages/Servers.tsx
+  - provision/setup.sh
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+An added server is a [worker](/docs/reference/glossary/#worker): it runs the same stack as the
+panel's own server, without the panel. Its sites, databases, mail relay and certificates all live
+on it. The panel reaches it over SSH and nothing else.
+
+<Screenshot name="server-add" alt="The Add server dialog on its Blank VPS tab, showing the panel's SSH key" />
+
+## Before you start
+
+- A fresh Ubuntu 26.04 server with SSH on port 22.
+- For a blank VPS, the panel's SSH key in root's `authorized_keys`.
+
+## Add a blank VPS
+
+1. Under **Servers → All servers**, choose **Add server**.
+2. On **Blank VPS (auto-provision)**, copy the key into your provider account. Then create the VPS.
+3. Enter a **Name**, the **SSH host / IP** and a **Let's Encrypt email**. Leave **Dev domain** at
+   the fleet's own unless this server needs another.
+4. Choose **Provision server** and follow the job in the dialog. A first run takes several minutes.
+
+## What happens
+
+The panel connects as root, copies its provisioning files and its version to `/opt/wpl7`, and runs
+`setup.sh --role=worker` there. That sets up Docker, a firewall, Traefik, MariaDB, the mail relay,
+and the `wpl7-panel` user the panel works as. The panel then runs the checks of **Test** and copies
+its plugin zips over. A server that fails is marked **error**, and **Update stack** on its page runs
+the setup again.
+
+## Add a server you set up yourself
+
+1. Clone WPL7 to `/opt/wpl7` on the server. Keep it there, because **Update stack** writes to it.
+
+   ```bash
+   sudo git clone https://github.com/andyfo/wpl7.git /opt/wpl7
+   ```
+
+2. Run the provisioner with the key from the **Add server** dialog.
+
+   ```bash
+   sudo /opt/wpl7/provision/setup.sh --role=worker --dev-domain=dev.example.com --acme-email=you@example.com --panel-key='<the key from the dialog>'
+   ```
+
+3. In the dialog, open **Already provisioned**. Enter the **Name**, **SSH host / IP** and **Dev
+   domain**, then choose **Verify & add**.
+4. Choose **Update stack** on the server's page once, so it runs the panel's own version.
+
+If one of the panel's checks fails, nothing is saved. Fix the cause and add the server again.
+
+## Point DNS at the new server
+
+The `*.dev.example.com` wildcard record keeps pointing at the panel's server. A site on an added
+server needs a record of its own, such as `harbor-yoga.dev.example.com`, pointing at that server.
+With a [Cloudflare token](/docs/integrations/cloudflare/), the panel creates and moves these records itself.
+
+The panel takes the server's public IP from its default route, which behind NAT is a private
+address. Set the real one with **Edit settings** on the server's page: DNS records and move
+forwarding use it.
+
+## Keep servers up to date
+
+After an update from **Settings → Updates** or `update.sh`, the panel runs the same setup on every
+added server, so they follow its version. **Update stack** does this for one server at any time,
+and is safe to repeat.
+
+## Remove a server
+
+**Remove server** on its page unregisters a server that runs no sites, once you type its name. It
+is refused while a moved site's old copy is still parked there. Files on the machine stay, and the
+panel forgets the backups stored on it. To end the panel's access, delete its key from
+`/home/wpl7-panel/.ssh/authorized_keys` and `/root/.ssh/authorized_keys` on that server.
+
+## Limits
+
+- The dialog connects on SSH port 22. Add a server on another port through the API, with
+  `sshPort`.
+- Without a Cloudflare token, the panel creates no DNS records and gives no reminder. Create each
+  site's record by hand.
+- The panel's key is root on every server that trusts it. Protect `/srv/panel/ssh` like a root
+  password.
+- The panel does not move sites off a server that is down.
+
+## Related
+
+- [Servers and monitoring](/docs/servers/overview/)
+- [Move a site to another server](/docs/sites/move/)
+- [DNS records](/docs/integrations/dns/)
+- [Updating WPL7](/docs/panel/updating/)
+- [API reference](/docs/integrations/api-reference/)

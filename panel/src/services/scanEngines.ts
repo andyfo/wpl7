@@ -1,3 +1,4 @@
+// @docs help/troubleshooting, reference/third-party, security/malware-scans
 import type { EphemeralLockdown } from './docker.js';
 import type { ServerHandle } from '../servers/registry.js';
 import { CHECK_SCRIPT, LOCAL_RULES_DIR, REDUCER_SCRIPT, RULES_SCRIPT, SIGNATURES_SHELL, ZIP_CHECK_SHELL, ZIP_MANIFEST_SCRIPT } from './scanScripts.js';

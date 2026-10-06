@@ -10,6 +10,7 @@
  * configuration is written from here. Keys live in the panel database and are materialized
  * onto every server, so moving a site never breaks its signatures.
  */
+// @docs mail/overview, mail/setup, mail/traffic, security/privacy
 import path from 'node:path';
 import { and, asc, count, desc, eq, gte, isNotNull, like, lt, or } from 'drizzle-orm';
 import type { Db } from '../db/index.js';

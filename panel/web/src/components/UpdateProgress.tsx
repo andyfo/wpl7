@@ -1,3 +1,4 @@
+// @docs panel/updating
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { UpdateStatusDto } from '../../../shared/types';

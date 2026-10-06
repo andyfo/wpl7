@@ -1,3 +1,4 @@
+// @docs servers/terminal
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { WebSocket } from 'ws';
 import { badRequest, forbidden, tooManyRequests } from '../lib/errors.js';

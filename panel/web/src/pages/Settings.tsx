@@ -1,3 +1,4 @@
+// @docs get-started/quick-start, panel/settings, sites/ftp-sftp, sites/settings, sites/visitors
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';

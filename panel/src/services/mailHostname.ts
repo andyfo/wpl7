@@ -17,6 +17,7 @@
  * Everything here is pure. MailService does the reads and writes.
  */
 
+// @docs mail/setup
 /** The relay.env key the image applies as postfix's `myhostname`. */
 export const HOSTNAME_OVERRIDE_KEY = 'POSTFIX_myhostname';
 

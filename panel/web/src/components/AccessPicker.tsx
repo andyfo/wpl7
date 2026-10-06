@@ -1,3 +1,4 @@
+// @docs integrations/api
 import { ACCESS_LABELS, ACCESS_SUMMARIES, accessLevels, type AccessLevel } from '../../../shared/access';
 
 /**

@@ -1,0 +1,17 @@
+---
+/**
+ * <Since v="0.4.0" />: "Edge" while 0.4.0 is newer than the latest release, then "Since 0.4.0".
+ * For a section of a page; a whole page uses the `since:` front matter field instead.
+ */
+import { isEdge } from '../lib/since';
+
+interface Props {
+  v: string;
+}
+const { v } = Astro.props;
+const edge = isEdge(v);
+---
+
+<span class:list={['since-badge', { 'is-edge': edge }]} title={edge ? `Ships in ${v}` : undefined}>
+  {edge ? 'Edge' : `Since ${v}`}
+</span>

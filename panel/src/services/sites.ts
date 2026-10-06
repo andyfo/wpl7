@@ -1,3 +1,4 @@
+// @docs sites/create, sites/move, sites/overview, sites/settings
 import { and, asc, eq } from 'drizzle-orm';
 import type { SiteCreateBody } from '../../shared/schemas.js';
 import type { SiteDetail, SiteSummary, SiteWpSummary } from '../../shared/types.js';

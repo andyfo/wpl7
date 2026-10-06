@@ -1,0 +1,21 @@
+# WPL7 docs: static files, served as they are. Published to <webroot>/docs/ with this file.
+# Apache and LiteSpeed read it; nginx needs hosting/nginx.conf.snippet instead.
+
+# WordPress's rewrite rules stop at this directory: nothing here is a WordPress URL.
+<IfModule mod_rewrite.c>
+  RewriteEngine Off
+</IfModule>
+
+Options -Indexes
+DirectoryIndex index.html
+DirectorySlash On
+ErrorDocument 404 /docs/404.html
+
+<IfModule mod_headers.c>
+  # Pages and the search entry point change with every publish.
+  Header set Cache-Control "public, max-age=300"
+  # Content-hashed files never change under their name: keep them for a year.
+  <If "%{REQUEST_URI} =~ m#^/docs/(_astro/|pagefind/(fragment|index)/|pagefind/pagefind\.[^/]+\.pf_meta$)#">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </If>
+</IfModule>

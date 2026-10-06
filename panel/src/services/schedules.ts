@@ -1,3 +1,4 @@
+// @docs automations/schedules
 import { Cron } from 'croner';
 import { and, asc, eq, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';

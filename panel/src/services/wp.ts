@@ -1,3 +1,4 @@
+// @docs sites/wordpress
 import { SITE_FILES_ROOT } from '../../shared/siteFilePath.js';
 import type { WpPluginRow } from '../../shared/types.js';
 import { badGateway, conflict } from '../lib/errors.js';

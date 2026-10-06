@@ -12,6 +12,7 @@
  * parsed for a timestamp opportunistically — an unreadable one just falls back to ingest time.
  */
 
+// @docs mail/traffic
 /** A message postfix accepted: the envelope, before any delivery attempt. */
 export interface MailEnvelopeEvent {
   kind: 'envelope';

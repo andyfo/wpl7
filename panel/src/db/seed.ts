@@ -1,3 +1,4 @@
+// @docs get-started/installation, get-started/quick-start, help/troubleshooting, panel/settings, sites/ftp-sftp, sites/settings, sites/visitors
 import argon2 from 'argon2';
 import { eq, inArray } from 'drizzle-orm';
 import type { Db } from './index.js';

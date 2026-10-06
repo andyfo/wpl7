@@ -1,3 +1,4 @@
+// @docs panel/users, security/accounts
 import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { sessions, users, type UserRow } from '../db/schema.js';

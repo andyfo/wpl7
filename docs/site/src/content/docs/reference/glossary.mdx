@@ -1,0 +1,215 @@
+---
+title: Glossary
+description: The words WPL7 uses, one line each.
+sidebar:
+  order: 10
+tableOfContents: false
+---
+
+## Admin
+
+An account that signs in to the panel and may do everything in it except remove or change the owner's account, as [Users](/docs/panel/users/) explains.
+
+## API key
+
+A credential your own tools send to the [REST API](/docs/integrations/api/), at one of three levels: Read only, Manage or Full.
+
+## Backup
+
+A copy of one site's database and files, taken on a schedule, on demand or before a risky change, and kept as plain files on the site's server, as [How backups work](/docs/backups/overview/) describes.
+
+## Block list
+
+The addresses every server refuses at its firewall, listed under **Servers → Security** and explained on [Blocked addresses](/docs/security/blocked-addresses/).
+
+## Blocked address
+
+An IP address or range that attack detection or an admin put on the block list, so no server answers it on ports 80 and 443 until the block ends, as [Blocked addresses](/docs/security/blocked-addresses/) describes.
+
+## Catalog
+
+WPL7 has two: the [plugin catalog](/docs/plugins/catalog/) of plugins and zips the new-site wizard offers, and the signed public catalog of [recipes](/docs/plugins/recipes/) the panel fetches every hour.
+
+## Channel
+
+Which builds the panel offers as updates, set by `WPL7_CHANNEL`: `stable` follows releases and `edge` follows every change merged to `main`, as [Updating WPL7](/docs/panel/updating/) explains.
+
+## Checkout mode
+
+An install that builds the panel and site images from a git checkout on the server, marked by `WPL7_SOURCE=build` and described on [Updating WPL7](/docs/panel/updating/).
+
+## Checksum
+
+A file's fingerprint, which [malware scans](/docs/security/malware-scans/) compare with the lists wordpress.org publishes and a restore compares with the list saved beside a backup.
+
+## Connection window
+
+The ten minutes after an admin chooses **Connect an app** on **Integrations → MCP**, the only time an AI app can sign in and be approved, as [AI apps over MCP](/docs/integrations/mcp/) explains.
+
+## Destination
+
+A place [offsite copies](/docs/backups/offsite/) go to: Amazon S3 or S3-compatible storage, an SFTP, FTP or WebDAV server, or another rclone remote.
+
+## Dev domain
+
+The wildcard domain every new site answers on first, as `<slug>.dev.example.com`, set at install and described on [Domains and going live](/docs/sites/domains/).
+
+## DKIM
+
+A signature the relay adds to each outgoing message, which receivers check against a key in the sending domain's DNS, as [SPF, DKIM and DMARC explained](/docs/mail/records/) describes.
+
+## DMARC
+
+A DNS record that tells receivers what to do with mail from a domain that fails SPF and DKIM, and where to send reports, as [SPF, DKIM and DMARC explained](/docs/mail/records/) describes.
+
+## Fetch back
+
+Copying an offsite-only backup from its destination onto the site's current server with **Fetch back**, so it can be restored or downloaded, as [Offsite copies](/docs/backups/offsite/) explains.
+
+## Finding
+
+Something a malware scan reported in a site's files, listed under **Sites → Security → Findings** and explained on [Malware scans](/docs/security/malware-scans/).
+
+## Fleet
+
+All the servers one panel manages, its own server included, shown on [Servers and monitoring](/docs/servers/overview/).
+
+## FTP and SFTP login
+
+A username and password that reaches one site's files over FTP or SFTP and nothing else, added on the site's **FTP** tab and described on [FTP and SFTP logins](/docs/sites/ftp-sftp/).
+
+## Go live
+
+Moving a site from its dev domain to the customer's own domains without downtime, as [Domains and going live](/docs/sites/domains/) explains.
+
+## Health gate
+
+The check an update waits on, where the new panel has to report healthy in time or the update rolls back, as [Updating WPL7](/docs/panel/updating/) explains.
+
+## Housekeeping
+
+The nightly job that prunes old backups, statistics, logs and finished jobs, applies offsite retention and finishes moved sites, described on [Disk, logs and housekeeping](/docs/servers/resources/).
+
+## Image mode
+
+An install that pulls the released panel and site images instead of building them, marked by `WPL7_SOURCE=image` and described on [Updating WPL7](/docs/panel/updating/).
+
+## Job
+
+A long operation the panel runs in the background with a log you can follow, such as creating a site or taking a backup, as [Jobs](/docs/automations/jobs/) explains.
+
+## Key level
+
+What an API key or an AI app may do: Read only, Manage for everything inside the sites, or Full for the panel itself, as [Protection levels and key levels](/docs/reference/security-levels/) lists.
+
+## Lane
+
+A queue that runs one job at a time, one per server plus lanes of their own for work such as offsite uploads, so a long job does not hold up the rest, as [Jobs](/docs/automations/jobs/) explains.
+
+## Live domain
+
+A customer's own domain that a site answers on after going live, the first of which is the site's address, as [Domains and going live](/docs/sites/domains/) explains.
+
+## Maintenance mode
+
+WordPress's maintenance page for visitors, switched on in the **Maintenance mode** card on a site's **WordPress** tab, as [Manage WordPress](/docs/sites/wordpress/) explains.
+
+## MCP
+
+The Model Context Protocol, through which AI apps such as Claude or ChatGPT connect to the panel at `/mcp` and use its API once you switch it on, as [AI apps over MCP](/docs/integrations/mcp/) explains.
+
+## Offsite copy
+
+A copy of a backup on a destination outside the server, uploaded by the server that holds the backup, as [Offsite copies](/docs/backups/offsite/) explains.
+
+## One-click login
+
+Signing in to a site's wp-admin from the panel with **Log in to WordPress**, through a link that works once instead of a password, as [Manage WordPress](/docs/sites/wordpress/) explains.
+
+## Owner
+
+The first account, created at install, which no other admin can remove or change, as [Users](/docs/panel/users/) explains.
+
+## Panel
+
+The WPL7 web interface and API, one container on the first server that manages every server and site, as [How WPL7 works](/docs/get-started/how-it-works/) explains.
+
+## Protection level
+
+The set of rules and limits site protection applies: Off, Standard or Strict, as [Protection levels and key levels](/docs/reference/security-levels/) lists.
+
+## Quarantine
+
+A folder outside the site where a malware scan's finding can be moved so it no longer runs, and from where **Put back** restores it, as [Malware scans](/docs/security/malware-scans/) explains.
+
+## Recipe
+
+A JSON file that tells the panel how to activate a plugin's license on each site, again when the site's address changes, and how to release it, as [Recipes and pro-plugin licenses](/docs/plugins/recipes/) explains.
+
+## Relay
+
+The postfix mail server on each server that takes every site's mail, signs it with DKIM and delivers it, as [How mail works](/docs/mail/overview/) explains.
+
+## Retention
+
+How many scheduled backups of each site are kept, on the server and at each destination, before the oldest are deleted, as [How backups work](/docs/backups/overview/) explains.
+
+## Rollback
+
+Going back to the state before a failed operation, such as a failed update that restores the previous panel, bundle and database, as [Updating WPL7](/docs/panel/updating/) explains.
+
+## Schedule
+
+A task the panel runs on a timetable, such as nightly backups or a WP-CLI command of your own, listed under **Automations → Schedules** and explained on [Schedules](/docs/automations/schedules/).
+
+## Sender authorization
+
+The relay's rule that no site may send mail from a domain that belongs to another site, held through each site's own relay login, as [How mail works](/docs/mail/overview/) explains.
+
+## Server
+
+A machine that runs the WPL7 stack, either the panel's own server or a worker, as [Servers and monitoring](/docs/servers/overview/) explains.
+
+## Site
+
+One WordPress install with its own container, database, network and files, as [The Sites list](/docs/sites/overview/) shows.
+
+## Site protection
+
+The rules and rate limits Traefik applies in front of a site before a request reaches WordPress, set for the fleet or per site, as [Site protection](/docs/security/site-protection/) explains.
+
+## Slug
+
+A site's short name of 3 to 32 lowercase letters, digits and dashes, used in its dev address, container and database names, as [Create a site](/docs/sites/create/) explains.
+
+## SPF
+
+A DNS record that lists the servers allowed to send mail for a domain, as [SPF, DKIM and DMARC explained](/docs/mail/records/) describes.
+
+## Suspension
+
+The relay refusing a site's outgoing mail after it sent more in an hour than the suspension limit, until an admin chooses **Resume mail** on the site, as [Traffic and queue](/docs/mail/traffic/) explains.
+
+## Two-factor authentication
+
+A code from an authenticator app that an account asks for after its password, with recovery codes for a lost phone, as [Accounts and access to the panel](/docs/security/accounts/) explains.
+
+## Vouch
+
+A malware scan vouches for a plugin's files when they match a known copy, either the wordpress.org plugin they say they are or a checked zip of the same version in the plugin catalog, as [Malware scans](/docs/security/malware-scans/) explains.
+
+## Web FTP
+
+The **Files** tab of a site, where you browse, edit, upload and download its files in the browser, as [Files](/docs/sites/files/) explains.
+
+## Wildcard certificate
+
+One certificate for every name under a server's dev domain, shared by its dev sites and issued through a DNS check, so it needs a DNS provider's API token, as [Cloudflare DNS](/docs/integrations/cloudflare/) explains.
+
+## Worker
+
+A server that runs sites but no panel, set up and driven by the panel over SSH, as [Add a server](/docs/servers/add/) explains.
+
+## WP-CLI console
+
+The box on a site's **WordPress** tab where you run WP-CLI commands inside the site's container, as [Manage WordPress](/docs/sites/wordpress/) explains.

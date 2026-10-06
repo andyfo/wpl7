@@ -12,6 +12,7 @@
 # Every step is guarded; the script is safe to re-run. It never overwrites an existing .env,
 # except for a value you pass explicitly on the re-run:
 #   ./provision/setup.sh --mail-hostname=smtp.example.com    # change the name postfix announces
+# @docs get-started/installation, get-started/quick-start, reference/installer-and-scripts, security/overview, servers/add, servers/resources
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -1,3 +1,4 @@
+// @docs backups/offsite, help/troubleshooting, reference/manual-recovery
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';

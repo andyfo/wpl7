@@ -5,6 +5,7 @@
 #   ./provision/compose.sh up -d --build panel   # apply local panel changes
 #   ./provision/compose.sh ps
 #   ./provision/compose.sh logs -f wpl7-panel
+# @docs reference/installer-and-scripts
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

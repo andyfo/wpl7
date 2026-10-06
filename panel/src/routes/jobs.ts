@@ -1,3 +1,4 @@
+// @docs automations/jobs
 import { and, asc, desc, eq, gt, gte, inArray, lte, notInArray, or, sql, type AnyColumn, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';

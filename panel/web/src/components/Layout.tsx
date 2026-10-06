@@ -1,3 +1,4 @@
+// @docs panel/appearance
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, NavLink, Outlet, matchPath, useLocation } from 'react-router';
 import { useMe, useMeta } from '../api/hooks';

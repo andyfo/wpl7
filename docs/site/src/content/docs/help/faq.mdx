@@ -1,0 +1,163 @@
+---
+title: FAQ
+description: "Questions people ask before they install WPL7: requirements, cost, limits, privacy, Cloudflare, mail and moving away."
+sidebar:
+  order: 2
+sources:
+  - README.md
+  - .github/workflows/build-images.yml
+  - panel/web/src/pages/Support.tsx
+  - panel/src/db/schema.ts
+  - panel/src/services/siteSpec.ts
+  - panel/src/services/siteNetwork.ts
+  - deploy/docker-compose.yml
+---
+
+Short answers, each with a link to the page that has the details.
+
+## Before you install
+
+### Who is WPL7 for?
+
+Agencies and freelancers who host their clients' WordPress sites, and anyone who would rather pay
+for a server than per site. It runs on your server, keeps the data on your disk, and has no
+outside service between you and your sites. See [How WPL7 works](/docs/get-started/how-it-works/).
+
+### What does it cost?
+
+The software is free, under the AGPL-3.0 license. You pay for your servers. The vulnerability
+feed it uses is free too. For businesses there is a paid [Enterprise package](https://wpl7.com/enterprise/)
+with hotfixes, priority email support and a dedicated engineer. See [Support](/docs/help/support/).
+
+### What do I need?
+
+A fresh Ubuntu 26.04 server on x86-64 with root access, at least 2 GB of memory, and ports 80 and
+443 open to the internet. You also need a domain whose DNS you can edit, for the panel's address
+and a wildcard for new sites. See [Installation](/docs/get-started/installation/).
+
+### Does it run on ARM?
+
+No. The released images are built for x86-64 only, and the installer pulls them.
+
+### Can it share a server with other software?
+
+No. WPL7 takes the whole machine: it installs Docker, turns on a firewall and takes ports 80
+and 443. Give it a server of its own. See [Installer and scripts](/docs/reference/installer-and-scripts/).
+
+### Is it ready for production?
+
+It is beta, version 0.x, and says so. It hosts real sites, but the API and the `.env` keys may
+still change between minor versions, and only the newest release gets fixes. Take a backup before
+you update, and read the release notes. See [Changelog](/docs/help/changelog/).
+
+## Sites and servers
+
+### How many sites fit on one server?
+
+That depends on the sites, and there is a ceiling. Each site has limits for memory, CPU and
+processes, by default 512 MB, 2 cores and 512 processes. These cap a site and reserve nothing.
+Each site also gets a Docker network of its own, and Docker's default address pools leave room
+for about 25 sites per server. See [Architecture](/docs/reference/architecture/).
+
+### Can I add more servers later?
+
+Yes. **Add server** on the **Servers** page sets up a blank server over SSH, and the panel then
+runs sites there too. You can move a site between servers, and the old server forwards visitors
+until DNS catches up. See [Add a server](/docs/servers/add/) and [Move a site to another server](/docs/sites/move/).
+
+### Which PHP versions can a site use?
+
+PHP 8.2, 8.3, 8.4 and 8.5. Each site picks its own, and you can switch it later. See
+[Site settings](/docs/sites/settings/).
+
+### Can I bring my existing WordPress sites?
+
+There is no importer. You move a site in by hand: create it in WPL7, copy in its `wp-content`
+over SFTP, and import its database with WP-CLI. See [FTP and SFTP logins](/docs/sites/ftp-sftp/)
+and [Manage WordPress](/docs/sites/wordpress/).
+
+### Can I move away from WPL7 later?
+
+Yes. Every site is ordinary WordPress in the official WordPress image. Its backups are plain
+files: a database dump, an archive of its files and a description of the site. You can restore
+them on any host without WPL7. See [Manual recovery without the panel](/docs/reference/manual-recovery/).
+
+### What keeps one hacked site from affecting the others?
+
+Each site runs in its own container on its own network, with dropped capabilities and limits for
+CPU, memory and processes. It cannot reach another site or the panel, and it cannot send mail as
+another site's domain. See [Security in WPL7](/docs/security/overview/).
+
+### What happens when the panel is down?
+
+Sites keep serving visitors, because Traefik routes to them without the panel, and the mail
+relay keeps sending. Scheduled backups, WordPress cron and monitoring wait until the panel is
+back, because the panel runs them.
+
+## Mail and DNS
+
+### Can I use my own SMTP server?
+
+Yes. Set `SMTP_RELAYHOST`, `SMTP_USERNAME` and `SMTP_PASSWORD` in `/opt/wpl7/deploy/.env`, then
+run `setup.sh` again. Without them, mail goes out directly, which many providers block or file as
+spam. See [How mail works](/docs/mail/overview/).
+
+### Does it host email inboxes?
+
+No. Each server's relay sends the mail sites write, and nothing more. It has no published port,
+so it receives no mail from outside. Use an email provider for mailboxes.
+
+### Does it work behind Cloudflare?
+
+Yes. A site can sit behind Cloudflare's proxy: the panel takes the visitor's address from
+Cloudflare's header when the connection comes from Cloudflare's published ranges, so statistics
+and blocking see the real visitor. FTP and SFTP need the server's IP, because Cloudflare's proxy
+carries web traffic only. See [Trust a proxy](/docs/security/site-protection/#trust-a-proxy).
+
+### Do I need Cloudflare?
+
+No. Any DNS provider works if you create the records yourself. A Cloudflare API token lets the
+panel write the records for you and get one wildcard certificate for a server's dev sites. The
+records it writes are not proxied. See [Cloudflare DNS](/docs/integrations/cloudflare/).
+
+## Data and access
+
+### Does it phone home?
+
+There is no telemetry and no control plane. The panel fetches public data only: GitHub every
+hour for new versions and recipes, wpvulnerability.net daily by plugin, theme and WordPress
+version, and wordpress.org's checksums for malware scans. Every week it fetches the internet
+registries' country tables and the address lists Cloudflare, Jetpack and AI companies publish.
+It checks a visitor who claims to be a search engine with a DNS lookup. You can switch off the
+vulnerability feed. See [What leaves your server](/docs/security/privacy/).
+
+### Can my clients log in to the panel?
+
+No. Every panel account is an admin with the same reach. Give a client an account in their own
+site's wp-admin, or an FTP or SFTP login that reaches their site's files and nothing else. See
+[Users](/docs/panel/users/) and [FTP and SFTP logins](/docs/sites/ftp-sftp/).
+
+### Can I automate it?
+
+Yes. The REST API takes API keys at three levels: Read only, Manage and Full. AI apps such as
+Claude or ChatGPT can connect over MCP once you switch it on. See [The REST API](/docs/integrations/api/)
+and [AI apps over MCP](/docs/integrations/mcp/).
+
+### How do updates work?
+
+The panel checks for a new version every hour and tells you. On **Settings → Updates**, the
+button that names the new version applies it. If the new panel does not come back healthy, the
+update rolls back to the previous version and database. See [Updating WPL7](/docs/panel/updating/).
+
+### Where do I get help?
+
+Ask in the [community forum](https://wpl7.com/community), report bugs on GitHub, and report
+security problems privately. Businesses can buy the Enterprise package. See [Support](/docs/help/support/).
+
+## Related
+
+- [Introduction](/docs/)
+- [Quick start](/docs/get-started/quick-start/)
+- [Troubleshooting](/docs/help/troubleshooting/)
+- [Known limits](/docs/reference/limits/)
+- [Support](/docs/help/support/)

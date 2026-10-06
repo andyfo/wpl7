@@ -1,3 +1,4 @@
+// @docs security/accounts
 import { useState, type FormEvent } from 'react';
 import { api } from '../api/client';
 import { Button, ErrorNote, Field, inputClass } from '../components/ui';

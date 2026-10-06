@@ -1,3 +1,4 @@
+// @docs automations/custom-jobs
 import { z } from 'zod';
 import { siteShellCommand, wpCliArgs, wpCliStdin, wpRestAuth, wpRestMethods, wpRestRoute } from '../../../shared/schemas.js';
 import type { SiteRow } from '../../db/schema.js';

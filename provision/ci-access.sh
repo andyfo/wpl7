@@ -9,6 +9,7 @@
 # installed with `restrict` + a forced command, so a leaked Actions secret cannot open a shell,
 # forward a port, or run anything else. The private half is printed (or handed to `gh`) once
 # and never stored on this server.
+# @docs reference/installer-and-scripts
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

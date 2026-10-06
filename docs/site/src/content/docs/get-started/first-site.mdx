@@ -1,0 +1,89 @@
+---
+title: Your first site
+description: "Create a WordPress site, sign in to it, and take it live on a customer domain."
+sidebar:
+  order: 3
+sources:
+  - panel/web/src/pages/NewSite.tsx
+  - panel/web/src/pages/SiteDetail.tsx
+  - panel/src/jobs/handlers/sites.ts
+  - panel/src/services/adminLogin.ts
+  - panel/src/services/labels.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+This tutorial creates a site for a customer, Northwind Bakery, and takes it live on
+`northwindbakery.example`. It needs a running panel, which the
+[Quick start](/docs/get-started/quick-start/) sets up.
+
+<Screenshot name="site-new" alt="The New site wizard with a site title entered" />
+
+## Create the site
+
+1. Open **Sites** and choose **New site**.
+2. In **Site title**, enter `Northwind Bakery`. **Site name (slug)** fills in as
+   `northwind-bakery`. It names the container, the database and the dev address.
+3. Leave **Use my own domain instead of a dev subdomain** off. The wizard shows the address:
+   `northwind-bakery.dev.example.com`. Choose **Continue**.
+4. On the **WordPress** step, enter the customer's **Admin email**. Leave **Generate a strong
+   admin password (shown once after creation)** on, pick the **Language** and the
+   **PHP version**, and choose **Continue**.
+5. On the **Plugins** step, tick plugins from your catalog, or search under **More plugins from
+   wordpress.org**. A fresh panel has an empty catalog. Choose **Continue**.
+6. Check the **Review** step and choose **Create site**.
+
+## Watch the job
+
+The page now follows the job's log. The panel creates the site's network, database
+and container, installs WordPress and the plugins, and runs their
+[recipes](/docs/reference/glossary/#recipe). Only then can visitors reach the site. A yellow
+line is a warning, such as a plugin that would not install. The site is created anyway.
+
+When the job is done, the page shows the site's address and the WordPress admin password.
+Copy the password now: the panel shows it only here. The job stays listed under
+**Automations → All jobs**.
+
+## Open the site
+
+Open `https://northwind-bakery.dev.example.com`. Allow up to a minute for the first visit,
+while Traefik gets the site's certificate. It is a fresh WordPress install that asks search
+engines not to index it.
+
+## Sign in to WordPress
+
+Choose **Open site page**, then **Log in to WordPress** on the **Overview** tab. A new tab opens
+the WordPress dashboard, signed in as the site's administrator. The link behind it works
+once, within two minutes. If the browser blocks the new tab, the panel shows the link instead.
+
+## Go live
+
+Once the customer's domain is ready, point it at the server: an `A` record for
+`northwindbakery.example` and one for `www.northwindbakery.example`. Then choose **Go live →**
+on the **Overview** tab, enter both domains, and leave **Keep the dev hostname as a 301
+redirect** on. The dev address keeps working while the certificate is issued.
+[Domains and going live](/docs/sites/domains/) covers the rest.
+
+## What changed
+
+- `northwindbakery.example` is now the site's address. `www.northwindbakery.example` and the
+  dev address redirect to it.
+- WordPress's address changed, and the old address was rewritten in every table.
+- The recipes ran again, so licensed plugins are activated for the new address.
+- The Sites list shows the site as live, and **Go live →** is gone from its page.
+
+## Limits
+
+- Lost the admin password? **Reset a user's password** on the **WordPress** tab makes a new
+  one.
+- A site's slug cannot be changed after it is created.
+- Search engines stay discouraged after going live. Untick **Discourage search engines from
+  indexing this site** in WordPress under **Settings → Reading**.
+
+## Related
+
+- [Create a site](/docs/sites/create/)
+- [Domains and going live](/docs/sites/domains/)
+- [Manage WordPress](/docs/sites/wordpress/)
+- [The Sites list](/docs/sites/overview/)
+- [Jobs](/docs/automations/jobs/)

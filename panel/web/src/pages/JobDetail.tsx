@@ -1,3 +1,4 @@
+// @docs automations/jobs
 import { useState, type ReactNode } from 'react';
 import { Link, useLocation, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';

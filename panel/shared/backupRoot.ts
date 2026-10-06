@@ -8,6 +8,7 @@
  * the very thing being backed up.
  */
 
+// @docs backups/storage
 /** Trees that hold live state; a backup root may neither be inside one nor contain one. */
 export const RESERVED_SRV_SUBTREES = ['sites', 'mysql', 'panel', 'mail', 'traefik', 'plugins'] as const;
 

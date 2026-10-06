@@ -2,6 +2,7 @@
 # Assigning the panel a profile that is never activated excludes it without touching the
 # base file - single-server installs keep working with plain `docker compose up`.
 # provision/compose.sh appends this file automatically when SERVER_ROLE=worker.
+# @docs reference/architecture, reference/third-party
 services:
   panel:
     profiles: ["panel-disabled"]

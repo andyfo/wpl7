@@ -1,3 +1,4 @@
+// @docs automations/jobs, reference/architecture
 /**
  * The named lane a site's commands (wp.cli, site.shell, wp.rest) run in: one at a time per server,
  * beside that server's Docker and MariaDB work rather than in front of it - a ten-minute

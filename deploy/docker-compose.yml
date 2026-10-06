@@ -5,6 +5,7 @@
 #
 # Production:            docker compose up -d
 # Local dev (macOS):     docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.build.yml up -d
+# @docs get-started/how-it-works, help/faq, reference/architecture, reference/third-party, security/privacy
 name: wpl7
 
 services:

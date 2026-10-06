@@ -1,3 +1,4 @@
+// @docs plugins/overview, plugins/updates, sites/wordpress
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { WpComponentDto } from '../../../../shared/types';

@@ -15,6 +15,7 @@
 # The rollback is the previous image plus the previous bundle plus the panel database as it
 # was before the new panel ran its migrations. There are no down-migrations, ever: a failed
 # update goes back to the whole previous state, not partway.
+# @docs help/troubleshooting, panel/updating, reference/installer-and-scripts
 set -euo pipefail
 
 case "${1:-}" in -h|--help) sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;; esac

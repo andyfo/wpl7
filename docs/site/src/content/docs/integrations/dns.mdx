@@ -1,0 +1,58 @@
+---
+title: DNS records
+description: "The DNS records a panel needs, and the ones more servers, customer domains and mail add."
+sidebar:
+  order: 5
+sources:
+  - panel/src/services/dns.ts
+  - panel/src/jobs/handlers/sites.ts
+  - panel/src/jobs/handlers/move.ts
+---
+
+import Since from '~/components/Since.astro';
+
+A panel needs two DNS records. More servers, customer domains and mail add others. With a
+[Cloudflare token](/docs/integrations/cloudflare/), the panel writes those for you.
+
+## The records a panel needs
+
+| Record | Name | Points at |
+|---|---|---|
+| A | `panel.example.com` | The panel's server |
+| A | `*.dev.example.com` | The panel's server, so every new site answers at once |
+
+Create both before you install. If the server has IPv6, add matching AAAA records or none: one
+pointing elsewhere breaks the certificate checks. For direct mail delivery, each server's mail
+hostname needs an A record and reverse DNS too, as [Mail setup](/docs/mail/setup/) explains.
+
+## Records for more servers and customer domains
+
+A site on a server the wildcard record does not point at needs a record of its own, such as
+`harbor-yoga.dev.example.com`. With a token, the panel creates, moves and deletes that record with
+the site. Without one, you create it yourself.
+
+Going live needs an A record for the customer's domain and one for `www`, both pointing at the
+site's server.
+
+<Since v="0.3.0-beta.2" /> With a token that reaches the domain's zone, switch on
+**Point them at this server through Cloudflare** in the Go live dialog, and the panel writes the
+records first.
+
+## Records for mail
+
+Each domain that sends mail needs SPF, DKIM and DMARC records. With a token, **Mail → Setup guide**
+publishes them, and each server's mail hostname. An SPF record already there is merged, never
+replaced.
+
+## Limits
+
+- The panel writes `A` records only, never `AAAA`, because servers are added by their IPv4
+  address.
+
+## Related
+
+- [Cloudflare DNS](/docs/integrations/cloudflare/)
+- [Domains and going live](/docs/sites/domains/)
+- [Mail setup](/docs/mail/setup/)
+- [Add a server](/docs/servers/add/)
+- [Installation](/docs/get-started/installation/)

@@ -1,3 +1,4 @@
+// @docs plugins/recipes
 import { Link } from 'react-router';
 import type { SiteLicenseDto } from '../../../../shared/types';
 import { isTerminal, useRunJob, useSiteRecipes } from '../../api/hooks';

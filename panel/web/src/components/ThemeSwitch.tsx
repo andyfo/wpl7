@@ -1,3 +1,4 @@
+// @docs panel/appearance
 import { useEffect, useState } from 'react';
 import { Icon } from './Icon';
 import { ColorPicker } from './ColorPicker';

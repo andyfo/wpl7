@@ -1,3 +1,4 @@
+// @docs plugins/updates
 import { Link } from 'react-router';
 import { timeAgo } from '../../lib/format';
 

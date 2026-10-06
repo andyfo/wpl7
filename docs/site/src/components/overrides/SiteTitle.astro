@@ -1,0 +1,50 @@
+---
+/**
+ * The wordmark, linking to the website, then "Docs", linking to the docs' home. Text only, as in
+ * the panel: no icon, no tagline (src/styles/wordmark.css).
+ */
+import { HOME_URL } from '../../lib/site';
+---
+
+<div class="site-title sl-flex">
+  <a href={HOME_URL} class="wordmark-link" aria-label="WPL7 website">
+    <span class="brand-name" translate="no">WP<span class="brand-name-accent">L7</span></span>
+  </a>
+  <span class="divider" aria-hidden="true"></span>
+  <a href={import.meta.env.BASE_URL} class="docs-link">Docs</a>
+</div>
+
+<style>
+  .site-title {
+    align-items: center;
+    gap: 0.85rem;
+    min-width: 0;
+  }
+  .wordmark-link {
+    display: block;
+    padding-block: 0.4rem;
+    text-decoration: none;
+  }
+  .divider {
+    flex-shrink: 0;
+    width: 1px;
+    height: 1.35rem;
+    background: var(--sl-color-gray-5);
+  }
+  /* Room for the header's button on a small phone. */
+  @media (max-width: 49.99rem) {
+    .site-title {
+      gap: 0.55rem;
+    }
+  }
+  .docs-link {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .docs-link:hover {
+    color: var(--sl-color-white);
+  }
+</style>

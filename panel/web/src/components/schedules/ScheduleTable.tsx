@@ -1,3 +1,4 @@
+// @docs automations/schedules
 import { Link } from 'react-router';
 import type { JobStatus } from '../../../../shared/schemas';
 import type { ScheduleDto, ScheduleRunDto } from '../../../../shared/types';

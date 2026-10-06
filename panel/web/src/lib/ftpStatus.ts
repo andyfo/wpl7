@@ -1,3 +1,4 @@
+// @docs sites/ftp-sftp
 import type { FtpServerStatusDto, FtpStatusDto, SiteFtpDto } from '../../../shared/types';
 
 /**

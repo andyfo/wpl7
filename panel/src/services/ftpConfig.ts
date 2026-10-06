@@ -1,3 +1,4 @@
+// @docs reference/architecture, sites/ftp-sftp
 import path from 'node:path';
 import type { Config } from '../config.js';
 import { safeJoin } from '../lib/slug.js';

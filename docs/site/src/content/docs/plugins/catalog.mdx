@@ -1,0 +1,93 @@
+---
+title: The plugin catalog
+description: "Add wordpress.org plugins and your own zips to the catalog new sites start from, choose the defaults, and see how zips are checked for malware."
+sidebar:
+  order: 2
+sources:
+  - panel/web/src/pages/Plugins.tsx
+  - panel/web/src/components/WporgPluginSearch.tsx
+  - panel/web/src/components/security/ZipCheck.tsx
+  - panel/src/routes/plugins.ts
+  - panel/src/services/pluginCatalog.ts
+  - panel/src/services/pluginSync.ts
+  - panel/src/services/pluginZipChecks.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+**Plugins → All plugins** is the catalog: the plugins the New site wizard offers. It holds plugins
+from the wordpress.org directory and premium plugins you upload as zips. Entries marked as
+default are ticked in the wizard from the start.
+
+<Screenshot name="plugins" alt="Plugins → All plugins with the catalog of wordpress.org plugins and uploaded zips" />
+
+## Add a plugin from wordpress.org
+
+1. Under **Add from wordpress.org**, search by name.
+2. Choose a result. It joins the catalog, and the search marks it **in catalog**.
+
+To add a slug you know, open **Know the slug? Add it directly**, type it and choose **Add**. The
+panel checks the slug with wordpress.org first. If wordpress.org cannot be reached, it offers to add
+the slug without checking.
+
+## Upload a premium plugin
+
+1. Under **Upload custom zip**, choose **Choose zip** and pick the plugin's zip, up to 100 MB.
+2. Wait for it to appear under **Catalog**. Its **Malware check** starts on its own.
+
+WordPress installs a zip under the folder inside it, and [recipes](/docs/plugins/recipes/) go by
+that folder, not by the file name. The panel keeps the zip and copies it to every server that may
+install it.
+
+## Choose the default plugins
+
+Switch on **Default** for each plugin a new site should start with. The wizard ticks it, and a
+site created through the API gets it too when the request names no plugins. On a fresh install,
+`WP_DEFAULT_PLUGINS` in `deploy/.env` fills the defaults once.
+
+## Remove a plugin
+
+Choose **Delete** on its row, then **Remove**. Sites that already have the plugin keep it. An
+uploaded zip is deleted from the panel's server.
+
+## How uploaded zips are checked
+
+A wordpress.org plugin says **on each site**: every site's [malware scan](/docs/security/malware-scans/)
+holds it to wordpress.org's checksums. An uploaded zip has none, so the panel checks the zip itself,
+when you upload it and whenever the scanner changes. It unpacks the zip in a throwaway container
+with no network, records each file's hash, and scans the files with AMWScan.
+
+A site's scan then [vouches](/docs/reference/glossary/#vouch) for each file that is the same as one
+in a checked zip of that plugin, whatever version the site runs. The scanner leaves those files
+out, and reads the rest as usual.
+
+| **Malware check** says | Means |
+|---|---|
+| **Nothing found** | Checked through, and nothing flagged |
+| **Not checked** | No check yet. **Check** starts one. |
+| a count of known malware or flagged files | Those files are not vouched for until you **Review** them |
+| **Reviewed** | Someone said the flagged files are the plugin's own code |
+| **Checked in part** | Not every file was read. The zip vouches for nothing. |
+| **Could not be checked** | The check failed. **Details** says why. |
+
+Some plugins trip a signature with their own code. Open **Review**, read what was flagged, and
+choose **They are the plugin’s own code** only if you trust where the zip came from. Otherwise,
+remove it from the catalog. A review holds for exactly those findings: a later check that flags
+something else asks again.
+
+## Limits
+
+- Malware that was in a zip when you uploaded it, and that AMWScan does not know, is vouched for
+  on every site that has the file.
+- A zip with no single folder at its top, or one that unpacks to more than 1 GB, vouches for
+  nothing.
+- Zips are checked only while **Scan every site** is on, in **Settings → Security**.
+- In the panel, the catalog serves new sites only. A site's **WordPress** tab installs from
+  wordpress.org. An uploaded zip reaches an existing site through the API only.
+
+## Related
+
+- [Create a site](/docs/sites/create/)
+- [Recipes and pro-plugin licenses](/docs/plugins/recipes/)
+- [Malware scans](/docs/security/malware-scans/)
+- [Plugins across your sites](/docs/plugins/overview/)

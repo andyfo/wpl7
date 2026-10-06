@@ -1,3 +1,4 @@
+// @docs automations/custom-jobs
 import { and, eq, inArray } from 'drizzle-orm';
 import { jobs, sites, type JobRow, type SiteRow } from '../db/schema.js';
 import { GODMODE_WAIT_REFUSAL, waitsOnGodmode, type JobType } from '../../shared/schemas.js';

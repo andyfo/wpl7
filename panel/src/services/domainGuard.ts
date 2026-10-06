@@ -1,3 +1,4 @@
+// @docs sites/domains
 import { ne } from 'drizzle-orm';
 import { sites } from '../db/schema.js';
 import { badRequest, conflict } from '../lib/errors.js';

@@ -12,6 +12,7 @@
 # This is the uncommitted-work counterpart of provision/deploy.sh: `deploy.sh` ships a
 # revision that is already on origin/main, `build.sh` builds whatever is on this disk right
 # now. Run it as the user that owns the checkout (`wp` after dev-access.sh).
+# @docs reference/installer-and-scripts
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

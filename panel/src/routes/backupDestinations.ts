@@ -1,3 +1,4 @@
+// @docs backups/offsite
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';

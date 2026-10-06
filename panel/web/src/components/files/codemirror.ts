@@ -1,3 +1,4 @@
+// @docs sites/files
 import { Compartment, type Extension } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';

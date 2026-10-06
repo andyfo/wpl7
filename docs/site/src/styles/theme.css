@@ -1,0 +1,90 @@
+/*
+ * The panel's colours on Starlight's scale. Grays are the panel's neutrals (--n50…--n900 in
+ * panel/web/src/styles.css) so a screenshot's frame and the page around it agree; the accent is
+ * the panel's blue, #315fc5 in light and #9bb7ff in dark. Starlight names its scale from the
+ * dark theme: "white" is the strongest text colour in both schemes and "black" the page.
+ */
+:root {
+  --sl-font: 'Inter';
+
+  --sl-color-white: #f3f3f6; /* n900 */
+  --sl-color-gray-1: #e5e5eb; /* n800 */
+  --sl-color-gray-2: #bfc0c9; /* n600: body text */
+  --sl-color-gray-3: #92939e; /* n400: muted */
+  --sl-color-gray-4: #484a55; /* n300 */
+  --sl-color-gray-5: #34353e; /* n200: borders */
+  --sl-color-gray-6: #202126; /* n50 */
+  --sl-color-black: #131418; /* the panel's canvas */
+
+  --sl-color-accent-low: #25314b; /* --accent-soft */
+  --sl-color-accent: #6f8fe6;
+  --sl-color-accent-high: #9bb7ff; /* --accent */
+
+  --sl-color-bg-nav: #17181c; /* the panel's sidebar */
+  --sl-color-bg-sidebar: #17181c;
+  --sl-color-bg-inline-code: #26272e; /* n100 */
+
+  --wpl7-accent: #9bb7ff;
+  --wpl7-accent-foreground: #17181c;
+  --wpl7-accent-hover: #bed0ff;
+  --wpl7-text-strong: #f3f3f6;
+  --wpl7-frame: #34353e;
+  --wpl7-shadow: 0 2px 12px #0000001f;
+}
+
+:root[data-theme='light'] {
+  --sl-color-white: #202127; /* n900 */
+  --sl-color-gray-1: #2d2e38; /* n800 */
+  --sl-color-gray-2: #3d3e49; /* n700: body text */
+  --sl-color-gray-3: #50515e; /* n600: muted */
+  --sl-color-gray-4: #6b6c75; /* n400 */
+  --sl-color-gray-5: #cdced6; /* n300 */
+  --sl-color-gray-6: #e3e3e9; /* n200: borders */
+  --sl-color-gray-7: #f1f1f4; /* n100 */
+  --sl-color-black: #ffffff;
+
+  --sl-color-accent-low: #e9effc; /* --accent-soft */
+  --sl-color-accent: #315fc5; /* --accent */
+  --sl-color-accent-high: #244ba4; /* --accent-hover */
+
+  --sl-color-bg-nav: #fafafa; /* the panel's sidebar */
+  --sl-color-bg-sidebar: #fafafa;
+  --sl-color-bg-inline-code: #f1f1f4; /* n100 */
+
+  --wpl7-accent: #315fc5;
+  --wpl7-accent-foreground: #ffffff;
+  --wpl7-accent-hover: #244ba4;
+  --wpl7-text-strong: #202127;
+  --wpl7-frame: #e3e3e9;
+  --wpl7-shadow: 0 2px 3px #18181b08, 0 8px 28px #18181b0d;
+}
+
+/* No rule under the page title and none beside "On this page". Without the rule, the title moves
+   closer to the page it heads: 2rem between them. starlight-image-zoom puts an empty element
+   before the page's content, which would otherwise give the content a top margin as well. */
+.content-panel + .content-panel {
+  border-top: 0;
+  padding-top: 0.5rem;
+}
+.content-panel + .content-panel .sl-markdown-content {
+  margin-top: 0;
+}
+.right-sidebar {
+  border-inline-start: 0;
+}
+
+/* Headings a step smaller than Starlight's: task pages are short, and the panel is quiet. */
+:root {
+  --sl-text-h1: var(--sl-text-3xl);
+  --sl-text-h2: var(--sl-text-xl);
+  --sl-text-h3: var(--sl-text-lg);
+  --sl-text-h4: var(--sl-text-base);
+}
+@media (min-width: 50em) {
+  :root {
+    --sl-text-h1: var(--sl-text-4xl);
+    --sl-text-h2: var(--sl-text-2xl);
+    --sl-text-h3: var(--sl-text-xl);
+    --sl-text-h4: var(--sl-text-lg);
+  }
+}

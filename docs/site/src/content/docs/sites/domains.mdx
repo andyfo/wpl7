@@ -1,0 +1,76 @@
+---
+title: Domains and going live
+description: Move a site from its dev address to the customer's domain with no downtime, and change domains later.
+sidebar:
+  order: 3
+sources:
+  - panel/src/routes/sites.ts
+  - panel/src/jobs/handlers/sites.ts
+  - panel/src/jobs/handlers/shared.ts
+  - panel/src/services/domainGuard.ts
+  - panel/web/src/pages/SiteDetail.tsx
+  - panel/shared/schemas.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+Every new site answers on its [dev domain](/docs/reference/glossary/#dev-domain), such as
+`northwind-bakery.dev.example.com`. Going live adds the customer's domains and makes the
+first one the site's address. Visitors keep reaching the site the whole time.
+
+<Screenshot name="site-go-live" alt="The Go live dialog with a customer domain entered" />
+
+## Before you start
+
+- Point each domain at the site's server: an `A` record for the bare domain and one for `www`.
+  With a [Cloudflare token](/docs/integrations/cloudflare/), the panel can create them for you.
+- Take a backup if the site already has content. Going live rewrites URLs in the database.
+
+## Go live
+
+1. Open the site and choose **Go live →**.
+2. Under **Production domains (first = primary)**, enter the domains, for example
+   `northwindbakery.example www.northwindbakery.example`.
+3. Leave **Keep the dev hostname as a 301 redirect** on, so old links still arrive.
+4. Optional: switch on **Point them at this server through Cloudflare**. It appears when the
+   panel has a Cloudflare token.
+5. Choose **Go live**, and follow the job's log in the dialog.
+
+## Change the domains later
+
+On the site's **Settings** tab, edit **Domains (first = primary)** and choose **Update
+domains**. The steps are the same as going live. A new first domain rewrites the URLs in the
+database again.
+
+## What happens
+
+The panel runs one job. It checks each domain's DNS and warns when a domain does not point at
+the server yet. It then serves the old and new addresses side by side while Traefik gets a
+certificate for the new ones. It waits up to 90 seconds for the new address to answer over
+HTTPS. A slow certificate is a warning, and Traefik keeps trying.
+
+Then the new first domain becomes the site's address. WordPress's `home` and `siteurl` change,
+and `wp search-replace` rewrites the old address in every table. The site's
+[recipes](/docs/reference/glossary/#recipe) run again for the new address, so licensed plugins
+are activated for it. A stopped site is started for this step and stopped again.
+
+If a step fails, the old addresses keep working and the job says what went wrong. Running the
+change again repairs it.
+
+## Limits
+
+- At most ten domains per site, and a domain belongs to one site.
+- The panel checks DNS but does not wait for it. A domain that points elsewhere gets no
+  certificate until its record is fixed.
+- The Cloudflare option only reaches zones in the account the token belongs to. Other domains
+  need their records created by hand.
+- Going live does not let search engines in. A new site starts with **Discourage search
+  engines from indexing this site** ticked. Untick it in WordPress under **Settings → Reading**.
+
+## Related
+
+- [Your first site](/docs/get-started/first-site/)
+- [DNS records](/docs/integrations/dns/)
+- [Recipes and pro-plugin licenses](/docs/plugins/recipes/)
+- [Move a site to another server](/docs/sites/move/)
+- [Troubleshooting](/docs/help/troubleshooting/)

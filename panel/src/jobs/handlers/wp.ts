@@ -1,3 +1,4 @@
+// @docs plugins/overview, plugins/updates, sites/bulk
 import { asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { plugins, sites, type SiteRow } from '../../db/schema.js';

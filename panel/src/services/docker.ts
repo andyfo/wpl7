@@ -1,3 +1,4 @@
+// @docs get-started/how-it-works, reference/architecture, security/overview
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { Writable } from 'node:stream';

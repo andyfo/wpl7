@@ -1,3 +1,4 @@
+// @docs servers/add, servers/overview
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';

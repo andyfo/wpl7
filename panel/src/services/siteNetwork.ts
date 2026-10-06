@@ -1,3 +1,4 @@
+// @docs get-started/how-it-works, help/faq, help/troubleshooting, reference/architecture, security/overview
 import type { DockerPort } from './docker.js';
 import { MAIL_CONTAINER, MARIADB_CONTAINER, TRAEFIK_CONTAINER } from './stack.js';
 

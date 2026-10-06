@@ -1,0 +1,103 @@
+---
+title: Accounts and access to the panel
+description: "Who can sign in to the panel, two-factor authentication, password resets, getting back in, and API keys as a separate credential."
+sidebar:
+  order: 5
+sources:
+  - panel/src/routes/auth.ts
+  - panel/src/routes/users.ts
+  - panel/src/services/users.ts
+  - panel/src/services/twoFactor.ts
+  - panel/src/services/accountRecovery.ts
+  - panel/src/server.ts
+  - panel/web/src/pages/Users.tsx
+  - panel/web/src/pages/UserDetail.tsx
+  - panel/web/src/pages/Login.tsx
+  - panel/web/src/pages/ResetPassword.tsx
+  - panel/web/src/components/TwoFactorCard.tsx
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+import UiPath from '~/components/UiPath.astro';
+
+Everyone who manages your sites gets an account of their own on the panel. The panel can do anything
+on its server, so every account, and every Full API key, deserves the care of a root password.
+
+<Screenshot name="users" alt="Users with the owner and two admins, their two-factor status and last sign-in" />
+
+## Owner and admins
+
+The [owner](/docs/reference/glossary/#owner) is the account the first boot created. Nobody else may
+rename it, set its password, change its recovery email or turn off its second factor. Every other
+account is an [admin](/docs/reference/glossary/#admin). Any admin can add an admin, remove anyone but
+the owner and themself, and change any account but the owner's.
+
+There are no lesser roles. Every account can do everything the panel can, the root shell in
+**Terminal** included.
+
+## Add an admin
+
+1. Open **Users** and choose **Add admin**.
+2. Enter a **Username** and a **Password** of at least 10 characters.
+
+Give each person their own login. Removing one ends every session it has at once, and signs nobody
+else out. Rename the owner off `admin` on its own page, since `admin` is the name every bot tries
+first.
+
+## Turn on two-factor authentication
+
+1. On your own page under **Users**, choose **Set up** under **Two-factor authentication**, and
+   confirm with your password.
+2. Scan the QR code with an authenticator app, and type its six digits under
+   **Code from the app**.
+3. Choose **Turn it on**, then save the ten recovery codes. They are shown only once.
+
+Your other browser sessions are signed out, because none of them passed a second factor. Nobody can
+set it up for you. **New recovery codes** replaces the whole set.
+
+## Get back in
+
+- **Forgot your password?** on the sign-in page sends a reset link to the account's recovery email.
+  Set one under **Recovery email**. It counts once you follow the link sent to it.
+- A reset changes the password and ends every session. The second factor is still asked for.
+- An admin who lost their phone and codes: another admin chooses **Turn off** on their
+  **Two-factor authentication** card.
+- An admin who forgot their password: another admin sets a new one on their page.
+- The owner without a recovery email: [Troubleshooting](/docs/help/troubleshooting/) has the way
+  back in from a shell on the server.
+
+A reset link works once, for 30 minutes. The sign-in page answers the same whether or not it sent
+one, and links need `PANEL_DOMAIN` set and mail that arrives.
+
+## Sessions and sign-in limits
+
+| | |
+|---|---|
+| Session | A week from its last use, in a cookie only the panel's own pages send |
+| Sign-in attempts | 5 a minute per address |
+| Wrong codes | 5 in a row stop the account accepting any code for 5 minutes, from every browser |
+| Your password changed | Your other sessions end |
+| A colleague's password set | All of their sessions end |
+
+## API keys
+
+API keys are a separate credential for scripts and AI apps. Two-factor authentication does not cover
+them, and password changes, renames and removed accounts leave them working. A Full key can add and
+remove admins, so guard it like the owner's password. Give each key the least it needs, and revoke
+the ones you stop using under <UiPath href="/docs/integrations/api/">Integrations → API keys</UiPath>.
+
+## Limits
+
+- Two-factor authentication guards the browser sign-in only.
+- Removing an admin leaves every API key working, including keys that person created.
+- A terminal already open outlives the session that opened it, until it exits or sits idle for 30
+  minutes.
+- On an account without a second factor, whoever reads its recovery mailbox can reset its password.
+
+## Related
+
+- [Users](/docs/panel/users/)
+- [Security in WPL7](/docs/security/overview/)
+- [The REST API](/docs/integrations/api/)
+- [AI apps over MCP](/docs/integrations/mcp/)
+- [Troubleshooting](/docs/help/troubleshooting/)

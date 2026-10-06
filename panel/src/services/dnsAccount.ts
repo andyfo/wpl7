@@ -1,3 +1,4 @@
+// @docs integrations/cloudflare
 import type { Config } from '../config.js';
 import type { ServerRegistry } from '../servers/registry.js';
 import type { SettingsService } from './settings.js';

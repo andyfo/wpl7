@@ -1,3 +1,4 @@
+// @docs backups/delete, get-started/first-site, integrations/cloudflare, integrations/dns, sites/create, sites/domains, sites/settings
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { backups, moveCleanups, sites, type SiteRow } from '../../db/schema.js';
@@ -276,9 +277,25 @@ export function siteCreateQueuedCancel(payload: z.infer<typeof siteCreatePayload
 }
 
 /**
- * The dev wildcard record points at the wildcard server; sites elsewhere need an
- * explicit per-site A record (specific beats wildcard). No-op when DNS management
- * is off or the site lands on the wildcard server.
+ * Whether the dev wildcard record already sends `hostname` to this server, so it needs no record
+ * of its own there. That record is `*.<DEV_DOMAIN>`, and it points at the wildcard server. A site
+ * keeps the dev hostname it was created with wherever it moves, so one created on a server with a
+ * dev domain of its own stays under that domain, which no record the panel knows of covers.
+ */
+export function wildcardCovers(
+  s: Pick<CoreServices, 'settings' | 'config'>,
+  serverId: number,
+  hostname: string,
+): boolean {
+  const devDomain = s.config.devDomain.toLowerCase();
+  if (!devDomain || !hostname.toLowerCase().endsWith(`.${devDomain}`)) return false;
+  return serverId === (s.settings.get('dnsWildcardServerId') ?? 1);
+}
+
+/**
+ * The dev wildcard record points at the wildcard server; a site it does not cover needs an
+ * explicit per-site A record (specific beats wildcard). No-op when DNS management is off or
+ * the wildcard covers the site where it lands.
  */
 export async function ensureDevDnsRecord(
   ctx: JobContext<unknown>,
@@ -287,8 +304,7 @@ export async function ensureDevDnsRecord(
   devHostname: string | null,
 ): Promise<void> {
   if (!devHostname || !s.dns.enabled) return;
-  const wildcardServerId = s.settings.get('dnsWildcardServerId') ?? 1;
-  if (server.id === wildcardServerId) return;
+  if (wildcardCovers(s, server.id, devHostname)) return;
   if (!server.row.publicIp) {
     ctx.warn(`Server "${server.name}" has no public IP recorded; cannot create the DNS record for ${devHostname}.`);
     return;

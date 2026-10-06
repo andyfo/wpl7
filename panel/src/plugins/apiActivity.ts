@@ -1,3 +1,4 @@
+// @docs integrations/api, servers/terminal
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ApiActivityService } from '../services/apiActivity.js';
 import type { ApiKeysService } from '../services/apiKeys.js';

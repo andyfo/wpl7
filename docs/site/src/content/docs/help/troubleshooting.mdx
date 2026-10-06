@@ -1,0 +1,441 @@
+---
+title: Troubleshooting
+description: "Symptoms and fixes for sites, certificates, mail, backups, jobs, accounts, FTP, security and updates."
+sidebar:
+  order: 1
+sources:
+  - panel/web/src/lib/siteHealth.ts
+  - panel/src/jobs/handlers/shared.ts
+  - panel/src/jobs/worker.ts
+  - panel/src/services/siteNetwork.ts
+  - panel/src/services/backup.ts
+  - panel/src/services/offsite.ts
+  - panel/src/services/accountRecovery.ts
+  - panel/src/services/twoFactor.ts
+  - panel/src/db/seed.ts
+  - panel/src/services/ftp.ts
+  - panel/src/services/security.ts
+  - panel/src/services/firewallSync.ts
+  - panel/src/services/scanEngines.ts
+  - panel/src/services/systemUpdate.ts
+  - provision/update.sh
+---
+
+import Since from '~/components/Since.astro';
+
+Find what you see, then do what the entry says. Each entry links the page with the whole
+story. Commands run as root on the server that holds the site, and `<slug>` is the site's
+short name.
+
+## Sites
+
+### The site redirects in a loop
+
+Every site container already turns HTTPS on behind Traefik, so a loop nearly always means
+WordPress's `home` or `siteurl` holds the wrong address. Read it:
+
+```bash
+docker exec -u 33:33 wp-<slug> wp option get home
+```
+
+Correct both with `wp option update home` and `wp option update siteurl`, the same way or in
+the WP-CLI console on the site's **WordPress** tab. See [Manage WordPress](/docs/sites/wordpress/).
+
+### The REST API returns the home page
+
+`/wp-json/` answers with the home page and a 200, while `/?rest_route=/` returns JSON. The site
+uses plain permalinks, so it has no rewrite rules. Check, then switch to post names:
+
+```bash
+docker exec -u 33:33 wp-<slug> wp option get permalink_structure
+```
+
+```bash
+docker exec -u 33:33 wp-<slug> wp rewrite structure '/%postname%/'
+```
+
+New sites start on `/%postname%/`. A site restored from an older backup keeps the backup's setting.
+
+### WordPress says it cannot connect to the database
+
+"Error establishing a database connection" usually means MariaDB is not healthy. Check it:
+
+```bash
+docker inspect --format '{{.State.Health.Status}}' wpl7-mariadb
+```
+
+It should say `healthy`. The site's database settings are in its container's environment, shown
+by `docker exec wp-<slug> env`. A site started while MariaDB was down recovers once MariaDB is up.
+
+### The site shows Offline or No container
+
+The badge is the uptime check's answer. Open the site: the banner on its **Overview** says what
+the check got back, and its button is the repair.
+
+| The banner says | Do |
+|---|---|
+| A 404, while the container runs | **Recreate container**. Traefik has no route for the site, usually after a PHP switch or a domain change that failed halfway. Files and database stay as they are |
+| The site has no container | **Recreate container** |
+| The container never ran, or exited | **Start**. Every start writes the files the container mounts again |
+| Any other answer | **Restart**, then read `docker logs --tail 50 wp-<slug>` |
+
+**Recreate container** only warns when the rebuilt site still does not answer, so read its job
+log. See [The Sites list](/docs/sites/overview/).
+
+### Every site returns 504 after a stack redeploy
+
+`docker compose up` recreated Traefik without the site networks. The panel attaches them again
+at boot and every minute, so wait a minute or run `docker restart wpl7-panel`. To see what it
+repaired:
+
+```bash
+docker logs wpl7-panel 2>&1 | grep "Site networks"
+```
+
+### A site cannot reach another site or the panel
+
+That is on purpose. Each site sits on a network of its own, so a call to another site has to go
+through that site's public address, like any visitor's. See
+[Architecture](/docs/reference/architecture/).
+
+### A job says the site did not answer the smoke check
+
+The check goes through Traefik with the site's hostname, so the container can be fine while its
+route is not. Read `docker logs wpl7-traefik`, then check that the container carries the label
+`traefik.docker.network=wpl7_site_<slug>`:
+
+```bash
+docker inspect wp-<slug> --format '{{json .Config.Labels}}'
+```
+
+### Uploads or updates fail with permission errors
+
+Site files must belong to `www-data`, uid 33. Files made from a root shell are the usual cause,
+and the **Files** tab shows them with a lock. Choose **Fix ownership…** in the ⋯ menu there, or
+run:
+
+```bash
+docker exec wp-<slug> chown -R www-data: /var/www/html
+```
+
+See [Files](/docs/sites/files/).
+
+### The site is down after a PHP switch
+
+When the site does not answer on the new version, the job switches it back by itself. If the
+server went down during the switch, the banner on the site's **Overview** offers the repair.
+`docker logs wp-<slug>` shows the PHP error, usually a plugin that does not support the new
+version. See [Site settings](/docs/sites/settings/).
+
+### The container will not start: "not a directory"
+
+Docker made a directory where the container mounts a file, which can happen to a container
+built by an older panel. Choose **Start** on the site: every start removes such a directory and
+writes the file again. If the site still does not start, choose **Recreate container**.
+
+### The site shows 404 after Recreate container or a PHP switch
+
+The job succeeded, but `docker ps -a` shows the container as Created: its start failed, and an
+older panel read that as stopped on purpose. Choose **Start**.
+
+### An upload is too large
+
+A site's PHP limits are in `/srv/sites/<slug>/config/uploads.ini`, 64 MB by default. Edit the
+file, then choose **Restart** on the site. Traefik ends a request that takes over 60 seconds to
+arrive, so the **Files** tab uploads in chunks. A file too large for WordPress's media uploader
+can go up there instead, up to 2 GiB.
+
+## Certificates
+
+### The site shows a certificate warning
+
+- The domain must point at the server before a certificate can be issued. Check with
+  `dig +short <domain>`.
+- `docker logs wpl7-traefik 2>&1 | grep -i acme` shows why Let's Encrypt refused.
+- The panel's own certificate is requested when Traefik starts. If its DNS record resolved
+  later, run `docker restart wpl7-traefik`.
+- Let's Encrypt limits failed checks and certificates per domain. While testing, set both
+  `TLS_MODE=staging` and `ACME_RESOLVER=letsencrypt-staging` in `deploy/.env`, then run
+  `setup.sh`.
+- `/srv/traefik/acme*.json` must stay mode 600, or Traefik does not use them.
+
+<Since v="0.3.0-beta.2" /> For a dev site on a server whose wildcard certificate is on, **Check**
+in **Settings → DNS** says whether the Cloudflare token reaches the dev domain's zone and can
+read its records. `docker logs wpl7-traefik 2>&1 | grep -i cloudflare` shows Cloudflare's
+answers. See [Cloudflare DNS](/docs/integrations/cloudflare/).
+
+## Mail
+
+### `wp_mail()` sends nothing
+
+1. Open **Mail → Overview**. Each server's checks name the failure, such as a stopped relay or
+   a blocked port 25.
+2. Send a test from **Send a test message** there, and from **Send test email** on the site's
+   **WordPress** tab. If one arrives and the other does not, the site is the problem.
+3. **Mail → Traffic** shows whether the relay took the message and what the receiving server
+   said. **Mail → Queue** shows what is stuck.
+
+Mail that lands in spam needs its records: **Mail → DKIM & DMARC** checks SPF, DKIM and DMARC
+against live DNS. See [How mail works](/docs/mail/overview/).
+
+### A site suddenly sends a lot of mail
+
+**Mail → Overview** flags a site over its hourly budget, or one with so many failures that its
+recipient list cannot be real. Both look like a hacked site sending spam. Past the suspension
+limit, the relay already refuses the site's mail and the panel emails the alert address. Delete
+its waiting messages on **Mail → Queue**, check its plugins and users, then choose
+**Resume mail** on the site. See [Traffic and queue](/docs/mail/traffic/).
+
+## Backups
+
+### Offsite copies fail
+
+The error is on **Backups → Storage**, under **Recent failures**, with **Retry**. It is
+rclone's own message.
+
+| Message | Cause and fix |
+|---|---|
+| `403 Forbidden` or `AccessDenied` on upload | The key cannot write under the bucket's prefix |
+| `AccessDenied` on delete only | The key cannot delete, which is good. Switch on **Retention is managed by the provider** and let a lifecycle rule prune |
+| `NoSuchBucket` or `SignatureDoesNotMatch` | Usually the endpoint or the region. **Test connection** on the destination finds it |
+| FTP lists but hangs on transfer | The FTP server's passive ports are closed to your server |
+| `knownhosts: key mismatch` | The SFTP server's key changed. Update **Host key** if it was reinstalled, and find out why if not |
+| `directory not found` on a fetch back | Something else deleted the copy. The local backup is not affected |
+| `failed to make remote "CRYPT:"` | The passphrase or the salt is wrong |
+
+A failed copy is retried after 10 minutes, an hour and six hours, then waits for **Retry**. An
+encrypted bucket full of unreadable names is working as intended. See
+[Offsite copies](/docs/backups/offsite/).
+
+### A backup fails for lack of disk space
+
+"Not enough free disk space for backup" means the backup location has less free space than
+about one and a half times the site's size. Free some space, or move the server's backups to
+another disk on **Backups → Storage**. See [Backup storage](/docs/backups/storage/).
+
+## Jobs
+
+### A job stopped when the panel restarted
+
+Jobs that were running are marked failed when the panel starts again. A site that was being
+created or deleted shows **Error**, and a backup that was being written is marked failed. Open
+the site: its banner offers the repair. See [Jobs](/docs/automations/jobs/).
+
+### The next job on a server does not start after a timeout
+
+A job that timed out is marked failed at once but keeps running until it can stop, after a long
+`tar` or database import for example. Until then the panel holds that server's lane, so a retry
+cannot run beside it. The panel log says:
+
+```text
+Job #42 (backup.restore) timed out but is still unwinding; holding its server lane until it stops
+```
+
+Jobs on other servers carry on. If the lane never frees, run `docker restart wpl7-panel`.
+
+## Accounts
+
+### I forgot my username
+
+**Forgot your password?** on the sign-in page also takes a confirmed recovery email, and the
+email it sends names the account. Any admin sees every name on **Users**. With nobody signed in,
+read the names from the panel's database:
+
+```bash
+docker exec wpl7-panel node -e "console.table(require('better-sqlite3')('/srv/panel/panel.db').prepare('select id, username, is_owner from users').all())"
+```
+
+`PANEL_ADMIN_USER` in `deploy/.env` only named the owner on the first boot.
+
+### I forgot the owner's password
+
+With a confirmed recovery email, use **Forgot your password?**. Any admin can set a new password
+for every account but the owner's on **Users**. For an owner with no recovery email, blank the
+password on the server and restart the panel:
+
+```bash
+docker exec wpl7-panel node -e "require('better-sqlite3')('/srv/panel/panel.db').prepare(\"update users set password_hash = '' where is_owner = 1\").run()"
+```
+
+```bash
+docker restart wpl7-panel
+```
+
+```bash
+docker logs wpl7-panel 2>&1 | grep -A1 'Owner password reset'
+```
+
+The new password is `PANEL_ADMIN_PASSWORD` from `deploy/.env` when that is set, otherwise a
+generated one printed once. The name, the second factor and the other admins stay. The owner's
+sessions are signed out. See [Accounts and access to the panel](/docs/security/accounts/).
+
+### The password reset email never arrives
+
+The sign-in page answers the same whether or not it sent anything. Check these:
+
+- The account needs a confirmed recovery email. An address counts once its confirmation link
+  was followed.
+- Mail goes out directly unless `SMTP_RELAYHOST` is set, and many providers block that or file
+  it as spam. When the relay took it, the panel log says `Password reset link emailed`.
+- One reset email per account per minute goes out, and only the newest link works.
+- Without `PANEL_DOMAIN`, nothing is sent, and the log says so.
+
+### I'm locked out by two-factor authentication
+
+Another admin can switch it off for you: on your account under **Users**, in the
+**Two-factor authentication** card, they choose **Turn off** and confirm with their own
+password. For the owner, run this on the server:
+
+```bash
+docker exec wpl7-panel node -e "require('better-sqlite3')('/srv/panel/panel.db').prepare('update users set totp = null, totp_enrollment = null where is_owner = 1').run()"
+```
+
+Then set it up again, and keep the recovery codes away from the phone. If codes are refused with
+the phone in hand, its clock is off: the panel accepts 30 seconds either way. Five wrong codes in
+a row stop that account's codes for five minutes.
+
+## FTP
+
+### The FTP client cannot connect at all
+
+- A cloud firewall in front of the server must allow the SFTP port, 2222 by default. For FTP it
+  must allow port 21 and the passive range, 30000 to 30015. The server's own firewall is not the
+  cause, because Docker publishes these ports past it.
+- A hostname behind Cloudflare's proxy carries web traffic only. Connect to the server's IP.
+- The site's **FTP** tab shows the gateway's state. `docker logs wpl7-ftp` on the server shows
+  logins, bans and transfers.
+
+See [FTP and SFTP logins](/docs/sites/ftp-sftp/).
+
+### FTP logs in, then hangs listing a folder
+
+The passive ports are blocked on the way, or the server's public IP in the panel is not the one
+clients reach. Check **Public IP** under **Edit settings** on the server's page. SFTP needs
+neither.
+
+### The FTP tab says a port is already in use
+
+Another program listens on that port, often a preinstalled FTP server on port 21 or the
+server's own SSH on 2222. With an FTP or passive port taken, the server offers SFTP only. With
+the SFTP port taken, the gateway does not start. Stop the program, or pick another port in the
+**FTP & SFTP** card under **Settings**.
+
+### The right password is refused
+
+After repeated failures, the gateway bans the address for 30 minutes, longer each time. Wait,
+or connect from another address. A login past its expiry date is refused too, and the tab shows
+it as expired.
+
+### The FTP tab says Paused
+
+A restore, move or delete of the site is running. FTP comes back when it ends.
+
+### The client says the server's key changed
+
+The site moved to another server, which has its own key and certificate. Compare them with the
+fingerprints on the site's **FTP** tab, then trust them.
+
+## Security
+
+### A site's Security tab says it is not protected as set
+
+| The banner says | Do |
+|---|---|
+| The panel cannot reach its server | Nothing. The panel retries every minute, and the rules apply once the server answers |
+| Its rules could not be written, or its server's rules could not be updated | The reason follows, and the site keeps its old rules. Wait a minute, or call `POST /api/security/sync` |
+| Its container was built before protection reached inside it | The panel rebuilds it by itself. **Recreate container** does it now |
+| Apache refused the new protection inside its container | The previous file is back, so the site is unchanged. `docker exec wp-<slug> apache2ctl -t` shows what Apache says |
+
+See [Site protection](/docs/security/site-protection/).
+
+### Traefik ignores one of a site's rules
+
+The site's **Security** tab lists the rule and Traefik's error, and the other rules keep
+working. It is nearly always a custom rule's regular expression. Traefik uses Go's syntax, which
+has no lookaround and no backreferences. Fix or remove the rule. On the server,
+`docker logs wpl7-traefik 2>&1 | grep wpl7sec` shows the same error.
+
+### A visitor, or you, is blocked
+
+**Servers → Security → Blocked addresses** shows why each address is blocked, and **Unblock**
+lifts it on every server within a minute. **Never block** keeps an address or a range off the
+list. The panel never blocks an address an admin used it from in the last 30 days, so if your
+own address is blocked, sign in from another connection and unblock it.
+
+To stop all blocking, switch off **Blocked addresses reach the servers** on
+**Servers → Security → Enforcement**. On a server without the panel, run
+`sudo wpl7-firewall off`, and `sudo wpl7-firewall on` afterwards. A 429 from a rate limit is not
+a block, and it ends when the rate drops. See [Blocked addresses](/docs/security/blocked-addresses/).
+
+### A server's blocking shows Not installed or HTTP only
+
+The state of each server is on **Servers → Security → Enforcement**.
+
+- **Not installed**: the server has not run `setup.sh` since blocking arrived. Run it, which an
+  update does for workers.
+- **HTTP only**: the helper is there but could not load the list. The message says why, and
+  `sudo wpl7-firewall status` on the server says the same. A server set up with `--no-firewall`
+  stays this way.
+
+In both cases Traefik refuses blocked visitors itself, at most 2,000 of them.
+
+### A malware scan is incomplete or failed
+
+The scan's result says what happened, and its **Malware scan** job's log has the details.
+
+| The scan says | Do |
+|---|---|
+| It ran out of time, or out of memory | Raise the time or memory per scan in the **Malware scans** card under **Settings** |
+| Files could not be read | Files the site's user cannot read, often root-owned files from a manual copy. Choose **Fix ownership…** on the **Files** tab |
+| wordpress.org's checksums could not be fetched | The panel could not reach wordpress.org. The next scan tries again |
+| The scanner could not be fetched | The server could not pull AMWScan's image from Docker Hub. The file check still ran |
+| **Superseded** | A restore, move or update ran during the scan. It runs again by itself |
+
+See [Malware scans](/docs/security/malware-scans/).
+
+## Updates
+
+### The Update button refuses to start
+
+The message says why:
+
+- Jobs are still queued or running. An update replaces the panel, so wait for them or cancel them.
+- The install builds its panel from a checkout. Update it with `provision/deploy.sh`.
+- No release is known yet. Choose **Check now** first.
+
+See [Updating WPL7](/docs/panel/updating/).
+
+### The update failed
+
+**Settings → Updates** shows the error and what the update printed. Rolled back means the
+previous panel runs again, with its database as it was before the update. If it says it was NOT
+rolled back, check the server before anything else. The full log is
+`/srv/panel/update/current.log`, and `journalctl -u wpl7-update` has it too.
+
+### The Update button cannot reach the server
+
+The panel starts an update over SSH as root on its own server. If sshd there refuses root logins
+with a key, start the update on the server instead:
+
+```bash
+/opt/wpl7/provision/update.sh --to=<version>
+```
+
+### update.sh says the install builds its panel from the checkout
+
+`build.sh` moved the install to checkout mode, so `update.sh` will not overwrite a panel built on
+the server. Add `--force` to replace it with the released image and go back to image mode.
+
+### Some steps failed after the update
+
+The new version runs, but a follow-up step failed. **Settings → Updates** lists the steps and
+says which one failed and why. Fix the cause, then choose **Re-run**. A failure here never rolls
+the update back.
+
+## Related
+
+- [FAQ](/docs/help/faq/)
+- [Support](/docs/help/support/)
+- [Known limits](/docs/reference/limits/)
+- [Architecture](/docs/reference/architecture/)
+- [Manual recovery without the panel](/docs/reference/manual-recovery/)

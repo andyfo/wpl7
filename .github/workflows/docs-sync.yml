@@ -1,0 +1,89 @@
+# The `docs-sync` check (docs/site/README.md, Docs signals): a pull request that changes
+# documented code changes its pages too, or says why not. Make it a required check on main.
+#
+# A workflow of its own because it must also run when the description or the labels change:
+# that is where `Docs: not needed — <reason>` and the label no-docs-change go, and a failed check
+# that only ran again on a push would hold the pull request after either. The jobs in docs.yml
+# must not run on those events: a job skipped by its condition counts as passed, so a skipped
+# rerun would hide a failed build. For the same reason this job has no condition.
+name: Docs sync
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The pages that document the code a pull request changes: it fails until one of them changes,
+  # or the description says `Docs: not needed — <reason>`, or the label no-docs-change is set.
+  # One comment on the pull request, found by its marker, says which pages and why. A fork's pull
+  # request gets a token that cannot comment, so there the job summary is the answer.
+  sync:
+    name: docs-sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/site/package-lock.json
+      - run: npm ci
+        working-directory: docs/site
+      # The map is written even when it finds problems. The `check` job in docs.yml fails on
+      # those; here they must not stop the comment, which lists them too.
+      - name: Map the pages to the code
+        run: npm run docs:map
+        working-directory: docs/site
+        continue-on-error: true
+      # The description reaches the script through the environment and a file, never through
+      # the script's text: it is whatever the author wrote.
+      - name: Hold the pull request to its pages
+        working-directory: docs/site
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          # The comment links each page's file at the pull request's own commit.
+          DOCS_SYNC_REF: ${{ github.event.pull_request.head.sha }}
+        run: |
+          printf '%s' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          npm run docs:sync -- --base "$PR_BASE" --body-file "$RUNNER_TEMP/pr-body.md" \
+            --labels "$PR_LABELS" --out "$RUNNER_TEMP/docs-sync.md"
+      - name: Job summary
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/docs-sync.md" ]; then cat "$RUNNER_TEMP/docs-sync.md" >> "$GITHUB_STEP_SUMMARY"
+          else echo 'docs-sync wrote no comment: the log of the step before says why.' >> "$GITHUB_STEP_SUMMARY"; fi
+      # Create the comment once, then edit it on every run. Only the script's verdict fails the
+      # job: a token that may not comment (a Dependabot pull request) is no reason to.
+      - name: Comment on the pull request
+        if: always() && github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          [ -f "$RUNNER_TEMP/docs-sync.md" ] || exit 0
+          ids="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- docs-sync -->"))) | .id')"
+          id="${ids%%$'\n'*}"
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$id" -F "body=@$RUNNER_TEMP/docs-sync.md" > /dev/null
+          else
+            gh api --method POST "repos/$REPO/issues/$PR/comments" -F "body=@$RUNNER_TEMP/docs-sync.md" > /dev/null
+          fi

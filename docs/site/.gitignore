@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.astro/
+# Copied in by scripts/prepare.ts on every build: the panel's icons, and the screenshots with
+# their WebP twins. The originals are panel/web/public/ and screens/.
+public/favicon.svg
+public/favicon.ico
+public/apple-touch-icon.png
+public/screens/
+.docs-map.json
+.screens-local/

@@ -1,0 +1,79 @@
+---
+title: Visitor statistics
+description: "Visitors, pages, referrers and countries per site, with crawlers kept apart and no cookies."
+sidebar:
+  order: 7
+sources:
+  - panel/web/src/pages/SiteDetail.tsx
+  - panel/web/src/pages/Settings.tsx
+  - panel/src/services/traffic.ts
+  - panel/src/lib/accessLog.ts
+  - panel/src/services/geoip.ts
+  - panel/src/db/seed.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A site's **Visitors** tab shows who reads the site: visitors, page views, top pages, referrers
+and countries. The panel builds it from each server's Traefik access log, so the site needs no
+script and sets no cookie.
+
+<Screenshot name="site-visitors" alt="A site's Visitors tab with a month of visitors per day" />
+
+## Read the numbers
+
+Choose a period: **24 hours**, **7 days**, **30 days** or **90 days**. The numbers update every
+minute.
+
+| Card | What it counts |
+|---|---|
+| **Visitors** | Unique visitors. Over several days, each day's visitors are added up. |
+| **Page views** | Successful requests for pages, not for the admin, the REST API, feeds or files. |
+| **Traffic** | Bytes sent, and the average response time. |
+| **Crawlers** | Requests from crawlers, and the server errors in the period. |
+| **Visitors per hour**, **Visitors per day** | The chart: by hour over 24 hours, by day otherwise. |
+| **Top pages** | The most viewed pages. Each one links to the page. |
+| **Where visitors came from** | The sites that sent visitors, by referrer. |
+| **Countries** | Visitors by the registered country of their address block. |
+| **Busiest addresses** | The addresses with the most requests, crawlers included. |
+
+## Crawlers are kept apart
+
+A request whose user agent names a crawler, such as Googlebot or Bingbot, never counts as a
+visitor or a page view. The **Crawlers** card lists crawlers by name, as requests. The panel's
+own uptime check is among them, as `wpl7-probe`.
+
+## Act on a busy address
+
+**Busiest addresses** shows each address with its country, requests, pages, crawler requests,
+server errors and when it was last seen. **Block** next to an address opens the dialog that
+blocks it on every server. See [Blocked addresses](/docs/security/blocked-addresses/).
+
+The list is the one part of the statistics that keeps personal data. Under
+**Settings → Monitoring → Visitor statistics**, set **Keep visitor addresses for (days)**, or
+switch off **Record visitor addresses (Busiest addresses, per-site)**. Switching it off deletes
+the addresses already stored, and the other numbers carry on.
+
+## How visitors stay anonymous
+
+A visitor is a one-way hash of the address and the browser, under a key the panel discards
+every night. The same person is a new visitor the next day, and two sites' numbers cannot be
+joined. Countries come from tables the internet registries publish, which the panel downloads
+every week. Each lookup happens on your server, so no address leaves it.
+
+**Keep visitor statistics for (days)** sets how long the counts stay. The default is 90 days.
+
+## Limits
+
+- Countries follow address registrations. A company's network shows where it registered its
+  addresses, not where the visitor sits.
+- A crawler that presents itself as a browser counts as a visitor.
+- Only requests that reach Traefik count. Pages a CDN serves from its cache never arrive.
+- The first read of a server's log goes back six hours at most. Nothing older is filled in.
+
+## Related
+
+- [Blocked addresses](/docs/security/blocked-addresses/)
+- [Settings](/docs/panel/settings/)
+- [The Sites list](/docs/sites/overview/)
+- [What leaves your server](/docs/security/privacy/)

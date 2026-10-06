@@ -1,0 +1,77 @@
+---
+title: "Appearance, Support and About"
+description: "Theme and accent color, the Support page with the community and the Enterprise package, and the About page."
+sidebar:
+  order: 4
+sources:
+  - panel/web/src/components/ThemeSwitch.tsx
+  - panel/web/src/components/ColorPicker.tsx
+  - panel/web/src/components/Layout.tsx
+  - panel/web/src/components/FeedbackDialog.tsx
+  - panel/web/src/pages/Support.tsx
+  - panel/web/src/pages/About.tsx
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+Three entries sit at the bottom of the sidebar. **Appearance** sets how the panel looks in your
+browser, **Support** is where to get help, and **About** says what this install is.
+
+## Change the theme and accent color
+
+Open **Appearance** and choose **Light**, **Dark** or **System**, which follows your device. Under
+**Theme color**, pick one of seven accent colors. Blue is the default.
+
+The choice is kept in your browser and applies to every open tab of the panel at once. Each browser
+keeps its own.
+
+## Get help on the Support page
+
+<Screenshot name="support" alt="The Support page with the community and Enterprise cards" />
+
+| Section | What it offers |
+|---|---|
+| **Community support** | The community forum, where people running WPL7 help each other. **Open community forum** goes there |
+| **Enterprise package** | Hotfixes, priority email support and a dedicated engineer, for businesses that run WPL7 in production. **Explore Enterprise** opens its page on wpl7.com |
+| **Found a bug?** | **GitHub issues**, or a private report for a security problem |
+
+## See what this install is
+
+Open **About**, or choose the version in the header. Three cards describe the install:
+
+| Card | Shows |
+|---|---|
+| **Version** | Version, commit, channel, the last update check and whether a newer version is out |
+| **Machine** | The panel's server: system, kernel, CPU, memory, uptime and Docker |
+| **Network** | Its address, reverse DNS, the panel's domain, Node and how long the panel has been up |
+
+**Check for updates** asks for a new version at once. Applying one is on
+[Updating WPL7](/docs/panel/updating/).
+
+<Screenshot name="about" alt="The About page with the version, machine and network cards" />
+
+## Send feedback
+
+**Send feedback** on the About page offers three kinds of message:
+
+- **Something is broken** and **Something is missing** open a new GitHub issue in your browser,
+  under your own account. Nothing is sent from the panel.
+- **A question or an idea** is sent by the panel to the community forum. Nothing is public until
+  you post it there yourself.
+
+**Include what this install is** adds the build and the machine, without addresses, domains or site
+names. Read a pasted log for passwords and customer domains before you send it.
+
+## Limits
+
+- The theme and accent belong to the browser, not to your account. They do not follow you to
+  another device.
+- The **Machine** card describes the panel's own server, not the other servers.
+- The Enterprise package is a premium service offered on wpl7.com, not inside the panel.
+
+## Related
+
+- [Support](/docs/help/support/)
+- [Updating WPL7](/docs/panel/updating/)
+- [What leaves your server](/docs/security/privacy/)
+- [Contributing](/docs/help/contributing/)

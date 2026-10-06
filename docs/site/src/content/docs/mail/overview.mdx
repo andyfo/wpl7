@@ -1,0 +1,129 @@
+---
+title: How mail works
+description: "How wp_mail() reaches inboxes: a relay per server, DKIM signing, a login per site, and direct delivery or a smarthost."
+sidebar:
+  order: 1
+sources:
+  - panel/web/src/pages/Mail.tsx
+  - panel/src/services/mail.ts
+  - panel/src/services/mailAuth.ts
+  - panel/src/services/mailDkim.ts
+  - deploy/wordpress-image/msmtprc
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+import Since from '~/components/Since.astro';
+
+Every site can send mail from the moment it exists. `wp_mail()` and every plugin built on it work
+without an SMTP plugin, through one mail [relay](/docs/reference/glossary/#relay) on each server.
+
+<Screenshot name="mail-overview" alt="Mail → Overview with the checks of each server's relay and the volume each site sent" />
+
+## How a message leaves a site
+
+1. PHP's `mail()` hands the message to msmtp inside the site's container.
+2. msmtp logs in to the relay of the site's server with the site's own login, `<slug>@wpl7`. The
+   connection stays on the site's private network.
+3. The relay checks that the site owns the sender's domain. A signer then adds a
+   [DKIM](/docs/reference/glossary/#dkim) signature when the domain has a key.
+4. The relay delivers the message, or queues it and tries again later.
+
+The relay publishes no port, so nothing on the internet can send through it. It also sees every
+message the sites on its server send, which is what makes the traffic view complete.
+
+DKIM keys belong to the panel, and every server gets a copy of every key. A site that moves to
+another server keeps signing with the same published key.
+
+## Who may send as which domain
+
+A site's login owns the site's domains and its dev address. The relay holds the sender address to
+that list, and the signer holds the `From:` header to it. This
+[sender authorization](/docs/reference/glossary/#sender-authorization) keeps a hacked site from
+mailing as another customer.
+
+| A site sends as | The relay | The signature |
+|---|---|---|
+| One of its own domains, or its dev address | Accepts it | Added when the domain or a domain above it has a key |
+| A domain of another site | Refuses it with a `553` error | None |
+| A domain with a DKIM key but no site | Refuses it | None |
+| A domain no site on your servers uses | Accepts it | None |
+
+A message with the site's own sender address but another site's domain in `From:` is delivered
+unsigned. The panel's own mail, such as alerts and test messages from the relay, is handed over
+inside the relay and needs no login.
+
+## Direct delivery or a smarthost
+
+By default each relay delivers to the recipients' mail servers itself. With a smarthost, it hands
+every message to one SMTP provider account instead.
+
+| | Direct, the default | Smarthost |
+|---|---|---|
+| In `deploy/.env` | `SMTP_RELAYHOST` empty | `SMTP_RELAYHOST`, `SMTP_USERNAME`, `SMTP_PASSWORD` |
+| Outbound port 25 | Must be open at your server's provider | Not needed |
+| SPF names | Every server's address | Your provider's servers |
+| Reverse DNS | Must match the mail hostname | Less critical |
+
+### Use a smarthost
+
+1. In `/opt/wpl7/deploy/.env` on the server, set the provider's host, port and account:
+
+   ```ini
+   SMTP_RELAYHOST=[smtp.example.com]:587
+   SMTP_USERNAME=postmaster@example.com
+   SMTP_PASSWORD=the-provider-password
+   ```
+
+2. Apply the change:
+
+   ```bash
+   sudo /opt/wpl7/provision/setup.sh
+   ```
+
+3. Do the same on every server. Each relay reads its own `deploy/.env`.
+
+The server's card on **Mail → Overview** then shows the provider next to the server's name.
+
+## What the Mail page shows
+
+| Tab | What it is for |
+|---|---|
+| **Overview** | Each server's checks, a test message, and what each site sent in the last day |
+| **Setup guide** | Every record and server setting delivery needs, checked against public DNS |
+| **Traffic** | Every message, one row per recipient |
+| **Queue** | What the relays are still trying to deliver |
+| **DKIM & DMARC** | One block per sending domain, with its key and its three records |
+
+| Check | What it says |
+|---|---|
+| `relay` | The relay runs. When it does not, `mail()` fails for every site on that server. |
+| `dkim` | The signer runs, and signs for the domains the server's sites send from. Red when the signer is down while keys exist. |
+| `hostname` | The name the relay announces to other mail servers. |
+| `mode` | Direct delivery, or the smarthost it relays through. |
+| `milter` | The relay passes mail through the signer. |
+| `port-25` | Direct delivery only: whether outbound port 25 is open. |
+| `queue` | How many messages wait, and how many are deferred. Red from 50 deferred. |
+
+<Since v="0.3.0-beta.2" /> The `dkim` check turns amber while sites send from a domain that no key
+signs, its own or one above it. It names those domains, and their mail still goes out, unsigned.
+
+**Send a test message** sends one **From the relay**, skipping WordPress, or
+**From a site (wp_mail)**, the way a contact form sends. When the relay's message arrives and the
+site's does not, the problem is in that site, such as a plugin that replaces `wp_mail()`.
+
+## Limits
+
+- WPL7 sends mail and does not receive it. Mailboxes for your customers' domains live elsewhere.
+- A relay that stops takes `mail()` away from every site on its server. Mail never fails over to
+  another server.
+- Mail from a domain without a DKIM key goes out unsigned. Mail from a domain no site uses is
+  accepted and never signed, and the recipient's own checks judge it.
+- The smarthost is set per server. The panel does not copy it to the servers it adds.
+
+## Related
+
+- [Setup guide](/docs/mail/setup/)
+- [Traffic and queue](/docs/mail/traffic/)
+- [SPF, DKIM and DMARC explained](/docs/mail/records/)
+- [Security in WPL7](/docs/security/overview/)
+- [Troubleshooting](/docs/help/troubleshooting/)

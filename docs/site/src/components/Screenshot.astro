@@ -1,0 +1,54 @@
+---
+/**
+ * <Screenshot name="sites-list" alt="…" caption="…" />
+ *
+ * A panel screenshot from screens/ (scripts/shots.ts lists them; CI takes them). Light always;
+ * the dark twin too when one was taken, shown when the page is dark (dark={false} keeps the light
+ * one). WebP with a PNG fallback, a frame drawn in CSS, zoom on click. A shot that does not
+ * exist yet renders a dashed placeholder and a build warning rather than a broken image.
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import { Zoom } from 'starlight-image-zoom/components';
+
+interface Props {
+  name: string;
+  alt: string;
+  caption?: string;
+  dark?: boolean;
+}
+
+const { name, alt, caption, dark = true } = Astro.props;
+// screens/, or a local capture's folder when DOCS_SCREENS names one (README.md, Screenshots).
+const screens = path.resolve(process.cwd(), process.env.DOCS_SCREENS ?? 'screens');
+const has = (theme: 'light' | 'dark') => fs.existsSync(path.join(screens, `${name}-${theme}.png`));
+const hasLight = has('light');
+const hasDark = dark && has('dark');
+const phone = name.startsWith('phone-');
+const [width, height] = phone ? [390, 844] : [1440, 900];
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const src = (theme: 'light' | 'dark', ext: 'png' | 'webp') => `${base}/screens/${name}-${theme}.${ext}`;
+if (!hasLight) console.warn(`[screenshot] screens/${name}-light.png does not exist yet (${Astro.url.pathname})`);
+---
+
+<figure class:list={['screenshot', { 'has-dark': hasDark, 'is-phone': phone }]}>
+  {
+    hasLight ? (
+      (hasDark ? (['light', 'dark'] as const) : (['light'] as const)).map((theme) => (
+        <div class={`screenshot-${theme}`}>
+          <Zoom label={alt}>
+            <picture>
+              <source srcset={src(theme, 'webp')} type="image/webp" />
+              <img src={src(theme, 'png')} alt={alt} width={width} height={height} loading="lazy" decoding="async" />
+            </picture>
+          </Zoom>
+        </div>
+      ))
+    ) : (
+      <div class="screenshot-missing" role="img" aria-label={alt}>
+        Screenshot to come: {name}
+      </div>
+    )
+  }
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>

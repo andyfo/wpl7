@@ -1,0 +1,9 @@
+# Docs pages written by docs/site/scripts/gen-*.ts (npm run docs:generate). GitHub folds them in
+# diffs and leaves them out of the language statistics; the `check` job in .github/workflows/docs.yml
+# holds them to their sources.
+docs/site/src/content/docs/integrations/api-reference/*.md linguist-generated=true
+docs/site/src/content/docs/integrations/mcp-tools.md linguist-generated=true
+docs/site/src/content/docs/reference/configuration.md linguist-generated=true
+docs/site/src/content/docs/reference/job-types.md linguist-generated=true
+docs/site/src/content/docs/reference/security-levels.md linguist-generated=true
+docs/site/src/content/docs/help/changelog.md linguist-generated=true

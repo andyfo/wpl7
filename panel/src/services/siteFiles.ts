@@ -1,3 +1,4 @@
+// @docs sites/files
 import crypto from 'node:crypto';
 import { finished } from 'node:stream/promises';
 import { Writable } from 'node:stream';

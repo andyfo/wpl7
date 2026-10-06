@@ -13,6 +13,7 @@
  * last, one JSON line with what they did; a refusal is an exit code from FILE_EXIT with the
  * reason as the last line on stderr. Written for PHP 8.0, the oldest a site can run.
  */
+// @docs sites/files
 import { FILE_EXIT } from './siteFilesScripts.js';
 
 const E = FILE_EXIT;

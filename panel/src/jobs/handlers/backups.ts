@@ -1,3 +1,4 @@
+// @docs backups/delete, backups/overview, backups/restore
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';

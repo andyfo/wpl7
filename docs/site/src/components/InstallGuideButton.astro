@@ -1,0 +1,37 @@
+---
+/** The header's one call to action: the install guide. */
+const href = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/get-started/installation/`;
+---
+
+<a class="install-button" href={href}>How to install</a>
+
+<style>
+  .install-button {
+    display: inline-flex;
+    align-items: center;
+    height: 2.1rem;
+    padding-inline: 0.95rem;
+    border-radius: 8px;
+    background: var(--wpl7-accent);
+    color: var(--wpl7-accent-foreground);
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .install-button:hover {
+    background: var(--wpl7-accent-hover);
+    color: var(--wpl7-accent-foreground);
+  }
+  /* A phone's header also holds the wordmark, "Docs", search and the menu. */
+  @media (max-width: 49.99rem) {
+    .install-button {
+      padding-inline: 0.7rem;
+    }
+  }
+  @media (max-width: 24rem) {
+    .install-button {
+      padding-inline: 0.5rem;
+    }
+  }
+</style>

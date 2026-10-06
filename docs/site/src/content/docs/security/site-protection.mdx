@@ -1,0 +1,93 @@
+---
+title: Site protection
+description: "Rules and rate limits in front of every site: the Standard and Strict levels, a site's own settings and rules, and visitors behind a proxy."
+sidebar:
+  order: 2
+sources:
+  - panel/shared/security.ts
+  - panel/src/services/security.ts
+  - panel/src/services/securityConfig.ts
+  - panel/src/services/siteHardening.ts
+  - panel/web/src/pages/SitesSecurity.tsx
+  - "panel/web/src/components/security/**"
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+import UiPath from '~/components/UiPath.astro';
+
+[Site protection](/docs/reference/glossary/#site-protection) refuses requests no visitor makes and
+limits how fast one address may log in or load pages. Traefik applies it in front of every site, and
+a few settings apply inside its container.
+
+<Screenshot name="sites-security-settings" alt="Sites → Security → Settings with the default protection level and its rules" />
+
+## Choose a level
+
+Every site follows the default unless it has a
+[protection level](/docs/reference/glossary/#protection-level) of its own. The default is
+**Standard**.
+
+- **Off**: no rules and no limits.
+- **Standard**: refuses secret files, PHP in uploads, install scripts, scanner tools and user
+  enumeration, limits logins and request rates, and removes wp-admin's file editor.
+- **Strict**: also refuses XML-RPC and outside calls to `wp-cron.php`, limits harder, adds headers,
+  and stops plugin installs from wp-admin.
+
+Every rule and number is in [Protection levels](/docs/reference/security-levels/). A refused request
+gets `403`, and one over a limit gets `429` until its rate drops.
+
+## Change the default
+
+1. Open <UiPath>Sites → Security → Settings</UiPath>.
+2. Pick the **Default level**, then change any row under it. Each row says where its value comes
+   from, and **reset** takes a change back.
+3. Choose **Save the default**.
+
+**Private addresses are never limited** is on by default: without IPv6 in Docker, every IPv6 visitor
+arrives from one private address.
+
+## Give a site its own settings
+
+1. On the site's **Security** tab, choose **Settings**.
+2. Under **Protection**, keep **Use the default** or pick a level, and change single rows.
+3. Add rules under **This site's own rules** if it needs them, then choose **Save**.
+
+**Sites with settings of their own** lists them on the default's page.
+
+A rule blocks or allows requests by path, user agent, method, query parameter or address, with up
+to 8 conditions. **Allow** lets a request past the site's other rules and limits. A rule Traefik
+refuses disables only itself, and the tab names it.
+
+## Trust a proxy
+
+Behind Cloudflare or a load balancer, every visitor seems to come from the proxy. For a trusted
+proxy, the panel reads the visitor's address from its header, but only on connections from the
+proxy's own addresses.
+
+**Cloudflare** is trusted by default, by the address list it publishes, fetched weekly and checked.
+Add your own under **Trusted proxies** on <UiPath>Settings → Security</UiPath>.
+
+Jetpack's servers are never limited or refused on XML-RPC. The panel knows them by Jetpack's
+published list: the connection comes from one of its addresses, or a trusted proxy's header holds
+exactly one of them.
+
+## Limits
+
+- The levels allow logins and XML-RPC in bursts of 2, because of an
+  [open Traefik bug](https://github.com/traefik/traefik/issues/13957). Traefik gives an address that
+  pauses a few seconds a full burst again. Attack detection still blocks an address after 20 login
+  attempts in 10 minutes.
+- Requests and assets keep large bursts, which a client renews the same way.
+- Rate limits start from zero whenever a server's rules change.
+- Without IPv6 in Docker, IPv6 visitors are not limited one by one.
+- A proxy that sends only `X-Forwarded-For` cannot be trusted.
+- Request bodies are never read. A POST exploit is refused by its path, or not at all.
+- The settings inside the container stop a stolen admin login, not code already running in the site.
+
+## Related
+
+- [Security in WPL7](/docs/security/overview/)
+- [Protection levels](/docs/reference/security-levels/)
+- [Blocked addresses](/docs/security/blocked-addresses/)
+- [Malware scans](/docs/security/malware-scans/)
+- [Visitor statistics](/docs/sites/visitors/)

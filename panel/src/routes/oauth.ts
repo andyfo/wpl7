@@ -1,3 +1,4 @@
+// @docs integrations/mcp
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { AppError, forbidden } from '../lib/errors.js';

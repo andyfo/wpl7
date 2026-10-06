@@ -1,3 +1,4 @@
+// @docs sites/ftp-sftp
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { SiteFtpDto, SiteFtpUserCreatedDto, SiteFtpUserDto } from '../../../../shared/types';

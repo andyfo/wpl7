@@ -7,6 +7,7 @@
  * stay inside the site, every value is bounded, and an engine whose summary line never came
  * was cut short - incomplete, never clean.
  */
+// @docs security/malware-scans
 import crypto from 'node:crypto';
 import {
   FINDING_KIND_INFO,

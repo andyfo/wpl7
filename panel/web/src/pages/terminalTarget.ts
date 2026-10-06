@@ -1,3 +1,4 @@
+// @docs servers/terminal
 import type { ServerDto } from '../../../shared/types';
 
 /**

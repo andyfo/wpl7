@@ -1,3 +1,4 @@
+// @docs integrations/api
 import { useMemo, useRef, useState } from 'react';
 import {
   API_DOC_GROUPS,

@@ -1,3 +1,4 @@
+// @docs security/site-protection
 import type { ReactNode } from 'react';
 import {
   CONTAINER_INFO,

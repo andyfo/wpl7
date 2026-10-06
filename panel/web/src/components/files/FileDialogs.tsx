@@ -1,3 +1,4 @@
+// @docs sites/files
 import { useState } from 'react';
 import type { SiteFileEntryDto } from '../../../../shared/types';
 import {

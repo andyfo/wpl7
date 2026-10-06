@@ -1,3 +1,4 @@
+// @docs help/faq
 import { sql } from 'drizzle-orm';
 import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 

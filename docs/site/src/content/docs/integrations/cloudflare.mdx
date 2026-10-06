@@ -1,0 +1,118 @@
+---
+title: Cloudflare DNS
+description: "With a Cloudflare API token, the panel writes your DNS records and gives each server one certificate for its dev sites."
+sidebar:
+  order: 6
+sources:
+  - panel/web/src/components/settings/DnsTab.tsx
+  - panel/src/routes/dns.ts
+  - panel/src/services/dns.ts
+  - panel/src/services/dnsAccount.ts
+  - panel/src/services/traefikDns.ts
+  - panel/src/services/wildcardSites.ts
+  - panel/src/jobs/handlers/sites.ts
+  - panel/src/jobs/handlers/move.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+import Since from '~/components/Since.astro';
+
+If your domains are on Cloudflare, an API token lets the panel do the DNS work itself. Without a
+token, everything still works, and you create the records yourself.
+
+<Screenshot name="settings-dns" alt="Settings → DNS with a saved Cloudflare token and the wildcard certificate on for two servers" />
+
+## What a token gives you
+
+| | Without a token | With a token |
+|---|---|---|
+| Dev site certificates | One for each site | One for each server, shared by its dev sites |
+| Sites on other servers | You create a record for each site | The panel creates and deletes the records |
+| Moving a site | You change its records | The panel re-points them |
+| Going live | You create the domain's records | The panel can create them |
+| Mail records | You copy them into your DNS | The panel publishes them |
+
+### Fewer certificates
+
+Let's Encrypt limits how many certificates it issues each week:
+
+| Limit | Per week |
+|---|---|
+| New certificates under one registered domain, such as `example.com` | 50 |
+| Certificates for exactly the same names | 5 |
+
+Without a token, every new dev site uses one of the 50. They are shared with every other
+certificate under that domain, the panel's included. Renewals do not count.
+
+With a token, you can give a server one
+[wildcard certificate](/docs/reference/glossary/#wildcard-certificate) for all its dev sites. A
+new dev site then has HTTPS at once and uses none of the 50. Its name also stays out of the
+public certificate logs.
+
+### One dev domain for every server
+
+The `*.dev.example.com` record points at the panel's server. A site on another server needs a
+record of its own, such as `harbor-yoga.dev.example.com`. With a token, the panel creates that
+record with the site and deletes it with the site. All your servers can then share one
+[dev domain](/docs/reference/glossary/#dev-domain).
+
+Without a token, you create each of these records by hand. The alternative is a dev domain and a
+wildcard record for each server.
+
+### Moves without DNS work
+
+When a site [moves to another server](/docs/sites/move/), the panel re-points its dev address at
+the new server. It re-points the site's customer domains too, when the token reaches their zone.
+The nightly cleanup then removes the old copy once the move is a day old.
+
+Without a token, you change each record by hand. Until you do, the old server keeps its copy and
+forwards visitors to the new one.
+
+## Add a token
+
+<Since v="0.3.0-beta.2" /> Set the token up in **Settings → DNS**:
+
+1. In Cloudflare, create a token with **Zone → Zone → Read** and **Zone → DNS → Edit**, for the
+   domains you host.
+2. Paste it under **API token**, and choose **Check** to see which domains it reaches.
+3. Choose **Save token**.
+
+The panel refuses a token that Cloudflare rejects or that sees no domain. Once saved, the token
+appears in no page and no API answer. `CF_DNS_API_TOKEN` in `deploy/.env` fills it in on the
+panel's first boot only.
+
+**Replace** and **Remove** restart Traefik on every server that held the old token, so their sites
+are down for a few seconds. Removing it also stops the records, and rebuilds the dev sites that
+shared a wildcard certificate.
+
+On the stable channel, the token goes in `deploy/.env` instead, as `CF_DNS_API_TOKEN` with
+`DNS_PROVIDER=cloudflare`, applied by `provision/setup.sh`.
+
+## Turn on the wildcard certificate
+
+<Since v="0.3.0-beta.2" /> Under **Wildcard certificate**, turn on the switch for a server. Its new
+dev sites then share one `*.dev.example.com` certificate. Existing dev sites keep their own
+certificates until they are rebuilt.
+
+The wildcard certificate needs the token, because it is issued through a DNS check. A switch that
+cannot be turned on says why. A server set up before this feature has to be updated first, under
+**Settings → Updates** for the panel's server, or with **Update stack** on a worker's page.
+Turning the switch off rebuilds the dev sites that share the certificate, so each is down for a
+few seconds.
+
+## Limits
+
+- The panel writes records through Cloudflare only, in the zones the token reaches. Other domains
+  need their records created by hand.
+- The records it writes are not proxied through Cloudflare.
+- Every server issues its own wildcard certificate, for the same names. Turn it on for at most
+  five servers a week.
+
+## Related
+
+- [DNS records](/docs/integrations/dns/)
+- [Move a site to another server](/docs/sites/move/)
+- [Add a server](/docs/servers/add/)
+- [Mail setup](/docs/mail/setup/)
+- [Domains and going live](/docs/sites/domains/)
+- [Settings](/docs/panel/settings/)

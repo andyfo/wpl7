@@ -1,0 +1,30 @@
+---
+/**
+ * Starlight's social links (the GitHub icon in the header), opening in a new tab: they leave the
+ * docs for another site. Everything else is Starlight's own SocialIcons.astro.
+ */
+import config from 'virtual:starlight/user-config';
+import { Icon } from '@astrojs/starlight/components';
+
+const links = config.social || [];
+---
+
+{
+  links.map(({ label, href, icon }) => (
+    <a {href} target="_blank" rel="me noopener" class="sl-flex">
+      <span class="sr-only">{label} (opens in a new tab)</span>
+      <Icon name={icon} />
+    </a>
+  ))
+}
+
+<style>
+  a {
+    color: var(--sl-color-text-accent);
+    padding: 0.5em;
+    margin: -0.5em;
+  }
+  a:hover {
+    color: var(--sl-color-white);
+  }
+</style>

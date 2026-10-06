@@ -1,0 +1,84 @@
+---
+title: Bulk management
+description: "Update plugins, themes and WordPress on many sites at once, with a backup first and a health check after."
+sidebar:
+  order: 10
+sources:
+  - panel/web/src/pages/BulkManagement.tsx
+  - panel/web/src/pages/bulkSelection.ts
+  - panel/web/src/components/wp/BulkRunOptions.tsx
+  - panel/src/services/wpBulk.ts
+  - panel/src/services/wpInventory.ts
+  - panel/src/routes/wpFleet.ts
+  - panel/src/jobs/handlers/wp.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+**Sites → Bulk management** lists every plugin, theme and WordPress version across your sites,
+and changes them on many sites at once. A change runs as one job per site, grouped into one
+run you can follow.
+
+<Screenshot name="sites-bulk" alt="Sites → Bulk management with plugin updates selected" />
+
+## Find what needs attention
+
+Choose **Plugins**, **Themes** or **WordPress core**. Each row is one component, with how many
+sites have it, how many need an update or are vulnerable, and its versions. Open a row to see
+its sites.
+
+The filter chips combine: **Vulnerable** with **Has update** shows exactly what an update can
+fix. **Inactive** and **Closed on wp.org** find plugins to remove. Search by name or slug, pick
+a server on a fleet, and tick **Include stopped sites** to show those too.
+
+The numbers come from the last scan. **Rescan all** scans every running site now.
+
+## Run a bulk change
+
+1. Tick a row to select it on every site the table shows, or open it and tick single sites.
+2. The bar at the bottom offers only what every selected item accepts: **Update**,
+   **Update WordPress**, **Activate**, **Deactivate** or **Delete**. Choose one.
+3. Keep or change **Back up first** and **Check the site answers afterwards**. Both start on.
+4. Confirm, for example with **Update now**. **Delete** asks you to type `delete`.
+
+## Follow the run
+
+The run appears as a card with one row per site: the job's status, the operations that worked,
+the pre-update backup and a link to the job's log. A queued job can be canceled. A site already
+busy with another job is listed as skipped, and **Reselect skipped sites** selects what you
+asked for on those sites again. **Recent bulk runs** keeps the earlier runs.
+
+## What happens
+
+Each server runs one job at a time, so a server's sites take their turn while servers work in
+parallel. Each job takes the backup if asked, then runs the changes inside the site's
+container, with WordPress last. It then checks that the site answers and scans it again. A job
+fails when a change or the check fails.
+
+A selection with any item that cannot run the action is refused whole, and nothing is queued.
+
+## Safety rules
+
+- Must-use plugins and drop-ins cannot be changed.
+- The active theme and its parent cannot be deleted. To replace a theme, activate another.
+- **Update** is offered only where the last scan found an update.
+- Deleting a plugin deactivates it first, and leaves its database tables behind.
+- Changing the filters, the tab or the server clears the selection. A run only takes what the
+  table shows.
+- A stopped site is started for its job, and stopped again afterwards.
+
+## Limits
+
+- A failed update is not rolled back. Restore the pre-update backup from the site's
+  **Backups** tab.
+- Pre-update backups stay until you delete them, so they use disk.
+- A site that has never been scanned cannot join a run.
+- Bulk management changes what is installed. It does not install new plugins.
+
+## Related
+
+- [Updates and known vulnerabilities](/docs/plugins/updates/)
+- [Manage WordPress](/docs/sites/wordpress/)
+- [Restore and download](/docs/backups/restore/)
+- [Jobs](/docs/automations/jobs/)
+- [Your own scheduled jobs](/docs/automations/custom-jobs/)

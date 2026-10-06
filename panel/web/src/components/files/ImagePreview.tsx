@@ -1,3 +1,4 @@
+// @docs sites/files
 import { useEffect, useState } from 'react';
 import { siteFileBase } from '../../../../shared/siteFilePath';
 import { downloadUrl, readFile } from '../../api/files';

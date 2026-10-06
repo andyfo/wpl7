@@ -2,6 +2,7 @@
  * Zod schemas shared between the API (validation) and the React app (types/forms).
  * These are the source of truth for every request body and the core DTO shapes.
  */
+// @docs sites/create, sites/domains, sites/move
 import { z } from 'zod';
 import { accessLevels } from './access.js';
 import {

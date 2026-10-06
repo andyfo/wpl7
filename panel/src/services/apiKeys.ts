@@ -1,3 +1,4 @@
+// @docs integrations/api
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { apiKeys, type ApiKeyRow } from '../db/schema.js';

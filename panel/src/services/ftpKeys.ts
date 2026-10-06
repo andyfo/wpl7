@@ -1,3 +1,4 @@
+// @docs sites/ftp-sftp
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import argon2 from 'argon2';

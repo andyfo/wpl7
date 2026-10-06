@@ -1,0 +1,100 @@
+---
+title: Files
+description: "Browse, edit, upload, download, zip and search a site's files in the browser."
+sidebar:
+  order: 5
+sources:
+  - "panel/web/src/components/files/**"
+  - panel/src/routes/files.ts
+  - "panel/src/services/siteFiles*.ts"
+  - panel/shared/siteFilePath.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A site's **Files** tab, the panel's [Web FTP](/docs/reference/glossary/#web-ftp), shows the
+site's WordPress folder in the browser, from `wp-config.php` down.
+
+<Screenshot name="site-files" alt="A site's Files tab listing its WordPress folder" />
+
+## Browse the folder
+
+Choose a folder to open it, or a part of the path above the list to go back. **Filter this
+folder** narrows the list by name. Choose a file to open it: text opens in the editor, an image
+in a preview, and anything else downloads.
+
+An entry's actions are behind its three dots, or a right-click on its row: **Download**,
+**Extract…**, **Compress to .zip…**, **Rename or move…**, **Duplicate…**, **Permissions…** and
+**Delete…**. Tick several entries to **Compress** or **Delete** them together.
+
+## Edit a file
+
+**Save**, or Cmd-S or Ctrl-S, writes the file in one step, so a visitor never runs half of it.
+
+- PHP is checked with the site's own PHP version first. A file that does not parse is refused,
+  with **Go to line** and **Save anyway**.
+- A save only replaces the version you opened. If someone changed the file meanwhile, choose
+  **Overwrite with mine** or **Load theirs (discard mine)**.
+
+## Upload and download
+
+Drop files on the tab, or choose **Upload**. Each upload shows its progress, with **Cancel**
+and **Retry**. Large files go up in pieces, and a piece lost on the way is sent again. To
+upload a folder, zip it, upload the `.zip` and **Extract…** it.
+
+A file downloads as it is, and a folder as a `.tar.gz`.
+
+## Zip and unzip
+
+**Extract…** and **Compress to .zip…** run as jobs, with their progress in the tab. Extraction
+checks the whole archive first. It refuses an archive with an entry that would land outside
+the folder, and skips links inside it. Existing files stay unless you tick **Replace files
+that are already there**.
+
+## Search
+
+**Search** looks under the current folder, by **File names** or **Contents**. A contents search
+takes plain text, or a pattern with **Regular expression**, and can stay **Only in** files such
+as `*.php,*.js`. Choose a result to open the file at that line.
+
+## Why it runs as the site's user
+
+Everything the tab does runs inside the site's container, as the site's own user, `www-data`.
+It can do what the site's PHP can do, and no more. A hacked site can plant a link to another
+site's files, but followed inside its own container, that link reaches nothing new.
+
+Files owned by root, left by a root shell for example, show a lock and are read-only.
+**Fix ownership…** in the menu at the top hands the folder back to `www-data`.
+
+## See who changed what
+
+Every change, download and file read is logged with the admin or API key and the path:
+
+```bash
+sudo docker logs wpl7-panel 2>&1 | grep '"files"'
+```
+
+## Limits
+
+| Limit | Value |
+|---|---|
+| A file in the editor, and one save | 8 MiB |
+| One upload | 2 GiB |
+| Free disk an upload or extraction must leave | 1 GiB |
+| Entries listed per folder | 10,000 |
+| One search | 1,000 matches or 45 seconds |
+| Entries one compress may take | 200 |
+| Downloads at once, per server | 3 |
+
+- The site has to be running. A stopped site's tab offers **Start the site**.
+- While any job other than a backup runs on the site, changes are refused. Browsing and
+  downloading carry on.
+- Binary files and text that is not UTF-8 open read-only or download.
+
+## Related
+
+- [FTP and SFTP logins](/docs/sites/ftp-sftp/)
+- [Manage WordPress](/docs/sites/wordpress/)
+- [Restore and download](/docs/backups/restore/)
+- [Malware scans](/docs/security/malware-scans/)
+- [API reference](/docs/integrations/api-reference/)

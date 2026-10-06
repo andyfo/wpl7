@@ -1,0 +1,93 @@
+---
+title: Site settings
+description: "Switch PHP, set CPU, memory and process limits, stop, recreate or delete a site."
+sidebar:
+  order: 8
+sources:
+  - panel/web/src/pages/SiteDetail.tsx
+  - panel/web/src/pages/Settings.tsx
+  - panel/src/routes/sites.ts
+  - panel/src/services/sites.ts
+  - panel/src/jobs/handlers/sites.ts
+  - panel/src/services/siteSpec.ts
+  - panel/src/db/seed.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+import Since from '~/components/Since.astro';
+
+A site's **Settings** tab switches its PHP version, changes its domains and deletes the site.
+Stopping, starting and rebuilding its container are on the **Overview** tab. Resource limits
+are the same for every site, under **Settings → Sites**.
+
+<Screenshot name="site-settings" alt="A site's Settings tab: PHP version, domains and the danger zone" />
+
+## Switch PHP
+
+Under **PHP version**, pick a **Version** and choose **Switch**. The job recreates the container
+with the new PHP image, and files and the database stay as they are. If the site does not
+answer on the new version, the job puts the old container back and fails.
+
+To change the site's domains, see [Domains and going live](/docs/sites/domains/).
+
+## Stop, start or recreate the container
+
+The **Overview** tab has the buttons:
+
+| Button | What it does |
+|---|---|
+| **Stop** | Stops the container. Visitors get a 404 until it starts again. |
+| **Start** | Starts the container. |
+| **Restart** | Restarts the container. |
+| **Recreate container** | Builds a new container from the site's current settings: networks, limits, mail login and certificate. Files and the database stay. |
+
+A WordPress job on a stopped site, such as an update, starts the site for the job and stops it
+again afterwards.
+
+## Set resource limits
+
+Every site container gets the limits under **Settings → Sites → Site container limits**. Saving
+reaches every existing site at once, without a restart. Lifting the CPU cap with 0 is the
+exception: it restarts each site once.
+
+| Field | Default | Note |
+|---|---|---|
+| **CPU cores per site** | 2 | Fractions allowed. 0 means uncapped. |
+| **Memory per site (MB)** | 512 | The container is killed if it exceeds this. |
+| **Processes per site** | 512 | 0 means uncapped. |
+
+## Delete a site
+
+1. On the **Settings** tab, under **Danger zone**, choose **Delete site**.
+2. Leave **Take a final backup first (kept until you delete it)** on to keep one last backup.
+3. <Since v="0.3.0-beta.2" /> To remove the site's other backups too, remote copies included,
+   switch on **Delete its existing backups too**. It appears when the site has backups. The
+   final backup, if you take one, is kept.
+4. Type the site's slug and choose **Delete site**.
+
+The job takes the final backup and releases licensed plugins at their vendors. It then removes
+the container, the FTP logins, the database, the files and the site's network. Backups outlive
+the site, under **Backups → All backups**. If a step fails, the site is left as **Error**, and
+deleting it again finishes the job.
+
+:::danger
+With **Take a final backup first (kept until you delete it)** off and the existing backups
+deleted, nothing of the site is left: no files, no database and no backup.
+:::
+
+## Limits
+
+- Resource limits apply to all sites alike. One site cannot have limits of its own.
+- Switching PHP replaces the container, so the site does not answer for a few seconds.
+- If a recreated container starts but does not answer, **Recreate container** leaves it in
+  place. The job log warns about it.
+- A vendor that cannot be reached keeps its license activation. The job warns, and the site is
+  deleted anyway.
+
+## Related
+
+- [Domains and going live](/docs/sites/domains/)
+- [Delete backups](/docs/backups/delete/)
+- [The Sites list](/docs/sites/overview/)
+- [Settings](/docs/panel/settings/)
+- [Move a site to another server](/docs/sites/move/)

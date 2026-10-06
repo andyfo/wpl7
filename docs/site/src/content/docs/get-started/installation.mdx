@@ -1,0 +1,178 @@
+---
+title: Installation
+description: "What the server needs, the DNS records, the install command and its flags, and what the installer changes."
+sidebar:
+  order: 2
+sources:
+  - install.sh
+  - provision/setup.sh
+  - provision/lib.sh
+  - provision/daemon.json
+  - "provision/firewall/*"
+  - deploy/.env.example
+  - panel/src/db/seed.ts
+  - panel/src/index.ts
+---
+
+import ManagedInstall from '~/components/ManagedInstall.astro';
+
+One command turns a fresh Ubuntu server into a WPL7 host. The
+[Quick start](/docs/get-started/quick-start/) is the short version of this page.
+
+## Before you start
+
+- A fresh Ubuntu 26.04 server on x86-64, with root access.
+- At least 2 GB of memory, and more as you add sites.
+- A public IPv4 address with ports 80 and 443 open, also in the provider's firewall.
+  Let's Encrypt checks domains over port 80.
+- A domain whose DNS you can edit.
+- Outbound access to GitHub, `ghcr.io`, Docker Hub and the Ubuntu and Docker package
+  repositories.
+
+Any provider with a plain Ubuntu image works, such as Hetzner, DigitalOcean, Vultr, Linode,
+Scaleway, Contabo or OVH.
+
+<ManagedInstall />
+
+## Create the DNS records
+
+Create both records before you install, and wait until they resolve. Traefik requests the
+panel's certificate as soon as it starts.
+
+| Record | Name | Value |
+|---|---|---|
+| `A` | `panel.example.com` | the server's IPv4 address |
+| `A` | `*.dev.example.com` | the server's IPv4 address |
+
+The wildcard makes each new site reachable at once, at `<slug>.dev.example.com`. On a server
+with IPv6, add matching `AAAA` records or none: one that points elsewhere fails the
+certificate check.
+
+Created the records after installing? Restart Traefik once they resolve:
+
+```bash
+sudo docker restart wpl7-traefik
+```
+
+## Run the installer
+
+```bash
+curl -fsSL https://github.com/andyfo/wpl7/releases/latest/download/install.sh | sudo bash -s -- \
+  --panel-domain=panel.example.com \
+  --dev-domain=dev.example.com \
+  --acme-email=you@example.com
+```
+
+The script unpacks the newest release into `/opt/wpl7` and hands over to `provision/setup.sh`,
+which pulls the images and starts everything. Nothing is compiled on the server.
+
+### Read the script first
+
+Download it, read it, then run your copy:
+
+```bash
+curl -fsSL -O https://github.com/andyfo/wpl7/releases/latest/download/install.sh
+```
+
+```bash
+less install.sh
+```
+
+```bash
+sudo bash install.sh --panel-domain=panel.example.com --dev-domain=dev.example.com --acme-email=you@example.com
+```
+
+From a terminal, it asks for anything you leave out, the admin password included. Piped into
+`bash` it cannot ask, so the three flags are required and the password is generated.
+
+### Flags
+
+| Flag | What it does |
+|---|---|
+| `--panel-domain=` | Where the panel answers. Required. |
+| `--dev-domain=` | The domain new sites appear under. Required. |
+| `--acme-email=` | The address Let's Encrypt writes to about certificates. Required. |
+| `--version=` | Install this release instead of the newest, for example `0.3.0-beta.1`. |
+| `--channel=edge` | Follow the [edge channel](/docs/reference/glossary/#channel), the rolling build of `main`. |
+| `--dir=` | Install somewhere other than `/opt/wpl7`. |
+| `--dry-run` | Print what would happen and change nothing. |
+| `--admin-user=` | Name the owner account. The default is `admin`. |
+| `--admin-password=` | Set the owner's password instead of generating one. It stays in your shell history. |
+| `--ssh-port=` | Keep this SSH port open too. The ports `sshd` listens on always stay open. |
+| `--no-firewall` | Leave the host's firewalls alone. Traefik alone then refuses blocked addresses. |
+| `--mail-hostname=` | The name the mail relay announces. For `panel.example.com` the default is `mail.example.com`. |
+| `--non-interactive` | Fail instead of asking for a missing value. |
+
+The full list is in [Installer and scripts](/docs/reference/installer-and-scripts/).
+
+## What the installer changes
+
+| Area | Change |
+|---|---|
+| Packages | Installs `ca-certificates`, `curl`, `gnupg`, `git`, `ufw`, `jq`, `openssl` and `nftables`. |
+| Docker | Installs Docker CE with its compose plugin from Docker's repository. Writes `/etc/docker/daemon.json` with log rotation and `live-restore`. |
+| Firewall | UFW denies incoming traffic except SSH, rate-limited, and ports 80 and 443. Existing rules stay. |
+| Blocked addresses | Installs the `wpl7-firewall` helper and its systemd unit, which load blocked addresses into the nftables table `inet wpl7`. |
+| Swap | Adds a 2 GB `/swapfile` when memory is under 4 GB and no swap is active. |
+| Directories | Creates `/srv` with `sites`, `backups`, `mysql`, `traefik`, `panel`, `plugins`, `mail` and `wpl7-firewall`. |
+| Configuration | Writes `/opt/wpl7/deploy/.env`, mode `0600`, with generated database and session secrets. |
+| SSH | Creates the panel's SSH key and adds it to root's `authorized_keys`, for the web terminal and for updates. No user account is created. |
+| Containers | Starts Traefik, MariaDB, the mail relay, the DKIM signer and the panel. Pulls the site images for PHP 8.2 to 8.5. |
+
+Running `setup.sh` again is safe. It never overwrites an existing `.env`, so it is how you
+apply a change made there.
+
+## Sign in for the first time
+
+A minute after the install, read the generated password:
+
+```bash
+sudo docker logs wpl7-panel | grep -A2 'First boot'
+```
+
+Sign in at `https://panel.example.com` as `admin`, or as your `--admin-user`. Change the
+password on your own page, under your name at the foot of the sidebar.
+
+## Install from a checkout instead
+
+To build the panel from source, clone the repository and run `setup.sh` from it. Install `git`
+first if the image lacks it:
+
+```bash
+sudo apt-get update && sudo apt-get install -y git
+```
+
+```bash
+sudo git clone https://github.com/andyfo/wpl7.git /opt/wpl7
+```
+
+```bash
+sudo /opt/wpl7/provision/setup.sh --panel-domain=panel.example.com --dev-domain=dev.example.com --acme-email=you@example.com
+```
+
+`setup.sh` notices the checkout, sets `WPL7_SOURCE=build` and builds the panel and the site
+images on the server. The install takes longer, and updates then run `provision/deploy.sh`.
+
+## Add a second server
+
+More servers run sites only, as [workers](/docs/reference/glossary/#worker) the panel drives
+over SSH. Under **Servers → Add server**, **Blank VPS (auto-provision)** has the panel set up a
+fresh Ubuntu 26.04 VPS itself. [Add a server](/docs/servers/add/) says what that needs.
+
+## Limits
+
+- Only Ubuntu 26.04 on x86-64. On another release, `setup.sh` warns and carries on.
+- The installer refuses a directory that already holds an install.
+- Docker publishes ports past UFW: 80 and 443, plus the FTP ports while a site has an FTP login.
+- The generated password is printed once. Editing `PANEL_ADMIN_PASSWORD` in `.env` later
+  changes nothing.
+- An install from a checkout cannot use the update button in the panel.
+
+## Related
+
+- [Quick start](/docs/get-started/quick-start/)
+- [Installer and scripts](/docs/reference/installer-and-scripts/)
+- [Configuration](/docs/reference/configuration/)
+- [Updating WPL7](/docs/panel/updating/)
+- [Add a server](/docs/servers/add/)
+- [DNS records](/docs/integrations/dns/)

@@ -1,3 +1,4 @@
+// @docs panel/appearance
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';

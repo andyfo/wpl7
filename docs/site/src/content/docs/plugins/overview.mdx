@@ -1,0 +1,84 @@
+---
+title: Plugins across your sites
+description: "See every plugin, theme and WordPress version on every site, and when the panel reads them again."
+sidebar:
+  order: 1
+sources:
+  - panel/src/services/wpInventory.ts
+  - panel/src/jobs/handlers/wp.ts
+  - panel/src/routes/wpFleet.ts
+  - panel/web/src/pages/BulkManagement.tsx
+  - panel/web/src/components/wp/WordPressTab.tsx
+  - panel/web/src/components/wp/ComponentTable.tsx
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+The panel knows what every site has installed: each plugin and theme with its version, the
+WordPress version, and which of them have an update. **Sites → Bulk management** shows it for
+all your sites, and each site's **WordPress** tab shows it for one. The **Plugins** section of
+the sidebar holds something else: the [catalog](/docs/plugins/catalog/) new sites start from, and
+the [recipes](/docs/plugins/recipes/).
+
+<Screenshot name="sites-bulk" alt="Sites → Bulk management listing plugins across every site, with updates and a known vulnerability" />
+
+## Look across every site
+
+On **Sites → Bulk management**, choose **Plugins**, **Themes** or **WordPress core**. Each row is
+one plugin, theme or version, with how many sites have it, how many of those have an update or a
+known vulnerability, and the versions installed. Open a row to see each site that has it.
+
+Narrow the table with **Has update**, **Vulnerable**, **Inactive** and **Closed on wp.org**. Chips
+you combine must all match. Search by name or slug, and pick a server when you have several.
+Stopped sites are left out unless you switch on **Include stopped sites**.
+
+The tiles above the table are **Sites scanned**, **With updates**, **Vulnerable** and **Core
+outdated**: how many sites were read, and how many have an update, a known vulnerability or an
+older WordPress. The dashboard's **WordPress** card shows updates and vulnerable sites too, once a
+site has been read.
+
+## Look at one site
+
+A site's **WordPress** tab lists its plugins and themes with their status and version. An arrow
+marks a version with an update. **(ahead)** marks a version newer than the one wordpress.org
+offers, which the panel does not offer to update.
+
+<Screenshot name="site-wordpress" alt="A site's WordPress tab with its updates and its plugins" />
+
+## When the panel reads the sites
+
+Reading a site runs WP-CLI inside its container, and WP-CLI asks wordpress.org for updates on the
+way. That takes seconds per site. So the panel keeps the last answer for each site and shows that
+everywhere, with its age.
+
+| When | What reads the sites again |
+|---|---|
+| Every 6 hours, per site | The **WordPress inventory scan** schedule, which checks every 10 minutes for a site due |
+| After every WordPress job | Each plugin, theme, core or bulk job reads the site it changed |
+| On demand, one site | **Check now** on the site's **WordPress** tab |
+| On demand, every site | **Rescan all** on **Sites → Bulk management** |
+
+**Re-check every (hours)** in **Settings → Security** sets the interval, from 1 to 168 hours. The
+scheduled scan reads running sites only, and skips a site that another job is busy with.
+
+A site never read says **Not scanned yet**, not that it has nothing installed. If a plugin breaks
+WP-CLI, the panel reads the site again with plugins and themes not loaded. The list is then
+complete, but it lacks the updates a premium plugin's own updater would report, and the tab says
+**partial scan**.
+
+## Limits
+
+- The numbers are as old as the last read. A plugin installed in wp-admin appears after the next
+  scan.
+- Stopped sites are not read on schedule. **Check now** needs the site running.
+- The panel takes at most ten **Check now** requests a minute.
+- Must-use plugins and drop-ins are listed, but the panel does not manage them.
+- A failed read keeps the previous list, and shows the error beside it.
+
+## Related
+
+- [Updates and known vulnerabilities](/docs/plugins/updates/)
+- [Bulk management](/docs/sites/bulk/)
+- [Manage WordPress](/docs/sites/wordpress/)
+- [The plugin catalog](/docs/plugins/catalog/)
+- [Schedules](/docs/automations/schedules/)

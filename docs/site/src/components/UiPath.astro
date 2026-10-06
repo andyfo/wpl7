@@ -1,0 +1,29 @@
+---
+/**
+ * A place in the panel: <UiPath href="/docs/security/site-protection/">Sites → Security → Settings</UiPath>.
+ * Bold, with the arrows set apart; with `href`, the last step links to the page that documents
+ * it. scripts/check-ui-paths.ts checks every step against the panel's own strings.
+ */
+interface Props {
+  href?: string;
+}
+const { href } = Astro.props;
+const text = (await Astro.slots.render('default')).replace(/<[^>]+>/g, '').trim();
+const steps = text.split(/\s*(?:→|-&gt;)\s*/).filter(Boolean);
+---
+
+<span class="ui-path">
+  {
+    steps.map((step, i) => (
+      <>
+        {i > 0 && (
+          <span class="ui-path-sep" aria-hidden="true">
+            →
+          </span>
+        )}
+        {i > 0 && <span class="sr-only">, then </span>}
+        {i === steps.length - 1 && href ? <a href={href}>{step}</a> : <span set:html={step} />}
+      </>
+    ))
+  }
+</span>

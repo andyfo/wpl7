@@ -1,3 +1,4 @@
+// @docs integrations/mcp
 import type { FastifyInstance } from 'fastify';
 import { createMcpHandler, McpServer, type McpHttpHandler } from '@modelcontextprotocol/server';
 import { ACCESS_LABELS } from '../../shared/access.js';

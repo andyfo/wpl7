@@ -1,3 +1,4 @@
+// @docs get-started/first-site, get-started/quick-start, sites/create
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { RecipeDto, WporgPluginDto } from '../../../shared/types';

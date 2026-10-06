@@ -1,0 +1,301 @@
+---
+title: Installer and scripts
+description: "Every flag of install.sh and every script in provision/, in the order you run them."
+sidebar:
+  order: 1
+sources:
+  - install.sh
+  - "provision/*.sh"
+  - "provision/firewall/*"
+  - provision/daemon.json
+---
+
+One script installs WPL7, and the scripts in `provision/` keep it running. They print their
+usage with `--help`. This page lists every flag, in the order you meet the scripts.
+
+## The scripts at a glance
+
+| Script | What it does | Run as | When |
+|---|---|---|---|
+| `install.sh` | Downloads a release and hands over to `setup.sh` | root | Once, on a blank server |
+| `provision/setup.sh` | Turns a blank Ubuntu 26.04 server into a running stack, or applies a changed bundle | root | First run, and after a change to `provision/` or `deploy/.env` |
+| `provision/migrate-rename.sh` | Moves an install of the old `ceo-server` stack to the WPL7 names | root | Once. `setup.sh` calls it for you |
+| `provision/update.sh` | Moves an install that pulls its images to another release | checkout owner | Every update by hand |
+| `provision/compose.sh` | Runs `docker compose` with this install's `.env` and overlays | checkout owner | For `ps`, `logs` and restarts |
+| `provision/dev-access.sh` | Makes the server editable: a non-root user, Node and the GitHub CLI | root | Once, on a server you develop on |
+| `provision/ci-access.sh` | Lets GitHub Actions deploy to this server | root | Once, to deploy on every push |
+| `provision/build.sh` | Tests and rebuilds what you edited on the server | checkout owner | After every edit on the server |
+| `provision/deploy.sh` | Deploys a commit that is already on `origin/main` | checkout owner | On every push through CI, or by hand |
+
+The checkout owner is the user that owns `/opt/wpl7`. That is `wp` once `dev-access.sh` has run,
+and root before. A script started as the wrong user stops and says so before it changes
+anything.
+
+## install.sh
+
+```bash
+curl -fsSL https://github.com/andyfo/wpl7/releases/latest/download/install.sh | sudo bash -s -- --panel-domain=panel.example.com --dev-domain=dev.example.com --acme-email=you@example.com
+```
+
+| Flag | What it does |
+|---|---|
+| `--version=X.Y.Z` | Installs that release instead of the latest one |
+| `--channel=stable`, `--channel=edge` | Picks the [channel](/docs/reference/glossary/#channel). `edge` follows the rolling build of `main`. The default is `stable` |
+| `--dir=PATH` | Installs somewhere other than `/opt/wpl7` |
+| `--dry-run` | Prints what it would do and changes nothing |
+| `--non-interactive` | Passed on to `setup.sh`. Added for you when stdin is not a terminal |
+| `-h`, `--help` | Prints the usage |
+
+Every other flag goes to `setup.sh` unchanged.
+
+What it does, in order:
+
+1. Checks that it runs as root, and installs `jq` if it is missing.
+2. Finds the release through the GitHub API: the latest one, the one `--version` names, or `edge`.
+3. Stops if the directory already holds an install, and prints the `update.sh` command to use instead.
+4. Unpacks the release bundle into the directory and records which release it is.
+5. Runs `provision/setup.sh`.
+
+Piped from `curl`, stdin is not a terminal, so every answer has to be a flag and the admin
+password is generated. Download the script and run `sudo bash install.sh` from a terminal to be
+asked for what you leave out. Set `WPL7_REPO` in the environment to install from a fork.
+
+## setup.sh
+
+The first run on a server installed from a checkout:
+
+```bash
+sudo ./provision/setup.sh --panel-domain=panel.example.com --dev-domain=dev.example.com --acme-email=you@example.com
+```
+
+Later runs need no flags. They reuse `deploy/.env`, which `setup.sh` never overwrites:
+
+```bash
+sudo /opt/wpl7/provision/setup.sh
+```
+
+| Flag | What it does |
+|---|---|
+| `--panel-domain=` | Where the panel answers. Required on the first run of a main server |
+| `--dev-domain=` | The domain new sites appear under, as `<slug>.dev.example.com`. Required on a first run |
+| `--acme-email=` | The Let's Encrypt account address. Required on a first run |
+| `--role=main`, `--role=worker` | `worker` runs sites and no panel. The default is `main` |
+| `--panel-key='ssh-ed25519 …'` | Lets the panel's SSH key in, as the `wpl7-panel` user and as root. Repeat it for several keys |
+| `--admin-user=` | The name of the owner account. The default is `admin` |
+| `--admin-password=` | The owner's first password. Without it, the panel generates one and prints it on its first boot |
+| `--mail-hostname=` | The name the mail relay announces. On an existing install it replaces the name set in the panel |
+| `--ssh-port=` | An SSH port to keep open in the firewall, beside the ports sshd listens on |
+| `--dns-provider=` | The DNS provider for wildcard dev certificates: `cloudflare`, `hetzner` or `digitalocean` |
+| `--dns-token-stdin` | Reads the provider's API token from stdin, so it never shows in the process list |
+| `--non-interactive` | Fails on a missing value instead of asking for it |
+| `--no-firewall` | Leaves the host's firewall alone: no UFW rules and no `wpl7-firewall` helper |
+| `-h`, `--help` | Prints the usage |
+
+The token from `--dns-token-stdin` goes into `deploy/.env` as `CF_DNS_API_TOKEN`,
+`HETZNER_API_KEY` or `DO_AUTH_TOKEN`, after the provider. The mail hostname defaults to the
+panel domain with a leading `panel.` replaced by `mail.`, so `panel.example.com` gives
+`mail.example.com`. On a worker it is `mail.` followed by the dev domain.
+
+What it does:
+
+- Installs Docker CE from Docker's own repository, with log rotation and `live-restore`
+  from `provision/daemon.json`.
+- Sets UFW to refuse incoming traffic except SSH, 80 and 443. SSH is rate-limited on every port
+  sshd listens on, and existing rules are kept.
+- Installs the `wpl7-firewall` helper and its boot unit, `wpl7-firewall.service`.
+- Creates the folders under `/srv`, and a 2 GB swap file when the machine has less than 4 GB of
+  memory and no swap.
+- Writes `deploy/.env` from `deploy/.env.example` on the first run, with generated database and
+  session secrets.
+- Creates the `wpl7-panel` user on a worker, or when `--panel-key` is given.
+- Pulls the site images for the PHP versions in `WP_PHP_VERSIONS`.
+- Calls `migrate-rename.sh` when it finds the old `ceo-server` stack.
+- Starts the stack and waits for MariaDB to report healthy.
+
+An install from `install.sh` is in [image mode](/docs/reference/glossary/#image-mode): it
+pulls the released panel and site images. In a git checkout, `setup.sh` sets
+`WPL7_SOURCE=build` and builds both on the server, starting the stack with
+`compose.sh up -d --build`. That is [checkout mode](/docs/reference/glossary/#checkout-mode).
+
+### The wpl7-firewall helper
+
+`setup.sh` installs `/usr/local/sbin/wpl7-firewall`. It loads the
+[block list](/docs/reference/glossary/#block-list) the panel writes to
+`/srv/wpl7-firewall/wpl7.nft` into the nftables table `inet wpl7`, and touches nothing else.
+The panel runs it, and you can run it as root.
+
+| Command | What it does |
+|---|---|
+| `wpl7-firewall status` | Prints what is loaded, as one line of JSON |
+| `wpl7-firewall apply` | Checks the panel's file with `nft -c`, then loads it in one transaction. A file that touches any other table is refused |
+| `wpl7-firewall off` | Removes the table and keeps it off until `on`, whatever the panel writes |
+| `wpl7-firewall on` | Loads the last list again |
+| `wpl7-firewall boot` | What the unit runs at boot: loads the last list unless it was switched off. It never fails a boot |
+
+## migrate-rename.sh
+
+`setup.sh` runs it by itself when it finds a container named `ceo-panel` or `ceo-traefik`. By
+hand, print the plan first:
+
+```bash
+sudo ./provision/migrate-rename.sh --dry-run
+```
+
+| Flag | What it does |
+|---|---|
+| `--yes`, `--non-interactive` | Does not ask before the minute of downtime |
+| `--dry-run` | Prints the plan and changes nothing |
+| `--new-dir=` | Where the checkout moves to. The default is `/opt/wpl7` |
+| `--state-file=` | Where it reports the new checkout path back to `setup.sh` |
+| `-h`, `--help` | Prints the usage, as the first argument only |
+
+It renames the stack and never touches `/srv/sites`, `/srv/mysql` or `/srv/backups`. Site
+containers keep running, and are unreachable for about a minute while Traefik restarts.
+
+## update.sh
+
+Moves an install in image mode to another release. Try it first with `--dry-run`:
+
+```bash
+/opt/wpl7/provision/update.sh --to=<version> --dry-run
+```
+
+| Flag | What it does |
+|---|---|
+| `--to=<version>`, `--to=edge` | Required. A published release, or the rolling `edge` build |
+| `--channel=stable`, `--channel=edge` | Records another channel than the release's own |
+| `--dry-run` | Prints the plan and changes nothing |
+| `--force` | Replaces a panel built on the server, and moves the install back to image mode |
+| `--no-rollback` | Leaves a failed update in place instead of going back |
+| `--expect-sha=` | The commit CI expected. It is reported, never enforced |
+| `-h`, `--help` | Prints the usage, as the first argument only |
+
+Run it as the checkout owner. It runs itself again as root with `sudo -n`. It writes its state
+and log to `/srv/panel/update/`. The new panel has to pass a
+[health gate](/docs/reference/glossary/#health-gate) within `WPL7_UPDATE_HEALTH_TIMEOUT`
+seconds, 300 by default. Otherwise the
+[rollback](/docs/reference/glossary/#rollback) puts back the previous image, bundle and panel
+database. **Settings → Updates** runs the same script.
+
+## compose.sh
+
+`docker compose` with this install's `deploy/.env`, so an ad hoc command cannot recreate the
+stack with another configuration. Everything after the script name goes to `docker compose`.
+
+```bash
+/opt/wpl7/provision/compose.sh logs -f panel
+```
+
+| Overlay | Added when | What it changes |
+|---|---|---|
+| `docker-compose.build.yml` | `WPL7_SOURCE=build`, not on a worker | Builds the panel from the checkout |
+| `docker-compose.worker.yml` | `SERVER_ROLE=worker` | Leaves out the panel container |
+| `docker-compose.backup-root.yml` | `BACKUP_ROOT` is set | Mounts the backup folder into the panel at the same path |
+
+## On a server you develop on
+
+The next four scripts are for editing WPL7 on the server itself. A server that only hosts sites
+needs none of them.
+
+### dev-access.sh
+
+Creates a non-root user that owns the checkout and can use Docker, installs Node 22 and the
+GitHub CLI from their signed repositories, and creates an SSH key for pushing to GitHub. Run it
+as root. It is safe to run again.
+
+```bash
+sudo ./provision/dev-access.sh --user=wp
+```
+
+| Flag | What it does |
+|---|---|
+| `--user=` | The user that owns the checkout. The default is `wp` |
+| `--git-name=`, `--git-email=` | The author of commits made on the server. The default is the repository's last author |
+| `--with-claude` | Also installs Claude Code. It is off by default |
+| `--skip-node`, `--skip-gh` | Leaves Node or the GitHub CLI out |
+| `--skip-claude` | Accepted and does nothing, because Claude Code is off by default |
+| `-h`, `--help` | Prints the usage |
+
+### ci-access.sh
+
+Creates an SSH key that can run `deploy.sh` and nothing else, and sets the six `DEPLOY_*`
+secrets the deploy workflow reads. Run it as root. With `--repo`, the deploy user needs its own
+GitHub CLI session first.
+
+```bash
+sudo ./provision/ci-access.sh --repo=owner/name
+```
+
+| Flag | What it does |
+|---|---|
+| `--repo=owner/name` | Sets the secrets with the GitHub CLI. Without it, the script prints them for you to paste |
+| `--rotate`, `--force` | Replaces a key that is already authorized. The old key stops working at once |
+| `--user=` | The deploy user. The default is `wp` |
+| `--host=`, `--port=` | What the runner connects to. Both are detected when left out |
+| `-h`, `--help` | Prints the usage |
+
+The private key is shown once and never stored on the server. To revoke it, delete the
+`wpl7-deploy@github-actions` line from the deploy user's `~/.ssh/authorized_keys`.
+
+### build.sh
+
+Works out what the working tree changed, runs the type check and the tests when panel code
+changed, rebuilds only what is affected, and checks that the panel comes back. If it does not,
+the previous panel image is restored. Building switches the install to `WPL7_SOURCE=build`.
+
+| Flag | What it does |
+|---|---|
+| `--quick`, `--skip-tests` | Skips the type check and the tests |
+| `--stack` | Rebuilds every service, not only the panel |
+| `--images` | Also rebuilds the `wpl7-wordpress` site images |
+| `--full` | Hands over to `setup.sh` |
+| `--dry-run` | Prints the plan and changes nothing |
+| `-h`, `--help` | Prints the usage |
+
+`BUILD_HEALTH_TIMEOUT` sets the health check's limit in seconds, 300 by default.
+
+### deploy.sh
+
+Moves the checkout to a commit on `origin/main`, rebuilds what the change touched, and goes
+back to the previous commit if the panel does not come back. GitHub Actions runs it over SSH.
+
+| Flag | What it does |
+|---|---|
+| `--ref=<sha>` | Deploys that commit. It must be on the branch |
+| `--branch=` | Deploys from another branch. Refused over the CI key |
+| `--full` | Runs the whole of `setup.sh` |
+| `--workers` | Afterwards, updates every worker through the panel's API |
+| `--dry-run` | Prints the plan and changes nothing |
+| `--allow-dirty` | Discards uncommitted edits on the server instead of refusing |
+| `--no-rollback` | Leaves a failed deploy in place instead of going back |
+| `-h`, `--help` | Prints the usage |
+
+| Variable | Default | What it sets |
+|---|---|---|
+| `DEPLOY_BRANCH` | `main` | The branch to deploy from |
+| `DEPLOY_HEALTH_TIMEOUT` | `300` | Seconds to wait for the panel |
+| `DEPLOY_WORKER_TIMEOUT` | `900` | Seconds to wait for each worker with `--workers` |
+| `DEPLOY_ENV_FILE` | `~/.wpl7-deploy.env` | A file with `WPL7_API_KEY`, the API key `--workers` uses |
+
+Over the CI key, only `--ref`, `--full`, `--workers`, `--dry-run` and `--no-rollback` are
+accepted. On an install in image mode, `deploy.sh` hands over to `update.sh --to=edge` when the
+channel is `edge`, and refuses on `stable`.
+
+## Limits
+
+- `setup.sh` is written for Ubuntu 26.04. On another system it prints a warning and carries on.
+- There is no uninstall script.
+- `--dns-provider`, `--dns-token-stdin`, `--admin-user` and `--admin-password` only count on the
+  first run, when `deploy/.env` is written.
+- `--dns-provider=hetzner` writes `HETZNER_API_KEY`. Traefik's ACME library reads that variable
+  as a key for Hetzner's legacy DNS API, which it marks as deprecated.
+- `install.sh` refuses a directory that already holds an install. Use `update.sh` there.
+
+## Related
+
+- [Installation](/docs/get-started/installation/)
+- [Updating WPL7](/docs/panel/updating/)
+- [Add a server](/docs/servers/add/)
+- [Configuration](/docs/reference/configuration/)
+- [Blocked addresses](/docs/security/blocked-addresses/)
+- [Contributing](/docs/help/contributing/)

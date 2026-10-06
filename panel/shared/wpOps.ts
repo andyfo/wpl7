@@ -1,3 +1,4 @@
+// @docs plugins/updates
 import type { WpComponentKind } from './schemas.js';
 import type { SiteWpStatusDto } from './types.js';
 

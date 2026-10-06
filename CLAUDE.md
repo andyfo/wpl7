@@ -15,3 +15,21 @@ and services it calls. Each entry has a priority and a **Last checked** time.
   A changed status that is only noted down is not a recheck.
 - When a change works around something upstream, or pins a version for a reason, add a watchlist
   entry in the same change. Remove an entry once there is nothing left to watch.
+
+## Docs follow the code
+
+[docs/site/](docs/site/) is the documentation site, published at wpl7.com/docs. A page names the
+code it documents (`sources:` in its front matter), and code names its pages in a comment
+(`// @docs sites/domains`). The `docs-sync` check holds every pull request to both.
+
+- A change in behaviour updates the pages its `@docs` markers and the pages' `sources:` name, in
+  the same pull request. `npm run docs:sync -- --base main` in `docs/site` lists them.
+- When none of them needs a change, the pull request description says why, on a line of its own:
+  `Docs: not needed — <reason>`.
+- A new feature gets a page, and `@docs` markers in its code: `npm run docs:markers` adds them
+  for every file a page lists in `sources:`.
+- Generated pages (API reference, MCP tools, `deploy/.env`, job types, levels, changelog) are
+  never edited by hand. Change the source, run `npm run docs:generate`, commit what it writes.
+- A change to the panel's UI changes screenshots: run the screenshot script to look at them
+  (`docs/site/README.md`, Screenshots). The `screenshots` job commits the new ones.
+- The writing rules for pages are in [docs/site/README.md](docs/site/README.md).

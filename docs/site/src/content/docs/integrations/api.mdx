@@ -1,0 +1,142 @@
+---
+title: The REST API
+description: "Drive the panel from your own tools: API keys and their levels, requests, jobs, the test console and the activity log."
+sidebar:
+  order: 1
+sources:
+  - panel/web/src/pages/ApiKeys.tsx
+  - "panel/web/src/components/apiKeys/**"
+  - panel/web/src/components/AccessPicker.tsx
+  - panel/src/plugins/auth.ts
+  - panel/src/plugins/apiActivity.ts
+  - panel/src/services/apiKeys.ts
+  - panel/src/services/apiActivity.ts
+  - panel/src/routes/misc.ts
+  - panel/shared/access.ts
+  - panel/shared/apiDocs.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+Everything the panel does is available over HTTP, at `https://panel.example.com/api`. Your own
+tools call it with an [API key](/docs/reference/glossary/#api-key), at the level you give the key.
+
+<Screenshot name="api-docs" alt="Integrations → API keys → Docs with the guide, the console and the endpoint list" />
+
+## Create a key
+
+1. Open **Integrations → API keys** and choose **New key**.
+2. Give it a **Name** that says what uses it, and pick its **Access**.
+3. Choose **Create**, and copy the token. It is shown only this once.
+
+A key's level is fixed for its life. Make one key per integration, so the Jobs list and the
+activity log say which one did what. **Revoke** ends a key at once.
+
+| Level | For | What it can do |
+|---|---|---|
+| **Read only** | Dashboards and reports | See sites, servers, jobs, backups, the WordPress inventory, mail, traffic and settings, and list files. Never a file's contents, a command's output or a password |
+| **Manage** | Tools that work on sites | Also what each site's WordPress admin could do: create sites, plugins, themes, WP-CLI, shell and REST calls, files, logins, backups and restores, custom schedules |
+| **Full** | Tools that run the panel | Also the panel itself: servers, settings, mail, DNS, offsite destinations, the catalog and recipes, blocked addresses, the backup policy, deleting and moving sites, updates |
+
+The [API reference](/docs/integrations/api-reference/) names the level each endpoint needs.
+
+## Send a request
+
+Send the key as a Bearer token. No cookie, CSRF header or login call is needed.
+
+```bash
+curl -s "https://panel.example.com/api/sites" -H "Authorization: Bearer wpl7_..."
+```
+
+Every error has the same shape:
+`{"error": {"code": "...", "message": "..."}}`. An unknown or revoked key gets
+`401 unauthorized`. A key below an endpoint's level gets `403 forbidden`, which names both levels.
+Over 300 requests a minute get `429 rate_limited`. While the panel updates itself, changes get
+`503 maintenance`.
+
+## Follow a job
+
+Anything slow answers `202` with a `job` and a `Location: /api/jobs/<id>` header. Poll the job until
+its `status` is `succeeded`, `failed` or `canceled`:
+
+```bash
+curl -s "https://panel.example.com/api/jobs/17?logAfter=0" -H "Authorization: Bearer wpl7_..."
+```
+
+The answer holds the job, its new log lines and `lastSeq`. Pass `lastSeq` as the next `logAfter`
+to get only new lines. Poll about once a second. A site takes one job at a time, so a second change
+meanwhile gets `409 job_conflict`.
+
+## Test a key and see what it did
+
+The **Console** on **API keys → Docs** sends real requests to your panel. To check a new key, turn on
+**Send as an API key instead of this browser session**, paste the **Token** and choose **Send**.
+
+**API keys → Activity** lists every request made with a key, refused ones included, with the job
+each one started. The panel's own browser session is not recorded. Requests are kept for 30 days
+by default, set under **Keep requests for**.
+
+<Screenshot name="api-activity" alt="Integrations → API keys → Activity with requests from two keys" />
+
+## Create a site and take it live
+
+1. Create the site on its dev domain. A Manage key is enough.
+
+   ```bash
+   curl -sX POST "https://panel.example.com/api/sites" -H "Authorization: Bearer wpl7_..." -H 'content-type: application/json' -d '{"title": "Northwind Bakery", "slug": "northwind-bakery", "domainMode": "dev", "adminUser": "northwind", "adminEmail": "owner@northwindbakery.example"}'
+   ```
+
+2. Poll the job from the `Location` header. When it succeeds, its `result` holds the site's `url`,
+   such as `https://northwind-bakery.dev.example.com`, and the generated `adminPassword`.
+3. Point the customer's domain at the server, then go live. The dev address stays as a redirect.
+
+   ```bash
+   curl -sX POST "https://panel.example.com/api/sites/northwind-bakery/go-live" -H "Authorization: Bearer wpl7_..." -H 'content-type: application/json' -d '{"domains": ["northwindbakery.example", "www.northwindbakery.example"], "keepDevAlias": true}'
+   ```
+
+Adding `"manageDns": true` creates the domain's records through the Cloudflare token, and needs a
+Full key.
+
+## Add a server and move a site
+
+These steps need a Full key.
+
+1. Fetch the panel's SSH key. Add it to `root` on a fresh Ubuntu 26.04 VPS, through your
+   provider's account.
+
+   ```bash
+   curl -s "https://panel.example.com/api/servers/ssh-public-key" -H "Authorization: Bearer wpl7_..."
+   ```
+
+2. Register the VPS and let the panel set it up. The answer holds the new `server` and its setup
+   `job`.
+
+   ```bash
+   curl -sX POST "https://panel.example.com/api/servers" -H "Authorization: Bearer wpl7_..." -H 'content-type: application/json' -d '{"name": "nyc1", "sshHost": "203.0.113.20", "devDomain": "dev.example.com", "provision": true, "acmeEmail": "ops@example.com"}'
+   ```
+
+3. Once the job succeeds, move the site to the server's `id`.
+
+   ```bash
+   curl -sX POST "https://panel.example.com/api/sites/northwind-bakery/move" -H "Authorization: Bearer wpl7_..." -H 'content-type: application/json' -d '{"targetServerId": 2}'
+   ```
+
+The site keeps its hostnames. With a Cloudflare token, the panel updates their DNS records.
+Without one, the job log names the records to change, and the old server forwards traffic meanwhile.
+
+## Limits
+
+- A key belongs to the panel, not to a person. Two-factor authentication does not apply to it, and
+  endpoints that ask for your own password refuse it.
+- A Manage key can read whatever a site holds, license keys included. What it creates inside a site
+  stays after you revoke it.
+- The activity log keeps at most the newest 100,000 requests.
+- There are no webhooks. Your tool polls jobs.
+
+## Related
+
+- [AI apps over MCP](/docs/integrations/mcp/)
+- [API reference](/docs/integrations/api-reference/)
+- [Jobs](/docs/automations/jobs/)
+- [Protection levels and key levels](/docs/reference/security-levels/)
+- [Accounts and access to the panel](/docs/security/accounts/)

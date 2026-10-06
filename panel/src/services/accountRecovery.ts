@@ -1,3 +1,4 @@
+// @docs help/troubleshooting, security/accounts
 import crypto from 'node:crypto';
 import argon2 from 'argon2';
 import type { Config } from '../config.js';

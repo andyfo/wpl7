@@ -1,3 +1,4 @@
+// @docs mail/overview, mail/traffic, security/overview
 import path from 'node:path';
 import type { Config } from '../config.js';
 

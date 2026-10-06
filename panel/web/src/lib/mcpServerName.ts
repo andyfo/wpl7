@@ -1,3 +1,4 @@
+// @docs integrations/mcp
 /** Labels that say what the host is, not whose: panel.agency.com is agency's. */
 const GENERIC = new Set(['www', 'panel', 'wpl7', 'wp', 'admin']);
 

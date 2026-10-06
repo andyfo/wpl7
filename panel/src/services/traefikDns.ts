@@ -1,3 +1,4 @@
+// @docs integrations/cloudflare
 import crypto from 'node:crypto';
 import path from 'node:path';
 import type { Config } from '../config.js';

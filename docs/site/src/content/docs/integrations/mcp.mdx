@@ -1,0 +1,145 @@
+---
+title: AI apps over MCP
+description: "Connect Claude, ChatGPT, Claude Code, Cursor or VS Code to the panel, decide what each may do, and revoke it."
+sidebar:
+  order: 3
+sources:
+  - panel/web/src/pages/Mcp.tsx
+  - panel/web/src/pages/OAuthAuthorize.tsx
+  - panel/web/src/lib/mcpServerName.ts
+  - panel/src/routes/mcp.ts
+  - panel/src/routes/oauth.ts
+  - panel/src/services/oauth.ts
+  - panel/src/mcp/server.ts
+  - panel/src/mcp/tools.ts
+  - panel/src/lib/panelUrl.ts
+  - panel/shared/oauth.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+The panel is an [MCP](/docs/reference/glossary/#mcp) server. An AI app connects to
+`https://panel.example.com/mcp` and works in the panel through the REST API, at the level you
+allow.
+
+<Screenshot name="mcp" alt="Integrations → MCP switched on, with two connected apps" />
+
+## Before you start
+
+- The panel needs `PANEL_DOMAIN` and HTTPS. The MCP page says what is missing.
+
+## Switch it on
+
+Open **Integrations → MCP** and turn on **Let AI apps connect**. While it is off, the MCP address
+does not exist, and connected apps are paused but kept. The **Server URL** is the address to give
+an app.
+
+## Connect an app by signing in
+
+1. Press **Connect an app**. For ten minutes, one app may register and you may approve it once.
+2. Add the server URL in the app, as the table below shows.
+3. The app opens an approval page in your browser. Check where your browser goes afterwards, such
+   as `claude.ai`. The app's name, in quotes, is only its own claim.
+4. Pick what it may do, **Read only** unless you choose more, and choose **Approve**.
+
+Outside the window, an approval link leads nowhere, so nobody can get an app approved by sending
+you one. If a stranger's app registered in your window first, choose **Discard** on the MCP page.
+The window stays open for yours.
+
+| App | Where the server URL goes |
+|---|---|
+| Claude | **Settings → Connectors → Add custom connector**, in claude.ai or the desktop app |
+| ChatGPT | Developer mode under **Settings → Connectors → Advanced**, then a connector with **OAuth** |
+| Claude Code | `claude mcp add --transport http wpl7-example https://panel.example.com/mcp`, then `/mcp` and Authenticate |
+| Cursor | An entry in `~/.cursor/mcp.json`. Cursor asks you to sign in when it starts the server |
+| VS Code | An entry in `.vscode/mcp.json`, or MCP: Add Server. VS Code asks you to sign in when it starts the server |
+
+## Connect with an API key
+
+Make a key under **Integrations → API keys** at the level the app should have. The key is the
+approval, so there is no window.
+
+```bash
+claude mcp add --transport http wpl7-example https://panel.example.com/mcp --header "Authorization: Bearer wpl7_..."
+```
+
+In Cursor's `~/.cursor/mcp.json`, the entry carries the same address and header. VS Code takes it
+under `servers`, with `"type": "http"`.
+
+```json
+{ "mcpServers": { "wpl7-example": { "url": "https://panel.example.com/mcp", "headers": { "Authorization": "Bearer wpl7_..." } } } }
+```
+
+## Choose what an app may do
+
+Apps have the three levels of [API keys](/docs/integrations/api/): **Read only**, **Manage** and
+**Full**. Change an app's level under **Connected apps** at any time, and its next call has the new
+one. An app sees only the [tools](/docs/integrations/mcp-tools/) its level can use.
+
+## Use several panels in one app
+
+Each panel is an MCP server of its own, with its own sign-in and levels. Add each one under its
+own name. **Name in the app** suggests one from the panel's domain, such as `wpl7-example` for
+`panel.example.com`. Servers added to one panel are not separate panels: one connection reaches
+them all.
+
+## See what an app did
+
+The app acts as itself, never as the admin who approved it.
+
+| Where | What it shows |
+|---|---|
+| The Jobs list, filtered to **AI apps (MCP)** | Each job credited to the app, such as `Claude via MCP (approved by sam)` |
+| **API keys → Activity** | Every tool call with the app's address, and every refused token |
+| **Recent calls** on the MCP page | The latest calls |
+| The panel log | An `mcp:` line for each approval, level change and revocation |
+
+## Revoke an app
+
+Choose **Revoke** beside the app under **Connected apps**. Its tokens stop working at once. To
+connect it again, remove it in the app and add it again. An app that uses an API key stops when you
+revoke the key.
+
+Removing an admin removes the connections they approved. A new password or signing out does not.
+A connection unused for two months ends on its own. Restoring the panel's database from a backup
+brings back connections revoked since, so revoke them again.
+
+## Troubleshooting
+
+| What you see | What to do |
+|---|---|
+| "No connection is being set up" | The window was closed, expired, used or another admin's. Press **Connect an app** and start again from the app. A revoked app has to be removed from the app and added again |
+| The approval page names an app you are not connecting | Choose **Decline**, press **Cancel** on the MCP page, and open a new window |
+| `404` at the MCP address | MCP is off, or the panel lacks `PANEL_DOMAIN` or HTTPS. The MCP page says which |
+| The app keeps asking to sign in | Its connection was revoked, its admin removed, or it was unused for two months. Connect it again |
+
+## For client authors
+
+The panel is its own OAuth authorization server, and `/mcp` is its only resource.
+
+| | |
+|---|---|
+| Discovery | `/.well-known/oauth-protected-resource/mcp` and `/.well-known/oauth-authorization-server`. A `401` from `/mcp` carries `WWW-Authenticate` with `resource_metadata` |
+| Registration | `POST /oauth/register`, RFC 7591, public clients only, with no secret. Only inside a connection window, one app per window. At most 5 redirect URIs of 2,000 characters, and 100 apps |
+| Redirect URIs | `https:` anywhere. `http:` only for `localhost`, `127.0.0.1` and `[::1]`, on any port. The schemes `cursor:`, `vscode:` and `vscode-insiders:` |
+| Authorization | `/oauth/authorize` with `response_type=code` and PKCE `S256`. A `resource`, if sent, must be the `/mcp` address. The response carries `iss` |
+| Scopes | `wpl7:read`, `wpl7:manage`, `wpl7:full`. The token gets the level the admin chose, and its `scope` says which |
+| Tokens | `POST /oauth/token`, form-encoded. Access tokens, `wpl7at_`, last an hour. Refresh tokens, `wpl7rt_`, last 60 days from their last use and rotate on every refresh. A code, `wpl7ac_`, lasts two minutes and works once |
+| Revocation | `POST /oauth/revoke`, RFC 7009. A refresh token ends the connection, an access token only itself |
+| Where tokens work | At `/mcp` only. The REST API never takes them |
+
+## Limits
+
+- Some endpoints are never reachable through MCP, whatever the level: signing in, admin accounts,
+  API keys, the activity log, uploads, binary downloads and the terminal.
+- What an app creates inside a site stays after you revoke it: WordPress users, application
+  passwords, FTP logins, changed files.
+- The panel offers tools only. It has no MCP resources or prompts.
+
+## Related
+
+- [The REST API](/docs/integrations/api/)
+- [MCP tools](/docs/integrations/mcp-tools/)
+- [Accounts and access to the panel](/docs/security/accounts/)
+- [Jobs](/docs/automations/jobs/)
+- [Protection levels and key levels](/docs/reference/security-levels/)

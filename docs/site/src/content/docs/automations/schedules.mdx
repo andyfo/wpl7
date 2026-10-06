@@ -1,0 +1,102 @@
+---
+title: Schedules
+description: "The panel's built-in schedules: what each runs, where it is set, pausing one, and running it now."
+sidebar:
+  order: 2
+sources:
+  - panel/web/src/pages/Schedules.tsx
+  - panel/web/src/components/schedules/ScheduleTable.tsx
+  - panel/web/src/lib/schedules.ts
+  - panel/src/jobs/schedulers.ts
+  - panel/src/services/schedules.ts
+  - panel/src/routes/schedules.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+import Since from '~/components/Since.astro';
+
+Everything the panel does on its own is a [schedule](/docs/reference/glossary/#schedule): the
+nightly backups, the WordPress scan, offsite copies, monitoring. **Automations → Schedules** lists
+them all, with when each runs next and how its last run went.
+
+<Screenshot name="schedules" alt="Automations → Schedules with the built-in schedules and two custom ones" />
+
+## The built-in schedules
+
+The page has three cards. **Scheduled jobs** queue jobs you can open in the Jobs list.
+**Background tasks** work inside the panel and only show their last run. **Custom schedules** are
+your own, described in [Your own scheduled jobs](/docs/automations/custom-jobs/). Times are on the
+server's clock, which the page names at the top.
+
+| Scheduled job | Runs | Changed in | While it is paused |
+|---|---|---|---|
+| Scheduled backups | On the backup schedule, 03:00 by default | **Settings → Backups** | No site is backed up on schedule, and no panel snapshot is taken |
+| WordPress inventory scan | When a site's inventory is older than the interval, 6 hours by default | **Settings → Security** | Update counts and vulnerability warnings go stale |
+| Malware scans | Each site every 24 hours by default | **Settings → Security** | No site is scanned. **Scan now** on a site still works |
+| Offsite copies | Every minute, and right after each backup | **Backups → Storage** | Nothing is copied offsite |
+| Container limits follow-up | Every minute, after the limits changed | **Settings → Sites** | Sites that were busy at the change keep their old limits |
+| Nightly housekeeping | 04:00 | Fixed | Old backups, statistics, logs and finished jobs are no longer removed |
+
+| Background task | Runs | While it is paused |
+|---|---|---|
+| WordPress cron | Every 5 minutes | Scheduled posts, plugin tasks and WooCommerce emails stop on every site |
+| Uptime checks | Every minute by default | A site that goes down is not noticed |
+| Site resource stats and Server resource stats | Every minute by default | The charts and the dashboard stop updating |
+| Disk usage | A few sites at a time, each about every 30 minutes | Disk sizes stop updating |
+| Visitor statistics | Every minute | Statistics stop updating, and visits meanwhile may not be counted |
+| Update check | Every hour | New releases go unnoticed. **Check now** still works |
+| Recipe catalog | Every hour | New and changed recipes stop arriving. **Fetch now** still works |
+
+The monitoring intervals are set in **Settings → Monitoring**. A row whose timing is a setting
+links to it with **Change in Settings**.
+
+The rest of the background tasks show **Always on**, with the reason. They keep the platform
+working, so they cannot be paused:
+
+| Background task | Runs | Why it is always on |
+|---|---|---|
+| Mail log | Every minute | It enforces the sending limits that suspend a site sending spam |
+| Site network repair | Every minute | A redeployed stack can leave sites unreachable without it |
+| Site protection | Every minute, and right after each change | It puts protection back on a server that lost it |
+| Blocked addresses | Every minute, and right after each change | It ends blocks on time and restores them after a reboot |
+| Wildcard certificate token | Every minute, and right after each change | <Since v="0.3.0-beta.2" /> It gives each server's Traefik the Cloudflare token |
+| FTP upkeep | Every minute | It switches off expired FTP logins |
+| Update watchdog | Every 30 seconds | A failed update would leave the panel read-only |
+
+## Pause a schedule
+
+1. Turn off the **Active** switch on the schedule's row.
+2. For a built-in schedule, read what stops while it is paused, then choose **Pause**.
+
+A pause holds for every way a schedule starts: its timer, the catch-up run after a restart, and
+events such as a finished backup. It survives restarts. Paused schedules are listed at the top of
+the page, each with **Resume**.
+
+## Run a schedule now
+
+Choose **Run now** on the schedule's row. It runs once, whether the schedule is paused or not, and
+a paused schedule stays paused.
+
+A schedule that queues jobs asks first, then says how many jobs it started, with a link to them.
+A background task starts at once, and its row shows **Running now** until it is done. **View runs**
+under a schedule's last run opens the Jobs list filtered to the jobs it queued.
+
+An automatic run that found nothing to do is not recorded. **Last run** is the last time the
+schedule did something.
+
+## Limits
+
+- Built-in schedules cannot be deleted, and their timing is changed in Settings, not here. The
+  housekeeping time is fixed.
+- The tasks marked **Always on** cannot be paused.
+- New monitoring intervals take effect after the panel restarts.
+- Pausing scheduled backups also stops the nightly snapshot of the panel's own database.
+- Through the API, pausing, resuming or running a built-in schedule needs a Full key.
+
+## Related
+
+- [Jobs](/docs/automations/jobs/)
+- [Your own scheduled jobs](/docs/automations/custom-jobs/)
+- [Settings](/docs/panel/settings/)
+- [How backups work](/docs/backups/overview/)
+- [Malware scans](/docs/security/malware-scans/)

@@ -1,3 +1,4 @@
+// @docs security/accounts
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';

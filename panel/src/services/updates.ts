@@ -1,3 +1,4 @@
+// @docs get-started/how-it-works, panel/updating, security/privacy
 import type { Config } from '../config.js';
 import type { SystemVersionDto, UpdateReleaseDto } from '../../shared/types.js';
 import { PANEL_GIT_SHA, PANEL_VERSION } from '../lib/version.js';

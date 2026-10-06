@@ -1,3 +1,4 @@
+// @docs servers/add
 import { PassThrough, Readable, Writable } from 'node:stream';
 import { asc, eq } from 'drizzle-orm';
 import { z } from 'zod';

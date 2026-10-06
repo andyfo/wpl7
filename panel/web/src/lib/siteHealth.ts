@@ -1,3 +1,4 @@
+// @docs help/troubleshooting, sites/overview
 import type { SiteStatus } from '../../../shared/schemas';
 import { timeAgo } from './format';
 
