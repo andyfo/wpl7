@@ -177,6 +177,11 @@ jobs:
           # The pull request's branch itself, so the new files can go on top of it.
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref || '' }}
           token: ${{ secrets.SCREENSHOTS_PUSH_TOKEN || github.token }}
+      # The container runs as root and the checkout belongs to the runner's user. Git refuses a
+      # folder someone else owns ("not in a git directory") unless it is marked safe, and
+      # actions/checkout marks it for its own step only.
+      - name: Let git use the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - uses: actions/setup-node@v5
         with:
           node-version: 22
