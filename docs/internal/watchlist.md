@@ -30,9 +30,10 @@ for a reason; remove one once there is nothing left to watch.
 | [Cloudflare: API tokens as the panel takes them](#cloudflare-api-tokens-as-the-panel-takes-them) | Medium | 2026-10-04 18:36 UTC | Formats and permissions as validated |
 | [Cloudflare's and Jetpack's address lists](#cloudflares-and-jetpacks-address-lists) | Low | 2026-09-30 07:23 UTC | All three answer |
 | [Ubuntu's `nftables.service`](#ubuntus-nftablesservice) | Low | 2026-09-29 | Disabled by default on 26.04 |
-| [The docs site's toolchain and its screenshot image](#the-docs-sites-toolchain-and-its-screenshot-image) | Low | 2026-10-05 12:21 UTC | Starlight 0.42.5, Astro 7.3.5, Playwright 1.63.0, oxipng 10.2.1 are the latest; `braces` advisory has no fix |
+| [The docs site's toolchain and its screenshot image](#the-docs-sites-toolchain-and-its-screenshot-image) | Low | 2026-10-07 07:33 UTC | Astro 7.3.6 is out, a patch over the pinned 7.3.5; Starlight, Playwright and oxipng are the latest; the `braces` and `postcss-selector-parser` advisories have no fix the site can take |
 | [The demo world's WordPress and plugin versions](#the-demo-worlds-wordpress-and-plugin-versions) | Medium | 2026-10-06 06:19 UTC | WordPress 7.1.2 and the newest plugins of the demo's date; Contact Form 7 6.2 left out |
 | [The site image's Apache modules for the docs' cache times](#the-site-images-apache-modules-for-the-docs-cache-times) | Low | 2026-10-07 06:49 UTC | `expires` on, `headers` off; the docs use `expires` |
+| [concurrently's pinned shell-quote](#concurrentlys-pinned-shell-quote) | Low | 2026-10-07 07:33 UTC | concurrently 10.0.5 pins 1.9.0; overridden to `^1.11.0` |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -319,12 +320,15 @@ for a reason; remove one once there is nothing left to watch.
 ## The docs site's toolchain and its screenshot image
 
 - **Priority:** Low
-- **Last checked:** 2026-10-05 12:21 UTC. `@astrojs/starlight` 0.42.5, `astro` 7.3.5,
-  `@playwright/test` 1.63.0 and oxipng 10.2.1 (2026-09-02) are the latest releases.
-  `npm outdated` also lists newer patch and minor releases of `picomatch`, `tinyglobby`, `yaml`,
-  `@types/node` and `@types/picomatch`. `npm audit` in `docs/site` reports the `braces` advisory
-  (stack exhaustion on deeply nested patterns) through `starlight-llms-txt` → `micromatch`, with
-  no fixed version yet.
+- **Last checked:** 2026-10-07 07:33 UTC. `@astrojs/starlight` 0.42.5, `@playwright/test` 1.63.0 and
+  oxipng 10.2.1 (2026-09-02) are the latest releases. `astro` 7.3.6 came out on 2026-10-06, a
+  patch over the pinned 7.3.5. `npm outdated` also lists newer patch and minor releases of
+  `picomatch`, `tinyglobby`, `yaml`, `@types/node` and `@types/picomatch`, and `pixelmatch` 8.
+  `npm audit` in `docs/site` reports two advisories. `braces` (stack exhaustion on deeply nested
+  patterns) comes through `starlight-llms-txt` → `micromatch`, with no fixed version yet.
+  `postcss-selector-parser` (quadratic selector parsing, GHSA-rj75-hqrm-r3gf) is fixed only in
+  7.1.6: `postcss-nested` 7 takes it, but `@expressive-code/core` 0.44.2, the latest, requires
+  `postcss-nested` 6.
 - **The problem:** `docs/site/package.json` pins every package exactly, and the `screenshots` job
   in `.github/workflows/docs.yml` runs in `mcr.microsoft.com/playwright:v1.63.0-noble`, the image
   of the same Playwright version. The pin is what makes two runs give the same screenshots, byte
@@ -332,7 +336,8 @@ for a reason; remove one once there is nothing left to watch.
   installs oxipng, which Ubuntu does not package, from its GitHub release, pinned by version and
   checksum (`OXIPNG_VERSION`, `OXIPNG_SHA256`). Dependabot does not watch `docs/site`, so nothing
   moves on its own. The `braces` advisory is build-time only and the patterns are the site's own,
-  so nothing reachable from outside uses it.
+  so nothing reachable from outside uses it. The same holds for `postcss-selector-parser`, which
+  only parses the site's own CSS at build time.
 - **Check:** `npm outdated` in `docs/site`, and `npm audit` there.
   `gh release list -R shssoichiro/oxipng --limit 3` for oxipng.
 - **When it changes:** bump Starlight and its plugins together, run `npm run build` and look at a
@@ -343,7 +348,8 @@ for a reason; remove one once there is nothing left to watch.
   `gh release view -R shssoichiro/oxipng --json assets`. Read its changelog for changed flags:
   `shoot.ts` runs it with `-o 4 --strip all`. It is lossless, and the job keeps a file whose
   pixels did not change, so a new oxipng alone changes no committed screenshot. Once
-  `micromatch` or `braces` ships a fix, update the lockfile.
+  `micromatch` or `braces` ships a fix, or `@expressive-code/core` moves to `postcss-nested` 7,
+  update the lockfile.
 
 ## The demo world's WordPress and plugin versions
 
@@ -390,3 +396,18 @@ for a reason; remove one once there is nothing left to watch.
 - **When it changes:** `headers` turning up needs nothing: the plugin's `mod_headers` block takes
   over. If `expires` goes, enable it in `deploy/wordpress-image/Dockerfile` with `a2enmod expires`,
   then check that `/docs/` answers with `Cache-Control: max-age=300`.
+
+## concurrently's pinned shell-quote
+
+- **Priority:** Low
+- **Last checked:** 2026-10-07 07:33 UTC. concurrently 10.0.5, the latest release, pins
+  `shell-quote` to exactly 1.9.0.
+- **The problem:** `shell-quote` before 1.11.0 lets `quote()` turn a line break after a
+  `{ comment }` token into a second command (GHSA-pqg4-j6r4-53mv, critical). concurrently runs only
+  the panel's own development scripts, so nothing untrusted reaches it, but the alert stands
+  until the version moves.
+- **What we do about it:** `overrides` in `panel/package.json` sets `shell-quote` to `^1.11.0`
+  for every package that uses it.
+- **Check:** `npm view concurrently@latest dependencies.shell-quote`.
+- **When it changes:** once concurrently asks for 1.11.0 or later, delete the `overrides` entry,
+  run `npm install` in `panel/` and commit the lockfile.
