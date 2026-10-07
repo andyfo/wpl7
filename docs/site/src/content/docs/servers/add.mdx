@@ -22,7 +22,7 @@ on it. The panel reaches it over SSH and nothing else.
 
 ## Before you start
 
-- A fresh Ubuntu 26.04 server with SSH on port 22.
+- A fresh Ubuntu 26.04 server on x86-64, with SSH on port 22. The setup stops on an ARM server.
 - For a blank VPS, the panel's SSH key in root's `authorized_keys`.
 
 ## Add a blank VPS
@@ -38,8 +38,9 @@ on it. The panel reaches it over SSH and nothing else.
 The panel connects as root, copies its provisioning files and its version to `/opt/wpl7`, and runs
 `setup.sh --role=worker` there. That sets up Docker, a firewall, Traefik, MariaDB, the mail relay,
 and the `wpl7-panel` user the panel works as. The panel then runs the checks of **Test** and copies
-its plugin zips over. A server that fails is marked **error**, and **Update stack** on its page runs
-the setup again.
+its plugin zips over. A server that fails is marked **error**, and its page says why under **Last
+error**. For a failed setup, that is the last line the setup printed. **Update stack** on that page
+runs the setup again.
 
 ## Add a server you set up yourself
 

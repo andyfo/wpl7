@@ -115,7 +115,8 @@ WPL7 takes the whole machine. The installer sets up Docker and turns on a firewa
 
 ## Limits
 
-- The installer is for Ubuntu 26.04 on x86-64. The images are not built for ARM.
+- The installer is for Ubuntu 26.04 on x86-64. The images are not built for ARM, so on an ARM
+  server it stops.
 - Piped into `bash`, the installer asks nothing. Every answer is a flag, and the panel
   generates the admin password.
 - The generated password is printed once, on the first boot. Editing `PANEL_ADMIN_PASSWORD`

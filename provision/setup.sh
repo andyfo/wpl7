@@ -92,6 +92,17 @@ require_or_prompt() {
   fi
 }
 
+# The released panel and site images, and the third-party DKIM signer's, are built for x86-64
+# only. A checkout builds the first two here, but not the signer's. Anywhere else they exit at
+# once with "exec format error", and this script would still print that the stack is up. So it
+# stops before installing anything, as install.sh does, and Add server in the panel shows the
+# message as the server's last error.
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64) ;;
+  aarch64|arm*) echo "This is an ARM server ($ARCH). WPL7 runs on x86-64 (amd64) servers only: its images are not built for ARM." >&2; exit 1 ;;
+  *) echo "This server's processor is $ARCH. WPL7 runs on x86-64 (amd64) servers only." >&2; exit 1 ;;
+esac
 [ "$(id -u)" = 0 ] || { echo "Run as root (sudo $0)." >&2; exit 1; }
 if ! grep -q 'Ubuntu 26' /etc/os-release 2>/dev/null; then
   echo "WARNING: this script targets Ubuntu 26.04 LTS; detected: $(. /etc/os-release && echo "$PRETTY_NAME"). Continuing anyway." >&2

@@ -147,31 +147,113 @@ describe('wpl7_stamp', () => {
   });
 });
 
+/** A folder of commands for a script's PATH: name -> bash body. Every stub logs its call to `calls`. */
+function stubCommands(commands: Record<string, string>): { dir: string; calls: () => string[] } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-inst-'));
+  stubs.push(dir);
+  const log = path.join(dir, 'calls.log');
+  for (const [name, body] of Object.entries(commands)) {
+    fs.writeFileSync(path.join(dir, name), `#!/usr/bin/env bash\necho "${name} $*" >> '${log}'\n${body}\n`, { mode: 0o755 });
+  }
+  const calls = () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n') : []);
+  return { dir, calls };
+}
+
+const INSTALL_FLAGS = ['--panel-domain=p.example.com', '--dev-domain=d.example.com', '--acme-email=a@b.test'];
+
 describe('install.sh', () => {
   it('hands setup.sh --non-interactive when stdin is a pipe', () => {
     // The documented command is `curl … | bash -s -- …`, which leaves setup.sh holding the
     // exhausted pipe as its stdin. Its admin-password prompt then reads EOF, `read` returns
     // non-zero, and `set -e` ends the install before .env is written or anything is started.
     //
-    // Only the decision is exercised here: `id` says root so the installer gets past its own
-    // guard, `jq` exists so it does not try to apt-get one, and `curl` fails so it stops at
-    // the release lookup rather than reaching the network.
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-inst-'));
-    stubs.push(dir);
-    fs.writeFileSync(path.join(dir, 'id'), '#!/usr/bin/env bash\necho 0\n', { mode: 0o755 });
-    fs.writeFileSync(path.join(dir, 'jq'), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
-    fs.writeFileSync(path.join(dir, 'curl'), '#!/usr/bin/env bash\nexit 1\n', { mode: 0o755 });
+    // Only the decision is exercised here: `uname` says x86-64 and `id` says root so the
+    // installer gets past its own guards, `jq` exists so it does not try to apt-get one, and
+    // `curl` fails so it stops at the release lookup rather than reaching the network.
+    const { dir } = stubCommands({ uname: 'echo x86_64', id: 'echo 0', jq: 'exit 0', curl: 'exit 1' });
 
-    const res = spawnSync(
-      'bash',
-      [path.join(ROOT, 'install.sh'), '--panel-domain=p.example.com', '--dev-domain=d.example.com', '--acme-email=a@b.test'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PATH: `${dir}:${process.env.PATH ?? ''}` } },
-    );
+    const res = spawnSync('bash', [path.join(ROOT, 'install.sh'), ...INSTALL_FLAGS], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH ?? ''}` },
+    });
 
     expect(res.stdout).toContain('stdin is not a terminal');
     expect(res.stdout).toContain('admin password is generated');
     // It reached the release lookup, which is where the stubbed curl stops it - so nothing
     // between the decision and there aborted first.
-    expect(res.stderr).toContain('GitHub API');
+    expect(res.stderr).toContain('Could not reach github.com');
+  });
+
+  it('stops on an ARM server before it changes or fetches anything', () => {
+    // The released images are x86-64 only: on ARM the panel and the DKIM signer exit with
+    // "exec format error", and the install used to end with "WPL7 is up" all the same.
+    const { dir, calls } = stubCommands({ uname: 'echo aarch64', id: 'echo 0', 'apt-get': 'exit 1', curl: 'exit 1' });
+
+    const res = spawnSync('bash', [path.join(ROOT, 'install.sh'), '--dry-run', ...INSTALL_FLAGS], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH ?? ''}` },
+    });
+
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain('This is an ARM server (aarch64). WPL7 runs on x86-64 (amd64) servers only');
+    expect(calls()).toEqual(['uname -m']);
+  });
+
+  it('runs dry on a server without jq: finds the release and installs nothing', () => {
+    // A blank server has no jq, and a dry run must not install it. It used to skip the install
+    // and then need jq to read the release anyway, which it reported as an unreachable GitHub.
+    // The PATH is the stubs alone, so there is no jq on it.
+    const target = path.join(os.tmpdir(), `wpl7-dry-${process.pid}`);
+    const { dir, calls } = stubCommands({
+      uname: 'echo x86_64',
+      id: 'echo 0',
+      tar: 'exit 1',
+      'apt-get': 'exit 1',
+      // github.com as install.sh asks it: the latest release's redirect, then the manifest
+      // followed by the HTTP status on a line of its own.
+      curl: [
+        'case "$*" in',
+        '  *redirect_url*) printf %s https://github.com/andyfo/wpl7/releases/tag/v1.2.3 ;;',
+        `  */releases/download/v1.2.3/manifest.json*) printf '{"version": "1.2.3"}\\n\\n200' ;;`,
+        '  *) exit 1 ;;',
+        'esac',
+      ].join('\n'),
+    });
+    fs.symlinkSync(spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim(), path.join(dir, 'bash'));
+
+    const res = spawnSync(path.join(dir, 'bash'), [path.join(ROOT, 'install.sh'), '--dry-run', `--dir=${target}`, ...INSTALL_FLAGS], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, PATH: dir, WPL7_REPO: 'andyfo/wpl7' },
+    });
+
+    expect(res.stderr).toBe('');
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain('would run: env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq jq');
+    expect(res.stdout).toContain('andyfo/wpl7 v1.2.3 (stable). jq is not installed, so a dry run does not read its manifest.');
+    expect(res.stdout).toContain(`would run: ${target}/provision/setup.sh`);
+    expect(calls().filter((c) => !c.startsWith('curl ') && !c.startsWith('uname ') && !c.startsWith('id '))).toEqual([]);
+    expect(fs.existsSync(target)).toBe(false);
+  });
+});
+
+describe('setup.sh', () => {
+  it('stops on an ARM server before it installs anything', () => {
+    // The same guard as install.sh's, for what runs setup.sh directly: a checkout, and the
+    // panel's Add server. A checkout builds the panel and the site images here, but the DKIM
+    // signer's comes from Docker Hub for x86-64 only.
+    const { dir, calls } = stubCommands({ uname: 'echo aarch64', id: 'echo 0', 'apt-get': 'exit 1' });
+
+    const res = spawnSync('bash', [path.join(ROOT, 'provision/setup.sh'), '--role=worker', '--non-interactive'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH ?? ''}` },
+    });
+
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain('This is an ARM server (aarch64). WPL7 runs on x86-64 (amd64) servers only');
+    expect(calls()).toEqual(['uname -m']);
   });
 });
