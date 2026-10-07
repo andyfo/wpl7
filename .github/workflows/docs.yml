@@ -46,7 +46,7 @@ jobs:
       screens: ${{ steps.diff.outputs.screens }}
       files: ${{ steps.diff.outputs.files }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: diff
@@ -82,11 +82,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # "Last updated" on every page comes from each file's git history.
           fetch-depth: 0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -115,10 +115,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # The generators import panel modules: the API catalog, the MCP tools, the job types.
       - uses: ./.github/actions/panel-deps
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -172,7 +172,7 @@ jobs:
     env:
       SAME_REPO: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           # The pull request's branch itself, so the new files can go on top of it.
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref || '' }}
@@ -182,7 +182,7 @@ jobs:
       # actions/checkout marks it for its own step only.
       - name: Let git use the checkout
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       # The image has no compiler, and better-sqlite3 compiles during the panel's npm ci (as in
@@ -280,10 +280,10 @@ jobs:
     env:
       PUBLIC_URL: ${{ vars.DOCS_PUBLIC_URL || 'https://wpl7.com/docs/' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm

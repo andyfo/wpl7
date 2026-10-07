@@ -104,7 +104,7 @@ jobs:
       short-sha: ${{ steps.v.outputs.short-sha }}
       panel-tags: ${{ steps.v.outputs.panel-tags }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - id: v
         env:
           REPOSITORY: ${{ github.repository }}
@@ -152,7 +152,7 @@ jobs:
       group: edge-release
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Build the install bundle
         env:
           VERSION: ${{ needs.meta.outputs.version }}
