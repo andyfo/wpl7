@@ -2,7 +2,7 @@
 title: Admin accounts
 description: Everyone who signs in to the panel. password in a body is always your own, so those calls need a session, never a key. Only the owner may change the owner.
 sidebar:
-  order: 2.21
+  order: 2.22
 sources:
   - panel/shared/apiDocs.ts
 ---

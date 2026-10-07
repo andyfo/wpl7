@@ -156,6 +156,11 @@ export class SitesService {
 
   delete(slug: string, finalBackup: boolean, deleteBackups = false): JobRow {
     const site = this.bySlug(slug);
+    // An import that is making the site, or failed part-way, owns what there is of it: its
+    // staging folder and its record. Deleting the import clears both.
+    if (this.s.imports.activeForSite(site.id)) {
+      throw conflict('This site is being imported. Delete the import under Sites → Import site first.');
+    }
     // A recently-moved site still has a parked copy on its old server, and site.delete
     // tears that down too. Claim the source lane as well, or that teardown races whatever
     // else the source server is doing.
@@ -429,6 +434,7 @@ export class SitesService {
             since: cleanup.createdAt,
           }
         : null,
+      importSource: this.s.imports.sourceForSite(site.id),
     };
   }
 }

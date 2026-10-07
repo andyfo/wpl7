@@ -12,6 +12,7 @@ import { Sites } from './pages/Sites';
 import { Servers } from './pages/Servers';
 import { ServerDetail } from './pages/ServerDetail';
 import { NewSite } from './pages/NewSite';
+import { ImportSite } from './pages/ImportSite';
 import { BulkManagement } from './pages/BulkManagement';
 import { SitesSecurity } from './pages/SitesSecurity';
 import { ServersSecurity } from './pages/ServersSecurity';
@@ -59,6 +60,8 @@ const pages: RouteObject[] = [
   { path: 'sites/bulk', element: <BulkManagement /> },
   // Reserved like "bulk" (RESERVED_SLUGS), for the same reason.
   { path: 'sites/security', element: <SitesSecurity /> },
+  // Reserved like "bulk" too.
+  { path: 'sites/import', element: <ImportSite /> },
   { path: 'sites/:slug', element: <SiteDetail /> },
   { path: 'plugins', element: <Plugins /> },
   { path: 'plugins/recipes', element: <Recipes /> },

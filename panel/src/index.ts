@@ -53,6 +53,7 @@ import { IntegrityManifests } from './services/integrityManifests.js';
 import { MalwareScanService } from './services/malwareScan.js';
 import { PluginZipChecks } from './services/pluginZipChecks.js';
 import { QuarantineService } from './services/quarantine.js';
+import { ImportService } from './services/imports.js';
 import { hostPortFor } from './servers/hostPort.js';
 import type { CoreServices, Logger } from './services/index.js';
 import { PANEL_VERSION } from './lib/version.js';
@@ -164,6 +165,7 @@ async function main(): Promise<void> {
   const quarantine = new QuarantineService(db, config, servers, log);
   const pluginZipChecks = new PluginZipChecks(db, servers, settings, (subject, body) => mail.notifyOperator(subject, body), log);
   const malwareScan = new MalwareScanService(db, config, servers, settings, integrityManifests, pluginZipChecks, panelFiles, quarantine, (subject, body) => mail.notifyOperator(subject, body), log);
+  const importsService = new ImportService(db, config, settings, servers, log);
   // Requests the rules blocked are counted from the same read of the log as the visits.
   traffic.onEvents((serverId, events, chunk) => {
     securityEvents.fold(events);
@@ -209,6 +211,7 @@ async function main(): Promise<void> {
     pluginZipChecks,
     panelFiles,
     quarantine,
+    imports: importsService,
     updates,
     system,
     log,

@@ -2,7 +2,7 @@
 title: Mail
 description: One relay per server, every message logged, and the SPF/DKIM/DMARC records checked against live DNS.
 sidebar:
-  order: 2.12
+  order: 2.13
 sources:
   - panel/shared/apiDocs.ts
 ---

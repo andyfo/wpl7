@@ -72,6 +72,7 @@ export const SHOTS: Shot[] = [
       await page.getByRole('dialog').getByRole('textbox').first().fill('summitcoffee.example www.summitcoffee.example');
     },
   },
+  { name: 'site-import', what: 'Importing a site: what the old site reported, on the Confirm step', path: '/sites/import?id=1', theme: 'light' },
   { name: 'site-wordpress', what: 'A site’s WordPress tab: updates and plugins', path: '/sites/northwind-bakery', theme: 'both', prepare: tab('WordPress') },
   { name: 'site-updates', what: 'A site’s WordPress tab: an update waiting and a known vulnerability', path: '/sites/blue-fern', theme: 'light', prepare: tab('WordPress') },
   {

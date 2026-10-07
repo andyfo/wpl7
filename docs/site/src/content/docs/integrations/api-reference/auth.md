@@ -2,7 +2,7 @@
 title: Panel login
 description: "The browser session, not the API. A key needs none of this: it is a separate credential that two-factor never gates."
 sidebar:
-  order: 2.2
+  order: 2.21
 sources:
   - panel/shared/apiDocs.ts
 ---

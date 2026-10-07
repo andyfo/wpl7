@@ -2,7 +2,7 @@
 title: Jobs
 description: Every 202 lands here. Poll with logAfter and use the returned lastSeq as the next cursor.
 sidebar:
-  order: 2.15
+  order: 2.16
 sources:
   - panel/shared/apiDocs.ts
 ---

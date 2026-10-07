@@ -78,6 +78,7 @@ import { IntegrityManifests, type FetchLike } from '../src/services/integrityMan
 import { MalwareScanService } from '../src/services/malwareScan.js';
 import { PluginZipChecks } from '../src/services/pluginZipChecks.js';
 import { QuarantineService } from '../src/services/quarantine.js';
+import { ImportService } from '../src/services/imports.js';
 import type { HostPort } from '../src/servers/hostPort.js';
 import { ApiKeysService } from '../src/services/apiKeys.js';
 import { ApiActivityService } from '../src/services/apiActivity.js';
@@ -1358,6 +1359,9 @@ export async function makeWorld(
   const quarantine = new QuarantineService(db, config, servers, log);
   const pluginZipChecks = new PluginZipChecks(db, servers, settings, (subject, body) => mail.notifyOperator(subject, body), log);
   const malwareScan = new MalwareScanService(db, config, servers, settings, integrityManifests, pluginZipChecks, panelFiles, quarantine, (subject, body) => mail.notifyOperator(subject, body), log);
+  const importsService = new ImportService(db, config, settings, servers, log);
+  // No network in tests: every name an import is pointed at resolves to a documentation address.
+  importsService.lookup = async () => [{ address: '203.0.113.80', family: 4 }];
   traffic.onEvents((serverId, events, chunk) => {
     securityEvents.fold(events);
     security.noteTraefikLog(chunk);
@@ -1395,6 +1399,7 @@ export async function makeWorld(
     pluginZipChecks,
     panelFiles,
     quarantine,
+    imports: importsService,
     log,
   } as unknown as CoreServices;
   core.wpInventory = new WpInventoryService(core, vulnerabilities);

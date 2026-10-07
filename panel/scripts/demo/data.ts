@@ -58,6 +58,9 @@ export const SITES: DemoSite[] = [
   { slug: 'tidewater-realty', title: 'Tidewater Realty', domain: 'tidewaterrealty.example', php: '8.2', server: 2, state: 'stopped', ageDays: 302, diskMb: 1630, dailyVisitors: 0 },
 ];
 
+/** The old site an import is connected to, waiting on its Confirm step (imports.ts). */
+export const IMPORT_SOURCE = 'https://willow-pediatrics.example';
+
 /** The site that was deleted: only its backups remain, on sin1. */
 export const DELETED_SITE = { slug: 'old-portfolio', server: 3 };
 

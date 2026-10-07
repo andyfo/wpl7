@@ -241,7 +241,15 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
       case 'plugin.zipCheck':
         return typeof p.pluginId === 'number' ? `Catalog zip #${p.pluginId}` : null;
       case 'site.malwareScan':
-        return p.trigger === 'schedule' ? 'On schedule' : p.trigger === 'rescan' ? 'Again, after its files changed' : p.trigger === 'manual' ? 'Asked for' : null;
+        return p.trigger === 'schedule'
+          ? 'On schedule'
+          : p.trigger === 'rescan'
+            ? 'Again, after its files changed'
+            : p.trigger === 'manual'
+              ? 'Asked for'
+              : p.trigger === 'import'
+                ? 'After the import'
+                : null;
       default:
         return null;
     }
