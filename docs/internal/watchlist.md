@@ -17,16 +17,16 @@ for a reason; remove one once there is nothing left to watch.
 
 | Entry | Priority | Last checked | Status |
 |---|---|---|---|
-| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-09-30 07:23 UTC | Open upstream; worked around |
+| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-10-07 11:05 UTC | Open upstream; worked around |
 | [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-10-02 05:12 UTC | Pinned 0.21.12 is the latest |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-10-02 05:12 UTC | Both overrides apply to 0.21.12; signatures named |
-| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-09-30 07:23 UTC | 2.7.6 is the latest; patch still needed |
+| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-07 11:05 UTC | 2.7.6 is the latest; patch still needed |
 | [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
 | [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-10-04 18:10 UTC | `latest` is v5.1.0; hostname logic as relied on |
 | [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-09-30 07:23 UTC | Both answer as expected |
 | [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-09-30 09:51 UTC | All six as listed |
 | [AI assistants' address lists](#ai-assistants-address-lists) | Medium | 2026-09-30 10:46 UTC | All 12 lists pass the checks |
-| [Traefik: the Cloudflare token from a file](#traefik-the-cloudflare-token-from-a-file) | Medium | 2026-10-04 18:36 UTC | lego v5.4.1 reads the file; Traefik keeps the client |
+| [Traefik: the Cloudflare token from a file](#traefik-the-cloudflare-token-from-a-file) | Medium | 2026-10-07 11:05 UTC | lego v5.5.2 reads the file; Traefik keeps the client |
 | [Cloudflare: API tokens as the panel takes them](#cloudflare-api-tokens-as-the-panel-takes-them) | Medium | 2026-10-04 18:36 UTC | Formats and permissions as validated |
 | [Cloudflare's and Jetpack's address lists](#cloudflares-and-jetpacks-address-lists) | Low | 2026-09-30 07:23 UTC | All three answer |
 | [Ubuntu's `nftables.service`](#ubuntus-nftablesservice) | Low | 2026-09-29 | Disabled by default on 26.04 |
@@ -34,13 +34,16 @@ for a reason; remove one once there is nothing left to watch.
 | [The demo world's WordPress and plugin versions](#the-demo-worlds-wordpress-and-plugin-versions) | Medium | 2026-10-06 06:19 UTC | WordPress 7.1.2 and the newest plugins of the demo's date; Contact Form 7 6.2 left out |
 | [The site image's Apache modules for the docs' cache times](#the-site-images-apache-modules-for-the-docs-cache-times) | Low | 2026-10-07 06:49 UTC | `expires` on, `headers` off; the docs use `expires` |
 | [concurrently's pinned shell-quote](#concurrentlys-pinned-shell-quote) | Low | 2026-10-07 07:33 UTC | concurrently 10.0.5 pins 1.9.0; overridden to `^1.11.0` |
+| [The DKIM signer's image: x86-64 only](#the-dkim-signers-image-x86-64-only) | Low | 2026-10-07 11:05 UTC | Every tag is amd64 only |
 
 ## Traefik: an idle visitor's rate limit refills
 
 - **Priority:** High
-- **Last checked:** 2026-09-30 07:23 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
-  is open; the Traefik team said on 2026-09-28 they would reproduce it. The latest release is
-  v3.7.13 (2026-09-04), which is what `traefik:v3.7` in `deploy/docker-compose.yml` runs.
+- **Last checked:** 2026-10-07 11:05 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
+  is open, with nothing since the Traefik team said on 2026-09-28 they would reproduce it. The
+  latest release is v3.7.14 (2026-10-06), which `traefik:v3.7` in `deploy/docker-compose.yml`
+  follows. Its one rate-limit change is to the Redis limiter's Lua script (#13825), which WPL7
+  does not use.
 - **The problem:** Traefik drops a visitor's rate-limit bucket after `1 + 1/rate` seconds without
   a request - 2 seconds for limits of one a second or more, 4 for 20 a minute - and starts the
   next request on a full burst. With logins at 20 a minute in bursts of 30, a guesser who paused
@@ -108,10 +111,10 @@ for a reason; remove one once there is nothing left to watch.
 ## SFTPGo: our build and its overwrite patch
 
 - **Priority:** High
-- **Last checked:** 2026-09-30 07:23 UTC. We build v2.7.6 (commit 62ae9ba3) with
-  `deploy/sftpgo-image/staged-overwrite.patch`; v2.7.6 (2026-09-19) is the latest release, and
-  the three advisories published that day (one high: stored XSS through directory names in the
-  WebClient) are patched in 2.7.6.
+- **Last checked:** 2026-10-07 11:05 UTC. We build v2.7.6 (commit 62ae9ba3) with
+  `deploy/sftpgo-image/staged-overwrite.patch`; v2.7.6 (2026-09-19) is still the latest release,
+  and no advisory has been published since the four of that day, which 2.7.6 fixes (one high:
+  stored XSS through directory names in the WebClient).
 - **The problem:** SFTPGo is on the internet (FTP and SFTP). Upstream's `upload_mode: 1` renames
   an existing file to a temporary name before an overwrite, so the file is missing for the whole
   transfer - WordPress without its `wp-config.php` shows the installer - and is deleted if the
@@ -248,10 +251,11 @@ for a reason; remove one once there is nothing left to watch.
 ## Traefik: the Cloudflare token from a file
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-04 18:36 UTC. Traefik v3.7.13 (commit fc92cc1), what `traefik:v3.7`
-  runs, imports lego v5.4.1. There `GetOrFile` (`platform/env/env.go`) returns `CF_DNS_API_TOKEN`
-  when it has a value and only otherwise reads the file `CF_DNS_API_TOKEN_FILE` names, trailing
-  newline trimmed; the Cloudflare provider asks for its token through it (`NewDNSProvider`,
+- **Last checked:** 2026-10-07 11:05 UTC, early: Traefik v3.7.14 moved to another lego. v3.7.14
+  (commit 3bd7aa3), what `traefik:v3.7` runs, imports lego v5.5.2. There, as in v5.4.1,
+  `GetOrFile` (`platform/env/env.go`) returns `CF_DNS_API_TOKEN` when it has a value and only
+  otherwise reads the file `CF_DNS_API_TOKEN_FILE` names, trailing newline trimmed; the
+  Cloudflare provider asks for its token through it (`NewDNSProvider`,
   `providers/dns/cloudflare/cloudflare.go`). Traefik builds its ACME client, DNS provider and all,
   once per process: `getClient` in `pkg/provider/acme/provider.go` keeps `p.client`, and calls
   itself only to get or renew a certificate.
@@ -411,3 +415,18 @@ for a reason; remove one once there is nothing left to watch.
 - **Check:** `npm view concurrently@latest dependencies.shell-quote`.
 - **When it changes:** once concurrently asks for 1.11.0 or later, delete the `overrides` entry,
   run `npm install` in `panel/` and commit the lockfile.
+
+## The DKIM signer's image: x86-64 only
+
+- **Priority:** Low
+- **Last checked:** 2026-10-07 11:05 UTC. Every tag of `instrumentisto/opendkim` on Docker Hub,
+  `latest` included, is built for amd64 alone. The last push was 2026-01-29.
+- **The problem:** `deploy/docker-compose.yml` runs the DKIM signer from this image. It is the
+  one third-party image in the stack without an ARM build: Traefik, MariaDB, `boky/postfix`, the
+  scanner and rclone all have one. WPL7's own images (`build-images.yml`) are amd64 only too, so
+  `install.sh` and `setup.sh` stop on a server that is not x86-64.
+- **Check:** `curl -fsS 'https://hub.docker.com/v2/repositories/instrumentisto/opendkim/tags?page_size=10' | jq -r '.results[] | .name + " " + ([.images[].architecture] | join(","))'`.
+- **When it changes:** an arm64 build of `latest` leaves only WPL7's own images between it and
+  ARM servers. Tell the user, and offer what ARM support then takes: `linux/arm64` beside
+  `linux/amd64` for the panel, site and SFTPGo images in `build-images.yml`, a test install on an
+  ARM server, and the architecture check taken out of `install.sh` and `provision/setup.sh`.

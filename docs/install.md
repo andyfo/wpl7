@@ -5,9 +5,10 @@ to pull.
 
 ## What you need
 
-- A fresh **Ubuntu 26.04** server, **x86-64** (the images are not built for ARM), with root
-  access. WPL7 takes the whole machine: it installs Docker, enables a firewall (UFW for SSH, 80
-  and 443, and an nftables table for blocked addresses) and binds ports 80 and 443.
+- A fresh **Ubuntu 26.04** server, **x86-64** (the images are not built for ARM, and the
+  installer stops on an ARM server), with root access. WPL7 takes the whole machine: it
+  installs Docker, enables a firewall (UFW for SSH, 80 and 443, and an nftables table for
+  blocked addresses) and binds ports 80 and 443.
 - **Ports 80 and 443 open to the internet**, including in your provider's own firewall if it
   has one. Let's Encrypt validates over port 80.
 - **2 GB of RAM** to start; a 2 GB swap file is added below 4 GB. Add memory as you add sites.
@@ -51,7 +52,7 @@ less install.sh
 sudo bash install.sh --panel-domain=… --dev-domain=… --acme-email=…
 ```
 
-It resolves the newest release through the GitHub API, unpacks its bundle — a few kilobytes of
+It finds the newest release on github.com, unpacks its bundle — a few kilobytes of
 compose files and shell scripts — into `/opt/wpl7`, records the release in `deploy/.env`, and
 hands over to `provision/setup.sh`, which pulls the images and starts the stack. Nothing is
 compiled, and no checkout, Node or credential is left on the box.

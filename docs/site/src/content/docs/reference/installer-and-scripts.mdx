@@ -42,7 +42,7 @@ curl -fsSL https://github.com/andyfo/wpl7/releases/latest/download/install.sh | 
 | `--version=X.Y.Z` | Installs that release instead of the latest one |
 | `--channel=stable`, `--channel=edge` | Picks the [channel](/docs/reference/glossary/#channel). `edge` follows the rolling build of `main`. The default is `stable` |
 | `--dir=PATH` | Installs somewhere other than `/opt/wpl7` |
-| `--dry-run` | Prints what it would do and changes nothing |
+| `--dry-run` | Prints what it would do and changes nothing. Without `jq` on the server, it does not read the release's manifest |
 | `--non-interactive` | Passed on to `setup.sh`. Added for you when stdin is not a terminal |
 | `-h`, `--help` | Prints the usage |
 
@@ -50,11 +50,12 @@ Every other flag goes to `setup.sh` unchanged.
 
 What it does, in order:
 
-1. Checks that it runs as root, and installs `jq` if it is missing.
-2. Finds the release through the GitHub API: the latest one, the one `--version` names, or `edge`.
-3. Stops if the directory already holds an install, and prints the `update.sh` command to use instead.
-4. Unpacks the release bundle into the directory and records which release it is.
-5. Runs `provision/setup.sh`.
+1. Stops on a server that is not x86-64, such as an ARM server.
+2. Checks that it runs as root, and installs `jq` if it is missing.
+3. Finds the release on github.com: the latest one, the one `--version` names, or `edge`.
+4. Stops if the directory already holds an install, and prints the `update.sh` command to use instead.
+5. Reads the release's manifest, unpacks its bundle into the directory and records which release it is.
+6. Runs `provision/setup.sh`.
 
 Piped from `curl`, stdin is not a terminal, so every answer has to be a flag and the admin
 password is generated. Download the script and run `sudo bash install.sh` from a terminal to be
@@ -98,6 +99,7 @@ panel domain with a leading `panel.` replaced by `mail.`, so `panel.example.com`
 
 What it does:
 
+- Stops on a server that is not x86-64, before it installs anything.
 - Installs Docker CE from Docker's own repository, with log rotation and `live-restore`
   from `provision/daemon.json`.
 - Sets UFW to refuse incoming traffic except SSH, 80 and 443. SSH is rate-limited on every port

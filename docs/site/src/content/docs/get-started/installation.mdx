@@ -161,7 +161,8 @@ fresh Ubuntu 26.04 VPS itself. [Add a server](/docs/servers/add/) says what that
 
 ## Limits
 
-- Only Ubuntu 26.04 on x86-64. On another release, `setup.sh` warns and carries on.
+- Only Ubuntu 26.04 on x86-64. On another processor, such as ARM, the installer stops. On another
+  Ubuntu release, `setup.sh` warns and carries on.
 - The installer refuses a directory that already holds an install.
 - Docker publishes ports past UFW: 80 and 443, plus the FTP ports while a site has an FTP login.
 - The generated password is printed once. Editing `PANEL_ADMIN_PASSWORD` in `.env` later

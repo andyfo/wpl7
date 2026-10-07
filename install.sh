@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install WPL7 on a blank Ubuntu 26.04 server.
+# Install WPL7 on a blank Ubuntu 26.04 server (x86-64).
 #
 #   curl -fsSL https://github.com/andyfo/wpl7/releases/latest/download/install.sh | bash -s -- \
 #     --panel-domain=panel.example.com --dev-domain=dev.example.com --acme-email=you@example.com
@@ -38,6 +38,18 @@ done
 log()  { printf '\n\033[1;32m==> %s\033[0m\n' "$*"; }
 die()  { printf '\n\033[1;31mxx %s\033[0m\n' "$*" >&2; exit 1; }
 run()  { if [ "$DRY" = 1 ]; then printf '   would run: %s\n' "$*"; else "$@"; fi; }
+# run, with the command's output dropped - but not the line a dry run prints in its place.
+runq() { if [ "$DRY" = 1 ]; then run "$@"; else "$@" >/dev/null; fi; }
+
+# The released panel and site images, and the third-party DKIM signer's, are built for x86-64
+# only. Anywhere else they exit at once with "exec format error", and the install would still
+# end with "WPL7 is up".
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64) ;;
+  aarch64|arm*) die "This is an ARM server ($ARCH). WPL7 runs on x86-64 (amd64) servers only: its images are not built for ARM." ;;
+  *) die "This server's processor is $ARCH. WPL7 runs on x86-64 (amd64) servers only." ;;
+esac
 
 # `curl … | bash` is the documented command, and it hands setup.sh the exhausted pipe as its
 # stdin. setup.sh would then reach its admin-password prompt, have `read` return EOF, and
@@ -57,55 +69,78 @@ for tool in curl tar; do
   command -v "$tool" >/dev/null || die "$tool is required (apt-get install -y $tool)."
 done
 # Reading the release manifest needs jq, and that happens before setup.sh gets as far as
-# installing anything. curl and tar are on every Ubuntu server image; jq is not.
+# installing anything. curl and tar are on every Ubuntu server image; jq is not. A dry run
+# installs nothing, so without jq it finds the release but leaves the manifest unread.
 if ! command -v jq >/dev/null; then
   log "Installing jq"
   run env DEBIAN_FRONTEND=noninteractive apt-get update -qq
-  run env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq jq >/dev/null
+  runq env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq jq
 fi
 
 # ------------------------------------------------------------ resolve
 
 log "Finding the release"
-gh_get() { curl -fsSL -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28' "$@"; }
+# The links github.com gives a release and its files, not the GitHub API: no JSON to read
+# before the manifest, and no API rate limit.
+RELEASES="https://github.com/$REPO/releases"
+OFFLINE="Could not reach github.com. Check this machine's outbound network."
 
 if [ "$CHANNEL" = edge ]; then
   RELEASE_TAG=edge
 elif [ -n "$VERSION" ]; then
   RELEASE_TAG="v${VERSION#v}"
 else
-  RELEASE_TAG="$(gh_get "https://api.github.com/repos/$REPO/releases/latest" | jq -r '.tag_name')" \
-    || die "Could not reach the GitHub API. Check this machine's outbound network."
+  # This link redirects to the latest release's page, whose address ends in its tag.
+  LATEST="$(curl -sS -o /dev/null -w '%{redirect_url}' "$RELEASES/latest")" || die "$OFFLINE"
+  case "$LATEST" in
+    */releases/tag/?*) RELEASE_TAG="${LATEST##*/releases/tag/}" ;;
+    *) die "$REPO has no published release." ;;
+  esac
 fi
-
-RELEASE_JSON="$(gh_get "https://api.github.com/repos/$REPO/releases/tags/$RELEASE_TAG")" \
-  || die "No release tagged $RELEASE_TAG in $REPO."
-MANIFEST_URL="$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name == "manifest.json") | .url')"
-BUNDLE_URL="$(printf '%s' "$RELEASE_JSON" | jq -r '.assets[] | select(.name | endswith("-bundle.tar.gz")) | .url')"
-[ -n "$MANIFEST_URL" ] && [ -n "$BUNDLE_URL" ] || die "Release $RELEASE_TAG has no bundle and manifest - it was not published by release.yml."
-
-MANIFEST="$(curl -fsSL -H 'Accept: application/octet-stream' "$MANIFEST_URL")"
-VERSION="$(printf '%s' "$MANIFEST" | jq -r '.version')"
-PANEL_IMAGE="$(printf '%s' "$MANIFEST" | jq -r '.images.panel')"
-# The tag images were published under: the version for a release, `edge` for the rolling
-# build, which calls itself 0.x.y-edge.<commit>.
-IMAGE_TAG="${PANEL_IMAGE##*:}"
-PANEL_REPO="${PANEL_IMAGE%:*}"
-WORDPRESS_REPO="$(printf '%s' "$MANIFEST" | jq -r '.images.wordpress | to_entries[0].value // empty')"
-WORDPRESS_REPO="${WORDPRESS_REPO%:*}"
-echo "   $REPO $RELEASE_TAG -> $VERSION ($CHANNEL) · $PANEL_IMAGE"
-
-# -------------------------------------------------------------- unpack
 
 if [ -e "$DIR/deploy/.env" ]; then
-  die "$DIR is already an install. Update it instead:  $DIR/provision/update.sh --to=$VERSION"
+  die "$DIR is already an install. Update it instead:  $DIR/provision/update.sh --to=${RELEASE_TAG#v}"
 fi
+
+# The manifest, then the HTTP status it ended with, on a line of its own.
+ANSWER="$(curl -sSL -w '\n%{http_code}' "$RELEASES/download/$RELEASE_TAG/manifest.json")" || die "$OFFLINE"
+case "${ANSWER##*$'\n'}" in
+  200) MANIFEST="${ANSWER%$'\n'*}" ;;
+  404)
+    [ "$(curl -sS -o /dev/null -w '%{http_code}' "$RELEASES/tag/$RELEASE_TAG")" = 200 ] \
+      || die "No release tagged $RELEASE_TAG in $REPO."
+    die "Release $RELEASE_TAG has no manifest.json - it was not published by release.yml." ;;
+  *) die "github.com answered HTTP ${ANSWER##*$'\n'} for the manifest of $RELEASE_TAG. Try again later." ;;
+esac
+
+BUNDLE_URL=""
+if [ "$DRY" = 1 ] && ! command -v jq >/dev/null; then
+  echo "   $REPO $RELEASE_TAG ($CHANNEL). jq is not installed, so a dry run does not read its manifest."
+else
+  VERSION="$(printf '%s' "$MANIFEST" | jq -r '.version')"
+  PANEL_IMAGE="$(printf '%s' "$MANIFEST" | jq -r '.images.panel')"
+  # The tag images were published under: the version for a release, `edge` for the rolling
+  # build, which calls itself 0.x.y-edge.<commit>.
+  IMAGE_TAG="${PANEL_IMAGE##*:}"
+  PANEL_REPO="${PANEL_IMAGE%:*}"
+  WORDPRESS_REPO="$(printf '%s' "$MANIFEST" | jq -r '.images.wordpress | to_entries[0].value // empty')"
+  WORDPRESS_REPO="${WORDPRESS_REPO%:*}"
+  # release.yml and deploy.yml name the bundle after the version in this manifest.
+  BUNDLE_URL="$RELEASES/download/$RELEASE_TAG/wpl7-$VERSION-bundle.tar.gz"
+  echo "   $REPO $RELEASE_TAG -> $VERSION ($CHANNEL) · $PANEL_IMAGE"
+fi
+
+# -------------------------------------------------------------- unpack
 
 log "Unpacking the bundle into $DIR"
 run mkdir -p "$DIR"
 if [ "$DRY" = 0 ]; then
-  curl -fsSL -H 'Accept: application/octet-stream' "$BUNDLE_URL" | tar -xz -C "$DIR"
+  curl -fsSL "$BUNDLE_URL" | tar -xz -C "$DIR" || die "Could not download and unpack $BUNDLE_URL."
   [ -x "$DIR/provision/setup.sh" ] || die "The bundle has no provision/setup.sh."
+elif [ -n "$BUNDLE_URL" ]; then
+  [ "$(curl -sSIL -o /dev/null -w '%{http_code}' "$BUNDLE_URL")" = 200 ] \
+    || die "Release $RELEASE_TAG has no wpl7-$VERSION-bundle.tar.gz - it was not published by release.yml."
+  echo "   would download: $BUNDLE_URL"
 fi
 
 # ------------------------------------------------------- record + provision

@@ -341,16 +341,21 @@ async function provisionOverSsh(
 
     ctx.info('Running setup.sh --role=worker (Docker install + stack boot; several minutes on first run)…');
     // Setup output streams into the job log; the DNS token travels over stdin, never argv.
+    // stderr is merged into it, so the reason for a failure is the last line it printed.
     let lineBuf = '';
+    let lastLine = '';
+    const logLine = (line: string) => {
+      const trimmed = line.replace(/\x1b\[[0-9;]*m/g, '').trimEnd();
+      if (!trimmed) return;
+      ctx.info(trimmed);
+      lastLine = trimmed.trim();
+    };
     const logSink = new Writable({
       write(chunk: Buffer, _enc, cb) {
         lineBuf += chunk.toString();
         const lines = lineBuf.split('\n');
         lineBuf = lines.pop() ?? '';
-        for (const line of lines) {
-          const trimmed = line.replace(/\x1b\[[0-9;]*m/g, '').trimEnd();
-          if (trimmed) ctx.info(trimmed);
-        }
+        for (const line of lines) logLine(line);
         cb();
       },
     });
@@ -359,9 +364,10 @@ async function provisionOverSsh(
       stdout: logSink,
       timeoutMs: 25 * 60_000,
     });
-    if (lineBuf.trim()) ctx.info(lineBuf.trim());
+    logLine(lineBuf);
     if (setupRes.exitCode !== 0) {
-      throw new Error(`setup.sh failed (exit ${setupRes.exitCode}): ${setupRes.stderr.trim().slice(0, 500)}`);
+      const reason = setupRes.stderr.trim() || lastLine;
+      throw new Error(`setup.sh failed (exit ${setupRes.exitCode}): ${reason.slice(0, 500)}`);
     }
     ctx.checkCanceled();
   } finally {
