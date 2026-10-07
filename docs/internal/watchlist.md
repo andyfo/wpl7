@@ -35,6 +35,8 @@ for a reason; remove one once there is nothing left to watch.
 | [The site image's Apache modules for the docs' cache times](#the-site-images-apache-modules-for-the-docs-cache-times) | Low | 2026-10-07 06:49 UTC | `expires` on, `headers` off; the docs use `expires` |
 | [concurrently's pinned shell-quote](#concurrentlys-pinned-shell-quote) | Low | 2026-10-07 07:33 UTC | concurrently 10.0.5 pins 1.9.0; overridden to `^1.11.0` |
 | [The DKIM signer's image: x86-64 only](#the-dkim-signers-image-x86-64-only) | Low | 2026-10-07 11:05 UTC | Every tag is amd64 only |
+| [setup-php: PHP 7.0 in CI](#setup-php-php-70-in-ci) | Low | 2026-10-07 15:07 UTC | `v2` is the newest major, 2.37.2 the latest release; 7.0 and 8.5 supported |
+| [The migration plugin's floor: WordPress 5.0 and PHP 7.0](#the-migration-plugins-floor-wordpress-50-and-php-70) | Medium | 2026-10-07 15:07 UTC | PHP 7.0 on 0.58% of sites, WordPress before 5.0 on 2.6%; CI installs 7.0 |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -430,3 +432,50 @@ for a reason; remove one once there is nothing left to watch.
   ARM servers. Tell the user, and offer what ARM support then takes: `linux/arm64` beside
   `linux/amd64` for the panel, site and SFTPGo images in `build-images.yml`, a test install on an
   ARM server, and the architecture check taken out of `install.sh` and `provision/setup.sh`.
+
+## setup-php: PHP 7.0 in CI
+
+- **Priority:** Low
+- **Last checked:** 2026-10-07 15:07 UTC. `v2` is the newest major tag of
+  `shivammathur/setup-php`. Its latest release is 2.37.2 (2026-06-08); 2.40.0-beta has been out
+  since 2026-09-29. Its README lists PHP 5.3 to 8.6 on GitHub-hosted runners, 7.0 and 8.5 among
+  them, on `ubuntu-latest` (Ubuntu 24.04).
+- **The problem:** the `php` job in `.github/workflows/test.yml` lints the migration plugin and
+  checks its protocol vectors on PHP 7.0 and 8.5 through `shivammathur/setup-php@v2`, pinned by
+  major tag like every action here. PHP 7.0 has been out of support since 2019. If the action or
+  the runner image stops providing it, the job fails, and the plugin's floor (the next entry) goes
+  untested.
+- **Check:** `gh api repos/shivammathur/setup-php/releases/latest --jq .tag_name`, then
+  `gh api 'repos/shivammathur/setup-php/git/matching-refs/tags/v' --jq '.[].ref'` for a new major,
+  and the PHP support table in its README for 7.0 on `ubuntu-latest`.
+- **When it changes:**
+  - **A new major:** read its release notes and move `@v2`. Dependabot's `actions` group proposes
+    it too.
+  - **7.0 gone from `ubuntu-latest`:** run the job's 7.0 leg in the `php:7.0-cli` image instead
+    (`container:` on the job), and tell the user: the floor may have to move.
+
+## The migration plugin's floor: WordPress 5.0 and PHP 7.0
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-07 15:07 UTC. By wordpress.org's statistics, PHP 7.0 runs 0.58% of
+  WordPress sites, 7.1 0.35% and 5.x about 2%. WordPress before 5.0 runs 2.6%, and 5.0 itself 0.2%.
+  The `php` job still installs 7.0 (previous entry). PHP 8.5 is the newest release, and the
+  matrix's upper end.
+- **The problem:** WPL7 Migrate runs on the old site, which can be anything. Its header and
+  `readme.txt` say `Requires at least: 5.0` and `Requires PHP: 7.0`, activation refuses anything
+  older, and the code keeps to what PHP 7.0 has: no nullable or void types, no arrow functions, no
+  `??=`, no functions added since. Nothing in it may be deprecated on the newest PHP either. A floor
+  set too high locks out the sites that most need moving; one set too low costs care in every
+  change, and needs a CI that can still install it.
+- **Check:** `curl -s https://api.wordpress.org/stats/php/1.0/` and
+  `curl -s https://api.wordpress.org/stats/wordpress/1.0/` for the shares of PHP 7.0 and 7.1 and of
+  WordPress 5.0 and older. Whether the `php` job's 7.0 leg still runs. Whether a newer PHP than the
+  matrix's upper end is out.
+- **When it changes:**
+  - **PHP 7.0 and 7.1 together under about 0.5% of sites, or 7.0 gone from CI:** propose raising
+    the floor to the user. It is `Requires PHP` in `wpl7-migrate.php` and `readme.txt`, the version
+    checks in `wpl7-migrate.php` and `WPL7_Migrate_Plugin::requirements_problem()`, the matrix in
+    `test.yml`, and docs/internal/import-protocol.md.
+  - **WordPress 5.0 and older under about 1%:** the same for `Requires at least`.
+  - **A new PHP release:** make it the matrix's upper end, and run the plugin on a real WordPress
+    with that PHP and `WP_DEBUG_LOG` on (the official image has a `php8.x-apache` tag for each).

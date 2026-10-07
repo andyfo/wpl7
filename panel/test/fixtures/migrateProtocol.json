@@ -1,0 +1,231 @@
+{
+  "about": "Shared test vectors for the WPL7 Migrate protocol (docs/internal/import-protocol.md). panel/migrate-plugin/tests/run.php checks the plugin against them, and the panel's tests read the same file. Bytes that are not text are given as hex.",
+  "protocol": 1,
+  "signature": [
+    {
+      "name": "ping with an empty object",
+      "token": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "importId": "12",
+      "action": "ping",
+      "timestamp": 1759843200,
+      "nonce": "00112233445566778899aabbccddeeff",
+      "body": "{}",
+      "bodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "canonical": "WPL7-MIGRATE-V1\n12\nping\n1759843200\n00112233445566778899aabbccddeeff\n44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "signature": "v1=12200c0ceb78565207910f3412a2d40eb27f7d6b1152a067b6c883f54fb60997"
+    },
+    {
+      "name": "an empty body",
+      "token": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "importId": "12",
+      "action": "tables",
+      "timestamp": 1759843200,
+      "nonce": "ffeeddccbbaa99887766554433221100",
+      "body": "",
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "WPL7-MIGRATE-V1\n12\ntables\n1759843200\nffeeddccbbaa99887766554433221100\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signature": "v1=0d97b9cfff7483eb0486cb395840549c73fa7fb63769623530a2593983b6b9ea"
+    },
+    {
+      "name": "snapshot start",
+      "token": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "importId": "12",
+      "action": "snapshot",
+      "timestamp": 1759843261,
+      "nonce": "0123456789abcdef0123456789abcdef",
+      "body": "{\"op\":\"start\",\"follow\":\"none\",\"budget_ms\":8000}",
+      "bodySha256": "c0a5068cc51abe264ecee2f4250146fd8b42b5a28721e40e6d2cb89b82128164",
+      "canonical": "WPL7-MIGRATE-V1\n12\nsnapshot\n1759843261\n0123456789abcdef0123456789abcdef\nc0a5068cc51abe264ecee2f4250146fd8b42b5a28721e40e6d2cb89b82128164",
+      "signature": "v1=01799b8da51b62ce9be6c643f5498140be5d48a21a377c553133f53eb6ff6613"
+    },
+    {
+      "name": "sql with a non-ASCII cursor, hashed as UTF-8 bytes",
+      "token": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "importId": "4096",
+      "action": "sql",
+      "timestamp": 1759843300,
+      "nonce": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "body": "{\"table\":\"wp_posts\",\"cursor\":\"k:[\\\"café\\\"]\",\"max_bytes\":1048576,\"encoding\":\"gzip\"}",
+      "bodySha256": "18b0355173b964554f7ad87e48ab8234f757fed8aa8859a9223e87b88ec32012",
+      "canonical": "WPL7-MIGRATE-V1\n4096\nsql\n1759843300\na0a1a2a3a4a5a6a7a8a9aaabacadaeaf\n18b0355173b964554f7ad87e48ab8234f757fed8aa8859a9223e87b88ec32012",
+      "signature": "v1=e3ff03e2ef8de31840b3d0f0cd9859ee6f3885a4b77f914cc8b8cd443231d8f2"
+    },
+    {
+      "name": "bundle",
+      "token": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "importId": "7",
+      "action": "bundle",
+      "timestamp": 1759850000,
+      "nonce": "deadbeefdeadbeefdeadbeefdeadbeef",
+      "body": "{\"snapshot_id\":\"9f86d081884c7d65\",\"ids\":[3,4,5],\"max_bytes\":4194304,\"encoding\":\"base64\"}",
+      "bodySha256": "d976aa3c070f042d3badc255dca03e6bc3809421dc9104de2dd2cd59a4548f48",
+      "canonical": "WPL7-MIGRATE-V1\n7\nbundle\n1759850000\ndeadbeefdeadbeefdeadbeefdeadbeef\nd976aa3c070f042d3badc255dca03e6bc3809421dc9104de2dd2cd59a4548f48",
+      "signature": "v1=a67b07615ffc5b79ed686750b88aa4de5693092ce201cd1cf6a941f66773263f"
+    }
+  ],
+  "timestamps": [
+    { "now": 1759843200, "timestamp": 1759843200, "ok": true },
+    { "now": 1759843200, "timestamp": 1759843500, "ok": true },
+    { "now": 1759843200, "timestamp": 1759843501, "ok": false },
+    { "now": 1759843200, "timestamp": 1759842900, "ok": true },
+    { "now": 1759843200, "timestamp": 1759842899, "ok": false }
+  ],
+  "literals": [
+    { "kind": "numeric", "value": "42", "sql": "42" },
+    { "kind": "numeric", "value": "-12.50", "sql": "-12.50" },
+    { "kind": "numeric", "value": "1.5e-7", "sql": "1.5e-7" },
+    { "kind": "numeric", "value": "18446744073709551615", "sql": "18446744073709551615" },
+    { "kind": "numeric", "value": null, "sql": "NULL" },
+    { "kind": "numeric", "value": "0x1F", "sql": "'0x1F'" },
+    { "kind": "string", "value": "it's", "sql": "'it\\'s'" },
+    { "kind": "string", "value": "a\\b \"q\"\n\r\t", "sql": "'a\\\\b \\\"q\\\"\\n\\r\t'" },
+    { "kind": "string", "hex": "00", "sql": "'\\0'" },
+    { "kind": "string", "hex": "1a", "sql": "'\\Z'" },
+    { "kind": "string", "value": "\u0000\n\r\\'\"\u001a", "sql": "'\\0\\n\\r\\\\\\'\\\"\\Z'" },
+    { "kind": "string", "value": "café ☕ 𝄞", "sql": "'café ☕ 𝄞'" },
+    { "kind": "string", "value": "100%", "sql": "'100%'" },
+    { "kind": "string", "value": "", "sql": "''" },
+    { "kind": "string", "value": null, "sql": "NULL" },
+    { "kind": "string", "value": "0000-00-00 00:00:00", "sql": "'0000-00-00 00:00:00'" },
+    { "kind": "string", "hex": "c328", "sql": "X'c328'" },
+    { "kind": "string", "hex": "636166e9", "sql": "X'636166e9'" },
+    { "kind": "binary", "hex": "00ff0001", "sql": "X'00ff0001'" },
+    { "kind": "binary", "hex": "", "sql": "X''" },
+    { "kind": "binary", "value": "abc", "sql": "X'616263'" },
+    { "kind": "binary", "value": null, "sql": "NULL" }
+  ],
+  "cursors": [
+    { "valuesHex": [], "cursor": "k:[]" },
+    { "valuesHex": ["3432"], "cursor": "k:[\"42\"]" },
+    { "valuesHex": ["37", "636166c3a9"], "cursor": "k:[\"7\",\"café\"]" },
+    { "valuesHex": ["c328", "41"], "cursor": "k:[{\"x\":\"c328\"},\"A\"]" },
+    { "valuesHex": ["612f6222635c64"], "cursor": "k:[\"a/b\\\"c\\\\d\"]" },
+    { "valuesHex": ["f09f9880"], "cursor": "k:[\"😀\"]" },
+    { "valuesHex": [""], "cursor": "k:[\"\"]" },
+    { "offset": 0, "cursor": "o:0" },
+    { "offset": 1500, "cursor": "o:1500" }
+  ],
+  "badCursors": ["x", "K:[]", "k:", "k:{}", "k:[1]", "k:[null]", "k:[{\"x\":\"zz\"}]", "k:[{\"x\":\"abc\"}]", "k:[{\"x\":\"00\",\"y\":1}]", "k:[\"a\"]x", "o:", "o:-1", "o:01", "o:1.5"],
+  "excludes": {
+    "defaults": [
+      "wp-config.php",
+      "wp-content/plugins/wpl7-migrate/**",
+      ".wpl7-*",
+      "wp-content/cache/**",
+      "wp-content/upgrade/**",
+      "wp-content/updraft/**",
+      "wp-content/ai1wm-backups/**",
+      "wp-content/backups-dup-lite/**",
+      "wp-content/backup*/**",
+      "*.log",
+      "error_log",
+      ".git/**",
+      "wp-content/**/node_modules/**"
+    ],
+    "cases": [
+      { "path": "wp-config.php", "excluded": "wp-config.php" },
+      { "path": "wp-config-sample.php", "excluded": null },
+      { "path": "wp-content/wp-config.php", "excluded": "wp-config.php" },
+      { "path": "index.php", "excluded": null },
+      { "path": "wp-content/plugins/wpl7-migrate", "excluded": "wp-content/plugins/wpl7-migrate/**" },
+      { "path": "wp-content/plugins/wpl7-migrate/includes/class-wpl7-migrate-sql.php", "excluded": "wp-content/plugins/wpl7-migrate/**" },
+      { "path": "wp-content/plugins/wpl7-migrate-extra/extra.php", "excluded": null },
+      { "path": ".wpl7-staging", "excluded": ".wpl7-*" },
+      { "path": "wp-content/uploads/.wpl7-tmp", "excluded": ".wpl7-*" },
+      { "path": "wp-content/cache", "excluded": "wp-content/cache/**" },
+      { "path": "wp-content/cache/page/index.html", "excluded": "wp-content/cache/**" },
+      { "path": "wp-content/cachex/a.txt", "excluded": null },
+      { "path": "wp-content/upgrade/tmp.zip", "excluded": "wp-content/upgrade/**" },
+      { "path": "wp-content/updraft/backup.zip", "excluded": "wp-content/updraft/**" },
+      { "path": "wp-content/ai1wm-backups/site.wpress", "excluded": "wp-content/ai1wm-backups/**" },
+      { "path": "wp-content/backups-dup-lite/archive.zip", "excluded": "wp-content/backups-dup-lite/**" },
+      { "path": "wp-content/backup-db/db.sql", "excluded": "wp-content/backup*/**" },
+      { "path": "wp-content/backups", "excluded": "wp-content/backup*/**" },
+      { "path": "wp-content/uploads/backup.zip", "excluded": null },
+      { "path": "wp-content/debug.log", "excluded": "*.log" },
+      { "path": "wp-content/uploads/report.log.txt", "excluded": null },
+      { "path": "error_log", "excluded": "error_log" },
+      { "path": "wp-admin/error_log", "excluded": "error_log" },
+      { "path": "wp-content/uploads/error_log.txt", "excluded": null },
+      { "path": ".git", "excluded": ".git/**" },
+      { "path": ".git/HEAD", "excluded": ".git/**" },
+      { "path": "wp-content/themes/example/.git/config", "excluded": ".git/**" },
+      { "path": "wp-content/themes/example/.github/workflows/ci.yml", "excluded": null },
+      { "path": "wp-content/themes/example/node_modules/lodash/index.js", "excluded": "wp-content/**/node_modules/**" },
+      { "path": "wp-content/node_modules/x.js", "excluded": "wp-content/**/node_modules/**" },
+      { "path": "node_modules/x.js", "excluded": null },
+      { "path": "wp-content/uploads/2026/10/photo.jpg", "excluded": null },
+      { "pathHex": "77702d636f6e74656e742f75706c6f6164732f636166e92e6c6f67", "excluded": "*.log" },
+      { "pathHex": "77702d636f6e74656e742f75706c6f6164732f636166e92e6a7067", "excluded": null }
+    ],
+    "extra": {
+      "patterns": ["wp-content/uploads/2019/**", "*.bak", "wp-content/*/big-?.zip"],
+      "cases": [
+        { "path": "wp-content/uploads/2019/01/a.jpg", "excluded": "wp-content/uploads/2019/**" },
+        { "path": "wp-content/uploads/2020/01/a.jpg", "excluded": null },
+        { "path": "wp-content/themes/example/style.css.bak", "excluded": "*.bak" },
+        { "path": "wp-content/uploads/big-1.zip", "excluded": "wp-content/*/big-?.zip" },
+        { "path": "wp-content/uploads/big-12.zip", "excluded": null },
+        { "path": "wp-content/uploads/x/big-1.zip", "excluded": null }
+      ]
+    }
+  },
+  "createTable": [
+    {
+      "name": "MariaDB, wp_options",
+      "raw": "CREATE TABLE `wp_options` (\n  `option_id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,\n  `option_name` varchar(191) NOT NULL DEFAULT '',\n  `option_value` longtext NOT NULL,\n  `autoload` varchar(20) NOT NULL DEFAULT 'yes',\n  PRIMARY KEY (`option_id`),\n  UNIQUE KEY `option_name` (`option_name`),\n  KEY `autoload` (`autoload`)\n) ENGINE=InnoDB AUTO_INCREMENT=136 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci",
+      "sql": "CREATE TABLE `wp_options` ( `option_id` bigint(20) unsigned NOT NULL AUTO_INCREMENT, `option_name` varchar(191) NOT NULL DEFAULT '', `option_value` longtext NOT NULL, `autoload` varchar(20) NOT NULL DEFAULT 'yes', PRIMARY KEY (`option_id`), UNIQUE KEY `option_name` (`option_name`), KEY `autoload` (`autoload`) ) ENGINE=InnoDB AUTO_INCREMENT=136 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci",
+      "warning": false
+    },
+    {
+      "name": "MySQL 8, a versioned ENCRYPTION='N' comment goes without a warning",
+      "raw": "CREATE TABLE `wp_users` (\n  `ID` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `user_login` varchar(60) COLLATE utf8mb4_0900_ai_ci NOT NULL DEFAULT '',\n  PRIMARY KEY (`ID`)\n) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci /*!80016 DEFAULT ENCRYPTION='N' */",
+      "sql": "CREATE TABLE `wp_users` ( `ID` bigint unsigned NOT NULL AUTO_INCREMENT, `user_login` varchar(60) COLLATE utf8mb4_0900_ai_ci NOT NULL DEFAULT '', PRIMARY KEY (`ID`) ) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "warning": false
+    },
+    {
+      "name": "a partitioning clause is removed, with a warning",
+      "raw": "CREATE TABLE `wp_log` (\n  `id` int NOT NULL,\n  `at` date NOT NULL,\n  PRIMARY KEY (`id`,`at`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4\n/*!50100 PARTITION BY RANGE (year(`at`))\n(PARTITION p2025 VALUES LESS THAN (2026) ENGINE = InnoDB,\n PARTITION pmax VALUES LESS THAN MAXVALUE ENGINE = InnoDB) */",
+      "sql": "CREATE TABLE `wp_log` ( `id` int NOT NULL, `at` date NOT NULL, PRIMARY KEY (`id`,`at`) ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+      "warning": true
+    },
+    {
+      "name": "quoted text keeps its spaces, escapes and anything that looks like a comment",
+      "raw": "CREATE TABLE `wp_quotes` (\n  `a` varchar(40) NOT NULL DEFAULT 'it''s  two\\nlines',\n  `b` varchar(10) DEFAULT 'a\\'b' COMMENT 'x /* not a comment */ y',\n  `c` int DEFAULT NULL\n) ENGINE=InnoDB",
+      "sql": "CREATE TABLE `wp_quotes` ( `a` varchar(40) NOT NULL DEFAULT 'it''s  two\\nlines', `b` varchar(10) DEFAULT 'a\\'b' COMMENT 'x /* not a comment */ y', `c` int DEFAULT NULL ) ENGINE=InnoDB",
+      "warning": false
+    },
+    {
+      "name": "an identifier with spaces and a doubled backtick",
+      "raw": "CREATE TABLE `wp_odd` (\n  `we``ird  name` int DEFAULT NULL\n) ENGINE=MyISAM DEFAULT CHARSET=latin1",
+      "sql": "CREATE TABLE `wp_odd` ( `we``ird  name` int DEFAULT NULL ) ENGINE=MyISAM DEFAULT CHARSET=latin1",
+      "warning": false
+    },
+    {
+      "name": "MySQL 8, an invisible column loses INVISIBLE, with a warning",
+      "raw": "CREATE TABLE `wp_hidden` (\n  `id` int NOT NULL,\n  `secret` int DEFAULT NULL /*!80023 INVISIBLE */,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB",
+      "sql": "CREATE TABLE `wp_hidden` ( `id` int NOT NULL, `secret` int DEFAULT NULL , PRIMARY KEY (`id`) ) ENGINE=InnoDB",
+      "warning": true
+    },
+    {
+      "name": "tabs and Windows line ends",
+      "raw": "CREATE TABLE `wp_tabs` (\r\n\t`x` int\r\n) ENGINE=InnoDB",
+      "sql": "CREATE TABLE `wp_tabs` ( `x` int ) ENGINE=InnoDB",
+      "warning": false
+    }
+  ],
+  "utf8": [
+    { "hex": "616263", "valid": true, "display": "abc" },
+    { "hex": "636166e9", "valid": false, "display": "caf�" },
+    { "hex": "e282", "valid": false, "display": "�" },
+    { "hex": "e28228", "valid": false, "display": "�(" },
+    { "hex": "f09f9880", "valid": true, "display": "😀" },
+    { "hex": "eda080", "valid": false, "display": "���" },
+    { "hex": "c0af", "valid": false, "display": "��" },
+    { "hex": "f4908080", "valid": false, "display": "����" },
+    { "hex": "ff", "valid": false, "display": "�" },
+    { "hex": "e98080", "valid": true, "display": "退" },
+    { "hex": "f0928080e2", "valid": false, "display": "𒀀�" },
+    { "hex": "6162e2828063", "valid": true, "display": "ab₀c" }
+  ]
+}
