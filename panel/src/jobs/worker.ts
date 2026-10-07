@@ -431,7 +431,8 @@ export class JobWorker {
    * A timed-out handler keeps running (it only stops at its next checkpoint) and keeps
    * touching that server's Docker/MariaDB while it unwinds. Its job row is already
    * 'failed', so the SQL lane check would let a retry - or any other job for the same
-   * server - start alongside it. Reserve the lane in memory until the handler settles.
+   * server - start alongside it. Reserve the lane in memory until the handler settles
+   * (`handler` includes the uptime check that ends its site's hold, when it has one).
    */
   private holdLaneUntilSettled(job: JobRow, handler: Promise<unknown>): void {
     this.zombieLanes.set(job.id, { serverId: job.serverId, auxServerId: job.auxServerId, lane: job.lane });
@@ -534,11 +535,12 @@ export class JobWorker {
         ctx.cancelRequested = true;
         handlerPromise.catch(() => undefined);
         if (timedOut) {
-          this.holdLaneUntilSettled(job, handlerPromise);
-          // Still at work on the site: it stays held until the handler stops, and is checked then.
+          // Still at work on the site: it stays held until the handler stops, and is checked
+          // then. The lane waits for that check too - a retry that started beside it would
+          // overtake it, and neither job's reading would stand.
           const late = release;
           release = null;
-          void handlerPromise.catch(() => undefined).then(() => this.releaseChecks(job, late));
+          this.holdLaneUntilSettled(job, handlerPromise.catch(() => undefined).then(() => this.releaseChecks(job, late)));
         }
         throw err;
       } finally {

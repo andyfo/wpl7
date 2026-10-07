@@ -278,4 +278,57 @@ describe('the check at the end of a job, against the job', () => {
     expect(done).toMatchObject({ status: 'failed', error: 'restart refused' });
     expect(w.core.monitor.latestFor(siteId)).toMatchObject({ up: true });
   });
+
+  /**
+   * Regression: a job that ran out of time gave its lane back when its handler stopped, while
+   * its final check was still out. A retry could start and end beside that check: it skipped its
+   * own check, the site being held still, and overtook the first one, so neither reading stood
+   * and the site kept its Offline from before both jobs.
+   */
+  it('lets no retry start beside the final check of a job that ran out of time', async () => {
+    const w = await makeWorld();
+    const siteId = addSite(w, 'retried', 'running');
+    const row = (id: number) => w.db.select().from(jobs).where(eq(jobs.id, id)).get()!;
+    const edgeState: { up: boolean; held: http.ServerResponse | null } = { up: false, held: null };
+    await edgeServing(w, (_host, res) => {
+      if (!edgeState.up) return void res.writeHead(404).end('');
+      // The first check after the jobs begin waits for the test to answer it.
+      if (edgeState.held === null) return void (edgeState.held = res);
+      res.writeHead(200).end('');
+    });
+    await w.core.monitor.tickUptime();
+    expect(w.core.monitor.latestFor(siteId)).toMatchObject({ up: false });
+    edgeState.up = true;
+
+    let unblock!: () => void;
+    const blocked = new Promise<void>((r) => (unblock = r));
+    const realRestart = w.docker.restartContainer.bind(w.docker);
+    let restarts = 0;
+    w.docker.restartContainer = async (name: string) => {
+      if (++restarts === 1) await blocked; // the first restart outlives its job
+      return realRestart(name);
+    };
+    restart.timeoutMs = 200;
+    const first = w.worker.enqueue('site.restart', { siteId }, { id: siteId, slug: 'retried', serverId: 1 });
+    w.worker.start();
+    try {
+      await waitFor(() => row(first.id).status === 'failed');
+      restart.timeoutMs = timeoutMs;
+      unblock();
+      await waitFor(() => edgeState.held !== null);
+      // The first job's final check is out. A retry queued now gets its chance to run beside it.
+      const retry = w.worker.enqueue('site.restart', { siteId }, { id: siteId, slug: 'retried', serverId: 1 });
+      await waitFor(() => !['queued', 'running'].includes(row(retry.id).status), 300).catch(() => undefined);
+      const answeredAt = Date.now();
+      edgeState.held!.writeHead(200).end('');
+      await waitFor(() => !['queued', 'running'].includes(row(retry.id).status), 15_000);
+
+      expect(row(first.id).error).toMatch(/timed out/);
+      expect(row(retry.id).status).toBe('succeeded');
+      expect(w.core.monitor.latestFor(siteId)).toMatchObject({ up: true, httpStatus: 200 });
+      expect(row(retry.id).startedAt).toBeGreaterThanOrEqual(answeredAt);
+    } finally {
+      await w.worker.stop();
+    }
+  });
 });
