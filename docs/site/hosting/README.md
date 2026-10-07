@@ -1,130 +1,102 @@
-# Hosting the docs under the website
+# Publishing the docs to the website
 
-The docs are static files. The `publish` job in `.github/workflows/docs.yml` copies the build
-into the `/docs` directory of the WordPress site with `rsync` over SSH, then checks the live
-site. This is the one-time setup on the website's server and in GitHub. Until it is done, the
-job builds the site, says it is not set up, and stops without failing.
+The docs are static files in the `/docs` folder of the website, a WordPress site. The website
+fetches every new build itself. GitHub holds no key to the website, and the website needs none
+to GitHub.
 
-Commands below use `www.example.com` for the website, `/var/www/example` for its web root and
-`docs-deploy` for the account that receives the files. Use your own.
+## How it works
 
-## 1. The directory
+1. The `package` job in `.github/workflows/docs.yml` builds the site and zips it. It runs on
+   every merge to `main` that changes the docs or the code they document, after every release,
+   and by hand.
+2. The `publish` job puts the zip on the repository's
+   [`docs-site` release](https://github.com/andyfo/wpl7/releases/tag/docs-site). Beside it,
+   `wpl7-docs.json` names the zip, its size and its SHA-256.
+3. On the website, the must-use plugin [`wpl7-docs.php`](wpl7-docs.php) adds the command
+   `wp wpl7-docs update`, and a schedule runs it. When `/docs` has another build than the one
+   `wpl7-docs.json` names, the command downloads that zip and installs it.
 
-```bash
-sudo adduser --disabled-password --gecos 'WPL7 docs publishing' docs-deploy
-```
+## What an update checks
 
-```bash
-sudo install -d -o docs-deploy -g www-data -m 2755 /var/www/example/docs
-```
+- The zip's size and SHA-256 match `wpl7-docs.json`.
+- Every file has a plain name and a type the docs are made of: HTML, CSS, JavaScript, JSON,
+  images, fonts and the search index. No `.php` file, no dot file such as `.htaccess`, no `..`
+  and no link gets in.
+- `index.html` and `404.html` are at the top of the zip.
 
-The directory belongs to the account that publishes. The web server only reads it, and
-WordPress's PHP user needs no write access to it.
+A failed check stops the update before anything is written, and the job's message names the
+file. The new build is unpacked next to `/docs` and swapped in once it is complete, so a failed
+update leaves the old docs in place.
 
-## 2. The key, allowed to write that directory and nothing else
+The plugin writes the folder's `.htaccess` itself. It turns WordPress's rewrites and PHP off in
+`/docs`, serves the docs' own 404 page and sets how long browsers keep each file. A bad zip
+could show wrong docs, but it cannot run code on the server.
 
-Make a key for GitHub only, on your own machine:
+The `package` job installs every zip with this plugin before it is published. A zip the plugin
+would refuse fails there, not on the website.
 
-```bash
-ssh-keygen -t ed25519 -N '' -C 'wpl7-docs-publish' -f docs_deploy_key
-```
+## Set it up on a WPL7 site
 
-On the server, give it to `docs-deploy` with a forced command. `rrsync` comes with rsync on
-Debian and Ubuntu. `-wo` lets the key write into the directory and nothing else: no shell, no
-reading, no other path.
+1. In the site's **Files** tab, open `wp-content/mu-plugins` and upload `wpl7-docs.php`. Create
+   the folder if it is missing. A must-use plugin needs no activation.
+2. In **Automations → Schedules**, choose **New schedule** and fill it in:
 
-```bash
-sudo -u docs-deploy mkdir -p -m 700 /home/docs-deploy/.ssh
-```
+   | Field | Value |
+   |---|---|
+   | **What** | **WP-CLI command** |
+   | **On** | the website's site |
+   | **Command** | `wpl7-docs update` |
+   | **When** | **Repeat**, **Cron schedule** `0 * * * *`, every hour |
 
-```bash
-echo "restrict,command=\"rrsync -wo /var/www/example/docs\" $(cat docs_deploy_key.pub)" | sudo -u docs-deploy tee -a /home/docs-deploy/.ssh/authorized_keys
-```
+3. Choose **Run now** on the schedule's row. The job's log ends with a line like this one:
 
-Check that the key cannot leave the directory. Both commands must be refused:
+   ```
+   Success: Installed the docs: commit a1b2c3d, built 2026-10-06T12:00:00Z, 364 files.
+   ```
 
-```bash
-ssh -i docs_deploy_key docs-deploy@www.example.com id
-```
+Each run is a job. A run that finds nothing new ends within seconds with "The docs are up to
+date". A failed run shows in **Automations → All jobs** with the reason, and the docs stay as
+they were.
 
-```bash
-rsync -e 'ssh -i docs_deploy_key' README.md 'docs-deploy@www.example.com:../outside.txt'
-```
+On a server without WPL7, a cron job that runs `wp wpl7-docs update` in the WordPress folder
+does the same.
 
-## 3. The web server
+## WordPress
 
-**Apache and LiteSpeed** need nothing more: `.htaccess` is published with the pages
-(`public/.htaccess`). It turns WordPress's rewrite rules off inside `/docs`, serves the docs' own
-404 page and sets the cache headers. The virtual host must allow `.htaccess` to do that
-(`AllowOverride FileInfo Indexes Options`, or `All`).
-
-**nginx** needs [`nginx.conf.snippet`](nginx.conf.snippet) in the WordPress site's `server`
-block, before its `location /`. Then:
-
-```bash
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-## 4. WordPress
-
-- No page, post or plugin route may use the slug `docs`. The directory would still win on every
-  web server, but editors and sitemaps would see two things at one address.
-- Add the docs' sitemap to the site's robots output: in the SEO plugin's robots setting, or with a
-  `robots_txt` filter.
+- No page, post or plugin route may use the slug `docs`. The folder would still win, but
+  editors and sitemaps would see two things at one address.
+- Add the docs' sitemap to the site's robots output, in the SEO plugin's robots setting or with
+  a `robots_txt` filter:
 
   ```
   Sitemap: https://www.example.com/docs/sitemap-index.xml
   ```
 
 - Leave page-cache plugins as they are. They cache WordPress's PHP pages, not files in `/docs`.
-  A CDN in front of the site caches pages for at most five minutes, per the headers above.
 
-## 5. The secrets in GitHub
+## Commands
 
-**Settings → Secrets and variables → Actions → Secrets**:
-
-| Secret | Value |
+| Command | What it does |
 |---|---|
-| `DOCS_DEPLOY_HOST` | `www.example.com` |
-| `DOCS_DEPLOY_USER` | `docs-deploy` |
-| `DOCS_DEPLOY_PORT` | `22`, or the server's SSH port |
-| `DOCS_DEPLOY_PATH` | `.` with `rrsync`, which already names the directory |
-| `DOCS_DEPLOY_SSH_KEY` | the contents of `docs_deploy_key`, the private half |
-| `DOCS_DEPLOY_KNOWN_HOSTS` | the server's host key line, from the command below |
+| `wp wpl7-docs update` | Installs the latest build, unless `/docs` has it |
+| `wp wpl7-docs update --force` | Installs the latest build again |
+| `wp wpl7-docs status` | Shows the build in `/docs` and the latest one |
 
-```bash
-ssh-keyscan -p 22 www.example.com
+`/docs/build.json` names the build that is installed. To fetch from another repository's
+release, a fork's for example, set its address in `wp-config.php`:
+
+```php
+define('WPL7_DOCS_MANIFEST_URL', 'https://github.com/example/wpl7/releases/download/docs-site/wpl7-docs.json');
 ```
 
-Compare what it prints with the server's own key before you paste it:
+## When the plugin changes
 
-```bash
-sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
-```
+The website runs its own copy of `wpl7-docs.php`. Upload it again after a change here. The
+`package` job checks every zip with the repository's copy, so an older copy on the website can
+still refuse a zip that passed. The failed job then names the file.
 
-A different public address for the docs goes in **Variables** as `DOCS_PUBLIC_URL`, for
-example `https://docs.example.com/docs/`. The default is `https://wpl7.com/docs/`.
+## Limits
 
-Delete `docs_deploy_key` from your machine once it is in GitHub.
-
-## 6. The first publish
-
-**Actions → Docs → Run workflow**, on `main`, with **Publish the site** ticked. The run copies
-the build and checks the live site: the start page carries the commit it was built from, a deep
-page answers, the search index is served as JSON, and a missing page gets the docs' own 404.
-
-After that, every merge to `main` that changes the docs or the code they document publishes
-within a few minutes, and every published release republishes the site, which clears the Edge
-badges of what it ships.
-
-## Rotating the key
-
-1. Make a new key as in step 2 and add its line to `authorized_keys`.
-2. Replace `DOCS_DEPLOY_SSH_KEY` in GitHub, and run the workflow by hand to see it work.
-3. Remove the old key's line from `authorized_keys`.
-
-## What a failed publish leaves
-
-`rsync` runs with `--delay-updates` and `--delete-delay`: new files arrive under temporary names
-and are swapped in, and old ones removed, only once everything has arrived. A transfer that
-fails leaves the previous site in place.
+- New docs go live at the schedule's next run, not at the merge.
+- The site's backups include `/docs`. A restore brings back the backup's docs until the next run.
+- `/docs` must be a plain folder. A link or a file in its place stops the update.

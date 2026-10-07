@@ -80,6 +80,8 @@ export default defineConfig({
         group('Panel', 'panel'),
         group('Reference', 'reference'),
         group('Help', 'help'),
+        // Not a group: one page, in sight whether Help is open or not.
+        'support',
       ],
       plugins: [
         starlightLinksValidator({

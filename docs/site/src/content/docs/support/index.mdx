@@ -1,8 +1,6 @@
 ---
 title: Support
-description: "Where to ask, how to report a bug or a security issue, and the Enterprise package."
-sidebar:
-  order: 3
+description: "Ask the community, report a bug, or get priority support with the Enterprise package."
 sources:
   - panel/web/src/pages/Support.tsx
   - SECURITY.md
@@ -10,30 +8,19 @@ sources:
   - panel/src/config.ts
 ---
 
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+import EnterpriseSupport from '~/components/EnterpriseSupport.astro';
 import Screenshot from '~/components/Screenshot.astro';
+import { COMMUNITY_URL, REPO_URL } from '~/lib/site';
 
-Help comes from the community, from the Enterprise package, or from the issue tracker for a
-bug. The panel lists the same places on its **Support** page, at the foot of the sidebar.
+Ask the community, report a bug, or get priority support for your business.
 
-<Screenshot name="support" alt="The Support page with the Community support and Enterprise package cards" />
+<CardGrid>
+  <LinkCard title="Community forum" description="Free help from WPL7 users and maintainers." href={COMMUNITY_URL} />
+  <LinkCard title="GitHub issues" description="Report a bug or suggest a change." href={`${REPO_URL}/issues`} />
+</CardGrid>
 
-## Ask the community
-
-The [community forum](https://wpl7.com/community) is free. People who run WPL7 and its
-maintainers answer questions, share fixes and setups, and discuss what WPL7 should do next.
-**Open community forum** on the Support page goes there. Questions and ideas are also welcome in
-[GitHub Discussions](https://github.com/andyfo/wpl7/discussions).
-
-## Get the Enterprise package
-
-The [Enterprise package](https://wpl7.com/enterprise/) is paid support for agencies and
-businesses that run WPL7 in production:
-
-- Hotfixes for your installation, without waiting for the next release.
-- Priority email support.
-- A dedicated engineer who investigates and helps in an emergency.
-
-**Explore Enterprise** on the Support page opens its page.
+<EnterpriseSupport />
 
 ## Report a bug
 
@@ -49,6 +36,8 @@ Open an issue at [github.com/andyfo/wpl7/issues](https://github.com/andyfo/wpl7/
 
 Remove passwords, API keys and customer domains from logs before you paste them. To suggest a
 feature, use the "Feature or change" form and describe the problem rather than the solution.
+Questions and ideas are also welcome in
+[GitHub Discussions](https://github.com/andyfo/wpl7/discussions).
 
 ## Report a security problem
 
@@ -61,6 +50,12 @@ WPL7 has one maintainer, so expect an acknowledgement within a few days. A repor
 other people's servers at risk goes first. The security policy says what is in scope and what is
 deliberate, such as the panel being root-equivalent on its own host. Read it in
 [SECURITY.md](https://github.com/andyfo/wpl7/blob/main/SECURITY.md).
+
+## In the panel
+
+The panel's **Support** page, at the foot of the sidebar, links to the same places.
+
+<Screenshot name="support" alt="The Support page with the Community support and Enterprise package cards" />
 
 ## Limits
 

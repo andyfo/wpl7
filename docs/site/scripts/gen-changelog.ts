@@ -74,7 +74,7 @@ export function generateChangelog(): string[] {
     '## Related',
     '',
     '- [Updating WPL7](/docs/panel/updating/)',
-    '- [Support](/docs/help/support/)',
+    '- [Support](/docs/support/)',
   ].join('\n');
   const changed = writePages(SCRIPT, [SOURCE], [
     {

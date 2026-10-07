@@ -865,9 +865,9 @@ What the build does differently from the sections above, and why:
   it, both with a **Get it installed** button to the website's `/assisted-setup` page. Phones
   show only the box in the page; their contents list is Starlight's dropdown.
 - **Pagefind** loads its WebAssembly as gzipped `.pagefind` files through `fetch`, so no
-  `application/wasm` type is needed. The smoke test checks `wasm.en.pagefind` instead. Only
-  `_astro/`, `pagefind/fragment/`, `pagefind/index/` and `pagefind.*.pf_meta` are content-hashed
-  and cached for a year; `pagefind.js` and `pagefind-entry.json` keep the five-minute cache.
+  `application/wasm` type is needed. Only `_astro/`, `pagefind/fragment/`, `pagefind/index/` and
+  `pagefind.*.pf_meta` are content-hashed and cached for a year; `pagefind.js` and
+  `pagefind-entry.json` keep the five-minute cache.
 - **Generated pages** are plain Markdown (`.md`): an HTML comment cannot be the header of an MDX
   file. The header carries a hash of the body, which `docs:map` checks.
 - **Known limits** is generated too (`gen-limits.ts`), from every page's Limits section, so it
@@ -900,6 +900,14 @@ What the build does differently from the sections above, and why:
 - **oxipng** comes from its GitHub release, pinned by version and checksum: Ubuntu's archive
   has no package for it. The screenshot image has no compiler, which better-sqlite3 needs during
   `npm ci`, and no GitHub CLI, so the job installs Ubuntu's `make`, `g++` and `gh` first.
+- **The website pulls the docs; nothing pushes them.** The website is a WordPress site in a
+  WPL7 container, where an SSH account writing into its files does not fit. So the `package` job
+  zips each build and the `publish` job puts it on the `docs-site` release, with
+  `wpl7-docs.json` naming it. On the website, a must-use plugin (`hosting/wpl7-docs.php`) adds
+  `wp wpl7-docs update`, which a WPL7 schedule runs. No deploy key or secret exists. The plugin
+  installs only static files and writes the folder's `.htaccess` itself, so `public/.htaccess`
+  and the nginx snippet are gone. The live smoke test went with the rsync step: `package`
+  installs each zip with the plugin instead, and `publish` checks the release's public address.
 
 ---
 

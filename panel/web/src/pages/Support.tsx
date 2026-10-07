@@ -1,4 +1,4 @@
-// @docs help/faq, help/support, panel/appearance
+// @docs help/faq, panel/appearance, support
 import type { ReactNode } from 'react';
 import { useMeta } from '../api/hooks';
 import { Icon, type IconName } from '../components/Icon';

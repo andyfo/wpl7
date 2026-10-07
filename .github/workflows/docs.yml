@@ -5,10 +5,12 @@
 #   build        a pull request that changes the site builds, with every internal link checked
 #   check        the generated pages match their sources, and every page and @docs marker maps
 #   screenshots  a pull request that changes the panel's look gets its screenshots retaken
-#   publish      main, a release or a manual run goes live at wpl7.com/docs
+#   package      main, a release or a manual run: the site built, zipped, and installed once as the
+#                website's plugin would
+#   publish      the zip goes on the `docs-site` release, where the website's plugin fetches it
 #
-# The `docs-sync` check has a workflow of its own, docs-sync.yml. A release starts `publish`
-# from release.yml. docs/site/README.md is the contributor side of all of this.
+# The `docs-sync` check has a workflow of its own, docs-sync.yml. A release starts `package` and
+# `publish` from release.yml. docs/site/README.md is the contributor side of all of this.
 name: Docs
 
 on:
@@ -19,7 +21,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: 'Publish the site (the first publish, or again after setting up the host)'
+        description: 'Publish the site: build it and put it on the docs-site release (from main only)'
         type: boolean
         default: true
       screenshots:
@@ -258,27 +260,22 @@ jobs:
             exit 1
           }
 
-  # Publishes docs/site to the website's /docs directory: on every merge to main that changes the
+  # The site, built and zipped for the website to install: on every merge to main that changes the
   # docs or the code they document, after every release, and by hand. A release creates its
   # GitHub release with the workflow's own token, which starts no workflow, so release.yml runs
   # this one by hand once the release is out; the Edge badges of what it ships then fall away.
-  # rsync over SSH, with a key the website's server only lets write that one directory, and the
-  # server's host key pinned; then a look at the live site. Until the secrets exist
-  # (docs/site/hosting/README.md) it builds, says so, and stops.
-  publish:
-    name: Publish
+  # The zip is installed once here with the website's own plugin (docs/site/hosting/wpl7-docs.php),
+  # so a zip the website would refuse fails this job instead.
+  package:
+    name: Build and zip the site
     needs: changes
     if: >-
       (github.event_name == 'workflow_dispatch' && inputs.publish) ||
       (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # One publish at a time, and never one cut off half-way.
-    concurrency:
-      group: docs-publish
-      cancel-in-progress: false
-    env:
-      PUBLIC_URL: ${{ vars.DOCS_PUBLIC_URL || 'https://wpl7.com/docs/' }}
+    outputs:
+      publish: ${{ steps.relevant.outputs.publish }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -321,60 +318,121 @@ jobs:
         env:
           DOCS_BUILD_ID: ${{ github.sha }}
         run: npm run build
-      - name: Copy to the website
-        id: rsync
+      # wpl7-docs.json names the zip, with its size and SHA-256. Every build's zip has a name of its
+      # own, so a website that read the previous json still finds the zip it names.
+      - name: Zip it
         if: steps.relevant.outputs.publish == 'true'
-        env:
-          HOST: ${{ secrets.DOCS_DEPLOY_HOST }}
-          USER: ${{ secrets.DOCS_DEPLOY_USER }}
-          PORT: ${{ secrets.DOCS_DEPLOY_PORT }}
-          DEST: ${{ secrets.DOCS_DEPLOY_PATH }}
-          KEY: ${{ secrets.DOCS_DEPLOY_SSH_KEY }}
-          KNOWN_HOSTS: ${{ secrets.DOCS_DEPLOY_KNOWN_HOSTS }}
+        working-directory: docs/site/dist
         run: |
           set -euo pipefail
-          if [ -z "$HOST" ] || [ -z "$KEY" ] || [ -z "$KNOWN_HOSTS" ]; then
-            echo '::notice::The site was built but not published: the DOCS_DEPLOY_* secrets are not set (docs/site/hosting/README.md).'
-            echo deployed=false >> "$GITHUB_OUTPUT"
-            exit 0
+          out="$RUNNER_TEMP/package"
+          zip="wpl7-docs-${GITHUB_SHA:0:7}-$GITHUB_RUN_NUMBER.zip"
+          mkdir -p "$out"
+          zip -q -r -X "$out/$zip" .
+          jq -n \
+            --arg commit "$GITHUB_SHA" \
+            --arg builtAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg zip "$zip" \
+            --argjson size "$(stat -c %s "$out/$zip")" \
+            --arg sha256 "$(sha256sum "$out/$zip" | cut -d ' ' -f 1)" \
+            '{commit: $commit, builtAt: $builtAt, zip: $zip, size: $size, sha256: $sha256}' > "$out/wpl7-docs.json"
+          cat "$out/wpl7-docs.json"
+      - name: Install it as the website would
+        if: steps.relevant.outputs.publish == 'true'
+        working-directory: docs/site
+        run: |
+          set -euo pipefail
+          # GitHub's Ubuntu runner comes with PHP and its zip extension, but does not promise them.
+          if ! php -m 2> /dev/null | grep -qx zip; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends php-cli php-zip > /dev/null
           fi
-          umask 077
-          printf '%s\n' "$KEY" > "$RUNNER_TEMP/docs_key"
-          printf '%s\n' "$KNOWN_HOSTS" > "$RUNNER_TEMP/docs_known_hosts"
-          # --delay-updates and --delete-delay: every new file lands under a temporary name and
-          # everything is swapped in at the end, so a transfer that fails leaves the old site.
-          rsync -az --delete --delete-delay --delay-updates --stats \
-            -e "ssh -p ${PORT:-22} -i $RUNNER_TEMP/docs_key -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/docs_known_hosts" \
-            docs/site/dist/ "${USER:-docs}@$HOST:${DEST:-.}/" 2>&1 | tee "$RUNNER_TEMP/rsync.log"
-          echo deployed=true >> "$GITHUB_OUTPUT"
-      # The live site, not the build: the new build id on the start page, a deep page, the
-      # search index, and a missing page answered by the docs' own 404.
-      - name: Check the live site
-        if: steps.rsync.outputs.deployed == 'true'
-        env:
-          SHA: ${{ github.sha }}
+          mkdir -p "$RUNNER_TEMP/website"
+          php -r '
+            define("ABSPATH", $argv[1] . "/");
+            require "hosting/wpl7-docs.php";
+            $build = json_decode(file_get_contents($argv[2] . "/wpl7-docs.json"), true);
+            echo WPL7_Docs::install($argv[2] . "/" . $build["zip"], $build), " files installed\n";
+          ' "$RUNNER_TEMP/website" "$RUNNER_TEMP/package"
+          test -f "$RUNNER_TEMP/website/docs/index.html"
+          test -f "$RUNNER_TEMP/website/docs/.htaccess"
+      - if: steps.relevant.outputs.publish == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: docs-package
+          path: ${{ runner.temp }}/package
+          retention-days: 3
+
+  # Attaches the zip to the `docs-site` release, where websites fetch it (docs/site/hosting/README.md).
+  # The only job here that may write to the repository, and it runs nothing from npm. The release is
+  # made once and stays: its assets are replaced, so it sinks down the releases list as versions
+  # come out.
+  publish:
+    name: Publish
+    needs: package
+    if: needs.package.outputs.publish == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    # One publish at a time, and never one cut off half-way.
+    concurrency:
+      group: docs-publish
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      TAG: docs-site
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: docs-package
+          path: package
+      - name: Attach it to the docs-site release
+        id: attach
         run: |
           set -euo pipefail
-          base="${PUBLIC_URL%/}"
-          id="${SHA:0:7}"
+          zip="$(jq -r .zip package/wpl7-docs.json)"
+          previous=''
+          if gh release download "$TAG" --repo "$REPO" --pattern wpl7-docs.json --dir current 2> /dev/null; then
+            previous="$(jq -r '.zip // empty' current/wpl7-docs.json)"
+            published="$(jq -r '.commit // empty' current/wpl7-docs.json)"
+            # Two merges close together can finish out of order: an older build never replaces a newer one.
+            if [ -n "$published" ] && [ "$(gh api "repos/$REPO/compare/$published...$GITHUB_SHA" --jq .status 2> /dev/null)" = behind ]; then
+              echo "::notice::Not published: the release has the docs of ${published:0:7}, which is newer."
+              echo attached=false >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          elif ! gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1; then
+            gh release create "$TAG" --repo "$REPO" --prerelease --target "$GITHUB_SHA" --title 'Docs site' \
+              --notes 'The documentation site, for the website to install: `wpl7-docs.json` names the current zip. Replaced with every change to the docs; not a version of WPL7. See `docs/site/hosting/README.md`.'
+          fi
+          # The zip first, then the json that names it. A rerun of this job uploads the same zip again.
+          gh release upload "$TAG" "package/$zip" --repo "$REPO" --clobber
+          gh release upload "$TAG" package/wpl7-docs.json --repo "$REPO" --clobber
+          # Older zips go. The one the previous json named stays: a website may be downloading it.
+          for name in $(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name'); do
+            case "$name" in
+              "$zip" | "$previous" | wpl7-docs.json) ;;
+              wpl7-docs-*.zip) gh release delete-asset "$TAG" "$name" --repo "$REPO" --yes ;;
+            esac
+          done
+          echo attached=true >> "$GITHUB_OUTPUT"
+      # What a website fetches: the json at the public address names this build, and its zip answers.
+      - name: Check the public address
+        if: steps.attach.outputs.attached == 'true'
+        run: |
+          set -euo pipefail
+          base="https://github.com/$REPO/releases/download/$TAG"
+          zip="$(jq -r .zip package/wpl7-docs.json)"
           for attempt in 1 2 3 4 5 6; do
-            if curl -fsS "$base/?v=$id" | grep -q "data-build-id=\"$id\""; then break; fi
-            [ "$attempt" = 6 ] && { echo "::error::$base/ does not carry build $id"; exit 1; }
+            if curl -fsSL "$base/wpl7-docs.json" | jq -e --arg sha "$GITHUB_SHA" '.commit == $sha' > /dev/null; then break; fi
+            [ "$attempt" = 6 ] && { echo "::error::$base/wpl7-docs.json does not name build ${GITHUB_SHA:0:7}"; exit 1; }
             sleep 10
           done
-          curl -fsS -o /dev/null "$base/get-started/quick-start/"
-          type="$(curl -fsS -o /dev/null -w '%{content_type}' "$base/pagefind/pagefind-entry.json")"
-          case "$type" in application/json*) ;; *) echo "::error::pagefind-entry.json is served as '$type'"; exit 1 ;; esac
-          curl -fsS -o /dev/null "$base/pagefind/wasm.en.pagefind"
-          status="$(curl -s -o "$RUNNER_TEMP/404.html" -w '%{http_code}' "$base/does-not-exist/")"
-          [ "$status" = 404 ] || { echo "::error::a missing page answers $status, not 404"; exit 1; }
-          grep -q 'Page not found' "$RUNNER_TEMP/404.html" || { echo '::error::a missing page is not the docs 404 page'; exit 1; }
-          echo "Live: $base/ (build $id)"
-      - name: Summary
-        if: always() && steps.relevant.outputs.publish == 'true'
-        run: |
+          curl -fsSL -o /dev/null "$base/$zip"
           {
-            echo '### Docs publish'
-            if [ '${{ steps.rsync.outputs.deployed }}' = true ]; then echo "Published build \`${GITHUB_SHA:0:7}\` to $PUBLIC_URL"; else echo 'Built, not published (no DOCS_DEPLOY_* secrets, or a step failed).'; fi
-            if [ -f "$RUNNER_TEMP/rsync.log" ]; then echo; echo '```'; tail -n 20 "$RUNNER_TEMP/rsync.log"; echo '```'; fi
+            echo '### Docs published'
+            echo "\`$zip\` ($(du -h "package/$zip" | cut -f 1)) is on the [\`$TAG\` release]($GITHUB_SERVER_URL/$REPO/releases/tag/$TAG)."
+            echo 'A website with the docs plugin installs it at its next `wp wpl7-docs update`.'
           } >> "$GITHUB_STEP_SUMMARY"
