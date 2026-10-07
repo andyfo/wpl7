@@ -1,4 +1,4 @@
-// @docs help/support, reference/third-party, security/privacy
+// @docs reference/third-party, security/privacy, support
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { existsSync as fsExistsSync, readFileSync } from 'node:fs';

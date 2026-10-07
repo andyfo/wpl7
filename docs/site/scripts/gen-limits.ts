@@ -9,7 +9,7 @@ import { isMain, listPages, type Page } from './lib/pages.js';
 const SCRIPT = 'gen-limits.ts';
 const FROM = ['the Limits section of every page'];
 
-/** The sidebar's groups, in its order (astro.config.mjs). */
+/** The sidebar's groups and its Support page, in its order (astro.config.mjs). */
 const GROUPS: [dir: string, label: string][] = [
   ['get-started', 'Get started'],
   ['sites', 'Sites'],
@@ -23,6 +23,7 @@ const GROUPS: [dir: string, label: string][] = [
   ['panel', 'Panel'],
   ['reference', 'Reference'],
   ['help', 'Help'],
+  ['support', 'Support'],
 ];
 
 /** The lines under `## Limits`, up to the next heading of that level or higher. */

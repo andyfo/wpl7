@@ -1,0 +1,211 @@
+---
+/**
+ * The paid support offer, as the panel's Support page shows it (panel/web/src/pages/Support.tsx):
+ * the same words, and the same forest green in either theme (`.support-premium` in
+ * panel/web/src/styles.css), so it reads as the one paid thing on the page.
+ */
+import { ENTERPRISE_URL } from '../lib/site';
+
+const POINTS = [
+  { title: 'Hotfixes', text: 'Critical fixes for your installation, without waiting for the next release.' },
+  { title: 'Priority email support', text: 'Your questions go to the front of the queue.' },
+  { title: 'Dedicated engineer', text: 'A real person, ready to investigate and help in an emergency.' },
+];
+---
+
+<section class="enterprise not-content" aria-labelledby="enterprise-title">
+  <div class="enterprise-top">
+    <span class="enterprise-icon" aria-hidden="true">
+      <!-- The panel's `gem` icon. -->
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 4h12l4 5-10 12L2 9z M2 9h20 M9.5 4 8 9l4 12 4-12-1.5-5" />
+      </svg>
+    </span>
+    <span class="enterprise-tag">Premium</span>
+  </div>
+  <p class="enterprise-title" id="enterprise-title">Enterprise package</p>
+  <p class="enterprise-text">For agencies and businesses that run WPL7 in production and can’t afford to wait.</p>
+  <ul class="enterprise-points">
+    {
+      POINTS.map((point) => (
+        <li>
+          <span class="enterprise-check" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m5 12 4 4 10-10" />
+            </svg>
+          </span>
+          <span>
+            <span class="enterprise-point-title">{point.title}</span>
+            <span class="enterprise-point-text">{point.text}</span>
+          </span>
+        </li>
+      ))
+    }
+  </ul>
+  <a class="enterprise-button" href={ENTERPRISE_URL}>
+    Explore Enterprise
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M5 12h14 m-5-5 5 5-5 5" />
+    </svg>
+  </a>
+</section>
+
+<style>
+  .enterprise {
+    --premium-glow: #7fd8a4;
+    --premium-text: #f6f6f8;
+    /* The muted greys lean green, or they read as dust on the ground. */
+    --premium-muted: #a3b3aa;
+    --premium-soft: color-mix(in oklab, var(--premium-glow) 16%, transparent);
+    display: flex;
+    flex-direction: column;
+    padding: 1.6rem;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    color: var(--premium-text);
+    /* Light off the top corner, a fainter answer from the opposite one, a forest-green ground,
+       and a hairline border that catches the light where it falls. */
+    background:
+      radial-gradient(90% 75% at 100% 0%, color-mix(in oklab, var(--premium-glow) 30%, transparent), transparent 70%)
+        padding-box,
+      radial-gradient(70% 60% at 0% 100%, color-mix(in oklab, var(--premium-glow) 9%, transparent), transparent 70%)
+        padding-box,
+      linear-gradient(160deg, #173d2c, #0a1a13) padding-box,
+      linear-gradient(225deg, color-mix(in oklab, var(--premium-glow) 85%, transparent), #ffffff1f 38%, #ffffff0d)
+        border-box;
+    /* Green under the card on a light page; on a dark one a coloured shadow is only a haze. */
+    box-shadow:
+      inset 0 1px 0 #ffffff0f,
+      0 2px 4px #0000000f,
+      0 24px 48px -28px #0f5c36bf;
+  }
+  :global([data-theme='dark']) .enterprise {
+    box-shadow:
+      inset 0 1px 0 #ffffff0f,
+      0 2px 4px #0000000f,
+      0 16px 40px -24px #000000b3;
+  }
+  .enterprise-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+  .enterprise-icon {
+    display: grid;
+    place-items: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    flex-shrink: 0;
+    border-radius: 10px;
+    background: var(--premium-soft);
+    color: var(--premium-glow);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--premium-glow) 30%, transparent);
+  }
+  .enterprise-icon svg {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+  .enterprise-tag {
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: var(--premium-soft);
+    color: var(--premium-glow);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--premium-glow) 32%, transparent);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    line-height: 1.4;
+    text-transform: uppercase;
+  }
+  .enterprise-title {
+    align-self: flex-start;
+    margin: 1.25rem 0 0;
+    font-size: var(--sl-text-lg);
+    font-weight: 600;
+    color: var(--premium-text);
+  }
+  /* White into the card's light, with a guard: without background-clip the title would be
+     transparent text on a dark card. */
+  @supports ((-webkit-background-clip: text) or (background-clip: text)) {
+    .enterprise-title {
+      background-image: linear-gradient(
+        100deg,
+        var(--premium-text) 25%,
+        color-mix(in oklab, var(--premium-glow) 70%, var(--premium-text))
+      );
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+  }
+  .enterprise-text {
+    margin: 0.4rem 0 0;
+    font-size: var(--sl-text-sm);
+    line-height: 1.6;
+    color: var(--premium-muted);
+  }
+  .enterprise-points {
+    display: grid;
+    gap: 1rem;
+    margin: 1.5rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .enterprise-points li {
+    display: flex;
+    gap: 0.75rem;
+  }
+  .enterprise-check {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    margin-top: 1px;
+    border-radius: 50%;
+    background: var(--premium-soft);
+    color: var(--premium-glow);
+  }
+  .enterprise-check svg {
+    width: 12px;
+    height: 12px;
+  }
+  .enterprise-point-title {
+    display: block;
+    font-size: var(--sl-text-sm);
+    font-weight: 500;
+    color: var(--premium-text);
+  }
+  .enterprise-point-text {
+    display: block;
+    margin-top: 0.125rem;
+    font-size: var(--sl-text-xs);
+    line-height: 1.55;
+    color: var(--premium-muted);
+  }
+  .enterprise-button {
+    display: inline-flex;
+    align-self: flex-start;
+    align-items: center;
+    gap: 0.4rem;
+    height: 2.5rem;
+    margin-top: 1.75rem;
+    padding-inline: 1.25rem;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #17181c;
+    font-size: var(--sl-text-sm);
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .enterprise-button:hover {
+    background: #e4e5eb;
+    color: #17181c;
+  }
+  .enterprise-button svg {
+    width: 1em;
+    height: 1em;
+  }
+</style>
