@@ -1243,6 +1243,11 @@ export async function makeWorld(
   const servers = new ServerRegistry(db, config, log, {
     makeLocal: () => ({ docker, exec, files: new LocalFiles(), dbAdmin }),
     makeSsh: (row): HandlePorts => remote(row.id),
+    // No Traefik in tests: a probe is refused at once, as on a server with nothing listening.
+    // Without this one went to the server's documentation-range address and waited out its
+    // timeout, or reached whatever the machine running the suite has on :443. A test that
+    // wants an answer points the handle at an edge of its own (monitorUptime.test.ts).
+    probeUrl: () => 'http://127.0.0.1:1/',
   });
   const addSshServer: TestWorld['addSshServer'] = (name, opts = {}) => {
     const now = Date.now();

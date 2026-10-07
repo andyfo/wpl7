@@ -10,6 +10,11 @@ import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
 import { httpProbeOnce } from '../lib/httpProbe.js';
 import { sitePaths } from './siteSpec.js';
 
+/** The site states the monitor looks at; mid-create and mid-delete are a job's to report. */
+const MONITORED = ['running', 'stopped', 'error'];
+/** How long the check at the end of a job gives a container that has just started to answer. */
+const SETTLE_MS = 10_000;
+
 export class MonitorService {
   private latest = new Map<number, SiteMonitorDto>();
   private latestServers = new Map<number, ServerStatsDto>();
@@ -18,6 +23,12 @@ export class MonitorService {
   private duCursor = 0;
   /** Slugs with an active backup/restore/move; du scanning skips them. */
   readonly busySlugs = new Set<string>();
+  /**
+   * Per site: how many jobs are changing it (holdChecks), and `changeSeq` as of the last time one
+   * began or ended. In memory, like the jobs' own handlers: neither survives a restart.
+   */
+  private changes = new Map<number, { holds: number; seq: number }>();
+  private changeSeq = 0;
 
   constructor(
     private readonly db: Db,
@@ -29,7 +40,7 @@ export class MonitorService {
     return this.db
       .select()
       .from(sites)
-      .where(inArray(sites.status, ['running', 'stopped', 'error']))
+      .where(inArray(sites.status, MONITORED))
       .all();
   }
 
@@ -66,6 +77,9 @@ export class MonitorService {
 
   /** HTTP probe of each site. Parallel across servers, sequential within one - no thundering herd per host. */
   async tickUptime(): Promise<void> {
+    // Taken with the list: each probe is built from the row as listed - its status, its
+    // domains - and a job that begins or ends on the site later in the tick makes that stale.
+    const seq = this.changeSeq;
     const byServer = this.activeSitesByServer();
     await Promise.all(
       [...byServer.entries()].map(async ([serverId, list]) => {
@@ -75,37 +89,108 @@ export class MonitorService {
         } catch {
           /* server row gone mid-tick */
         }
-        for (const site of list) {
-          const entry = this.entryFor(site.id, site.slug, site.serverId);
-          // `stopped` is the one state the panel can answer without asking: it stopped the
-          // container itself. `error` is NOT - it only says a job failed, and plenty of them
-          // fail with the site still serving (a delete whose final backup failed marks the
-          // row `error` while the container is still up). Asserting `up: false` there put a
-          // measured-looking "not serving" on a site nobody had probed.
-          if (site.status === 'stopped') {
-            entry.up = false;
-            entry.httpStatus = null;
-            entry.httpMs = null;
-            entry.lastCheckedAt = Date.now();
-            continue;
-          }
-          if (!handle) continue;
-          const primary = (JSON.parse(site.domains) as string[])[0] ?? site.slug;
-          const { ok: up, status, ms } = await httpProbeOnce(handle.probeUrlFor(site.containerName), primary, 5000);
-          entry.up = up;
-          // Kept even when the probe passed: it is the whole difference between "nothing
-          // answered" and "Traefik answered 404 because no router matched this hostname",
-          // which is what the panel has to say out loud when a site is running but dark.
-          entry.httpStatus = status;
-          entry.httpMs = up ? ms : null;
-          entry.lastCheckedAt = Date.now();
-          this.db
-            .insert(siteStats)
-            .values({ siteId: site.id, ts: Date.now(), up: up ? 1 : 0, httpMs: entry.httpMs })
-            .run();
-        }
+        for (const site of list) await this.check(site, handle, () => this.changedSince(site.id, seq));
       }),
     );
+  }
+
+  /**
+   * Hold the uptime check off a site while a job stops, starts or replaces its container on
+   * purpose (the worker calls this for SITE_INTERRUPTING_JOBS). A probe landing in a container
+   * swap reads Traefik's 404, and that reading stayed on the site page until the next check.
+   * The returned function checks the site and then ends the hold, so the job ends with a
+   * reading of what it left - not the last one from before it, or one taken halfway through.
+   */
+  holdChecks(siteId: number): () => Promise<void> {
+    const change = this.changes.get(siteId) ?? { holds: 0, seq: 0 };
+    this.changes.set(siteId, change);
+    change.holds++;
+    change.seq = ++this.changeSeq;
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      const seq = change.seq;
+      try {
+        // Still held while it runs, so no scheduled probe of the site starts beside it and
+        // lands after it: one that failed on a container still settling would have the last word.
+        if (change.holds === 1) await this.recheck(siteId, () => change.seq !== seq);
+      } finally {
+        change.holds--;
+        // A scheduled probe that listed the site, or was out, before this point drops its answer.
+        change.seq = ++this.changeSeq;
+      }
+    };
+  }
+
+  /** Whether a job is changing the site, or has begun or ended since `seq`. */
+  private changedSince(siteId: number, seq: number): boolean {
+    const change = this.changes.get(siteId);
+    return change !== undefined && (change.holds > 0 || change.seq > seq);
+  }
+
+  /**
+   * The check that ends a hold: the row as the job left it, and a few seconds to answer.
+   * `stale` says whether another job has begun on the site since.
+   */
+  private async recheck(siteId: number, stale: () => boolean): Promise<void> {
+    const site = this.db.select().from(sites).where(eq(sites.id, siteId)).get();
+    if (!site || !MONITORED.includes(site.status)) return;
+    let handle: ServerHandle | null = null;
+    try {
+      handle = this.servers.handleFor(site.serverId);
+    } catch {
+      /* server row gone */
+    }
+    // The jobs' own smoke-check window, cut down: a job that has one already waited for the
+    // site, and one that only started a container (Start, Restart) needs seconds, not half a
+    // minute. Zero in tests, as theirs is.
+    await this.check(site, handle, stale, Math.min(this.config.probeTimeoutMs, SETTLE_MS));
+  }
+
+  /**
+   * Probe one site and record what it answered, unless it has gone `stale`: a job has begun or
+   * ended on it since its row was read, and the reading is that job's to take (holdChecks). With
+   * `settleMs`, a failed probe is tried again, a second apart, until that long has passed.
+   */
+  private async check(site: SiteRow, handle: ServerHandle | null, stale: () => boolean, settleMs = 0): Promise<void> {
+    if (stale()) return;
+    const entry = this.entryFor(site.id, site.slug, site.serverId);
+    // `stopped` is the one state the panel can answer without asking: it stopped the
+    // container itself. `error` is NOT - it only says a job failed, and plenty of them
+    // fail with the site still serving (a delete whose final backup failed marks the
+    // row `error` while the container is still up). Asserting `up: false` there put a
+    // measured-looking "not serving" on a site nobody had probed.
+    if (site.status === 'stopped') {
+      entry.up = false;
+      entry.httpStatus = null;
+      entry.httpMs = null;
+      entry.lastCheckedAt = Date.now();
+      return;
+    }
+    if (!handle) return;
+    const url = handle.probeUrlFor(site.containerName);
+    const primary = (JSON.parse(site.domains) as string[])[0] ?? site.slug;
+    const deadline = Date.now() + settleMs;
+    let attempt = await httpProbeOnce(url, primary, 5000);
+    while (!attempt.ok && Date.now() < deadline && !stale()) {
+      await new Promise((r) => setTimeout(r, 1000));
+      attempt = await httpProbeOnce(url, primary, 5000);
+    }
+    // A job that began on the site while the request was out may be what it answered.
+    if (stale()) return;
+    const { ok: up, status, ms } = attempt;
+    entry.up = up;
+    // Kept even when the probe passed: it is the whole difference between "nothing
+    // answered" and "Traefik answered 404 because no router matched this hostname",
+    // which is what the panel has to say out loud when a site is running but dark.
+    entry.httpStatus = status;
+    entry.httpMs = up ? ms : null;
+    entry.lastCheckedAt = Date.now();
+    this.db
+      .insert(siteStats)
+      .values({ siteId: site.id, ts: Date.now(), up: up ? 1 : 0, httpMs: entry.httpMs })
+      .run();
   }
 
   async tickContainerStats(): Promise<void> {

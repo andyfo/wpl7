@@ -174,3 +174,27 @@ export const SECRET_PAYLOAD_KEYS: Partial<Record<JobType, readonly string[]>> = 
   'wp.cli': ['stdin'],
   'wp.rest': ['auth'],
 };
+
+/**
+ * Jobs that start, stop or replace their site's container, or change its WordPress code (an
+ * update holds the site in maintenance mode while it runs). While one runs, the uptime check
+ * leaves the site alone, and the site is checked as the job ends (MonitorService.holdChecks).
+ * Without it, a check that landed in a container swap read Traefik's 404, and the site page
+ * said Offline - offering a repair - for a site that was only going live, until the next check
+ * a minute later.
+ */
+export const SITE_INTERRUPTING_JOBS: ReadonlySet<JobType> = new Set<JobType>([
+  'site.create',
+  'site.start',
+  'site.stop',
+  'site.restart',
+  'site.changePhp',
+  'site.reconcile',
+  'site.updateDomains',
+  'site.move',
+  'backup.restore',
+  'wp.coreUpdate',
+  'wp.pluginTask',
+  'wp.themeTask',
+  'wp.bulkTask',
+]);
