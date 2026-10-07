@@ -283,6 +283,14 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       },
       {
         method: 'POST',
+        path: '/api/imports/:id/refresh',
+        summary: "Pull a finished import's database and changed files again, with the old site in maintenance",
+        job: true,
+        danger: true,
+        level: 'manage',
+      },
+      {
+        method: 'POST',
         path: '/api/imports/:id/disconnect',
         summary: "Stop the old site's plugin answering this import",
         returns: 'ImportDto',

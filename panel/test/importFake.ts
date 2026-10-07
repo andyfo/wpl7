@@ -81,6 +81,10 @@ export class FakeSourceSite {
   private seen = new Set<string>();
   /** Changes made to a file after the snapshot listed it: applied on the next read. */
   private pendingChanges = new Map<string, Buffer>();
+  /** The modification time of a file changed by `writeFile`; every other file is from 2023. */
+  private mtimes = new Map<string, number>();
+  /** The current snapshot's `since`: files not changed from then on are listed as unchanged. */
+  private since: number | null = null;
 
   constructor(
     readonly opts: {
@@ -99,6 +103,17 @@ export class FakeSourceSite {
 
   failNext(action: string, ...how: (number | 'network')[]): void {
     this.failures.set(action, [...(this.failures.get(action) ?? []), ...how]);
+  }
+
+  /** A file written on the old site now, by its own clock, between pulls: new, or changed. */
+  writeFile(path: string, content: string | Buffer): void {
+    this.opts.files[path] = Buffer.from(content);
+    this.mtimes.set(path, Math.floor(Date.now() / 1000) + this.clockSkewS);
+  }
+
+  /** A file deleted on the old site between pulls. */
+  deleteFile(path: string): void {
+    delete this.opts.files[path];
   }
 
   /** The file changes on the old site once the snapshot has it: its next read sees the new content. */
@@ -176,9 +191,10 @@ export class FakeSourceSite {
     for (const d of [...dirs].sort()) this.files.push({ id: ++id, path: d, type: 'd', mtime: 1_700_000_000 });
     for (const p of paths) {
       const f = this.opts.files[p]!;
-      if (f === 'dir') this.files.push({ id: ++id, path: p, type: 'd', mtime: 1_700_000_000 });
-      else if (typeof f === 'object' && !Buffer.isBuffer(f)) this.files.push({ id: ++id, path: p, type: 'l', link: f.link, mtime: 1_700_000_000 });
-      else this.files.push({ id: ++id, path: p, type: 'f', data: Buffer.from(f), mtime: 1_700_000_000 });
+      const mtime = this.mtimes.get(p) ?? 1_700_000_000;
+      if (f === 'dir') this.files.push({ id: ++id, path: p, type: 'd', mtime });
+      else if (typeof f === 'object' && !Buffer.isBuffer(f)) this.files.push({ id: ++id, path: p, type: 'l', link: f.link, mtime });
+      else this.files.push({ id: ++id, path: p, type: 'f', data: Buffer.from(f), mtime });
     }
   }
 
@@ -221,6 +237,7 @@ export class FakeSourceSite {
         if (p.op === 'start') {
           this.snapshotId = crypto.randomBytes(8).toString('hex');
           this.snapshotSteps = 0;
+          this.since = typeof p.since === 'number' ? p.since : null;
           this.walk();
           this.listed = new Map(this.files.map((f) => [f.id, { s: f.data?.length ?? 0, m: f.mtime }]));
         } else if (p.op === 'continue') {
@@ -255,6 +272,7 @@ export class FakeSourceSite {
               md: f.type === 'd' ? '755' : '644',
               t: f.type,
               ...(f.link ? { l: f.link } : {}),
+              ...(this.since !== null && f.type === 'f' && f.mtime < this.since ? { f: ['unchanged'] } : {}),
               ...(utf8.toString('utf8') === f.path ? {} : { pb: utf8.toString('base64') }),
               ...(f.data && f.data.length <= 1024 * 1024 ? { h: sha256(f.data) } : {}),
             };

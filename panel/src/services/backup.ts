@@ -31,7 +31,7 @@ const noopLog: LogFn = () => undefined;
 export const PRUNED_BACKUP_TYPES = ['scheduled', 'panel'] as const;
 
 /** Job types that read or write a site's backup files while they run. */
-const BACKUP_USING_JOB_TYPES = ['backup.create', 'backup.restore', 'site.move', 'site.delete', 'site.importFinish'] as const;
+const BACKUP_USING_JOB_TYPES = ['backup.create', 'backup.restore', 'site.move', 'site.delete', 'site.importFinish', 'site.importRefresh'] as const;
 /** Job types that read or write ONE backup's files, outside the site's job lane. */
 const COPY_JOB_TYPES = ['backup.offsite', 'backup.fetch'] as const;
 

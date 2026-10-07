@@ -64,6 +64,7 @@ import {
 } from './handlers/servers.js';
 import { siteMove, siteMoveFinalize, siteMoveFinalizePayload, siteMovePayload } from './handlers/move.js';
 import { siteImport, siteImportFinish, siteImportFinishPayload, siteImportPayload, siteImportQueuedCancel } from './handlers/import.js';
+import { siteImportRefresh, siteImportRefreshPayload } from './handlers/importRefresh.js';
 import { systemPostUpdate, systemPostUpdatePayload } from './handlers/systemUpdate.js';
 import { filesCompress, filesCompressPayload, filesExtract, filesExtractPayload } from './handlers/files.js';
 import { siteShell, siteShellPayload, wpCli, wpCliPayload, wpRest, wpRestPayload } from './handlers/exec.js';
@@ -144,6 +145,8 @@ const registry: Partial<Record<JobType, RegistryEntry>> = {
   'site.import': entry(siteImportPayload, siteImport, 24 * 3600_000, siteImportQueuedCancel) as RegistryEntry,
   // Bounded like a restore: everything it reads is on the server already.
   'site.importFinish': entry(siteImportFinishPayload, siteImportFinish, 60 * 60_000) as RegistryEntry,
+  // A whole database again, and what changed since: hours for a big site, holding its server.
+  'site.importRefresh': entry(siteImportRefreshPayload, siteImportRefresh, 6 * 3600_000) as RegistryEntry,
   // Lane-less: it queues per-server work rather than doing any, so holding a server's lane
   // would only stop the jobs it just created from starting.
   'system.postUpdate': entry(systemPostUpdatePayload, systemPostUpdate, 30 * 60_000) as RegistryEntry,
@@ -198,6 +201,7 @@ export const SITE_INTERRUPTING_JOBS: ReadonlySet<JobType> = new Set<JobType>([
   'site.updateDomains',
   'site.move',
   'site.importFinish',
+  'site.importRefresh',
   'backup.restore',
   'wp.coreUpdate',
   'wp.pluginTask',

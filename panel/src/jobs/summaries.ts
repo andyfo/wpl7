@@ -173,6 +173,7 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
       }
       case 'site.import':
       case 'site.importFinish':
+      case 'site.importRefresh':
         return str(p.sourceHost) ? `From ${str(p.sourceHost)}` : null;
       case 'site.shell':
         return str(p.command) ? maskShell(str(p.command)!) : null;

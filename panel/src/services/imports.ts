@@ -38,6 +38,7 @@ import {
   migrateReportSchema,
   type MigrateReport,
 } from './importInspect.js';
+import { ImportListings } from './importListing.js';
 import { ImportPullClient, type PullState, type PullTransport, type RangeEncoding, type Transport } from './importPull.js';
 
 /**
@@ -118,6 +119,11 @@ export interface ImportCursor {
   longestStatement: number;
   tablesDone: number;
   tablesTotal: number;
+  /**
+   * When the listing began, by the old site's clock (unix seconds). A file changed after that may
+   * have been read before it changed; a refresh copies everything changed from then on.
+   */
+  listedAt?: number;
   /** The finish job has moved the files into the site's folder. */
   materialized: boolean;
 }
@@ -177,6 +183,8 @@ export class ImportService {
   /** How the pull waits between retries; tests make it instant. */
   retrySleep: ((ms: number) => Promise<void>) | undefined;
   private worker: JobWorker | null = null;
+  /** The old site's files as each import's last pull listed them (importListing.ts). */
+  readonly listings: ImportListings;
 
   constructor(
     private readonly db: Db,
@@ -184,7 +192,9 @@ export class ImportService {
     private readonly settings: SettingsService,
     private readonly servers: ServerRegistry,
     private readonly log: Logger,
-  ) {}
+  ) {
+    this.listings = new ImportListings(path.join(config.paths.panel, 'imports'));
+  }
 
   /** The queue, once it exists: it is built from the bundle this service is in (see CoreServices.worker). */
   attachWorker(worker: JobWorker): void {
@@ -257,6 +267,7 @@ export class ImportService {
     }
     if (row.token && row.status !== 'pending') await this.tellPluginToFinish(row);
     await this.clearStaging(row);
+    this.listings.drop(row.id);
     this.db.transaction(() => {
       this.db.delete(imports).where(eq(imports.id, row.id)).run();
       this.releaseSiteRow(row);
@@ -274,6 +285,7 @@ export class ImportService {
       throw conflict('The import is running. Stop its job first.');
     }
     if (row.token && row.status !== 'pending') await this.tellPluginToFinish(row);
+    this.listings.drop(row.id);
     const now = Date.now();
     const waiting = row.status === 'pending' || row.status === 'connected';
     return this.db
@@ -436,6 +448,25 @@ export class ImportService {
     });
   }
 
+  /**
+   * Pull a finished import's database and changed files again (jobs/handlers/importRefresh.ts),
+   * for a site whose old copy kept changing after the import.
+   */
+  refresh(id: number): JobRow {
+    const worker = this.requireWorker();
+    const row = this.get(id);
+    if (row.status !== 'done') throw conflict('Only a finished import can be refreshed.');
+    if (!row.token) throw conflict('The plugin on the old site was disconnected. Import the site again instead.');
+    const site = row.siteId ? this.db.select().from(sites).where(eq(sites.id, row.siteId)).get() : undefined;
+    if (!site) throw conflict('The site this import made is gone.');
+    if (site.status !== 'running' && site.status !== 'stopped') throw conflict(`The site is ${site.status}; refresh it once that is over.`);
+    return worker.enqueue(
+      'site.importRefresh',
+      { importId: row.id, sourceHost: hostOf(row.homeUrl) },
+      { id: site.id, slug: site.slug, serverId: site.serverId },
+    );
+  }
+
   /** The pull's client for this import, carrying on with what an earlier run learned about the old host. */
   clientFor(row: ImportRow, opts: { state?: Partial<PullState>; canceled?: () => boolean; log?: (line: string) => void } = {}): ImportPullClient {
     if (!row.token || !row.homeUrl || !row.endpointUrl) throw new Error('This import is not connected to an old site');
@@ -529,6 +560,12 @@ export class ImportService {
       .where(and(eq(imports.status, 'expired'), lt(imports.updatedAt, now - IMPORT_TTL_MS.expired)))
       .returning({ id: imports.id })
       .all();
+    // A file listing is kept only while the import can still use it: to go on, or to refresh.
+    for (const id of this.listings.ids()) {
+      const row = this.db.select().from(imports).where(eq(imports.id, id)).get();
+      const inUse = row?.token && (IMPORT_UNFINISHED.includes(row.status as ImportStatus) || (row.status === 'done' && row.siteId));
+      if (!inUse) this.listings.drop(id);
+    }
     return cleared + old.length;
   }
 

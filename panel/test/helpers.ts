@@ -93,6 +93,7 @@ import { badGateway } from '../src/lib/errors.js';
 import type { AppDeps } from '../src/routes/deps.js';
 import { buildServer } from '../src/server.js';
 import { SCRIPTS as SITE_FILE_SCRIPTS } from '../src/services/siteFilesScripts.js';
+import { REMOVE_UNCHANGED_SCRIPT } from '../src/jobs/handlers/importRefresh.js';
 import { sitePaths } from '../src/services/siteSpec.js';
 
 /**
@@ -379,6 +380,7 @@ export class FakeDocker implements DockerPort {
         : { stdout: '', stderr: 'sh: postconf: not found', exitCode: 127 };
     }
     if (isDropInWrite(cmd)) return this.dropIn(name, cmd, null);
+    if (cmd[0] === 'sh' && cmd[1] === '-c' && cmd[2] === REMOVE_UNCHANGED_SCRIPT) return this.removeUnchanged(name, cmd.slice(4));
     // Apache's own check before a reload of a site's protection (services/security.ts):
     // infrastructure again, answered here rather than from the queue.
     if (cmd[0] === 'apache2ctl') return this.apacheCheck;
@@ -404,6 +406,23 @@ export class FakeDocker implements DockerPort {
    * and, like the relay housekeeping above, it never eats an answer a test lined up.
    */
   siteRoot: ((container: string) => string) | null = null;
+
+  /** A refresh's removal of files the old site deleted (importRefresh.ts), on the site's folder. */
+  private removeUnchanged(name: string, args: string[]): RunResult {
+    const root = this.siteRoot?.(name);
+    let removed = 0;
+    let kept = 0;
+    for (let i = 0; root && i + 2 < args.length; i += 3) {
+      const file = path.join(root, args[i + 2]!);
+      const st = fs.lstatSync(file, { throwIfNoEntry: false });
+      if (!st?.isFile()) continue;
+      if (st.size === Number(args[i]) && Math.floor(st.mtimeMs / 1000) === Number(args[i + 1])) {
+        fs.rmSync(file);
+        removed++;
+      } else kept++;
+    }
+    return { stdout: `${removed} ${kept}\n`, stderr: '', exitCode: 0 };
+  }
 
   private dropIn(name: string, cmd: string[], input: Buffer | null): RunResult {
     const [, dir, file, mode, legacy] = cmd.slice(4) as [string, string, string, string, string];
@@ -456,6 +475,12 @@ export class FakeDocker implements DockerPort {
   ephemeral: ((opts: EphemeralOpts) => RunResult | Promise<RunResult>) | null = null;
   async runEphemeral(opts: EphemeralOpts): Promise<RunResult> {
     this.record('runEphemeral', [opts]);
+    // A refresh's changed files into the site's folder (importRefresh.ts), done on the fake's disk.
+    if (opts.labels?.['wpl7.refresh'] && opts.entrypoint?.[0] === 'cp') {
+      const from = (target: string) => opts.binds!.find((b) => b.split(':')[1] === target)!.split(':')[0]!;
+      fs.cpSync(from('/delta'), from('/var/www/html'), { recursive: true, force: true, preserveTimestamps: true });
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
     if (this.ephemeral) return this.ephemeral(opts);
     return this.execQueue.shift() ?? this.execDefault;
   }

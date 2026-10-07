@@ -210,7 +210,13 @@ export async function siteImport(ctx: JobContext<z.infer<typeof siteImportPayloa
     ctx.checkCanceled();
 
     if (cursor.phase === 'snapshot') await listFiles(ctx, client, cursor, commit);
-    if (cursor.phase === 'files') await pullFiles(ctx, client, ping, server, wordpressDir, cursor, commit);
+    if (cursor.phase === 'files') {
+      // The listing is written down as it is paged through, for a refresh to tell deleted files by.
+      if (cursor.filesAfterId === 0) s.imports.listings.reset(row.id, 'current', cursor.listedAt);
+      await pullFiles(ctx, client, ping, server, wordpressDir, cursor, commit, {
+        onPage: (entries) => s.imports.listings.append(row.id, entries),
+      });
+    }
     if (cursor.phase === 'db') await pullDatabase(ctx, client, ping, server, dbFile, report, cursor, commit);
 
     // ---------------------------------------------------------- verify
@@ -256,7 +262,8 @@ export async function siteImport(ctx: JobContext<z.infer<typeof siteImportPayloa
 
 /**
  * Every file of the old site, listed by its plugin in steps it can finish within its time limit.
- * `since`: only what changed from then on (unix seconds), for a refresh.
+ * `since` (unix seconds), for a refresh: files not changed from then on are listed as `unchanged`,
+ * and not copied.
  */
 export async function listFiles(
   ctx: JobContext<unknown>,
@@ -265,8 +272,11 @@ export async function listFiles(
   commit: () => Promise<void>,
   opts: { since?: number } = {},
 ): Promise<void> {
-  ctx.info(opts.since ? "Listing the old site's files that changed since the import…" : "Listing the old site's files…");
-  const start = () => client.snapshot('start', { follow: 'none', ...(opts.since ? { since: opts.since } : {}) });
+  ctx.info("Listing the old site's files…");
+  const start = () => {
+    cursor.listedAt = Math.floor(Date.now() / 1000) + client.state.skewS;
+    return client.snapshot('start', { follow: 'none', ...(opts.since ? { since: opts.since } : {}) });
+  };
   let snap = cursor.snapshotId ? await client.snapshot('status') : await start();
   if (cursor.snapshotId && snap.snapshot_id !== cursor.snapshotId) snap = await start();
   cursor.snapshotId = snap.snapshot_id;
@@ -321,7 +331,10 @@ function listingNote(w: { code: string; count?: number; detail?: string }): { le
   }
 }
 
-/** The files, page by page of the listing, into the staging folder. */
+/**
+ * The files, page by page of the listing, into the staging folder. `onPage` sees every page of the
+ * listing as it arrives, files left unchanged since a refresh's `since` included.
+ */
 export async function pullFiles(
   ctx: JobContext<unknown>,
   client: ImportPullClient,
@@ -330,6 +343,7 @@ export async function pullFiles(
   wordpressDir: string,
   cursor: ImportCursor,
   commit: () => Promise<void>,
+  opts: { onPage?: (entries: FileEntry[]) => void } = {},
 ): Promise<void> {
   ctx.info(cursor.filesAfterId > 0 ? 'Copying the files, from where the last run stopped…' : 'Copying the files…');
   const maxBytes = Math.max(64 * 1024, ping.limits.max_bytes);
@@ -340,7 +354,11 @@ export async function pullFiles(
   const progress = () => {
     if (cursor.bytesDone - logged.bytes < LOG_BYTES && cursor.filesDone - logged.files < LOG_FILES) return;
     logged = { bytes: cursor.bytesDone, files: cursor.filesDone };
-    ctx.info(`… ${count(cursor.filesDone)} of ${count(cursor.filesTotal)} files, ${bytesText(cursor.bytesDone)} of ${bytesText(cursor.bytesTotal)}`);
+    ctx.info(
+      cursor.filesTotal > 0
+        ? `… ${count(cursor.filesDone)} of ${count(cursor.filesTotal)} files, ${bytesText(cursor.bytesDone)} of ${bytesText(cursor.bytesTotal)}`
+        : `… ${count(cursor.filesDone)} files, ${bytesText(cursor.bytesDone)}`,
+    );
   };
 
   /** Read a file whole into memory, starting over when it changes under the read. */
@@ -542,7 +560,15 @@ export async function pullFiles(
       }
       throw err;
     }
-    if (page.entries.length > 0) await writePage(page.entries, false);
+    opts.onPage?.(page.entries);
+    const fresh = page.entries.filter((e) => !(e.f ?? []).includes('unchanged'));
+    if (fresh.length > 0) await writePage(fresh, false);
+    // Unchanged files after the last one copied are done with too.
+    const last = page.entries.at(-1);
+    if (last && last.id > cursor.filesAfterId && (fresh.length === 0 || cursor.filesAfterId === fresh.at(-1)!.id)) {
+      cursor.filesAfterId = last.id;
+      await commit();
+    }
     if (page.next === null || page.entries.length === 0) break;
   }
 

@@ -87,6 +87,7 @@ const DESTRUCTIVE = [
   'POST /api/backup-destinations/:id/passphrase',
   'POST /api/backups/:id/restore',
   'POST /api/backups/bulk-delete',
+  'POST /api/imports/:id/refresh',
   'POST /api/jobs/:id/cancel',
   'POST /api/mail/dkim',
   'POST /api/mail/domains/:domain/publish',

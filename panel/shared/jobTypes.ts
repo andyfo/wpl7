@@ -88,6 +88,12 @@ export const JOB_TYPE_INFO = {
     description: 'Brings an imported site up from its staging folder: database, container, WordPress fixes and a first backup.',
     category: 'sites',
   },
+  'site.importRefresh': {
+    label: 'Refresh import',
+    description:
+      "Pulls an imported site's database and changed files from the old host again, with the old site in maintenance, and replaces this site's copy.",
+    category: 'sites',
+  },
   'site.shell': {
     label: 'Shell command',
     description: "Runs a shell command inside the site's container as www-data and keeps its output in the job log.",

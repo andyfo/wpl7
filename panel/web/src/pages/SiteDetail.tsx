@@ -463,6 +463,9 @@ function ImportedBanner({ slug, source }: { slug: string; source: NonNullable<Si
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [confirmRefresh, setConfirmRefresh] = useState(false);
+  const refresh = useRunJob([['site', slug], ['backups', slug]]);
+  const refreshing = refresh.isPending || (refresh.job !== null && !isTerminal(refresh.job.status));
   const host = (() => {
     try {
       return source.url ? new URL(source.url).hostname : 'the old site';
@@ -483,13 +486,29 @@ function ImportedBanner({ slug, source }: { slug: string; source: NonNullable<Si
       <div className="font-medium">Imported from {host}</div>
       <p className="mt-1">The migration plugin on the old site is still connected.</p>
       <div className="mt-2 flex flex-wrap items-center gap-2">
+        <span title={refreshing ? 'A refresh is running.' : undefined}>
+          <Button small variant="secondary" disabled={refreshing} onClick={() => setConfirmRefresh(true)}>
+            Refresh from source
+          </Button>
+        </span>
         <Button small disabled={busy} onClick={disconnect}>
           Disconnect
         </Button>
       </div>
-      <div className="mt-2">
-        <ErrorNote error={error} />
+      <div className="mt-2 space-y-2">
+        <ErrorNote error={error ?? refresh.error} />
+        <JobProgress job={refresh.job} logs={refresh.logs} />
       </div>
+      {confirmRefresh && (
+        <ConfirmDialog
+          title="Refresh from source"
+          message={`This site's database is replaced with ${host}'s, and the file changes made there since the last pull are copied. ${host} shows a maintenance page meanwhile.`}
+          confirmWord={slug}
+          confirmLabel="Refresh"
+          onConfirm={() => refresh.mutate({ path: `/api/imports/${source.importId}/refresh` })}
+          onClose={() => setConfirmRefresh(false)}
+        />
+      )}
     </div>
   );
 }

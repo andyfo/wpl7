@@ -10,7 +10,8 @@
  *
  *   WPL7_IMPORT_E2E=1 npx vitest run test/e2e/import
  *
- * WPL7_IMPORT_E2E_CASES=mariadb10.6-wp-latest,mysql8.0-wp5.1 runs some of the cases.
+ * WPL7_IMPORT_E2E_CASES=mariadb10.6-wp-latest,mysql8.0-wp5.1 runs some of the cases. After the
+ * import, the old site changes and the copy is refreshed from it (Refresh from source).
  *
  * The old site is reached the way the panel reaches any: its address resolves to a public one
  * (a documentation address here) and the guard lets it through; only the last step, the socket,
@@ -24,8 +25,10 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { spawn } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../../src/config.js';
+import { jobs } from '../../../src/db/schema.js';
 import { hostExec } from '../../../src/lib/exec.js';
 import type { PullResponse, PullTransport } from '../../../src/services/importPull.js';
 import { sitePaths } from '../../../src/services/siteSpec.js';
@@ -418,6 +421,39 @@ describe.skipIf(!ENABLED).each(cases)('importing from $wp on $db', (c) => {
     } finally {
       client.close();
     }
+  }, 20 * 60_000);
+
+  it('refreshes the copy: what changed on the old site arrives, what was deleted there goes', async () => {
+    await wp(['post', 'create', '--post_title=Written after the import', '--post_status=publish']);
+    await sh('printf changed > wp-content/uploads/2024/01/hello.txt && printf new > wp-content/uploads/after.txt && rm wp-content/uploads/empty.txt');
+    // Visitors of the old site, all the while.
+    const seen = new Set<number>();
+    const visitors = setInterval(() => {
+      request(port, 'GET', '/').then(
+        (r) => seen.add(r.status),
+        () => undefined,
+      );
+    }, 100);
+    let job;
+    try {
+      job = w.core.imports.refresh(importId);
+      await settle(w, importId, 15 * 60_000);
+    } finally {
+      clearInterval(visitors);
+    }
+    const status = w.db.select().from(jobs).where(eq(jobs.id, job.id)).get()!.status;
+    expect(status, logOf(w, job.id).join('\n')).toBe('succeeded');
+    expect(seen).toContain(503);
+
+    const wordpress = sitePaths(w.config, 'willow').wordpress;
+    expect(fs.readFileSync(path.join(wordpress, 'wp-content/uploads/2024/01/hello.txt'), 'utf8')).toBe('changed');
+    expect(fs.readFileSync(path.join(wordpress, 'wp-content/uploads/after.txt'), 'utf8')).toBe('new');
+    expect(fs.existsSync(path.join(wordpress, 'wp-content/uploads/empty.txt'))).toBe(false);
+    expect(fs.existsSync(path.join(wordpress, 'wp-content/uploads/big.bin'))).toBe(true);
+    expect(dumps).toHaveLength(2);
+    expect(zlib.gunzipSync(fs.readFileSync(dumps[1]!)).toString('utf8')).toContain('Written after the import');
+    // The old site is open again.
+    expect((await request(port, 'GET', '/')).status).toBe(200);
   }, 20 * 60_000);
 
   it('lets go of the old site on Disconnect', async () => {

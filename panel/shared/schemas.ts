@@ -147,6 +147,7 @@ export const jobTypes = [
   // An import of an existing site: the pull from the old host, then the set-up from what it pulled.
   'site.import',
   'site.importFinish',
+  'site.importRefresh',
   'backup.create',
   'backup.restore',
   'backup.offsite',

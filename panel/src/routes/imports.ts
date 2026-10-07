@@ -61,6 +61,11 @@ export function registerImportRoutes(app: FastifyInstance, deps: AppDeps): void 
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });
 
+  r.post('/api/imports/:id/refresh', { schema: { params: importIdParams } }, async (req, reply) => {
+    const job = deps.imports.refresh(req.params.id);
+    return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
+  });
+
   r.post('/api/imports/:id/disconnect', { schema: { params: importIdParams } }, async (req) =>
     deps.imports.toDto(await deps.imports.disconnect(req.params.id)),
   );
