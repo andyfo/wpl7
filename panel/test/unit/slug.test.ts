@@ -20,6 +20,10 @@ describe('slug validation', () => {
     expect(isValidSlug('panel')).toBe(false);
     expect(isValidSlug('mail')).toBe(false);
     expect(isValidSlug('traefik')).toBe(false);
+    // /sites/import is the import wizard.
+    expect(isValidSlug('import')).toBe(false);
+    expect(isValidSlug('imports')).toBe(false);
+    expect(slugify('import')).toBe('import-site');
   });
 
   it('slugifies titles and domains', () => {

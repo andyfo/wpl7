@@ -36,6 +36,8 @@ COPY --from=build /app/web/dist ./web/dist
 COPY panel/package.json ./
 # Bundled catalog (plugin recipes) - data, read at boot; see panel/catalog/README.md.
 COPY panel/catalog /app/catalog
+# The migration plugin an import hands out, zipped per import with its connection file.
+COPY panel/migrate-plugin/wpl7-migrate /app/migrate-plugin/wpl7-migrate
 COPY deploy/wordpress-image /app/wordpress-image
 # The FTP image's recipe, for servers that build it rather than pull it (services/ftp.ts).
 COPY deploy/sftpgo-image /app/sftpgo-image

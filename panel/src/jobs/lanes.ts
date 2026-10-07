@@ -15,3 +15,9 @@ export function laneServerId(lane: string | null): number | null {
   const match = lane ? /:(\d+)$/.exec(lane) : null;
   return match ? Number(match[1]) : null;
 }
+
+/**
+ * The named lane an import's pull runs in: one import per server at a time, beside that server's
+ * own work - a pull can take hours, and every other site on the machine must not wait for it.
+ */
+export const importLane = (serverId: number) => `import:${serverId}`;

@@ -115,6 +115,7 @@ spec no longer matches.
                                      each site's protection (sec-<slug>.yml), blocked addresses (wpl7-blocked.yml)
 /srv/wpl7-firewall/                  the network layer's rules (wpl7.nft) and status, root only
 /srv/wpl7-scan/<scan-id>/            a malware scan's input while it runs: the checksums it is handed
+/srv/wpl7-import/<id>/               an import's staging folder while it runs: wordpress/, db.sql.gz, import.json (0700)
 /srv/panel/panel.db                  panel state (SQLite, chmod 600)
 /srv/panel/ssh/id_ed25519            the panel's fleet SSH key (server 1 only)
 ```

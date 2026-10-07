@@ -11,6 +11,21 @@ import type { JobWorker } from '../jobs/worker.js';
 import { siteScheme } from './labels.js';
 import { assertDomainsFree } from './domainGuard.js';
 
+/** The server a new site goes on: the one asked for, else the default in Settings - and it has to be up. */
+export function resolveTargetServer(s: Pick<CoreServices, 'settings' | 'servers'>, requestedId?: number): ServerRow {
+  const serverId = requestedId ?? s.settings.get('defaultServerId') ?? 1;
+  const server = s.servers.rowById(serverId);
+  if (!server) {
+    throw requestedId !== undefined
+      ? notFound(`Server #${serverId} not found`)
+      : badRequest(`Default server #${serverId} no longer exists; update Settings`);
+  }
+  if (server.status !== 'ok') {
+    throw conflict(`Server "${server.name}" is ${server.status}; pick another server`);
+  }
+  return server;
+}
+
 export class SitesService {
   constructor(
     private readonly s: CoreServices,
@@ -31,21 +46,6 @@ export class SitesService {
     assertDomainsFree(this.s, domains, { excludeSiteId, allowDevHostname });
   }
 
-  /** Resolve + validate the target server for a new site. */
-  private resolveTargetServer(requestedId?: number): ServerRow {
-    const serverId = requestedId ?? this.s.settings.get('defaultServerId') ?? 1;
-    const server = this.s.servers.rowById(serverId);
-    if (!server) {
-      throw requestedId !== undefined
-        ? notFound(`Server #${serverId} not found`)
-        : badRequest(`Default server #${serverId} no longer exists; update Settings`);
-    }
-    if (server.status !== 'ok') {
-      throw conflict(`Server "${server.name}" is ${server.status}; pick another server`);
-    }
-    return server;
-  }
-
   create(body: SiteCreateBody): { site: SiteRow; job: JobRow } {
     const offered = this.s.settings.get('phpVersions') ?? [];
     const phpVersion = body.phpVersion ?? this.s.settings.get('defaultPhpVersion');
@@ -55,7 +55,7 @@ export class SitesService {
     const locale = body.locale ?? this.s.settings.get('defaultLocale') ?? 'en_US';
     const adminEmail = body.adminEmail ?? (this.s.settings.get('defaultAdminEmail') || null);
     if (!adminEmail) throw badRequest('No default admin email is set in Settings; provide "adminEmail"');
-    const server = this.resolveTargetServer(body.serverId);
+    const server = resolveTargetServer(this.s, body.serverId);
 
     const slug = body.slug ?? slugify(body.domainMode === 'custom' ? body.domains![0]! : body.title);
     if (!slug || !isValidSlug(slug)) {
@@ -156,6 +156,11 @@ export class SitesService {
 
   delete(slug: string, finalBackup: boolean, deleteBackups = false): JobRow {
     const site = this.bySlug(slug);
+    // An import that is making the site, or failed part-way, owns what there is of it: its
+    // staging folder and its record. Deleting the import clears both.
+    if (this.s.imports.activeForSite(site.id)) {
+      throw conflict('This site is being imported. Delete the import under Sites → Import site first.');
+    }
     // A recently-moved site still has a parked copy on its old server, and site.delete
     // tears that down too. Claim the source lane as well, or that teardown races whatever
     // else the source server is doing.
@@ -311,13 +316,30 @@ export class SitesService {
       .get();
   }
 
-  updateDomains(slug: string, domains: string[], keepDevAlias: boolean, goLive: boolean, manageDns = false): JobRow {
+  /**
+   * Change the domains a site answers on; `goLive` also marks it live. `allowSearchEngines` only
+   * counts with `goLive`: a plain domain edit leaves WordPress's search engine setting alone.
+   */
+  updateDomains(
+    slug: string,
+    domains: string[],
+    keepDevAlias: boolean,
+    goLive: boolean,
+    opts: { manageDns?: boolean; allowSearchEngines?: boolean } = {},
+  ): JobRow {
     const site = this.bySlug(slug);
     const unique = [...new Set(domains)];
     this.assertDomainsFree(unique, site.id, site.devHostname);
     return this.worker.enqueue(
       'site.updateDomains',
-      { siteId: site.id, domains: unique, keepDevAlias, goLive, manageDns },
+      {
+        siteId: site.id,
+        domains: unique,
+        keepDevAlias,
+        goLive,
+        manageDns: opts.manageDns ?? false,
+        allowSearchEngines: goLive && (opts.allowSearchEngines ?? false),
+      },
       { id: site.id, slug, serverId: site.serverId },
     );
   }
@@ -393,6 +415,7 @@ export class SitesService {
       adminUser: site.wpAdminUser,
       adminEmail: site.wpAdminEmail,
       dbName: site.dbName,
+      tablePrefix: site.tablePrefix,
       containerState,
       url: `${siteScheme(this.s.config.tlsMode)}://${summary.primaryDomain}`,
       keepDevAlias: site.keepDevAlias === 1,
@@ -411,6 +434,7 @@ export class SitesService {
             since: cleanup.createdAt,
           }
         : null,
+      importSource: this.s.imports.sourceForSite(site.id),
     };
   }
 }

@@ -26,8 +26,8 @@ All flows run as sequential panel jobs with live step logs (Jobs page / `GET /ap
    cannot succeed while the container is still unrouted (step 7), and its fallback — plain permalinks —
    leaves `/wp-json/` serving the home page under a 200. "Discourage search engines"
    (`blog_public = 0`) is on by default because a site answers on its dev hostname from the first
-   minute; nothing turns it off again, go-live included — the site is released for indexing in
-   WordPress, Settings → Reading. The bundled-plugin removal happens *before* the installs, so a
+   minute. Going live turns it off (`allowSearchEngines`, on unless unticked in the Go live dialog),
+   after the URL rewrite; a plain domain change never touches it. The bundled-plugin removal happens *before* the installs, so a
    catalog that deliberately contains Akismet gets a current copy from wp.org; it is permanent (the
    image entrypoint only seeds an empty directory, and core updates never restore a deleted bundled
    plugin). The removal and the installs run as the administrator `core install` just created
@@ -108,6 +108,38 @@ copy + cutover + DNS:
    target while DNS propagates — no downtime, no lost writes. The source copy is never torn down inside
    the move: it is cleaned up automatically once every hostname resolves *only* to the target (no old
    address left in the answer, no AAAA records) and ≥ 24 h have passed, or earlier via **Finalize**.
+
+## Import (`site.import` + `site.importFinish`)
+
+Docs page: docs/site/src/content/docs/sites/import.mdx; the protocol: docs/internal/import-protocol.md.
+An import brings an existing WordPress site in through the migration plugin, installed on the old site
+from a zip the panel builds for that import (it carries the import's token).
+
+1. **Connect.** The plugin reports the old site (`POST /api/migrate/connect`, its token in
+   `X-WPL7-Import-Token`). The panel checks the report and binds the import to that site's `home`.
+2. **Start** (`POST /api/imports/:id/run`) reserves the site like a new one - row `provisioning`, dev
+   hostname only, the old site's table prefix - and queues `site.import` in the target server's
+   `import:<server>` lane, so a pull of hours holds up nothing else on the machine.
+3. **`site.import`** pulls into `<SRV_ROOT>/wpl7-import/<id>/`: the file listing, then the files as a tar
+   stream straight into `tar -x` on the server (small files many to a request, big ones in ranges), then
+   the database as SQL pages, every line checked against the protocol's grammar
+   (services/importSql.ts) and appended to `db.sql.gz`. After every batch it writes its cursor to
+   `import.json` and to the row: Continue (`POST /api/imports/:id/retry`) resumes from there after Stop,
+   a failure or a restart. No compensations: the staging folder stays until the import is deleted, or
+   for 7 days after a failure nobody continued.
+4. **`site.importFinish`** (the server lane, with the site) removes the chosen drop-ins and must-use
+   plugins, writes WordPress's standard `.htaccess` when there is none, then restores the site from the
+   folder with the move's restore step (handlers/restoreSite.ts): files renamed into place, the database
+   imported as the **site's own database user**, the container started without a router. The image
+   writes `wp-config.php` at first start; the chosen constants go in with `wp config set`. Then
+   `wp core update-db`, the old address replaced with the dev address (both schemes and JSON-escaped,
+   plugins not loaded), the old folder with `/var/www/html` when asked, the chosen plugins deactivated,
+   `blog_public = 0`, and the site published with its router. A failure rolls back to the pulled copy in
+   staging (database dropped, container and network removed); Continue runs the finish again. Once the
+   site is up, an inventory scan, a malware scan (trigger `import`) and the first backup (type `import`)
+   follow, each a warning at worst, and the staging folder goes.
+5. The plugin stays connected until **Disconnect** (site page) or **Delete import**, which also ask the
+   plugin to clean up and deactivate itself (`finish`).
 
 ## PHP switch
 

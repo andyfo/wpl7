@@ -26,7 +26,7 @@ import type {
   SiteContainerSpec,
 } from '../src/services/docker.js';
 import { SPEC_LABEL, serviceSpecHash } from '../src/services/docker.js';
-import type { DbAdminPort } from '../src/services/dbAdmin.js';
+import { packetLimitFor, type DbAdminPort } from '../src/services/dbAdmin.js';
 import { hostExec, type ExecPort, type ExecResult } from '../src/lib/exec.js';
 import { LocalFiles, type FilesPort } from '../src/lib/files.js';
 import { servers as serversTable } from '../src/db/schema.js';
@@ -78,6 +78,7 @@ import { IntegrityManifests, type FetchLike } from '../src/services/integrityMan
 import { MalwareScanService } from '../src/services/malwareScan.js';
 import { PluginZipChecks } from '../src/services/pluginZipChecks.js';
 import { QuarantineService } from '../src/services/quarantine.js';
+import { ImportService } from '../src/services/imports.js';
 import type { HostPort } from '../src/servers/hostPort.js';
 import { ApiKeysService } from '../src/services/apiKeys.js';
 import { ApiActivityService } from '../src/services/apiActivity.js';
@@ -92,6 +93,7 @@ import { badGateway } from '../src/lib/errors.js';
 import type { AppDeps } from '../src/routes/deps.js';
 import { buildServer } from '../src/server.js';
 import { SCRIPTS as SITE_FILE_SCRIPTS } from '../src/services/siteFilesScripts.js';
+import { REMOVE_UNCHANGED_SCRIPT } from '../src/jobs/handlers/importRefresh.js';
 import { sitePaths } from '../src/services/siteSpec.js';
 
 /**
@@ -378,6 +380,7 @@ export class FakeDocker implements DockerPort {
         : { stdout: '', stderr: 'sh: postconf: not found', exitCode: 127 };
     }
     if (isDropInWrite(cmd)) return this.dropIn(name, cmd, null);
+    if (cmd[0] === 'sh' && cmd[1] === '-c' && cmd[2] === REMOVE_UNCHANGED_SCRIPT) return this.removeUnchanged(name, cmd.slice(4));
     // Apache's own check before a reload of a site's protection (services/security.ts):
     // infrastructure again, answered here rather than from the queue.
     if (cmd[0] === 'apache2ctl') return this.apacheCheck;
@@ -403,6 +406,23 @@ export class FakeDocker implements DockerPort {
    * and, like the relay housekeeping above, it never eats an answer a test lined up.
    */
   siteRoot: ((container: string) => string) | null = null;
+
+  /** A refresh's removal of files the old site deleted (importRefresh.ts), on the site's folder. */
+  private removeUnchanged(name: string, args: string[]): RunResult {
+    const root = this.siteRoot?.(name);
+    let removed = 0;
+    let kept = 0;
+    for (let i = 0; root && i + 2 < args.length; i += 3) {
+      const file = path.join(root, args[i + 2]!);
+      const st = fs.lstatSync(file, { throwIfNoEntry: false });
+      if (!st?.isFile()) continue;
+      if (st.size === Number(args[i]) && Math.floor(st.mtimeMs / 1000) === Number(args[i + 1])) {
+        fs.rmSync(file);
+        removed++;
+      } else kept++;
+    }
+    return { stdout: `${removed} ${kept}\n`, stderr: '', exitCode: 0 };
+  }
 
   private dropIn(name: string, cmd: string[], input: Buffer | null): RunResult {
     const [, dir, file, mode, legacy] = cmd.slice(4) as [string, string, string, string, string];
@@ -455,6 +475,12 @@ export class FakeDocker implements DockerPort {
   ephemeral: ((opts: EphemeralOpts) => RunResult | Promise<RunResult>) | null = null;
   async runEphemeral(opts: EphemeralOpts): Promise<RunResult> {
     this.record('runEphemeral', [opts]);
+    // A refresh's changed files into the site's folder (importRefresh.ts), done on the fake's disk.
+    if (opts.labels?.['wpl7.refresh'] && opts.entrypoint?.[0] === 'cp') {
+      const from = (target: string) => opts.binds!.find((b) => b.split(':')[1] === target)!.split(':')[0]!;
+      fs.cpSync(from('/delta'), from('/var/www/html'), { recursive: true, force: true, preserveTimestamps: true });
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
     if (this.ephemeral) return this.ephemeral(opts);
     return this.execQueue.shift() ?? this.execDefault;
   }
@@ -656,6 +682,18 @@ export class FakeDbAdmin implements DbAdminPort {
   }
   async importFrom(srcGzPath: string, dbName: string): Promise<void> {
     this.record('importFrom', [srcGzPath, dbName]);
+  }
+  async importFromAs(srcGzPath: string, dbName: string, dbUser: string, dbPassword: string): Promise<void> {
+    this.record('importFromAs', [srcGzPath, dbName, dbUser, dbPassword]);
+  }
+  /** The server's max_allowed_packet, as raisePacketLimit finds and leaves it. */
+  maxAllowedPacket = 16 * 1024 * 1024;
+  async raisePacketLimit(bytes: number): Promise<number | null> {
+    this.record('raisePacketLimit', [bytes]);
+    const wanted = packetLimitFor(bytes);
+    if (this.maxAllowedPacket >= wanted) return null;
+    this.maxAllowedPacket = wanted;
+    return wanted;
   }
 }
 
@@ -1355,6 +1393,14 @@ export async function makeWorld(
   const quarantine = new QuarantineService(db, config, servers, log);
   const pluginZipChecks = new PluginZipChecks(db, servers, settings, (subject, body) => mail.notifyOperator(subject, body), log);
   const malwareScan = new MalwareScanService(db, config, servers, settings, integrityManifests, pluginZipChecks, panelFiles, quarantine, (subject, body) => mail.notifyOperator(subject, body), log);
+  const importsService = new ImportService(db, config, settings, servers, log);
+  // No network in tests: every name an import is pointed at resolves to a documentation address.
+  importsService.lookup = async () => [{ address: '203.0.113.80', family: 4 }];
+  // Nor any network for the pull: a test that runs one hands it a fake old site (test/importFake.ts).
+  importsService.transport = async (req) => {
+    throw new Error(`test tried to reach ${req.url.host}; set core.imports.transport to a FakeSourceSite's`);
+  };
+  importsService.retrySleep = async () => undefined;
   traffic.onEvents((serverId, events, chunk) => {
     securityEvents.fold(events);
     security.noteTraefikLog(chunk);
@@ -1392,11 +1438,13 @@ export async function makeWorld(
     pluginZipChecks,
     panelFiles,
     quarantine,
+    imports: importsService,
     log,
   } as unknown as CoreServices;
   core.wpInventory = new WpInventoryService(core, vulnerabilities);
   const worker = new JobWorker(db, core);
   offsite.attachWorker(worker);
+  importsService.attachWorker(worker);
   const shell = new FakeShell();
   const wporg = opts.wporg ?? new FakeWporg();
   const users = new UsersService(db);

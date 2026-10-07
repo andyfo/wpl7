@@ -2,7 +2,7 @@
 title: Domains and going live
 description: Move a site from its dev address to the customer's domain with no downtime, and change domains later.
 sidebar:
-  order: 3
+  order: 4
 sources:
   - panel/src/routes/sites.ts
   - panel/src/jobs/handlers/sites.ts
@@ -32,9 +32,11 @@ first one the site's address. Visitors keep reaching the site the whole time.
 2. Under **Production domains (first = primary)**, enter the domains, for example
    `northwindbakery.example www.northwindbakery.example`.
 3. Leave **Keep the dev hostname as a 301 redirect** on, so old links still arrive.
-4. Optional: switch on **Point them at this server through Cloudflare**. It appears when the
+4. Leave **Allow search engines** on, unless the site should stay out of search results for now.
+   It unticks **Discourage search engines from indexing this site** in WordPress.
+5. Optional: switch on **Point them at this server through Cloudflare**. It appears when the
    panel has a Cloudflare token.
-5. Choose **Go live**, and follow the job's log in the dialog.
+6. Choose **Go live**, and follow the job's log in the dialog.
 
 ## Change the domains later
 
@@ -52,7 +54,8 @@ HTTPS. A slow certificate is a warning, and Traefik keeps trying.
 Then the new first domain becomes the site's address. WordPress's `home` and `siteurl` change,
 and `wp search-replace` rewrites the old address in every table. The site's
 [recipes](/docs/reference/glossary/#recipe) run again for the new address, so licensed plugins
-are activated for it. A stopped site is started for this step and stopped again.
+are activated for it. With **Allow search engines** on, search engines are allowed next. A stopped
+site is started for this step and stopped again.
 
 If a step fails, the old addresses keep working and the job says what went wrong. Running the
 change again repairs it.
@@ -64,8 +67,9 @@ change again repairs it.
   certificate until its record is fixed.
 - The Cloudflare option only reaches zones in the account the token belongs to. Other domains
   need their records created by hand.
-- Going live does not let search engines in. A new site starts with **Discourage search
-  engines from indexing this site** ticked. Untick it in WordPress under **Settings → Reading**.
+- Changing the domains later leaves search engines as they are. Only going live allows them, and
+  only with **Allow search engines** on. Otherwise untick **Discourage search engines from
+  indexing this site** in WordPress under **Settings → Reading**.
 
 ## Related
 

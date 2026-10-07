@@ -48,6 +48,9 @@ export const RESERVED_SLUGS = [
   'new',
   'bulk',
   'security',
+  // /sites/import is the import wizard; `imports` is held back with it for the API's own name.
+  'import',
+  'imports',
 ] as const;
 
 export const DOMAIN_RE =
@@ -97,6 +100,14 @@ export const localeSchema = z
 
 export const phpVersionSchema = z.string().regex(/^8\.\d{1,2}$/, 'not a valid PHP version');
 
+/**
+ * A WordPress table prefix as the panel keeps one: what `$table_prefix` in wp-config.php may hold
+ * (WordPress itself allows letters, digits and underscores), kept short enough for MariaDB's
+ * 64-character table names to fit the longest core table behind it.
+ */
+export const TABLE_PREFIX_RE = /^[A-Za-z0-9_]{1,32}$/;
+export const tablePrefixSchema = z.string().regex(TABLE_PREFIX_RE, 'not a valid table prefix (letters, digits and _)');
+
 // WP plugin directory slug / installed plugin name (path segment, no traversal).
 export const wpPluginNameSchema = z.string().regex(/^[a-zA-Z0-9._-]{1,100}$/, 'not a valid plugin name');
 
@@ -133,6 +144,10 @@ export const jobTypes = [
   'site.updateDomains',
   'site.move',
   'site.moveFinalize',
+  // An import of an existing site: the pull from the old host, then the set-up from what it pulled.
+  'site.import',
+  'site.importFinish',
+  'site.importRefresh',
   'backup.create',
   'backup.restore',
   'backup.offsite',
@@ -184,7 +199,8 @@ export type JobOrigin = (typeof jobOrigins)[number];
 export const jobCategories = ['sites', 'backups', 'wordpress', 'files', 'security', 'servers', 'system'] as const;
 export type JobCategory = (typeof jobCategories)[number];
 
-export const backupTypes = ['manual', 'scheduled', 'pre_restore', 'pre_update', 'final', 'move', 'panel'] as const;
+/** `import`: the first backup of an imported site, taken once it is up; kept like a manual one. */
+export const backupTypes = ['manual', 'scheduled', 'pre_restore', 'pre_update', 'final', 'move', 'panel', 'import'] as const;
 export type BackupType = (typeof backupTypes)[number];
 
 /** Which kinds of backup a destination copies. The transient ones are excluded by default. */
@@ -196,6 +212,7 @@ export const offsiteCopyTypes = [
   'pre_restore',
   'pre_update',
   'move',
+  'import',
 ] as const;
 export const DEFAULT_COPY_TYPES = ['scheduled', 'manual', 'final', 'panel'] as const;
 
@@ -347,8 +364,8 @@ export const siteCreateBody = z.object({
    * WordPress's "Discourage search engines from indexing this site" (Settings -> Reading).
    * On by default: a new site is reachable on its dev hostname from the first minute, and an
    * indexed dev copy competing with the customer's real site is far more expensive to undo
-   * than a checkbox. Nothing flips it back - the site has to be released for indexing in
-   * WordPress once it is live.
+   * than a checkbox. Going live flips it back, unless the Go live dialog says otherwise
+   * (`goLiveBody.allowSearchEngines`).
    */
   discourageSearchEngines: z.boolean().default(true),
 }).strict()
@@ -362,6 +379,8 @@ export const goLiveBody = z.object({
   keepDevAlias: z.boolean().default(true),
   /** Create/point the A records via the DNS provider API when the zone is in the account. */
   manageDns: z.boolean().default(false),
+  /** Untick WordPress's "Discourage search engines" once the site answers on its real domains. */
+  allowSearchEngines: z.boolean().default(true),
 }).strict();
 
 export const domainsUpdateBody = z.object({
@@ -388,6 +407,85 @@ export const siteMoveBody = z.object({
   /** Source freeze while copying. Defaults: live site → 'maintenance', dev site → 'none'. */
   quiesce: z.enum(['maintenance', 'stop', 'none']).optional(),
 }).strict();
+
+// ---------------------------------------------------------------------------
+// Site imports (services/imports.ts)
+
+/**
+ * pending: waiting for the old site to connect · connected: it has, and reported itself ·
+ * queued, pulling: the pull job's · pulled: files and database are on the server · finishing:
+ * the site is being set up from them · done · failed: stopped or broken, Continue resumes it ·
+ * expired: waited too long, or failed and was cleared away.
+ */
+export const importStatuses = [
+  'pending',
+  'connected',
+  'queued',
+  'pulling',
+  'pulled',
+  'finishing',
+  'done',
+  'failed',
+  'expired',
+] as const;
+export type ImportStatus = (typeof importStatuses)[number];
+
+export const importIdParams = z.object({ id: z.coerce.number().int().positive() });
+
+export const importCreateBody = z
+  .object({
+    /** Where the admin says the old site is. Shown until it connects; its own `home` counts after that. */
+    sourceUrl: z.url({ protocol: /^https?$/ }).max(2000).optional(),
+    /** Let the panel reach the old site over plain http. Refused otherwise. */
+    allowHttp: z.boolean().default(false),
+  })
+  .strict();
+export type ImportCreateBody = z.infer<typeof importCreateBody>;
+
+/** A constant from the old site's wp-config.php, as the panel carries one over. */
+export const CONSTANT_NAME_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+/** The WordPress drop-ins an import can be asked to leave behind: files in wp-content. */
+export const WORDPRESS_DROPINS = [
+  'advanced-cache.php',
+  'object-cache.php',
+  'db.php',
+  'db-error.php',
+  'install.php',
+  'maintenance.php',
+  'php-error.php',
+  'fatal-error-handler.php',
+  'sunrise.php',
+  'blog-deleted.php',
+  'blog-inactive.php',
+  'blog-suspended.php',
+] as const;
+
+/** A must-use plugin: a PHP file at the top of wp-content/mu-plugins. */
+export const MU_PLUGIN_FILE_RE = /^[A-Za-z0-9_][A-Za-z0-9._ -]{0,199}\.php$/;
+
+/** What the admin chose on the Confirm step. */
+export const importRunBody = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    slug: slugSchema,
+    /** Left out, the `site.defaultServerId` setting, as for a new site. */
+    serverId: z.number().int().positive().optional(),
+    /** Left out, the offered version nearest to the old site's. */
+    phpVersion: phpVersionSchema.optional(),
+    /** Left out, what the old site uses. */
+    locale: localeSchema.optional(),
+    /** Constants from the old site's wp-config.php to define in the new one. */
+    carryConstants: z.array(z.string().regex(CONSTANT_NAME_RE)).max(500).default([]),
+    /** Plugins to deactivate once the site is up. */
+    deactivatePlugins: z.array(wpPluginNameSchema).max(2000).default([]),
+    removeDropins: z.array(z.enum(WORDPRESS_DROPINS)).max(WORDPRESS_DROPINS.length).default([]),
+    removeMuPlugins: z.array(z.string().regex(MU_PLUGIN_FILE_RE)).max(500).default([]),
+    /** Replace the old site's folder with the new one's (/var/www/html) in the database. */
+    rewritePaths: z.boolean().default(true),
+  })
+  .strict();
+export type ImportRunBody = z.infer<typeof importRunBody>;
 
 // ---------------------------------------------------------------------------
 // Servers

@@ -63,6 +63,12 @@ export const sites = sqliteTable(
     wpAdminEmail: text('wp_admin_email'),
     containerName: text('container_name').notNull(),
     /**
+     * The prefix of the site's WordPress tables, handed to the container's wp-config.php. `wp_`
+     * for every site the panel installed; an imported site keeps the one it came with. Never
+     * renamed: code on an imported site may name its tables outright.
+     */
+    tablePrefix: text('table_prefix').notNull().default('wp_'),
+    /**
      * SMTP AUTH password for this site's relay login (`<slug>@<realm>`). The relay refuses
      * to send as a domain that belongs to another site, and the login is how it tells them
      * apart - so this is per-site, not a shared secret. NULL on rows created before mail
@@ -1221,7 +1227,7 @@ export const siteScans = sqliteTable(
       .references(() => sites.id, { onDelete: 'cascade' }),
     serverId: integer('server_id'),
     jobId: integer('job_id'),
-    /** 'schedule' | 'manual' | 'rescan'. */
+    /** 'schedule' | 'manual' | 'rescan' | 'import'. */
     trigger: text('trigger').notNull(),
     /** ScanOutcome. */
     status: text('status').notNull(),
@@ -1478,3 +1484,75 @@ export const oauthTokens = sqliteTable(
 export type OAuthClientRow = typeof oauthClients.$inferSelect;
 export type OAuthGrantRow = typeof oauthGrants.$inferSelect;
 export type OAuthTokenRow = typeof oauthTokens.$inferSelect;
+
+/**
+ * One import of an existing WordPress site (services/imports.ts, docs/internal/import-protocol.md):
+ * the migration plugin installed on the old site, what it reported about it, what the admin chose
+ * at Confirm, and how far the pull has got.
+ *
+ * `token` is kept as it is, not only as a hash: the panel signs every request to the plugin with
+ * it, as it reads site database passwords and destination credentials back from this file. It is
+ * nulled when the import is disconnected, which ends the plugin's answering to it.
+ */
+export const imports = sqliteTable(
+  'imports',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    token: text('token'),
+    /** sha256 of the token: how the plugin's own calls find their import. */
+    tokenHash: text('token_hash').notNull(),
+    /** 'pending' | 'connected' | 'queued' | 'pulling' | 'pulled' | 'finishing' | 'done' | 'failed' | 'expired' */
+    status: text('status').notNull(),
+    /** What the admin typed, if anything; the old site's real address is `home_url`. */
+    sourceUrl: text('source_url'),
+    /** The old site's `home`, bound at its first connect: another site cannot connect with the token. */
+    homeUrl: text('home_url'),
+    endpointUrl: text('endpoint_url'),
+    /** 1 = the admin allowed the old site to be reached over plain http. */
+    allowHttp: integer('allow_http').notNull().default(0),
+    pluginVersion: text('plugin_version'),
+    protocol: integer('protocol'),
+    wpVersion: text('wp_version'),
+    phpVersion: text('php_version'),
+    tablePrefix: text('table_prefix'),
+    multisite: integer('multisite'),
+    /** The old site's "Search engine visibility": 1 = allowed. */
+    blogPublic: integer('blog_public'),
+    filesBytes: integer('files_bytes'),
+    dbBytes: integer('db_bytes'),
+    fileCount: integer('file_count'),
+    tableCount: integer('table_count'),
+    /** JSON: the old site's report as the plugin sent it, checked (services/importInspect.ts). */
+    report: text('report'),
+    /** JSON ImportWarning[]: what the report says about importing it. */
+    warnings: text('warnings'),
+    /** JSON ImportChoices: what the admin chose at Confirm. */
+    choices: text('choices'),
+    /** JSON ImportCursor: how far the pull has got; the staging folder's import.json is its twin. */
+    cursor: text('cursor'),
+    /** `<srvRoot>/wpl7-import/<id>` on the target server. */
+    stagingPath: text('staging_path'),
+    siteId: integer('site_id').references(() => sites.id, { onDelete: 'set null' }),
+    serverId: integer('server_id').references(() => servers.id, { onDelete: 'set null' }),
+    /** The job working on it now, or the last one that did. */
+    jobId: integer('job_id'),
+    lastError: text('last_error'),
+    createdBy: text('created_by'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    connectedAt: integer('connected_at'),
+    /** When an import that is waiting (pending, connected) or done expires; see ImportService. */
+    expiresAt: integer('expires_at'),
+    startedAt: integer('started_at'),
+    pulledAt: integer('pulled_at'),
+    importedAt: integer('imported_at'),
+    disconnectedAt: integer('disconnected_at'),
+  },
+  (t) => [
+    uniqueIndex('imports_token_hash_idx').on(t.tokenHash),
+    index('imports_status_idx').on(t.status),
+    index('imports_site_idx').on(t.siteId),
+  ],
+);
+
+export type ImportRow = typeof imports.$inferSelect;

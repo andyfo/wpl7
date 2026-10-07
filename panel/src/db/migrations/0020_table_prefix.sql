@@ -1,0 +1,1 @@
+ALTER TABLE `sites` ADD `table_prefix` text DEFAULT 'wp_' NOT NULL;

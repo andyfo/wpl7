@@ -38,6 +38,10 @@ const EXCEPTIONS: Record<string, string> = {
   'GET /api/sites/:slug/godmode/chats/:chatId': 'manage',
   'GET /api/backups/:id/download': 'manage',
   'GET /api/servers/:id/terminal': 'full',
+  // An import's settings quote the old wp-config.php; its plugin zip carries its token.
+  'GET /api/imports/:id': 'manage',
+  'GET /api/imports/:id/plugin': 'manage',
+  'GET /api/imports/:id/code': 'manage',
   // The panel's own, but only a nudge: now, what the panel does by itself anyway.
   'POST /api/backup-destinations/:id/test': 'manage',
   'POST /api/servers/:id/test': 'manage',
@@ -56,6 +60,7 @@ const DESTRUCTIVE = [
   'DELETE /api/backup-destinations/:id',
   'DELETE /api/backups/:id',
   'DELETE /api/dns/token',
+  'DELETE /api/imports/:id',
   'DELETE /api/mail/dkim/:domain',
   'DELETE /api/mail/queue/:serverId/:queueId',
   'DELETE /api/mcp/connections/:id',
@@ -82,6 +87,7 @@ const DESTRUCTIVE = [
   'POST /api/backup-destinations/:id/passphrase',
   'POST /api/backups/:id/restore',
   'POST /api/backups/bulk-delete',
+  'POST /api/imports/:id/refresh',
   'POST /api/jobs/:id/cancel',
   'POST /api/mail/dkim',
   'POST /api/mail/domains/:domain/publish',
@@ -164,6 +170,12 @@ const NOT_THROUGH_MCP = [
   'GET /api/backups/:id/download',
   'GET /api/servers/:id/terminal',
   'POST /api/plugins/upload',
+  'GET /api/imports/:id/plugin',
+  // An import's token: whoever holds it can pull the old site.
+  'GET /api/imports/:id/code',
+  // The migration plugin's own calls, which its import's token lets in.
+  'POST /api/migrate/connect',
+  'GET /api/migrate/status',
   // Leaves the box.
   'POST /api/feedback',
   // The Cloudflare token: a credential, and checking one sends it to Cloudflare.
@@ -190,6 +202,7 @@ describe('access levels in the API catalog', () => {
   it('draws the line at the sites: a change inside them is Manage, a change to the panel Full', () => {
     expect(Object.fromEntries(API_DOC_GROUPS.map((g) => [g.id, g.changes]))).toEqual({
       sites: 'manage',
+      imports: 'manage',
       wp: 'manage',
       files: 'manage',
       ftp: 'manage',

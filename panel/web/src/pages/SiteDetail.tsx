@@ -12,7 +12,7 @@ import {
   useSiteHistory,
   useSiteTraffic,
 } from '../api/hooks';
-import type { BackupDto } from '../../../shared/types';
+import type { BackupDto, SiteDetail as SiteDetailDto } from '../../../shared/types';
 import { api } from '../api/client';
 import {
   Button,
@@ -222,6 +222,7 @@ function OverviewTab({ slug }: { slug: string }) {
           </div>
         </div>
       )}
+      {s.importSource?.connected && s.importSource.status === 'done' && <ImportedBanner slug={slug} source={s.importSource} />}
       <Card>
         <div className="flex flex-wrap items-center gap-2">
           <Button small variant="secondary" onClick={() => run.mutate({ path: `/api/sites/${slug}/start` })}>Start</Button>
@@ -260,6 +261,7 @@ function OverviewTab({ slug }: { slug: string }) {
             <FactRow label="Language" value={localeName(meta.data?.locales, s.locale)} />
             <FactRow label="Container" value={s.containerState} />
             <FactRow label="Database" value={s.dbName} />
+            {s.tablePrefix !== 'wp_' && <FactRow label="Table prefix" value={s.tablePrefix} />}
             <FactRow label="WP admin" value={`${s.adminUser ?? '–'} <${s.adminEmail ?? '–'}>`} />
             <FactRow label="Disk" value={formatBytes(s.diskBytes)} />
             <FactRow label="Created" value={formatDate(s.createdAt)} />
@@ -453,6 +455,64 @@ function MoveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
   );
 }
 
+/**
+ * A site that came through an import, while the plugin on its old site still answers the panel:
+ * where it came from, and the way to cut that tie.
+ */
+function ImportedBanner({ slug, source }: { slug: string; source: NonNullable<SiteDetailDto['importSource']> }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [confirmRefresh, setConfirmRefresh] = useState(false);
+  const refresh = useRunJob([['site', slug], ['backups', slug]]);
+  const refreshing = refresh.isPending || (refresh.job !== null && !isTerminal(refresh.job.status));
+  const host = (() => {
+    try {
+      return source.url ? new URL(source.url).hostname : 'the old site';
+    } catch {
+      return 'the old site';
+    }
+  })();
+  const disconnect = () => {
+    setBusy(true);
+    setError(null);
+    void api(`/api/imports/${source.importId}/disconnect`, { method: 'POST' })
+      .then(() => qc.invalidateQueries({ queryKey: ['site', slug] }))
+      .catch(setError)
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+      <div className="font-medium">Imported from {host}</div>
+      <p className="mt-1">The migration plugin on the old site is still connected.</p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <span title={refreshing ? 'A refresh is running.' : undefined}>
+          <Button small variant="secondary" disabled={refreshing} onClick={() => setConfirmRefresh(true)}>
+            Refresh from source
+          </Button>
+        </span>
+        <Button small disabled={busy} onClick={disconnect}>
+          Disconnect
+        </Button>
+      </div>
+      <div className="mt-2 space-y-2">
+        <ErrorNote error={error ?? refresh.error} />
+        <JobProgress job={refresh.job} logs={refresh.logs} />
+      </div>
+      {confirmRefresh && (
+        <ConfirmDialog
+          title="Refresh from source"
+          message={`This site's database is replaced with ${host}'s, and the file changes made there since the last pull are copied. ${host} shows a maintenance page meanwhile.`}
+          confirmWord={slug}
+          confirmLabel="Refresh"
+          onConfirm={() => refresh.mutate({ path: `/api/imports/${source.importId}/refresh` })}
+          onClose={() => setConfirmRefresh(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 function FactRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex gap-3">
@@ -468,6 +528,7 @@ function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
   const [domainsText, setDomainsText] = useState('');
   const [keepDevAlias, setKeepDevAlias] = useState(true);
   const [manageDns, setManageDns] = useState(false);
+  const [allowSearchEngines, setAllowSearchEngines] = useState(true);
   const domains = domainsText.split(/[\s,]+/).map((d) => d.trim().toLowerCase()).filter(Boolean);
   const done = isTerminal(run.job?.status);
 
@@ -482,6 +543,16 @@ function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
             <input className={inputClass} value={domainsText} onChange={(e) => setDomainsText(e.target.value)} autoFocus />
           </Field>
           <Toggle checked={keepDevAlias} onChange={setKeepDevAlias} label="Keep the dev hostname as a 301 redirect" />
+          <Toggle
+            checked={allowSearchEngines}
+            onChange={setAllowSearchEngines}
+            label={
+              <span>
+                Allow search engines
+                <span className="block text-xs text-neutral-500">Unticks Discourage search engines in WordPress.</span>
+              </span>
+            }
+          />
           {meta.data?.dnsManaged && (
             <Toggle
               checked={manageDns}
@@ -508,7 +579,10 @@ function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
             <Button
               disabled={domains.length === 0 || run.isPending}
               onClick={() =>
-                run.mutate({ path: `/api/sites/${slug}/go-live`, body: { domains, keepDevAlias, ...(manageDns ? { manageDns: true } : {}) } })
+                run.mutate({
+                  path: `/api/sites/${slug}/go-live`,
+                  body: { domains, keepDevAlias, allowSearchEngines, ...(manageDns ? { manageDns: true } : {}) },
+                })
               }
             >
               Go live

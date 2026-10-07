@@ -31,6 +31,7 @@ import type { MalwareScanService } from './malwareScan.js';
 import type { PanelFiles } from './panelFiles.js';
 import type { PluginZipChecks } from './pluginZipChecks.js';
 import type { QuarantineService } from './quarantine.js';
+import type { ImportService } from './imports.js';
 
 export interface Logger {
   info(msg: string): void;
@@ -105,5 +106,7 @@ export interface CoreServices {
   panelFiles: PanelFiles;
   /** Files moved out of sites, kept beside them until restored or deleted. */
   quarantine: QuarantineService;
+  /** Imports of existing WordPress sites through the migration plugin. */
+  imports: ImportService;
   log: Logger;
 }

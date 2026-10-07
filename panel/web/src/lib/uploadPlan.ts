@@ -1,22 +1,9 @@
 /**
- * How big each upload chunk is. Traefik ends any request that takes longer than 60 s to
- * arrive, so a chunk has to cross the operator's uplink well within that - on hotel wifi as
- * much as on fibre. Start small, then aim for about ten seconds a chunk: doubling while they
- * come back fast, halving when one was slow.
+ * How big each upload chunk is: shared/transferPlan.ts, which an import's pull uses too. Traefik
+ * ends any request that takes longer than 60 s to arrive, so a chunk has to cross the operator's
+ * uplink well within that - on hotel wifi as much as on fibre.
  */
-
-export const CHUNK_MIN = 256 * 1024;
-export const CHUNK_START = 1024 * 1024;
-export const CHUNK_MAX = 8 * 1024 * 1024;
-const TARGET_MS = 10_000;
-
-export function nextChunkSize(sent: number, tookMs: number): number {
-  if (tookMs <= 0) return Math.min(CHUNK_MAX, sent * 2);
-  let next = sent;
-  if (tookMs < TARGET_MS / 2) next = sent * 2;
-  else if (tookMs > TARGET_MS * 2) next = Math.floor(sent / 2);
-  return Math.max(CHUNK_MIN, Math.min(CHUNK_MAX, next));
-}
+export { CHUNK_MAX, CHUNK_MIN, CHUNK_START, nextChunkSize } from '../../../shared/transferPlan';
 
 /** Upload ids are the client's to choose (see UPLOAD_ID_RE). */
 export function newUploadId(): string {

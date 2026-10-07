@@ -59,6 +59,10 @@ const PUBLIC_ROUTES = new Set([
   '/api/auth/reset-password',
   '/api/auth/confirm-email',
   '/api/health',
+  // The migration plugin on an old site: its import's token is checked by the route itself
+  // (routes/imports.ts), in a header of its own.
+  '/api/migrate/connect',
+  '/api/migrate/status',
 ]);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 

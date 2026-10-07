@@ -2,7 +2,7 @@
 title: MCP connections
 description: "The MCP server for AI apps (docs/mcp.md): the connection window an app signs in through, and the apps connected. None of it is reachable over MCP itself."
 sidebar:
-  order: 2.18
+  order: 2.19
 sources:
   - panel/shared/apiDocs.ts
 ---

@@ -64,6 +64,15 @@ export async function runHousekeeping(
   await s.backup.gcSafetyCopies();
   checkCanceled();
 
+  // Imports that waited for the old site too long, and failed ones nobody continued.
+  const importsCleared = await s.imports.prune().catch((err: unknown) => {
+    log.warn(`Import clear-up failed: ${errorText(err)}`);
+    return 0;
+  });
+  result.importsCleared = importsCleared;
+  if (importsCleared > 0) log.info(`Imports: cleared ${importsCleared} that waited or failed too long`);
+  checkCanceled();
+
   result.movesFinalized = await autoFinalizeMoves(s, s.worker, log, resolvers);
   checkCanceled();
 

@@ -73,7 +73,9 @@ the URLs from the old domain to the new site's.
    (the previous tree is kept 24 h as `wordpress.pre-restore-<ts>` next to the site). The site's
    FTP/SFTP logins are paused from here to the end, and then see the restored files (docs/ftp.md).
 3. If the backup was taken on a different PHP version that is still offered, the container is recreated
-   to match. If the domains changed since the backup, URLs are rewritten to the current primary.
+   to match; so it is when the backup's tables have another prefix (a backup of a deleted site that had
+   the same slug), and the site takes that prefix. If the domains changed since the backup, URLs are
+   rewritten to the current primary.
 4. Site started + smoke-checked.
 
 If step 1 fails (checksum mismatch, no disk for the safety copy) the site is untouched and keeps

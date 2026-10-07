@@ -9,6 +9,8 @@ import type {
   BatchDto,
   CatalogStateDto,
   FtpServerStatusDto,
+  ImportDto,
+  ImportSummaryDto,
   JobDto,
   JobListDto,
   JobLogLine,
@@ -100,6 +102,33 @@ export const useSites = () =>
     queryKey: ['sites'],
     queryFn: () => api<{ items: SiteSummary[] }>('/api/sites').then((r) => r.items),
     refetchInterval: 15_000,
+  });
+
+/** Imports that something is still happening to: the list and the page poll while one is. */
+const LIVE_IMPORTS = new Set(['pending', 'connected', 'queued', 'pulling', 'pulled', 'finishing']);
+
+export const useImports = () =>
+  useQuery({
+    queryKey: ['imports'],
+    queryFn: () => api<{ items: ImportSummaryDto[] }>('/api/imports').then((r) => r.items),
+    refetchInterval: (q) => (q.state.data?.some((i) => LIVE_IMPORTS.has(i.status)) ? 5000 : false),
+  });
+
+/**
+ * One import. Polled fast while it waits for the old site or runs; a little slower on Confirm,
+ * where only a re-sent report changes anything.
+ */
+export const useImport = (id: number | null) =>
+  useQuery({
+    queryKey: ['import', id],
+    queryFn: () => api<ImportDto>(`/api/imports/${id}`),
+    enabled: id !== null,
+    retry: false,
+    refetchInterval: (q) => {
+      const status = q.state.data?.status;
+      if (!status || !LIVE_IMPORTS.has(status)) return false;
+      return status === 'connected' ? 5000 : 2000;
+    },
   });
 
 export const useSite = (slug: string) =>

@@ -124,6 +124,7 @@ export async function writeSiteJson(server: ServerHandle, config: Config, site: 
     status: site.status,
     dbName: site.dbName,
     dbUser: site.dbUser,
+    tablePrefix: site.tablePrefix,
     containerName: site.containerName,
     serverId: site.serverId,
     updatedAt: new Date().toISOString(),
@@ -289,6 +290,61 @@ export async function syncRelayAuth(
     });
   for (const failed of results.filter((r) => !r.ok)) {
     ctx.warn(`Mail relay not updated on "${failed.name}": ${failed.detail}`);
+  }
+}
+
+/**
+ * Point WordPress (home/siteurl + content) at `newUrl`. The current URL is read from
+ * WordPress itself rather than derived from the registry row, so the rewrite is resumable:
+ * whatever an earlier attempt left behind, it converges on `newUrl`.
+ *
+ * `inside` runs in the same started-if-needed window, after the rewrite and the recipes'
+ * `afterUrlChange` hook - and also when WordPress already used `newUrl`: it is whatever else the
+ * caller needs done while the container is up anyway.
+ */
+export async function rewriteWordPressUrls(
+  ctx: JobContext<unknown>,
+  s: CoreServices,
+  server: ServerHandle,
+  site: SiteRow,
+  fallbackOldUrl: string,
+  newUrl: string,
+  wasRunning: boolean,
+  /** `skipExtensions`: the rewrite itself runs with the site's plugins and theme left out (WpService). */
+  opts: { inside?: (container: string) => Promise<void>; skipExtensions?: boolean } = {},
+): Promise<void> {
+  // wp-cli runs via `docker exec`, so the container has to be up. Skipping the rewrite
+  // for a stopped site left it flagged live while WordPress still redirected every
+  // request to the old dev URL - visible only once someone started it again.
+  if (!wasRunning) {
+    ctx.info('Site is stopped; starting it briefly to rewrite the WordPress URLs…');
+    await startSiteContainer(server, s, site, ctx);
+  }
+  // Passed on only when asked for: every other caller's commands stay exactly as they were.
+  const wpOpts: [] | [{ skipExtensions: boolean }] = opts.skipExtensions ? [{ skipExtensions: true }] : [];
+  try {
+    const currentUrl = (await server.wp.optionGet(site.containerName, 'home', ...wpOpts)) || fallbackOldUrl;
+    if (currentUrl === newUrl) {
+      ctx.info(`WordPress already uses ${newUrl}; no URL rewrite needed.`);
+    } else {
+      ctx.info(`Updating WordPress URLs (${currentUrl} -> ${newUrl})…`);
+      await server.wp.optionUpdate(site.containerName, 'home', newUrl, ...wpOpts);
+      await server.wp.optionUpdate(site.containerName, 'siteurl', newUrl, ...wpOpts);
+      ctx.info('Running search-replace across all tables (guids preserved)…');
+      const res = await server.wp.searchReplace(site.containerName, currentUrl, newUrl, ...wpOpts);
+      ctx.info(res.stdout.trim().split('\n').slice(-1)[0] ?? 'search-replace done');
+      // Still inside the started-if-needed window: licensed plugins tie their activation to
+      // the URL, and Breakdance keeps URLs in JSON that search-replace does not reach.
+      await runLicenseHook(ctx, s, server, site, 'afterUrlChange', { url: newUrl, oldUrl: currentUrl, newUrl });
+    }
+    await opts.inside?.(site.containerName);
+  } finally {
+    if (!wasRunning) {
+      ctx.info('Stopping the site again (it was stopped before the domain change).');
+      await server.docker.stopContainer(site.containerName).catch((err: unknown) => {
+        ctx.warn(`Could not stop the site again: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
   }
 }
 

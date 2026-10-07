@@ -16,6 +16,7 @@ import { seedSecurity } from './security.js';
 import { seedAccounts } from './accounts.js';
 import { seedRecipes } from './recipes.js';
 import { seedFtp } from './ftp.js';
+import { seedImports } from './imports.js';
 import { installDemoTerminal } from './terminal.js';
 
 export async function seedAll(world: TestWorld): Promise<void> {
@@ -32,5 +33,6 @@ export async function seedAll(world: TestWorld): Promise<void> {
   seedAccounts(world);
   seedRecipes(world);
   seedFtp(world);
+  seedImports(world);
   installDemoTerminal(world);
 }
