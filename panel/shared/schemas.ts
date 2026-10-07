@@ -358,8 +358,8 @@ export const siteCreateBody = z.object({
    * WordPress's "Discourage search engines from indexing this site" (Settings -> Reading).
    * On by default: a new site is reachable on its dev hostname from the first minute, and an
    * indexed dev copy competing with the customer's real site is far more expensive to undo
-   * than a checkbox. Nothing flips it back - the site has to be released for indexing in
-   * WordPress once it is live.
+   * than a checkbox. Going live flips it back, unless the Go live dialog says otherwise
+   * (`goLiveBody.allowSearchEngines`).
    */
   discourageSearchEngines: z.boolean().default(true),
 }).strict()
