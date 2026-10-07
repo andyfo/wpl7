@@ -17,6 +17,8 @@ const site = path.resolve(import.meta.dirname, '..');
 const panelPublic = path.resolve(site, '../../panel/web/public');
 const publicDir = path.join(site, 'public');
 
+// Nothing in public/ is committed, so a fresh checkout has no such folder.
+fs.mkdirSync(publicDir, { recursive: true });
 for (const file of ['favicon.svg', 'favicon.ico', 'apple-touch-icon.png']) {
   fs.copyFileSync(path.join(panelPublic, file), path.join(publicDir, file));
 }

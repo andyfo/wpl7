@@ -14,8 +14,7 @@ docs/site/
   src/data/releases.json  the release notes snapshot (Changelog, Edge badges)
   screens/                the screenshots, taken by CI from the demo world
   scripts/                prepare, the shooter, the generators and the docs checks
-  hosting/                what the website's server needs (nginx snippet, checklist)
-  public/.htaccess        the same for Apache and LiteSpeed, published with the pages
+  hosting/                the website's side: the plugin that installs each build into /docs
 ```
 
 ## Run it
@@ -283,10 +282,10 @@ failing one holds the merge.
 
 `.github/workflows/docs.yml` publishes on every merge to `main` that touches the docs or their
 sources, after every release, and by hand. The Release workflow starts the publish once the
-release is out. It builds, validates, copies `dist/` to the website's `/docs` directory with
-`rsync` over SSH, and checks the live site afterwards.
-[hosting/README.md](hosting/README.md) is the website side: the directory, the key, the
-`.htaccess` or nginx snippet, and the secrets.
+release is out. It builds the site, zips it, installs the zip once with the website's own
+plugin, and puts it on the repository's `docs-site` release with `wpl7-docs.json` naming it.
+The website fetches it from there on a schedule. [hosting/README.md](hosting/README.md) is the
+website's side: the must-use plugin and the schedule that runs it.
 
 A page with `since:` newer than the latest release carries an **Edge** badge and a banner. The
 publish after a release builds `main` with the new release notes, and the badges disappear.

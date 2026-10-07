@@ -4,9 +4,10 @@
  * Refreshes src/data/releases.json from the repository's GitHub releases: the Changelog page is
  * generated from it (gen-changelog.ts), and the Edge badges compare `since:` with `latest`.
  *
- * Drafts and the rolling `edge` release are left out. `latest` is the release GitHub marks
- * Latest (never a prerelease), or null when there is none. Releases are newest first, in an
- * order that does not depend on the API's. Uses GITHUB_TOKEN when it is set.
+ * Drafts are left out, and so are the two releases that are not versions: the rolling `edge`
+ * build, and `docs-site`, where the publish job puts the docs for the website. `latest` is the
+ * release GitHub marks Latest (never a prerelease), or null when there is none. Releases are
+ * newest first, in an order that does not depend on the API's. Uses GITHUB_TOKEN when it is set.
  *
  * Fails soft: on any network or API error it keeps the file as it is, warns, and exits 0, so a
  * publish never stops because GitHub did not answer.
@@ -18,6 +19,8 @@ import { SITE_DIR, isMain } from './lib/pages.js';
 export const RELEASES_FILE = path.join(SITE_DIR, 'src/data/releases.json');
 const REPO = 'andyfo/wpl7';
 const API = `https://api.github.com/repos/${REPO}`;
+/** Releases that are not versions of WPL7 (deploy.yml's `edge`, docs.yml's `docs-site`). */
+const NOT_VERSIONS = new Set(['edge', 'docs-site']);
 
 export interface Release {
   tag: string;
@@ -80,7 +83,7 @@ async function latestTag(): Promise<string | null> {
 export async function fetchReleases(): Promise<Releases> {
   const [list, latest] = await Promise.all([allReleases(), latestTag()]);
   const releases = list
-    .filter((r) => !r.draft && r.tag_name !== 'edge' && r.published_at)
+    .filter((r) => !r.draft && !NOT_VERSIONS.has(r.tag_name) && r.published_at)
     .map((r) => ({
       tag: r.tag_name,
       name: (r.name ?? '').trim() || r.tag_name,
