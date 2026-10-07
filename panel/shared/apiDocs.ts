@@ -129,7 +129,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         method: 'POST',
         path: '/api/sites/:slug/go-live',
         summary: 'Move a dev site onto its real domains with no downtime',
-        input: '{domains: [primary, ...aliases], keepDevAlias?: true, manageDns?: false (true needs Full)}',
+        input: '{domains: [primary, ...aliases], keepDevAlias?: true, allowSearchEngines?: true, manageDns?: false (true needs Full)}',
         job: true,
         danger: true,
         level: 'manage',

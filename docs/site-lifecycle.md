@@ -26,8 +26,8 @@ All flows run as sequential panel jobs with live step logs (Jobs page / `GET /ap
    cannot succeed while the container is still unrouted (step 7), and its fallback — plain permalinks —
    leaves `/wp-json/` serving the home page under a 200. "Discourage search engines"
    (`blog_public = 0`) is on by default because a site answers on its dev hostname from the first
-   minute; nothing turns it off again, go-live included — the site is released for indexing in
-   WordPress, Settings → Reading. The bundled-plugin removal happens *before* the installs, so a
+   minute. Going live turns it off (`allowSearchEngines`, on unless unticked in the Go live dialog),
+   after the URL rewrite; a plain domain change never touches it. The bundled-plugin removal happens *before* the installs, so a
    catalog that deliberately contains Akismet gets a current copy from wp.org; it is permanent (the
    image entrypoint only seeds an empty directory, and core updates never restore a deleted bundled
    plugin). The removal and the installs run as the administrator `core install` just created

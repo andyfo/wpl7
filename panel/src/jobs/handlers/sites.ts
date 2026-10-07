@@ -768,6 +768,11 @@ export const siteUpdateDomainsPayload = z.object({
   keepDevAlias: z.boolean(),
   goLive: z.boolean(),
   manageDns: z.boolean().default(false),
+  /**
+   * Untick WordPress's "Discourage search engines" once the site answers on its real domains.
+   * Go-live only. False for jobs queued before it existed, which left the setting alone.
+   */
+  allowSearchEngines: z.boolean().default(false),
 });
 
 /**
@@ -859,12 +864,25 @@ export async function siteUpdateDomains(
   await replaceContainer(ctx, server, s, siteRuntimeFrom(s.settings), site, { site: finalSite, domains: newList }, { site, domains: transition }, wasRunning);
 
   const newUrl = siteUrl(s.config, newPrimary);
+  // A site going live stops asking search engines to stay away (decided in the Go live dialog).
+  // In the same started-if-needed window as the rewrite; never a reason to fail a go-live.
+  const allowSearch = ctx.payload.goLive && ctx.payload.allowSearchEngines;
+  const inside = allowSearch
+    ? async (container: string) => {
+        ctx.info('Allowing search engines to index the site…');
+        try {
+          await server.wp.searchEngineVisibility(container, true);
+        } catch (err) {
+          ctx.warn(`Could not allow search engines (${errMsg(err)}); untick Discourage search engines in Settings -> Reading.`);
+        }
+      }
+    : undefined;
   // Running sites are always asked what URL WordPress currently uses (an earlier, partially
   // applied attempt may have left the database ahead of or behind the row); a stopped site
-  // is only started for the rewrite when the primary actually changes.
-  if (wasRunning || newPrimary !== oldPrimary) {
+  // is only started for the rewrite when the primary actually changes, or to allow search engines.
+  if (wasRunning || newPrimary !== oldPrimary || allowSearch) {
     try {
-      await rewriteWordPressUrls(ctx, s, server, site, siteUrl(s.config, oldPrimary), newUrl, wasRunning);
+      await rewriteWordPressUrls(ctx, s, server, site, siteUrl(s.config, oldPrimary), newUrl, wasRunning, { inside });
     } catch (err) {
       ctx.error(
         `WordPress URL rewrite failed (${errMsg(err)}); restoring the transition router so the old canonical ` +

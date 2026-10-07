@@ -311,13 +311,30 @@ export class SitesService {
       .get();
   }
 
-  updateDomains(slug: string, domains: string[], keepDevAlias: boolean, goLive: boolean, manageDns = false): JobRow {
+  /**
+   * Change the domains a site answers on; `goLive` also marks it live. `allowSearchEngines` only
+   * counts with `goLive`: a plain domain edit leaves WordPress's search engine setting alone.
+   */
+  updateDomains(
+    slug: string,
+    domains: string[],
+    keepDevAlias: boolean,
+    goLive: boolean,
+    opts: { manageDns?: boolean; allowSearchEngines?: boolean } = {},
+  ): JobRow {
     const site = this.bySlug(slug);
     const unique = [...new Set(domains)];
     this.assertDomainsFree(unique, site.id, site.devHostname);
     return this.worker.enqueue(
       'site.updateDomains',
-      { siteId: site.id, domains: unique, keepDevAlias, goLive, manageDns },
+      {
+        siteId: site.id,
+        domains: unique,
+        keepDevAlias,
+        goLive,
+        manageDns: opts.manageDns ?? false,
+        allowSearchEngines: goLive && (opts.allowSearchEngines ?? false),
+      },
       { id: site.id, slug, serverId: site.serverId },
     );
   }

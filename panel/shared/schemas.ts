@@ -373,6 +373,8 @@ export const goLiveBody = z.object({
   keepDevAlias: z.boolean().default(true),
   /** Create/point the A records via the DNS provider API when the zone is in the account. */
   manageDns: z.boolean().default(false),
+  /** Untick WordPress's "Discourage search engines" once the site answers on its real domains. */
+  allowSearchEngines: z.boolean().default(true),
 }).strict();
 
 export const domainsUpdateBody = z.object({

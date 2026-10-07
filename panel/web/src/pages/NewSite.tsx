@@ -256,7 +256,7 @@ export function NewSite() {
                 label="Discourage search engines from indexing this site"
               />
               <p className="mt-1 text-xs text-neutral-500">
-                WordPress's Search engine visibility setting. Going live does not change it.
+                WordPress's Search engine visibility setting. Going live allows them again unless you untick it there.
               </p>
             </div>
           </div>

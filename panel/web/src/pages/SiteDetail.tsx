@@ -469,6 +469,7 @@ function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
   const [domainsText, setDomainsText] = useState('');
   const [keepDevAlias, setKeepDevAlias] = useState(true);
   const [manageDns, setManageDns] = useState(false);
+  const [allowSearchEngines, setAllowSearchEngines] = useState(true);
   const domains = domainsText.split(/[\s,]+/).map((d) => d.trim().toLowerCase()).filter(Boolean);
   const done = isTerminal(run.job?.status);
 
@@ -483,6 +484,16 @@ function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
             <input className={inputClass} value={domainsText} onChange={(e) => setDomainsText(e.target.value)} autoFocus />
           </Field>
           <Toggle checked={keepDevAlias} onChange={setKeepDevAlias} label="Keep the dev hostname as a 301 redirect" />
+          <Toggle
+            checked={allowSearchEngines}
+            onChange={setAllowSearchEngines}
+            label={
+              <span>
+                Allow search engines
+                <span className="block text-xs text-neutral-500">Unticks Discourage search engines in WordPress.</span>
+              </span>
+            }
+          />
           {meta.data?.dnsManaged && (
             <Toggle
               checked={manageDns}
@@ -509,7 +520,10 @@ function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
             <Button
               disabled={domains.length === 0 || run.isPending}
               onClick={() =>
-                run.mutate({ path: `/api/sites/${slug}/go-live`, body: { domains, keepDevAlias, ...(manageDns ? { manageDns: true } : {}) } })
+                run.mutate({
+                  path: `/api/sites/${slug}/go-live`,
+                  body: { domains, keepDevAlias, allowSearchEngines, ...(manageDns ? { manageDns: true } : {}) },
+                })
               }
             >
               Go live

@@ -190,12 +190,13 @@ ones the panel's pickers offer. Every new site has WordPress's bundled plugins �
 Dolly — removed right after the install, before the requested plugins go on.
 `discourageSearchEngines` defaults to **true**: the site is created with WordPress's "Discourage
 search engines from indexing this site" (Settings → Reading) switched on. Pass `false` for a site
-that should be indexed from the start — nothing else turns it off later, go-live included.
+that should be indexed from the start. Going live turns it off unless its `allowSearchEngines` is
+`false`.
 | `GET /sites/:slug` | – | `SiteDetail` (incl. `containerState` — `unknown` when the hosting server cannot be reached; the rest is served from the registry — `url`, monitoring snapshot) |
 | `DELETE /sites/:slug` | `?finalBackup=true\|false` (default true; `false` skips the final backup) `&deleteBackups=true\|false` (default false) | `202 {job}` — `deleteBackups=true` also deletes the backups the site already has, offsite copies included: once the site is gone, its job queues a `backup.delete` for them (`result.backupDeleteJobId`). The final backup is not among them, so with both the site leaves exactly one backup behind (`result.finalBackupId`); when a final backup was asked for but the files were already gone, its newest complete backup stays instead |
 | `POST /sites/:slug/start` · `/stop` · `/restart` | – | `202 {job}` |
 | `PUT /sites/:slug/php` | `{phpVersion}` | `202 {job}` — auto-rollback if the site stops responding |
-| `POST /sites/:slug/go-live` | `{domains: [primary, ...aliases], keepDevAlias?: true, manageDns?: false}` | `202 {job}` — `manageDns: true` creates the A records first, through the Cloudflare token in Settings → DNS, for the domains whose zone it reaches |
+| `POST /sites/:slug/go-live` | `{domains: [primary, ...aliases], keepDevAlias?: true, allowSearchEngines?: true, manageDns?: false}` | `202 {job}` — `manageDns: true` creates the A records first, through the Cloudflare token in Settings → DNS, for the domains whose zone it reaches; `allowSearchEngines` unticks WordPress's "Discourage search engines" once the URLs are rewritten |
 | `PUT /sites/:slug/domains` | `{domains}` | `202 {job}` — general domain edit |
 | `POST /sites/:slug/move` | `{targetServerId, quiesce?: "maintenance"\|"stop"\|"none"}` | `202 {job}` — default quiesce: live site `maintenance`, dev site `none`; see docs/multi-server.md |
 | `POST /sites/:slug/move/finalize` | – | `202 {job}` — tear down the source copy of a moved site now instead of waiting for DNS verification |
