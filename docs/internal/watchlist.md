@@ -30,7 +30,7 @@ for a reason; remove one once there is nothing left to watch.
 | [Cloudflare: API tokens as the panel takes them](#cloudflare-api-tokens-as-the-panel-takes-them) | Medium | 2026-10-04 18:36 UTC | Formats and permissions as validated |
 | [Cloudflare's and Jetpack's address lists](#cloudflares-and-jetpacks-address-lists) | Low | 2026-09-30 07:23 UTC | All three answer |
 | [Ubuntu's `nftables.service`](#ubuntus-nftablesservice) | Low | 2026-09-29 | Disabled by default on 26.04 |
-| [The docs site's toolchain and its screenshot image](#the-docs-sites-toolchain-and-its-screenshot-image) | Low | 2026-10-07 07:33 UTC | Astro 7.3.6 is out, a patch over the pinned 7.3.5; Starlight, Playwright and oxipng are the latest; the `braces` and `postcss-selector-parser` advisories have no fix the site can take |
+| [The docs site's toolchain and its screenshot image](#the-docs-sites-toolchain-and-its-screenshot-image) | Low | 2026-10-07 07:33 UTC | Starlight 0.42.5, Astro 7.3.6, Playwright 1.63.0, oxipng 10.2.1 are the latest; the `braces` and `postcss-selector-parser` advisories have no fix the site can take |
 | [The demo world's WordPress and plugin versions](#the-demo-worlds-wordpress-and-plugin-versions) | Medium | 2026-10-06 06:19 UTC | WordPress 7.1.2 and the newest plugins of the demo's date; Contact Form 7 6.2 left out |
 | [The site image's Apache modules for the docs' cache times](#the-site-images-apache-modules-for-the-docs-cache-times) | Low | 2026-10-07 06:49 UTC | `expires` on, `headers` off; the docs use `expires` |
 | [concurrently's pinned shell-quote](#concurrentlys-pinned-shell-quote) | Low | 2026-10-07 07:33 UTC | concurrently 10.0.5 pins 1.9.0; overridden to `^1.11.0` |
@@ -320,15 +320,15 @@ for a reason; remove one once there is nothing left to watch.
 ## The docs site's toolchain and its screenshot image
 
 - **Priority:** Low
-- **Last checked:** 2026-10-07 07:33 UTC. `@astrojs/starlight` 0.42.5, `@playwright/test` 1.63.0 and
-  oxipng 10.2.1 (2026-09-02) are the latest releases. `astro` 7.3.6 came out on 2026-10-06, a
-  patch over the pinned 7.3.5. `npm outdated` also lists newer patch and minor releases of
-  `picomatch`, `tinyglobby`, `yaml`, `@types/node` and `@types/picomatch`, and `pixelmatch` 8.
-  `npm audit` in `docs/site` reports two advisories. `braces` (stack exhaustion on deeply nested
-  patterns) comes through `starlight-llms-txt` → `micromatch`, with no fixed version yet.
-  `postcss-selector-parser` (quadratic selector parsing, GHSA-rj75-hqrm-r3gf) is fixed only in
-  7.1.6: `postcss-nested` 7 takes it, but `@expressive-code/core` 0.44.2, the latest, requires
-  `postcss-nested` 6.
+- **Last checked:** 2026-10-07 07:33 UTC. `@astrojs/starlight` 0.42.5, `astro` 7.3.6 (2026-10-06),
+  `@playwright/test` 1.63.0 and oxipng 10.2.1 (2026-09-02) are the latest releases. Moving from
+  Astro 7.3.5 changed nothing in the built site but its generator tag. `npm outdated` also lists
+  newer patch and minor releases of `picomatch`, `tinyglobby`, `yaml`, `@types/node` and
+  `@types/picomatch`, and `pixelmatch` 8. `npm audit` in `docs/site` reports two advisories.
+  `braces` (stack exhaustion on deeply nested patterns) comes through `starlight-llms-txt` →
+  `micromatch`, with no fixed version yet. `postcss-selector-parser` (quadratic selector parsing,
+  GHSA-rj75-hqrm-r3gf) is fixed only in 7.1.6: `postcss-nested` 7 takes it, but
+  `@expressive-code/core` 0.44.2, the latest, requires `postcss-nested` 6.
 - **The problem:** `docs/site/package.json` pins every package exactly, and the `screenshots` job
   in `.github/workflows/docs.yml` runs in `mcr.microsoft.com/playwright:v1.63.0-noble`, the image
   of the same Playwright version. The pin is what makes two runs give the same screenshots, byte
