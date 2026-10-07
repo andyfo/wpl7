@@ -6,22 +6,12 @@ import { backups, moveCleanups, sites, type MoveCleanupRow } from '../../db/sche
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
-import { buildSiteContainerSpec, sitePaths, siteRuntimeFrom, siteTlsFor } from '../../services/siteSpec.js';
-import { ensureSiteNetwork, removeSiteNetwork } from '../../services/siteNetwork.js';
-import {
-  ensureSiteMountSources,
-  loadSite,
-  probeSite,
-  runLicenseHook,
-  siteDomains,
-  siteUrl,
-  startSiteContainer,
-  syncRelayAuth,
-  updateSiteRow,
-  writeSiteJson,
-} from './shared.js';
+import { sitePaths } from '../../services/siteSpec.js';
+import { removeSiteNetwork } from '../../services/siteNetwork.js';
+import { loadSite, siteDomains, siteUrl, startSiteContainer, updateSiteRow, writeSiteJson } from './shared.js';
 import { ensureSiteImage, wildcardCovers } from './sites.js';
 import { pipeBetweenServers, proxyConfigPathFor, proxyConfigYaml, rmOn } from './moveHelpers.js';
+import { restoreSiteOnServer, type ProtectionHold } from './restoreSite.js';
 
 export const siteMovePayload = z.object({
   siteId: z.number().int(),
@@ -82,7 +72,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
   let resumeFtp: (() => void) | null = null;
   // The site's rules on the target, from before it starts there until the row says it lives
   // there - the moment the source's go (docs/security.md).
-  let releaseProtection: (() => void) | null = null;
+  const protection: ProtectionHold = { release: null };
   try {
     // ------------------------------------------------------------ 0: preflight
     ctx.info(`Moving "${site.slug}" from "${source.name}" to "${target.name}"…`);
@@ -229,97 +219,49 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     ctx.checkCanceled();
 
     // ------------------------------------------------------------ 4: restore-as-new on target
-    ctx.info('Restoring files on the target…');
-    await target.files.mkdirp(paths.root);
-    ctx.pushCompensation('remove site files on target', async () => {
-      await rmOn(target, s.config.paths.sites, site.slug);
-    });
-    const untar = await target.exec.run('tar', ['-xzf', path.join(finalDir, 'files.tar.gz'), '-C', paths.root], {
-      timeoutMs: 60 * 60_000,
-    });
-    if (untar.exitCode !== 0) throw new Error(`File extraction failed: ${untar.stderr.slice(0, 300)}`);
-    if (!(await target.files.exists(path.join(paths.wordpress, 'wp-config.php')))) {
-      throw new Error('Extracted tree has no wordpress/wp-config.php');
-    }
-    // The archive carries the site's config directory, but one taken before these mounts
-    // existed does not - and a bind mount with no source on the target costs the site its
-    // container there (see ensureSiteMountSources).
-    await ensureSiteMountSources(target, s, site, ctx);
-    await s.backup.chownWordpress(target, site.slug, (l, m) => ctx.log(l, m));
-
-    // Quarantined files travel with the site: they are restorable, and evidence. Not in the
-    // snapshot - a backup restores a site's files, and must never put these back among them.
-    if (await source.files.exists(paths.quarantine)) {
-      ctx.info('Copying the quarantined files to the target…');
-      await pipeBetweenServers({
-        source,
-        sourceCmd: ['tar', ['-C', paths.root, '-cf', '-', 'quarantine']],
-        target,
-        targetCmd: ['tar', ['-xpf', '-', '-C', paths.root]],
-        timeoutMs: 30 * 60_000,
-      });
-    }
-
-    ctx.info(`Creating database ${site.dbName} on the target…`);
-    await target.dbAdmin.createSiteDb(site.dbName, site.dbUser, site.dbPassword);
-    ctx.pushCompensation('drop database on target', async () => {
-      await target.dbAdmin.dropSiteDb(site.dbName, site.dbUser);
-    });
-    ctx.info('Importing the database…');
-    await target.dbAdmin.importFrom(path.join(finalDir, 'db.sql.gz'), site.dbName);
-    ctx.checkCanceled();
-
-    ctx.info('Creating the site network on the target…');
-    ctx.pushCompensation('remove site network on target', () => removeSiteNetwork(target.docker, site.slug));
-    const attached = await ensureSiteNetwork(target.docker, site.slug);
-    if (attached.missing.length > 0) {
-      ctx.warn(`Not attached to the site network on "${target.name}": ${attached.missing.join(', ')}.`);
-    }
-    // The snapshot carried the site's msmtp credential across, but a target that has never
-    // seen this site has no matching SASL login yet - without this, wp_mail() on the new
-    // server authenticates against nothing.
-    await syncRelayAuth(ctx, s, site.slug);
-
-    ctx.info('Starting the site on the target…');
-    releaseProtection = s.security.pin(target.id, site.id);
-    await s.security.kick(target.id);
-    await target.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, target.row), siteRuntimeFrom(s.settings)),
+    // Hostnames are unchanged, so no URL rewrite is needed.
+    await restoreSiteOnServer(
+      ctx,
+      s,
+      target,
+      site,
+      domains,
+      { kind: 'archive', filesTarGz: path.join(finalDir, 'files.tar.gz'), dbSqlGz: path.join(finalDir, 'db.sql.gz') },
+      {
+        routing: true,
+        requireWpConfig: true,
+        protection,
+        // Quarantined files travel with the site: they are restorable, and evidence. Not in the
+        // snapshot - a backup restores a site's files, and must never put these back among them.
+        afterFiles: async () => {
+          if (!(await source.files.exists(paths.quarantine))) return;
+          ctx.info('Copying the quarantined files to the target…');
+          await pipeBetweenServers({
+            source,
+            sourceCmd: ['tar', ['-C', paths.root, '-cf', '-', 'quarantine']],
+            target,
+            targetCmd: ['tar', ['-xpf', '-', '-C', paths.root]],
+            timeoutMs: 30 * 60_000,
+          });
+        },
+        afterStart: async () => {
+          if (p.quiesce !== 'maintenance' || !quiesced) return;
+          // The .maintenance marker traveled with the files; clear it on the target.
+          // (The source stays frozen - it is removed or proxied at cutover.)
+          await target.wp
+            .maintenance(site.containerName, false)
+            .catch((err) => ctx.warn(`Could not clear maintenance mode on the target: ${errMsg(err)}`));
+        },
+        probe: {
+          host: primary,
+          timeoutMs: Math.max(s.config.probeTimeoutMs, 60_000),
+          message: wasStopped
+            ? 'Probing the site on the target (it is started briefly for this)…'
+            : 'Probing the site on the target…',
+        },
+      },
     );
-    ctx.pushCompensation('remove container on target', async () => {
-      await target.docker.removeContainer(site.containerName);
-    });
-    await startSiteContainer(target, s, site, ctx);
-
-    if (p.quiesce === 'maintenance' && quiesced) {
-      // The .maintenance marker traveled with the files; clear it on the target.
-      // (The source stays frozen - it is removed or proxied at cutover.)
-      await target.wp
-        .maintenance(site.containerName, false)
-        .catch((err) => ctx.warn(`Could not clear maintenance mode on the target: ${errMsg(err)}`));
-    }
-
-    // Hostnames are unchanged, so no URL rewrite is needed; guard stays for safety.
-    const manifestPrimary = domains[0];
-    if (manifestPrimary && manifestPrimary !== primary) {
-      const oldUrl = siteUrl(s.config, manifestPrimary);
-      const newUrl = siteUrl(s.config, primary);
-      await target.wp.optionUpdate(site.containerName, 'home', newUrl);
-      await target.wp.optionUpdate(site.containerName, 'siteurl', newUrl);
-      await target.wp.searchReplace(site.containerName, oldUrl, newUrl);
-      await runLicenseHook(ctx, s, target, site, 'afterUrlChange', { url: newUrl, oldUrl, newUrl });
-    }
-
-    ctx.info(wasStopped ? 'Probing the site on the target (it is started briefly for this)…' : 'Probing the site on the target…');
-    if (s.config.nodeEnv === 'test') {
-      // No live HTTP in unit tests; the container state is the gate there.
-      const state = await target.docker.containerState(site.containerName);
-      if (state !== 'running') throw new Error('Site container is not running on the target - rolling back');
-    } else {
-      const up = await probeSite(target, site.containerName, primary, Math.max(s.config.probeTimeoutMs, 60_000));
-      if (!up) throw new Error('Site did not answer on the target - rolling back (source untouched)');
-    }
-    ctx.checkCanceled(); // last cancel point - beyond here the move commits
+    // That was the last cancel point - beyond here the move commits.
 
     if (wasStopped) {
       ctx.info('Site was stopped before the move; stopping it again on the target…');
@@ -363,8 +305,8 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     site = loadSite(s.db, site.id);
     await writeSiteJson(target, s.config, site);
     // The row points at the target now: the pin is redundant there, and the source's file goes.
-    releaseProtection?.();
-    releaseProtection = null;
+    protection.release?.();
+    protection.release = null;
     await s.security.kick(p.sourceServerId);
 
     const dns = { updated: [] as string[], manual: [] as { host: string; ip: string }[] };
@@ -498,8 +440,8 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     s.monitor.busySlugs.delete(site.slug);
     resumeFtp?.();
     // Rolled back: the target serves nothing of this site, so it keeps no rules for it.
-    if (releaseProtection) {
-      releaseProtection();
+    if (protection.release) {
+      protection.release();
       await s.security.kick(p.targetServerId);
     }
   }

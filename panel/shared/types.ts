@@ -83,6 +83,8 @@ export interface SiteDetail extends SiteSummary {
   adminUser: string | null;
   adminEmail: string | null;
   dbName: string;
+  /** The prefix of the site's WordPress tables: `wp_`, or what an imported site came with. */
+  tablePrefix: string;
   /** 'unknown' = the hosting server could not be asked (unreachable); the rest of the detail is served from the registry. */
   containerState: 'running' | 'created' | 'exited' | 'missing' | 'unknown';
   url: string;

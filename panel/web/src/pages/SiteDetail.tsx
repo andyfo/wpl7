@@ -260,6 +260,7 @@ function OverviewTab({ slug }: { slug: string }) {
             <FactRow label="Language" value={localeName(meta.data?.locales, s.locale)} />
             <FactRow label="Container" value={s.containerState} />
             <FactRow label="Database" value={s.dbName} />
+            {s.tablePrefix !== 'wp_' && <FactRow label="Table prefix" value={s.tablePrefix} />}
             <FactRow label="WP admin" value={`${s.adminUser ?? '–'} <${s.adminEmail ?? '–'}>`} />
             <FactRow label="Disk" value={formatBytes(s.diskBytes)} />
             <FactRow label="Created" value={formatDate(s.createdAt)} />

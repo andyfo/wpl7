@@ -302,8 +302,33 @@ export class WpService {
 
   async coreUpdate(container: string): Promise<{ update: RunResult; updateDb: RunResult }> {
     const update = await this.runOk(container, ['core', 'update'], 600_000);
-    const updateDb = await this.runOk(container, ['core', 'update-db'], 300_000);
+    const updateDb = await this.coreUpdateDb(container);
     return { update, updateDb };
+  }
+
+  /** Bring the database up to the WordPress version the files are (a no-op when it already is). */
+  coreUpdateDb(container: string): Promise<RunResult> {
+    return this.runOk(container, ['core', 'update-db'], 300_000);
+  }
+
+  /**
+   * Define a constant in the site's wp-config.php (`wp config set`): added above the "stop
+   * editing" line, or changed where it already is. `raw` writes the value as PHP - `true`, `42`,
+   * `null` - instead of as a quoted string, so the caller must only ever pass a literal it made.
+   * A value that starts with `--` would reach WP-CLI as one of its own options, and is refused.
+   */
+  configSet(container: string, name: string, value: string, opts: { raw?: boolean } = {}): Promise<RunResult> {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error(`Not a PHP constant name: ${JSON.stringify(name)}`);
+    if (value.startsWith('--')) throw new Error(`Refusing a wp-config.php value that reads as a WP-CLI option: ${name}`);
+    return this.runOk(container, ['config', 'set', name, value, '--type=constant', ...(opts.raw ? ['--raw'] : [])], 60_000);
+  }
+
+  /** Deactivate plugins (folder names, or the file of a one-file plugin) in one call. */
+  pluginDeactivate(container: string, names: string[], actor?: string): Promise<RunResult> {
+    for (const name of names) {
+      if (!/^[A-Za-z0-9._][A-Za-z0-9._-]*$/.test(name)) throw new Error(`Not a plugin name: ${JSON.stringify(name)}`);
+    }
+    return this.runOk(container, ['plugin', 'deactivate', ...names, ...actingAs(actor)], 300_000);
   }
 
   pluginAction(

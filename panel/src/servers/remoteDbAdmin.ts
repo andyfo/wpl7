@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { ExecPort } from '../lib/exec.js';
 import { assertDbIdentifier, DUMP_ARGS, grantPattern, type DbAdminPort } from '../services/dbAdmin.js';
@@ -97,6 +98,40 @@ export class RemoteDbAdminService implements DbAdminPort {
       throw new Error(`Database import failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
     }
   }
+
+  /**
+   * As the site's own user. Its password never appears in an argv, here or on the server: it goes
+   * over stdin into an option file inside the MariaDB container (mode 600, removed afterwards), and
+   * the client reads it from there.
+   */
+  async importFromAs(srcGzPath: string, dbName: string, dbUser: string, dbPassword: string): Promise<void> {
+    assertDbIdentifier(dbName);
+    assertDbIdentifier(dbUser);
+    const cnf = `/run/wpl7-import-${randomBytes(8).toString('hex')}.cnf`;
+    const written = await this.exec.runWithInput(
+      'docker',
+      ['exec', '-i', this.container, 'sh', '-c', `umask 077; cat > ${cnf}`],
+      Readable.from([`[client]\nuser=${dbUser}\npassword=${optionQuote(dbPassword)}\n`]),
+      { timeoutMs: 60_000 },
+    );
+    if (written.exitCode !== 0) {
+      throw new Error(`Could not hand the database login to the import (exit ${written.exitCode}): ${written.stderr.slice(0, 500)}`);
+    }
+    try {
+      const script =
+        `set -o pipefail; zcat ${q(srcGzPath)} | docker exec -i ${this.container} ` +
+        `mariadb --defaults-extra-file=${cnf} ${dbName}`;
+      const res = await this.exec.run('bash', ['-c', script], { timeoutMs: 60 * 60_000 });
+      if (res.exitCode !== 0) {
+        throw new Error(`Database import failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
+      }
+    } finally {
+      await this.exec.run('docker', ['exec', this.container, 'rm', '-f', cnf], { timeoutMs: 60_000 }).catch(() => undefined);
+    }
+  }
 }
 
 const q = (p: string) => `'${p.replace(/'/g, `'\\''`)}'`;
+
+/** A value in a MySQL option file: double-quoted, with the two characters that need it escaped. */
+const optionQuote = (v: string) => `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;

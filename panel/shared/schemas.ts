@@ -48,6 +48,9 @@ export const RESERVED_SLUGS = [
   'new',
   'bulk',
   'security',
+  // /sites/import is the import wizard; `imports` is held back with it for the API's own name.
+  'import',
+  'imports',
 ] as const;
 
 export const DOMAIN_RE =
@@ -96,6 +99,14 @@ export const localeSchema = z
   );
 
 export const phpVersionSchema = z.string().regex(/^8\.\d{1,2}$/, 'not a valid PHP version');
+
+/**
+ * A WordPress table prefix as the panel keeps one: what `$table_prefix` in wp-config.php may hold
+ * (WordPress itself allows letters, digits and underscores), kept short enough for MariaDB's
+ * 64-character table names to fit the longest core table behind it.
+ */
+export const TABLE_PREFIX_RE = /^[A-Za-z0-9_]{1,32}$/;
+export const tablePrefixSchema = z.string().regex(TABLE_PREFIX_RE, 'not a valid table prefix (letters, digits and _)');
 
 // WP plugin directory slug / installed plugin name (path segment, no traversal).
 export const wpPluginNameSchema = z.string().regex(/^[a-zA-Z0-9._-]{1,100}$/, 'not a valid plugin name');

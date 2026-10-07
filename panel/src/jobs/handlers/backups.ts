@@ -3,7 +3,7 @@ import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { backups, type BackupRow } from '../../db/schema.js';
-import { backupTypes } from '../../../shared/schemas.js';
+import { TABLE_PREFIX_RE, backupTypes } from '../../../shared/schemas.js';
 import type { CoreServices } from '../../services/index.js';
 import type { JobContext } from '../context.js';
 import {
@@ -106,28 +106,41 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
     // Optionally move back to the PHP version the backup was taken with.
     const manifest = await readManifest(s, backup.serverId, backup.path);
     const offered = s.settings.get('phpVersions') ?? [];
+    const recreate: { phpVersion?: string; tablePrefix?: string } = {};
     if (manifest?.phpVersion && manifest.phpVersion !== site.phpVersion) {
       if (offered.includes(manifest.phpVersion)) {
         ctx.info(`Backup was taken on PHP ${manifest.phpVersion}; recreating container to match…`);
-        const { ensureSiteImage } = await import('./sites.js');
-        await ensureSiteImage(ctx, server, s.config, manifest.phpVersion);
-        await server.docker.removeContainer(site.containerName);
-        updateSiteRow(s.db, site.id, { phpVersion: manifest.phpVersion });
-        const { buildSiteContainerSpec, siteRuntimeFrom, siteTlsFor } = await import('../../services/siteSpec.js');
-        await server.docker.createSiteContainer(
-          buildSiteContainerSpec(
-            s.config,
-            loadSite(s.db, site.id),
-            siteDomains(site),
-            siteTlsFor(s.dns, server.row),
-            siteRuntimeFrom(s.settings),
-          ),
-        );
+        recreate.phpVersion = manifest.phpVersion;
       } else {
         ctx.warn(
           `Backup was taken on PHP ${manifest.phpVersion}, which is no longer offered; keeping PHP ${site.phpVersion}.`,
         );
       }
+    }
+    // The database just restored names its tables the way the backup's site did. That is this
+    // site's prefix, unless the slug once belonged to a deleted site whose backups it now restores.
+    const backupPrefix = manifest?.tablePrefix;
+    if (backupPrefix && TABLE_PREFIX_RE.test(backupPrefix) && backupPrefix !== site.tablePrefix) {
+      ctx.info(`The backup's tables start with ${backupPrefix}, not ${site.tablePrefix}; recreating the container to match…`);
+      recreate.tablePrefix = backupPrefix;
+    }
+    if (recreate.phpVersion || recreate.tablePrefix) {
+      if (recreate.phpVersion) {
+        const { ensureSiteImage } = await import('./sites.js');
+        await ensureSiteImage(ctx, server, s.config, recreate.phpVersion);
+      }
+      await server.docker.removeContainer(site.containerName);
+      updateSiteRow(s.db, site.id, recreate);
+      const { buildSiteContainerSpec, siteRuntimeFrom, siteTlsFor } = await import('../../services/siteSpec.js');
+      await server.docker.createSiteContainer(
+        buildSiteContainerSpec(
+          s.config,
+          loadSite(s.db, site.id),
+          siteDomains(site),
+          siteTlsFor(s.dns, server.row),
+          siteRuntimeFrom(s.settings),
+        ),
+      );
     }
 
     ctx.info('Starting site…');
@@ -172,7 +185,7 @@ async function readManifest(
   s: CoreServices,
   serverId: number,
   dir: string,
-): Promise<{ phpVersion?: string; domains?: string[] } | null> {
+): Promise<{ phpVersion?: string; domains?: string[]; tablePrefix?: string } | null> {
   try {
     const files = s.servers.handleFor(serverId).files;
     return JSON.parse(await files.readFile(path.join(dir, 'manifest.json')));

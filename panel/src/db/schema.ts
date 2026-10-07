@@ -63,6 +63,12 @@ export const sites = sqliteTable(
     wpAdminEmail: text('wp_admin_email'),
     containerName: text('container_name').notNull(),
     /**
+     * The prefix of the site's WordPress tables, handed to the container's wp-config.php. `wp_`
+     * for every site the panel installed; an imported site keeps the one it came with. Never
+     * renamed: code on an imported site may name its tables outright.
+     */
+    tablePrefix: text('table_prefix').notNull().default('wp_'),
+    /**
      * SMTP AUTH password for this site's relay login (`<slug>@<realm>`). The relay refuses
      * to send as a domain that belongs to another site, and the login is how it tells them
      * apart - so this is per-site, not a shared secret. NULL on rows created before mail

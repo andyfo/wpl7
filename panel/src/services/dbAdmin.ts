@@ -17,6 +17,12 @@ export interface DbAdminPort {
   dumpTo(dbName: string, destGzPath: string): Promise<void>;
   /** Import a gzipped dump from a path ON THAT SERVER into dbName. */
   importFrom(srcGzPath: string, dbName: string): Promise<void>;
+  /**
+   * The same, connected as the site's own database user rather than as root. For a dump the panel
+   * did not write itself (an import pulled from another host): whatever it holds can then reach
+   * nothing but the site's own database.
+   */
+  importFromAs(srcGzPath: string, dbName: string, dbUser: string, dbPassword: string): Promise<void>;
 }
 
 const IDENT_RE = /^[a-z0-9_]{1,64}$/;
@@ -145,6 +151,28 @@ export class DbAdminService implements DbAdminPort {
       env: [
         `DB_HOST=${this.config.mariadb.host}`,
         `DB_PASS=${this.config.mariadb.rootPassword}`,
+        `DB_NAME=${dbName}`,
+        `DUMP_FILE=${path.basename(srcGzPath)}`,
+      ],
+      binds: [`${path.dirname(srcGzPath)}:/work:ro`],
+      networks: [this.config.dbNetwork],
+      timeoutMs: 60 * 60_000,
+    });
+    if (res.exitCode !== 0) {
+      throw new Error(`Database import failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
+    }
+  }
+
+  async importFromAs(srcGzPath: string, dbName: string, dbUser: string, dbPassword: string): Promise<void> {
+    assertDbIdentifier(dbName);
+    assertDbIdentifier(dbUser);
+    const res = await this.docker.runEphemeral({
+      image: this.config.mariadb.clientImage,
+      cmd: ['sh', '-c', 'zcat "/work/$DUMP_FILE" | exec mariadb -h"$DB_HOST" -u"$DB_USER" -p"$DB_PASS" "$DB_NAME"'],
+      env: [
+        `DB_HOST=${this.config.mariadb.host}`,
+        `DB_USER=${dbUser}`,
+        `DB_PASS=${dbPassword}`,
         `DB_NAME=${dbName}`,
         `DUMP_FILE=${path.basename(srcGzPath)}`,
       ],

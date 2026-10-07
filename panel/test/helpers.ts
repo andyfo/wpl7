@@ -657,6 +657,9 @@ export class FakeDbAdmin implements DbAdminPort {
   async importFrom(srcGzPath: string, dbName: string): Promise<void> {
     this.record('importFrom', [srcGzPath, dbName]);
   }
+  async importFromAs(srcGzPath: string, dbName: string, dbUser: string, dbPassword: string): Promise<void> {
+    this.record('importFromAs', [srcGzPath, dbName, dbUser, dbPassword]);
+  }
 }
 
 export const fakeExecOk: ExecPort = {

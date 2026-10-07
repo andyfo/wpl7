@@ -115,7 +115,7 @@ export function siteTlsFor(
 
 export function buildSiteContainerSpec(
   config: Config,
-  site: Pick<SiteRow, 'slug' | 'phpVersion' | 'dbName' | 'dbUser' | 'dbPassword' | 'containerName'>,
+  site: Pick<SiteRow, 'slug' | 'phpVersion' | 'dbName' | 'dbUser' | 'dbPassword' | 'containerName' | 'tablePrefix'>,
   domains: string[],
   /** The server this container will run on - its dev domain and wildcard decide the certificate labels. */
   server: SiteTls,
@@ -141,7 +141,7 @@ export function buildSiteContainerSpec(
       WORDPRESS_DB_NAME: site.dbName,
       WORDPRESS_DB_USER: site.dbUser,
       WORDPRESS_DB_PASSWORD: site.dbPassword,
-      WORDPRESS_TABLE_PREFIX: 'wp_',
+      WORDPRESS_TABLE_PREFIX: site.tablePrefix,
       WORDPRESS_CONFIG_EXTRA,
     },
     labels: {

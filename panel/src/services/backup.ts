@@ -228,7 +228,7 @@ export class BackupService {
         locale: site.locale,
         dbName: site.dbName,
         dbUser: site.dbUser,
-        tablePrefix: 'wp_',
+        tablePrefix: site.tablePrefix,
         serverId: h.id,
         serverName: h.name,
       };

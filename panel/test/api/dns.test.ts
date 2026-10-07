@@ -201,7 +201,7 @@ describe('Settings -> DNS: a server’s wildcard certificate', () => {
     const row = world.servers.rowById(1)!;
     const spec = buildSiteContainerSpec(
       world.config,
-      { slug: 'gamma', phpVersion: '8.3', dbName: 'g', dbUser: 'g', dbPassword: 'x', containerName: 'wp-gamma' },
+      { slug: 'gamma', phpVersion: '8.3', dbName: 'g', dbUser: 'g', dbPassword: 'x', containerName: 'wp-gamma', tablePrefix: 'wp_' },
       ['gamma.dev.example.test'],
       siteTlsFor(world.core.dns, row),
       siteRuntimeFrom(world.core.settings),

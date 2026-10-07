@@ -11,6 +11,21 @@ import type { JobWorker } from '../jobs/worker.js';
 import { siteScheme } from './labels.js';
 import { assertDomainsFree } from './domainGuard.js';
 
+/** The server a new site goes on: the one asked for, else the default in Settings - and it has to be up. */
+export function resolveTargetServer(s: Pick<CoreServices, 'settings' | 'servers'>, requestedId?: number): ServerRow {
+  const serverId = requestedId ?? s.settings.get('defaultServerId') ?? 1;
+  const server = s.servers.rowById(serverId);
+  if (!server) {
+    throw requestedId !== undefined
+      ? notFound(`Server #${serverId} not found`)
+      : badRequest(`Default server #${serverId} no longer exists; update Settings`);
+  }
+  if (server.status !== 'ok') {
+    throw conflict(`Server "${server.name}" is ${server.status}; pick another server`);
+  }
+  return server;
+}
+
 export class SitesService {
   constructor(
     private readonly s: CoreServices,
@@ -31,21 +46,6 @@ export class SitesService {
     assertDomainsFree(this.s, domains, { excludeSiteId, allowDevHostname });
   }
 
-  /** Resolve + validate the target server for a new site. */
-  private resolveTargetServer(requestedId?: number): ServerRow {
-    const serverId = requestedId ?? this.s.settings.get('defaultServerId') ?? 1;
-    const server = this.s.servers.rowById(serverId);
-    if (!server) {
-      throw requestedId !== undefined
-        ? notFound(`Server #${serverId} not found`)
-        : badRequest(`Default server #${serverId} no longer exists; update Settings`);
-    }
-    if (server.status !== 'ok') {
-      throw conflict(`Server "${server.name}" is ${server.status}; pick another server`);
-    }
-    return server;
-  }
-
   create(body: SiteCreateBody): { site: SiteRow; job: JobRow } {
     const offered = this.s.settings.get('phpVersions') ?? [];
     const phpVersion = body.phpVersion ?? this.s.settings.get('defaultPhpVersion');
@@ -55,7 +55,7 @@ export class SitesService {
     const locale = body.locale ?? this.s.settings.get('defaultLocale') ?? 'en_US';
     const adminEmail = body.adminEmail ?? (this.s.settings.get('defaultAdminEmail') || null);
     if (!adminEmail) throw badRequest('No default admin email is set in Settings; provide "adminEmail"');
-    const server = this.resolveTargetServer(body.serverId);
+    const server = resolveTargetServer(this.s, body.serverId);
 
     const slug = body.slug ?? slugify(body.domainMode === 'custom' ? body.domains![0]! : body.title);
     if (!slug || !isValidSlug(slug)) {
@@ -393,6 +393,7 @@ export class SitesService {
       adminUser: site.wpAdminUser,
       adminEmail: site.wpAdminEmail,
       dbName: site.dbName,
+      tablePrefix: site.tablePrefix,
       containerState,
       url: `${siteScheme(this.s.config.tlsMode)}://${summary.primaryDomain}`,
       keepDevAlias: site.keepDevAlias === 1,
