@@ -14,5 +14,8 @@ company is this project or is endorsed by it — including as the name of a host
 package, or a company. If you are not sure whether something reads as endorsement, ask first;
 the answer is usually yes.
 
+The WordPress plugins that come with the panel, such as WPL7 Migrate, carry the WPL7 name, so a
+fork that ships a changed copy of one should give it a name of its own.
+
 This is the ordinary arrangement for an open-source project with a name worth keeping
 distinct: the code is yours to use, the name identifies the upstream.
