@@ -54,6 +54,8 @@ export interface HandlePorts {
 export interface HandleFactories {
   makeLocal?(row: ServerRow): HandlePorts;
   makeSsh?(row: ServerRow): HandlePorts;
+  /** Where probes of the server's sites go instead of its Traefik, which a test does not have. */
+  probeUrl?(row: ServerRow): string;
 }
 
 interface CacheEntry {
@@ -112,6 +114,7 @@ export class ServerRegistry {
 
     const { ports, conn } = this.buildPorts(row);
     const tlsMode = this.config.tlsMode;
+    const probeUrl = this.factories.probeUrl;
     const handle: ServerHandle = {
       id: row.id,
       name: row.name,
@@ -121,6 +124,7 @@ export class ServerRegistry {
       wp: new WpService(ports.docker),
       siteFiles: new SiteFilesService(ports.docker),
       probeUrlFor(_containerName: string): string {
+        if (probeUrl) return probeUrl(this.row);
         // Probes go through Traefik, never straight at the container. Site containers are
         // no longer members of wpl7_proxy - that isolation is the point (services/siteNetwork.ts)
         // - so the panel cannot address them by name any more, and would not want to: routing

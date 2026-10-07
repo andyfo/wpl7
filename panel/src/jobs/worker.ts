@@ -9,7 +9,7 @@ import { JobCanceledError } from '../lib/errors.js';
 import type { CoreServices } from '../services/index.js';
 import { currentActor, withoutActor } from './actor.js';
 import { JobContext } from './context.js';
-import { SECRET_PAYLOAD_KEYS, getRegistry } from './registry.js';
+import { SECRET_PAYLOAD_KEYS, SITE_INTERRUPTING_JOBS, getRegistry } from './registry.js';
 import { summarizeJob } from './summaries.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -487,9 +487,26 @@ export class JobWorker {
     }
   }
 
+  /**
+   * End a job's hold on its site's uptime check (holdChecks), which checks the site first. The
+   * check is the monitor's business: it never decides how the job went.
+   */
+  private async releaseChecks(job: JobRow, release: (() => Promise<void>) | null): Promise<void> {
+    await release?.().catch((err: unknown) => {
+      this.services.log.warn(
+        `Job #${job.id}: could not check site #${job.siteId} afterwards: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
+
   private async execute(job: JobRow, ctx: JobContext): Promise<void> {
     const registry = getRegistry();
     const entry = registry[job.type as JobType];
+    // A job that takes its site down on purpose (SITE_INTERRUPTING_JOBS) holds the uptime check
+    // off it. The hold ends with a check of the site, after the handler and outside its
+    // deadline, and before the status is written: a page that reloads as the job ends then
+    // shows what the job left.
+    let release: (() => Promise<void>) | null = null;
     try {
       if (!entry) throw new Error(`Unknown job type: ${job.type}`);
       const parsed = entry.payloadSchema.safeParse(JSON.parse(job.payload));
@@ -497,6 +514,9 @@ export class JobWorker {
       (ctx as { payload: unknown }).payload = parsed.data;
 
       const timeoutMs = entry.timeoutMs ?? 30 * 60_000;
+      if (job.siteId !== null && SITE_INTERRUPTING_JOBS.has(job.type as JobType)) {
+        release = this.services.monitor.holdChecks(job.siteId);
+      }
       const handlerPromise = entry.handler(ctx as never, this.services);
       let timer!: NodeJS.Timeout;
       let timedOut = false;
@@ -513,12 +533,19 @@ export class JobWorker {
         // checkpoint and swallow its eventual rejection to avoid an unhandled rejection.
         ctx.cancelRequested = true;
         handlerPromise.catch(() => undefined);
-        if (timedOut) this.holdLaneUntilSettled(job, handlerPromise);
+        if (timedOut) {
+          this.holdLaneUntilSettled(job, handlerPromise);
+          // Still at work on the site: it stays held until the handler stops, and is checked then.
+          const late = release;
+          release = null;
+          void handlerPromise.catch(() => undefined).then(() => this.releaseChecks(job, late));
+        }
         throw err;
       } finally {
         clearTimeout(timer);
       }
 
+      await this.releaseChecks(job, release);
       this.db
         .update(jobs)
         .set({
@@ -530,6 +557,7 @@ export class JobWorker {
         .run();
       this.forgetSecrets(job);
     } catch (err) {
+      await this.releaseChecks(job, release);
       const canceled = err instanceof JobCanceledError;
       const message = err instanceof Error ? err.message : String(err);
       if (!canceled) {
