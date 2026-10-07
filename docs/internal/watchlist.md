@@ -32,6 +32,7 @@ for a reason; remove one once there is nothing left to watch.
 | [Ubuntu's `nftables.service`](#ubuntus-nftablesservice) | Low | 2026-09-29 | Disabled by default on 26.04 |
 | [The docs site's toolchain and its screenshot image](#the-docs-sites-toolchain-and-its-screenshot-image) | Low | 2026-10-05 12:21 UTC | Starlight 0.42.5, Astro 7.3.5, Playwright 1.63.0, oxipng 10.2.1 are the latest; `braces` advisory has no fix |
 | [The demo world's WordPress and plugin versions](#the-demo-worlds-wordpress-and-plugin-versions) | Medium | 2026-10-06 06:19 UTC | WordPress 7.1.2 and the newest plugins of the demo's date; Contact Form 7 6.2 left out |
+| [The site image's Apache modules for the docs' cache times](#the-site-images-apache-modules-for-the-docs-cache-times) | Low | 2026-10-07 06:49 UTC | `expires` on, `headers` off; the docs use `expires` |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -372,3 +373,20 @@ for a reason; remove one once there is nothing left to watch.
   `npm run shoot -- --out .screens-local --only site-wordpress,site-updates,sites-bulk,plugins-catalog`
   in `docs/site` and look at the shots. The `screenshots` job retakes the committed ones on the
   pull request.
+
+## The site image's Apache modules for the docs' cache times
+
+- **Priority:** Low
+- **Last checked:** 2026-10-07 06:49 UTC. The official image's Dockerfile, `latest/php8.3/apache` and
+  `latest/php8.5/apache`, runs `a2enmod rewrite expires` and `a2enmod remoteip`. It does not
+  enable `headers`, and `deploy/wordpress-image/Dockerfile` enables nothing more.
+- **The problem:** the docs' must-use plugin (`docs/site/hosting/wpl7-docs.php`) writes
+  `/docs/.htaccess`. Its cache times use `mod_headers` where a server has it, and `mod_expires`
+  where it does not, as on a WPL7 site. With neither, pages carry no cache time and browsers
+  guess one from a file's age. A page kept past an update then asks for styles and scripts the
+  update deleted.
+- **Check:** for each PHP version WPL7 builds,
+  `gh api repos/docker-library/wordpress/contents/latest/php8.3/apache/Dockerfile --jq .content | base64 -d | grep a2enmod`.
+- **When it changes:** `headers` turning up needs nothing: the plugin's `mod_headers` block takes
+  over. If `expires` goes, enable it in `deploy/wordpress-image/Dockerfile` with `a2enmod expires`,
+  then check that `/docs/` answers with `Cache-Control: max-age=300`.
