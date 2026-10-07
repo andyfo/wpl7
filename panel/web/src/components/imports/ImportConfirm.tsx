@@ -1,3 +1,4 @@
+// @docs sites/import
 import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -9,9 +10,6 @@ import { Button, Card, ConfirmDialog, ErrorNote, Field, Toggle, inputClass } fro
 import { LocaleSelect } from '../LocaleSelect';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/;
-
-/** Why Start import is off in this version, whatever the site. */
-const NOT_YET = 'Available in the next version';
 
 /**
  * Step 2: what the old site reported, what stands in the way, and the choices - the new site's
@@ -46,10 +44,33 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
   const servers = meta.data?.servers ?? [];
   const multiServer = meta.data?.multiServer ?? false;
   const effServerId = serverId ?? meta.data?.defaultServerId ?? 1;
+  const start = useMutation({
+    mutationFn: () =>
+      api(`/api/imports/${imp.id}/run`, {
+        method: 'POST',
+        body: {
+          title: title.trim(),
+          slug,
+          ...(multiServer ? { serverId: effServerId } : {}),
+          ...(phpVersion ? { phpVersion } : {}),
+          locale,
+          carryConstants: [...constants],
+          deactivatePlugins: [...plugins],
+          removeDropins: [...dropins],
+          removeMuPlugins: [...muPlugins],
+          rewritePaths,
+        },
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['import', imp.id] });
+      void qc.invalidateQueries({ queryKey: ['imports'] });
+      void qc.invalidateQueries({ queryKey: ['sites'] });
+    },
+  });
   const blocking = imp.warnings.filter((w) => w.blocking);
   const others = imp.warnings.filter((w) => !w.blocking);
   const activePlugins = report.plugins.filter((p) => p.active);
-  const reason = imp.blockedReason ?? (!SLUG_RE.test(slug) ? 'The site name is not valid.' : !title.trim() ? 'The site needs a title.' : NOT_YET);
+  const reason = imp.blockedReason ?? (!SLUG_RE.test(slug) ? 'The site name is not valid.' : !title.trim() ? 'The site needs a title.' : null);
   const oldPhp = /^(\d+\.\d+)/.exec(report.phpVersion)?.[1] ?? report.phpVersion;
 
   return (
@@ -182,15 +203,17 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
       </Card>
 
       <div className="flex flex-wrap items-center gap-3">
-        <span title={reason} className="inline-block">
-          <Button disabled>Start import</Button>
+        <span title={reason ?? undefined} className="inline-block">
+          <Button disabled={reason !== null || start.isPending} onClick={() => start.mutate()}>
+            Start import
+          </Button>
         </span>
         <Button variant="secondary" onClick={() => setDeleting(true)}>
           Delete import
         </Button>
       </div>
-      <p className={`text-sm ${blocking.length > 0 ? 'text-red-700' : 'text-neutral-500'}`}>{reason}</p>
-      <ErrorNote error={remove.error} />
+      {reason && <p className={`text-sm ${blocking.length > 0 ? 'text-red-700' : 'text-neutral-500'}`}>{reason}</p>}
+      <ErrorNote error={start.error ?? remove.error} />
       {deleting && (
         <ConfirmDialog
           title="Delete import"

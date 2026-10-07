@@ -182,6 +182,8 @@ export interface ImportSummaryDto {
   /** The old site's address once it connected, else what the admin typed (or null). */
   source: string | null;
   siteSlug: string | null;
+  /** The new site's address, once there is a site. */
+  siteUrl: string | null;
   serverName: string | null;
   jobId: number | null;
   lastError: string | null;

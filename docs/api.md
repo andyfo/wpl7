@@ -207,6 +207,23 @@ that should be indexed from the start. Going live turns it off unless its `allow
 | `PUT /sites/:slug/offsite-enabled` | `{enabled}` | `SiteDetail` (sync) — stop (or resume) copying this site's backups to the offsite destinations. Copies already made are kept |
 | `GET /sites/:slug/traffic` | `?days=1..365` (default 30) | `SiteTrafficDto` — visitor statistics; see below |
 
+### Site imports
+Bringing an existing WordPress site in (docs/site-lifecycle.md → Import). The last two are the migration
+plugin's own calls; its import's token goes in `X-WPL7-Import-Token`, never in `Authorization`.
+
+| Method & path | Body / query | Returns |
+|---|---|---|
+| `GET /imports` | – | `{items: ImportSummaryDto[]}` — newest first, with status and progress |
+| `POST /imports` | `{sourceUrl?, allowHttp?: false}` | `201 ImportDto` — `409` without a `PANEL_DOMAIN` in production: the old site has no address to reach the panel at |
+| `GET /imports/:id` | – | `ImportDto` (Manage: it quotes the old wp-config.php's settings; secret-looking values masked) |
+| `GET /imports/:id/plugin` | – | the plugin zip for this import, its token inside; `409` once the import is done, expired or disconnected |
+| `POST /imports/:id/run` | `{title, slug, serverId?, phpVersion?, locale?, carryConstants?, deactivatePlugins?, removeDropins?, removeMuPlugins?, rewritePaths?: true}` | `202 {job}` (`site.import`) — `409` until the old site connected, or when a warning blocks the import |
+| `POST /imports/:id/retry` | – | `202 {job}` — a failed import: the pull from its cursor, or the set-up when the pull was done |
+| `POST /imports/:id/disconnect` | – | `ImportDto` — the token goes; the plugin is asked to stop first |
+| `DELETE /imports/:id` | – | `204` — `409` while a job works on it; removes its staging folder and the site row it reserved when that never became a site |
+| `POST /migrate/connect` | the old site's report | `{ok, import: {id, status, label}, panel_version}` — `401` unknown token, `409` running or bound to another site, `410` expired, `426` another protocol, `422` a report it cannot read |
+| `GET /migrate/status` | – | `MigrateStatusDto` |
+
 ### Backups
 | Method & path | Body / query | Returns |
 |---|---|---|

@@ -23,6 +23,18 @@ export interface DbAdminPort {
    * nothing but the site's own database.
    */
   importFromAs(srcGzPath: string, dbName: string, dbUser: string, dbPassword: string): Promise<void>;
+  /**
+   * Make the server take a statement of `bytes`: its max_allowed_packet (16 MiB by default) is
+   * raised when it is lower, until the server restarts. The new limit, or null when it was enough.
+   */
+  raisePacketLimit(bytes: number): Promise<number | null>;
+}
+
+const MIB = 1024 * 1024;
+
+/** The packet limit a statement of `bytes` needs: whole 16 MiB steps, at most MariaDB's 1 GiB. */
+export function packetLimitFor(bytes: number): number {
+  return Math.min(1024 * MIB, Math.ceil((bytes + MIB) / (16 * MIB)) * 16 * MIB);
 }
 
 const IDENT_RE = /^[a-z0-9_]{1,64}$/;
@@ -168,7 +180,8 @@ export class DbAdminService implements DbAdminPort {
     assertDbIdentifier(dbUser);
     const res = await this.docker.runEphemeral({
       image: this.config.mariadb.clientImage,
-      cmd: ['sh', '-c', 'zcat "/work/$DUMP_FILE" | exec mariadb -h"$DB_HOST" -u"$DB_USER" -p"$DB_PASS" "$DB_NAME"'],
+      // The client's own packet limit is 16 MiB too; the server's is raised apart (raisePacketLimit).
+      cmd: ['sh', '-c', 'zcat "/work/$DUMP_FILE" | exec mariadb --max-allowed-packet=1G -h"$DB_HOST" -u"$DB_USER" -p"$DB_PASS" "$DB_NAME"'],
       env: [
         `DB_HOST=${this.config.mariadb.host}`,
         `DB_USER=${dbUser}`,
@@ -183,6 +196,14 @@ export class DbAdminService implements DbAdminPort {
     if (res.exitCode !== 0) {
       throw new Error(`Database import failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
     }
+  }
+
+  async raisePacketLimit(bytes: number): Promise<number | null> {
+    const wanted = packetLimitFor(bytes);
+    const [rows] = await this.pool.query('SELECT @@GLOBAL.max_allowed_packet AS v');
+    if (Number((rows as { v: number | string }[])[0]?.v ?? 0) >= wanted) return null;
+    await this.pool.query(`SET GLOBAL max_allowed_packet = ${wanted}`);
+    return wanted;
   }
 
   async close(): Promise<void> {

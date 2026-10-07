@@ -109,6 +109,38 @@ copy + cutover + DNS:
    the move: it is cleaned up automatically once every hostname resolves *only* to the target (no old
    address left in the answer, no AAAA records) and ≥ 24 h have passed, or earlier via **Finalize**.
 
+## Import (`site.import` + `site.importFinish`)
+
+Docs page: docs/site/src/content/docs/sites/import.mdx; the protocol: docs/internal/import-protocol.md.
+An import brings an existing WordPress site in through the migration plugin, installed on the old site
+from a zip the panel builds for that import (it carries the import's token).
+
+1. **Connect.** The plugin reports the old site (`POST /api/migrate/connect`, its token in
+   `X-WPL7-Import-Token`). The panel checks the report and binds the import to that site's `home`.
+2. **Start** (`POST /api/imports/:id/run`) reserves the site like a new one - row `provisioning`, dev
+   hostname only, the old site's table prefix - and queues `site.import` in the target server's
+   `import:<server>` lane, so a pull of hours holds up nothing else on the machine.
+3. **`site.import`** pulls into `<SRV_ROOT>/wpl7-import/<id>/`: the file listing, then the files as a tar
+   stream straight into `tar -x` on the server (small files many to a request, big ones in ranges), then
+   the database as SQL pages, every line checked against the protocol's grammar
+   (services/importSql.ts) and appended to `db.sql.gz`. After every batch it writes its cursor to
+   `import.json` and to the row: Continue (`POST /api/imports/:id/retry`) resumes from there after Stop,
+   a failure or a restart. No compensations: the staging folder stays until the import is deleted, or
+   for 7 days after a failure nobody continued.
+4. **`site.importFinish`** (the server lane, with the site) removes the chosen drop-ins and must-use
+   plugins, writes WordPress's standard `.htaccess` when there is none, then restores the site from the
+   folder with the move's restore step (handlers/restoreSite.ts): files renamed into place, the database
+   imported as the **site's own database user**, the container started without a router. The image
+   writes `wp-config.php` at first start; the chosen constants go in with `wp config set`. Then
+   `wp core update-db`, the old address replaced with the dev address (both schemes and JSON-escaped,
+   plugins not loaded), the old folder with `/var/www/html` when asked, the chosen plugins deactivated,
+   `blog_public = 0`, and the site published with its router. A failure rolls back to the pulled copy in
+   staging (database dropped, container and network removed); Continue runs the finish again. Once the
+   site is up, an inventory scan, a malware scan (trigger `import`) and the first backup (type `import`)
+   follow, each a warning at worst, and the staging folder goes.
+5. The plugin stays connected until **Disconnect** (site page) or **Delete import**, which also ask the
+   plugin to clean up and deactivate itself (`finish`).
+
 ## PHP switch
 
 Recreates the container with the new `wpl7-wordpress:php<X.Y>` image. Files and DB are untouched (the

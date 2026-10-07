@@ -26,7 +26,7 @@ import type {
   SiteContainerSpec,
 } from '../src/services/docker.js';
 import { SPEC_LABEL, serviceSpecHash } from '../src/services/docker.js';
-import type { DbAdminPort } from '../src/services/dbAdmin.js';
+import { packetLimitFor, type DbAdminPort } from '../src/services/dbAdmin.js';
 import { hostExec, type ExecPort, type ExecResult } from '../src/lib/exec.js';
 import { LocalFiles, type FilesPort } from '../src/lib/files.js';
 import { servers as serversTable } from '../src/db/schema.js';
@@ -660,6 +660,15 @@ export class FakeDbAdmin implements DbAdminPort {
   }
   async importFromAs(srcGzPath: string, dbName: string, dbUser: string, dbPassword: string): Promise<void> {
     this.record('importFromAs', [srcGzPath, dbName, dbUser, dbPassword]);
+  }
+  /** The server's max_allowed_packet, as raisePacketLimit finds and leaves it. */
+  maxAllowedPacket = 16 * 1024 * 1024;
+  async raisePacketLimit(bytes: number): Promise<number | null> {
+    this.record('raisePacketLimit', [bytes]);
+    const wanted = packetLimitFor(bytes);
+    if (this.maxAllowedPacket >= wanted) return null;
+    this.maxAllowedPacket = wanted;
+    return wanted;
   }
 }
 
@@ -1362,6 +1371,11 @@ export async function makeWorld(
   const importsService = new ImportService(db, config, settings, servers, log);
   // No network in tests: every name an import is pointed at resolves to a documentation address.
   importsService.lookup = async () => [{ address: '203.0.113.80', family: 4 }];
+  // Nor any network for the pull: a test that runs one hands it a fake old site (test/importFake.ts).
+  importsService.transport = async (req) => {
+    throw new Error(`test tried to reach ${req.url.host}; set core.imports.transport to a FakeSourceSite's`);
+  };
+  importsService.retrySleep = async () => undefined;
   traffic.onEvents((serverId, events, chunk) => {
     securityEvents.fold(events);
     security.noteTraefikLog(chunk);
@@ -1405,6 +1419,7 @@ export async function makeWorld(
   core.wpInventory = new WpInventoryService(core, vulnerabilities);
   const worker = new JobWorker(db, core);
   offsite.attachWorker(worker);
+  importsService.attachWorker(worker);
   const shell = new FakeShell();
   const wporg = opts.wporg ?? new FakeWporg();
   const users = new UsersService(db);

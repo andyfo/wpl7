@@ -1,10 +1,11 @@
+// @docs sites/import
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt } from 'drizzle-orm';
 import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
-import { imports, sites, type ImportRow, type SiteRow } from '../db/schema.js';
+import { imports, jobs, sites, type ImportRow, type JobRow, type SiteRow } from '../db/schema.js';
 import type { ImportCreateBody, ImportRunBody, ImportStatus } from '../../shared/schemas.js';
 import type {
   ImportConnectionCodeDto,
@@ -15,27 +16,35 @@ import type {
   MigrateStatusDto,
   SiteDetail,
 } from '../../shared/types.js';
-import { conflict, notFound } from '../lib/errors.js';
-import { sameSecret, sha256Hex } from '../lib/crypto.js';
+import { badRequest, conflict, notFound } from '../lib/errors.js';
+import { generateSecret, sameSecret, sha256Hex } from '../lib/crypto.js';
 import { panelUrl } from '../lib/panelUrl.js';
 import { PANEL_VERSION } from '../lib/version.js';
+import { containerName, dbIdentifier, isValidSlug, safeJoin } from '../lib/slug.js';
 import { zipOf, type ZipEntry } from '../lib/zipWriter.js';
 import { OutboundRefusedError, assertAllowedSource, type LookupFn } from '../lib/outboundGuard.js';
+import { importLane } from '../jobs/lanes.js';
+import type { JobWorker } from '../jobs/worker.js';
 import type { ServerRegistry } from '../servers/registry.js';
 import type { SettingsService } from './settings.js';
 import type { Logger } from './index.js';
+import { assertDomainsFree } from './domainGuard.js';
+import { resolveTargetServer } from './sites.js';
 import {
   MIGRATE_PROTOCOL,
   blockingReason,
+  checkChoices,
   inspectReport,
   migrateReportSchema,
   type MigrateReport,
 } from './importInspect.js';
+import { ImportPullClient, type PullState, type PullTransport, type RangeEncoding, type Transport } from './importPull.js';
 
 /**
  * Imports of existing WordPress sites (docs/internal/import-protocol.md): the record of each one,
- * the personalised migration plugin it hands out, and the two calls that plugin makes back - its
- * report when it connects, and the progress its admin page shows.
+ * the personalised migration plugin it hands out, the two calls that plugin makes back - its
+ * report when it connects, and the progress its admin page shows - and the bookkeeping of the
+ * two jobs that do the work (jobs/handlers/import.ts).
  *
  * Every import has its own token, 32 random bytes: the plugin presents it to the panel, and the
  * panel signs its requests to the plugin with it. It is the only thing that lets anyone pull the
@@ -49,12 +58,16 @@ export const IMPORT_TTL_MS = {
   pending: 24 * 3600_000,
   /** Connected, Start import not yet chosen. */
   connected: 7 * 24 * 3600_000,
+  /** Failed, and nobody chose Continue: its staging folder is cleared away. */
+  failed: 7 * 24 * 3600_000,
+  /** Expired, before the record itself goes. */
+  expired: 30 * 24 * 3600_000,
 } as const;
 
 /** The states in which a job owns the import: it can be neither deleted nor disconnected. */
 export const IMPORT_BUSY: readonly ImportStatus[] = ['queued', 'pulling', 'pulled', 'finishing'];
 
-/** The states a pull can still go on from, for a site whose import has not finished. */
+/** The states a site's import has not finished in: the site cannot be deleted but through it. */
 const IMPORT_UNFINISHED: readonly ImportStatus[] = [...IMPORT_BUSY, 'failed'];
 
 /** What a plugin route answers instead of the panel's usual error: the plugin acts on the status. */
@@ -70,16 +83,70 @@ export class PluginRefusal extends Error {
   }
 }
 
-/** The pull's bookkeeping, as the pull job keeps it (`imports.cursor`); C2 fills in the rest. */
+/**
+ * How far an import has got: the pull job keeps it in `imports.cursor` and, as its twin, in the
+ * staging folder's `import.json`, so a job that stopped - a restart, a failure, Stop - goes on
+ * from the last batch that was safely written.
+ */
 export interface ImportCursor {
-  phase: ImportProgressDto['phase'];
-  filesDone?: number;
-  filesTotal?: number;
-  bytesDone?: number;
-  bytesTotal?: number;
-  tablesDone?: number;
-  tablesTotal?: number;
-  [key: string]: unknown;
+  phase: 'snapshot' | 'files' | 'db' | 'done';
+  snapshotId: string | null;
+  transport: Transport | null;
+  encoding: RangeEncoding;
+  skewS: number;
+  /** Paths left behind on purpose: wp-config.php, and the drop-ins and must-use plugins chosen. */
+  skip: string[];
+  /** The last snapshot entry written. */
+  filesAfterId: number;
+  filesDone: number;
+  bytesDone: number;
+  filesTotal: number;
+  bytesTotal: number;
+  /** Entries that changed while they were read, to read again; how often each was. */
+  retry: number[];
+  retried: Record<string, number>;
+  /** What was left out, for the warnings at the end. */
+  skipped: { links: number; unreadable: number; changed: string[]; rows: number };
+  /** The tables to pull, fixed when the database part starts. */
+  tables: string[] | null;
+  /** The table being pulled, and where in it. */
+  dbTable: string | null;
+  dbCursor: string;
+  /** db.sql.gz's size after the last page that was safely written. */
+  dbBytesCommitted: number;
+  /** The longest statement in db.sql.gz, in bytes: the database server has to take it whole. */
+  longestStatement: number;
+  tablesDone: number;
+  tablesTotal: number;
+  /** The finish job has moved the files into the site's folder. */
+  materialized: boolean;
+}
+
+export function initialCursor(skip: string[]): ImportCursor {
+  return {
+    phase: 'snapshot',
+    snapshotId: null,
+    transport: null,
+    encoding: 'raw',
+    skewS: 0,
+    skip,
+    filesAfterId: 0,
+    filesDone: 0,
+    bytesDone: 0,
+    filesTotal: 0,
+    bytesTotal: 0,
+    retry: [],
+    retried: {},
+    skipped: { links: 0, unreadable: 0, changed: [], rows: 0 },
+    tables: null,
+    dbTable: null,
+    dbCursor: '',
+    dbBytesCommitted: 0,
+    longestStatement: 0,
+    tablesDone: 0,
+    tablesTotal: 0,
+    materialized: false,
+  };
 }
 
 const parseJson = <T>(raw: string | null): T | null => {
@@ -94,9 +161,22 @@ const parseJson = <T>(raw: string | null): T | null => {
 /** A PHP single-quoted string literal. */
 const phpString = (v: string) => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 
+const hostOf = (url: string | null): string => {
+  try {
+    return url ? new URL(url).hostname : 'the old site';
+  } catch {
+    return 'the old site';
+  }
+};
+
 export class ImportService {
   /** How the old site's address is resolved before the panel calls it; tests swap it. */
   lookup: LookupFn | undefined;
+  /** How the panel's requests reach the old site; tests swap it for a fake old site. */
+  transport: PullTransport | undefined;
+  /** How the pull waits between retries; tests make it instant. */
+  retrySleep: ((ms: number) => Promise<void>) | undefined;
+  private worker: JobWorker | null = null;
 
   constructor(
     private readonly db: Db,
@@ -105,6 +185,11 @@ export class ImportService {
     private readonly servers: ServerRegistry,
     private readonly log: Logger,
   ) {}
+
+  /** The queue, once it exists: it is built from the bundle this service is in (see CoreServices.worker). */
+  attachWorker(worker: JobWorker): void {
+    this.worker = worker;
+  }
 
   /**
    * Where the old site reaches the panel: PANEL_DOMAIN, as every link the panel sends out says it.
@@ -160,27 +245,35 @@ export class ImportService {
   }
 
   /**
-   * Remove an import's record. Refused while a job works on it; the job has to be stopped first.
-   * The site an import made is not touched: it is a site like any other by then.
+   * Remove an import: its record, its staging folder, the site row it reserved when that never
+   * became a site, and its hold on the old site (the plugin is told to stop, if it answers).
+   * Refused while a job works on it. A site the import finished is not touched: it is a site
+   * like any other by then.
    */
-  delete(id: number): void {
+  async delete(id: number): Promise<void> {
     const row = this.get(id);
     if (IMPORT_BUSY.includes(row.status as ImportStatus)) {
       throw conflict('The import is running. Stop its job first.');
     }
-    this.db.delete(imports).where(eq(imports.id, row.id)).run();
+    if (row.token && row.status !== 'pending') await this.tellPluginToFinish(row);
+    await this.clearStaging(row);
+    this.db.transaction(() => {
+      this.db.delete(imports).where(eq(imports.id, row.id)).run();
+      this.releaseSiteRow(row);
+    });
   }
 
   /**
-   * Stop the old site's plugin answering this import: the token goes, so the panel can no longer
-   * sign a request with it and the plugin's calls are refused. An import that had not started
-   * cannot go on without it, and expires.
+   * Stop the old site's plugin answering this import: it is told to clean up and deactivate when
+   * it can be reached, and the token goes either way, so the panel can no longer sign a request
+   * with it. An import that had not started cannot go on without it, and expires.
    */
-  disconnect(id: number): ImportRow {
+  async disconnect(id: number): Promise<ImportRow> {
     const row = this.get(id);
     if (IMPORT_BUSY.includes(row.status as ImportStatus)) {
       throw conflict('The import is running. Stop its job first.');
     }
+    if (row.token && row.status !== 'pending') await this.tellPluginToFinish(row);
     const now = Date.now();
     const waiting = row.status === 'pending' || row.status === 'connected';
     return this.db
@@ -218,10 +311,225 @@ export class ImportService {
     };
   }
 
-  /** Start the pull. Not in this version: the Confirm step shows why. */
-  run(id: number, _choices: ImportRunBody): never {
-    this.get(id);
-    throw conflict('Available in the next version');
+  // ------------------------------------------------------------------ running it
+
+  /**
+   * Start the import with the Confirm step's choices: reserve the site - a row like a new site's,
+   * `provisioning`, on its dev address - and queue the pull in the target server's import lane.
+   * Nothing is created on the server yet; the jobs do that.
+   */
+  start(id: number, choices: ImportRunBody): { row: ImportRow; job: JobRow } {
+    const worker = this.requireWorker();
+    const row = this.get(id);
+    if (row.status !== 'connected') {
+      throw conflict(row.status === 'pending' ? 'The old site has not connected yet.' : `The import is ${row.status}.`);
+    }
+    if (!row.token) throw conflict('This import was disconnected.');
+    const report = this.reportOf(row);
+    if (!report) throw conflict('The old site has not reported itself yet.');
+    const inspection = inspectReport(report, { offeredPhp: this.offeredPhp(), allowHttp: row.allowHttp === 1 });
+    const blocked = blockingReason(inspection.warnings);
+    if (blocked) throw conflict(blocked);
+    const problem = checkChoices(report, choices, inspection.constants);
+    if (problem) throw badRequest(problem);
+    if (!isValidSlug(choices.slug)) throw badRequest(`"${choices.slug}" cannot be a site name`);
+    const server = resolveTargetServer({ settings: this.settings, servers: this.servers }, choices.serverId);
+    const phpVersion = choices.phpVersion ?? inspection.suggestions.phpVersion ?? this.settings.get('defaultPhpVersion');
+    if (!this.offeredPhp().includes(phpVersion)) {
+      throw badRequest(`PHP ${phpVersion} is not offered (available: ${this.offeredPhp().join(', ')})`);
+    }
+    const devHostname = `${choices.slug}.${server.devDomain || this.config.devDomain}`;
+    assertDomainsFree({ db: this.db, config: this.config, servers: this.servers }, [devHostname], { allowDevHostname: devHostname });
+    const skip = [
+      'wp-config.php',
+      ...choices.removeDropins.map((d) => `wp-content/${d}`),
+      ...choices.removeMuPlugins.map((m) => `wp-content/mu-plugins/${m}`),
+    ];
+    const stored: ImportRunBody = { ...choices, serverId: server.id, phpVersion, locale: choices.locale ?? report.locale ?? 'en_US' };
+    const now = Date.now();
+    try {
+      return this.db.transaction(() => {
+        const site = this.db
+          .insert(sites)
+          .values({
+            slug: choices.slug,
+            serverId: server.id,
+            title: choices.title,
+            domains: JSON.stringify([devHostname]),
+            devHostname,
+            isLive: 0,
+            keepDevAlias: 1,
+            phpVersion,
+            locale: stored.locale!,
+            status: 'provisioning',
+            dbName: dbIdentifier(choices.slug),
+            dbUser: dbIdentifier(choices.slug),
+            dbPassword: generateSecret(24),
+            mailPassword: generateSecret(24),
+            // The old site's users came with it; the panel acts as its oldest administrator.
+            wpAdminUser: null,
+            wpAdminEmail: report.admin_email || null,
+            containerName: containerName(choices.slug),
+            tablePrefix: report.table_prefix,
+            createdAt: now,
+            updatedAt: now,
+          })
+          .returning()
+          .get();
+        const job = worker.enqueue('site.import', { importId: row.id, sourceHost: hostOf(row.homeUrl) }, undefined, {
+          lane: importLane(server.id),
+          siteSlug: site.slug,
+        });
+        const updated = this.db
+          .update(imports)
+          .set({
+            status: 'queued',
+            siteId: site.id,
+            serverId: server.id,
+            jobId: job.id,
+            choices: JSON.stringify(stored),
+            cursor: JSON.stringify(initialCursor(skip)),
+            stagingPath: path.join(this.config.srvRoot, 'wpl7-import', String(row.id)),
+            lastError: null,
+            startedAt: now,
+            expiresAt: null,
+            updatedAt: now,
+          })
+          .where(eq(imports.id, row.id))
+          .returning()
+          .get();
+        return { row: updated, job };
+      });
+    } catch (err) {
+      if (err instanceof Error && /UNIQUE constraint failed: sites\.slug/.test(err.message)) {
+        throw conflict(`Site name "${choices.slug}" is already taken`);
+      }
+      throw err;
+    }
+  }
+
+  /** Go on with a failed import: the pull from where it stopped, or the set-up when the pull was done. */
+  retry(id: number): { row: ImportRow; job: JobRow } {
+    const worker = this.requireWorker();
+    const row = this.get(id);
+    if (row.status !== 'failed') throw conflict(`The import is ${row.status}; only a stopped one can go on.`);
+    if (!row.token) throw conflict('This import was disconnected.');
+    const site = row.siteId ? this.db.select().from(sites).where(eq(sites.id, row.siteId)).get() : undefined;
+    if (!site || row.serverId === null) throw conflict('The site this import was making is gone. Delete the import and start again.');
+    const cursor = this.cursorOf(row);
+    const sourceHost = hostOf(row.homeUrl);
+    return this.db.transaction(() => {
+      const job =
+        cursor?.phase === 'done'
+          ? worker.enqueue('site.importFinish', { importId: row.id, sourceHost }, { id: site.id, slug: site.slug, serverId: site.serverId })
+          : worker.enqueue('site.import', { importId: row.id, sourceHost }, undefined, {
+              lane: importLane(row.serverId!),
+              siteSlug: site.slug,
+            });
+      const updated = this.db
+        .update(imports)
+        .set({ status: cursor?.phase === 'done' ? 'pulled' : 'queued', jobId: job.id, lastError: null, updatedAt: Date.now() })
+        .where(eq(imports.id, row.id))
+        .returning()
+        .get();
+      return { row: updated, job };
+    });
+  }
+
+  /** The pull's client for this import, carrying on with what an earlier run learned about the old host. */
+  clientFor(row: ImportRow, opts: { state?: Partial<PullState>; canceled?: () => boolean; log?: (line: string) => void } = {}): ImportPullClient {
+    if (!row.token || !row.homeUrl || !row.endpointUrl) throw new Error('This import is not connected to an old site');
+    return new ImportPullClient({
+      importId: row.id,
+      token: row.token,
+      home: row.homeUrl,
+      endpoint: row.endpointUrl,
+      allowHttp: row.allowHttp === 1,
+      transport: this.transport,
+      lookup: this.lookup,
+      sleep: this.retrySleep,
+      state: opts.state,
+      canceled: opts.canceled,
+      log: opts.log,
+    });
+  }
+
+  cursorOf(row: ImportRow): ImportCursor | null {
+    return parseJson<ImportCursor>(row.cursor);
+  }
+
+  /** Change an import's record; `updatedAt` follows. */
+  mark(id: number, patch: Partial<typeof imports.$inferInsert>): ImportRow {
+    return this.db
+      .update(imports)
+      .set({ ...patch, updatedAt: Date.now() })
+      .where(eq(imports.id, id))
+      .returning()
+      .get();
+  }
+
+  writeCursor(id: number, cursor: ImportCursor): void {
+    this.mark(id, { cursor: JSON.stringify(cursor) });
+  }
+
+  /**
+   * After a restart: an import whose job died with the old process is marked failed, cursor
+   * intact, so Continue goes on from there. A job that is still queued survives restarts, and
+   * its import is left alone.
+   */
+  reconcileOnBoot(): number {
+    const rows = this.db.select().from(imports).where(inArray(imports.status, ['queued', 'pulling', 'pulled', 'finishing'])).all();
+    let failed = 0;
+    for (const row of rows) {
+      const job = row.jobId ? this.db.select({ status: jobs.status }).from(jobs).where(eq(jobs.id, row.jobId)).get() : undefined;
+      if (job && (job.status === 'queued' || job.status === 'running')) continue;
+      this.mark(row.id, { status: 'failed', lastError: 'Interrupted by panel restart' });
+      this.log.warn(`Import #${row.id} was interrupted by the restart; Continue on Sites → Import site resumes it`);
+      failed++;
+    }
+    return failed;
+  }
+
+  /**
+   * The nightly clear-up: imports that waited too long expire; a failed one nobody continued for
+   * a week loses its staging folder and the site row it reserved, and expires; an expired record
+   * goes a month later.
+   */
+  async prune(now = Date.now()): Promise<number> {
+    let cleared = 0;
+    const waiting = this.db
+      .select()
+      .from(imports)
+      .where(and(inArray(imports.status, ['pending', 'connected']), lt(imports.expiresAt, now)))
+      .all();
+    for (const row of waiting) {
+      this.expireIfDue(row);
+      cleared++;
+    }
+    const stale = this.db
+      .select()
+      .from(imports)
+      .where(and(eq(imports.status, 'failed'), lt(imports.updatedAt, now - IMPORT_TTL_MS.failed)))
+      .all();
+    for (const row of stale) {
+      try {
+        await this.clearStaging(row);
+      } catch (err) {
+        this.log.warn(`Import #${row.id}: could not remove its staging folder (${err instanceof Error ? err.message : String(err)})`);
+        continue;
+      }
+      this.db.transaction(() => {
+        this.mark(row.id, { status: 'expired', token: null });
+        this.releaseSiteRow(row);
+      });
+      cleared++;
+    }
+    const old = this.db
+      .delete(imports)
+      .where(and(eq(imports.status, 'expired'), lt(imports.updatedAt, now - IMPORT_TTL_MS.expired)))
+      .returning({ id: imports.id })
+      .all();
+    return cleared + old.length;
   }
 
   // ------------------------------------------------------------------ the plugin
@@ -349,32 +657,26 @@ export class ImportService {
 
     const inspection = inspectReport(report, { offeredPhp: this.offeredPhp(), allowHttp: row.allowHttp === 1 });
     const now = Date.now();
-    const updated = this.db
-      .update(imports)
-      .set({
-        status: 'connected',
-        homeUrl: report.home,
-        endpointUrl: report.endpoint,
-        pluginVersion: report.plugin,
-        protocol: report.protocol,
-        wpVersion: report.wp,
-        phpVersion: report.php,
-        tablePrefix: report.table_prefix,
-        multisite: report.multisite ? 1 : 0,
-        blogPublic: report.blog_public,
-        filesBytes: report.files.bytes,
-        dbBytes: report.db.bytes,
-        fileCount: report.files.count,
-        tableCount: report.db.tables.length,
-        report: JSON.stringify(report),
-        warnings: JSON.stringify(inspection.warnings),
-        connectedAt: row.connectedAt ?? now,
-        expiresAt: now + IMPORT_TTL_MS.connected,
-        updatedAt: now,
-      })
-      .where(eq(imports.id, row.id))
-      .returning()
-      .get();
+    const updated = this.mark(row.id, {
+      status: 'connected',
+      homeUrl: report.home,
+      endpointUrl: report.endpoint,
+      pluginVersion: report.plugin,
+      protocol: report.protocol,
+      wpVersion: report.wp,
+      phpVersion: report.php,
+      tablePrefix: report.table_prefix,
+      multisite: report.multisite ? 1 : 0,
+      blogPublic: report.blog_public,
+      filesBytes: report.files.bytes,
+      dbBytes: report.db.bytes,
+      fileCount: report.files.count,
+      tableCount: report.db.tables.length,
+      report: JSON.stringify(report),
+      warnings: JSON.stringify(inspection.warnings),
+      connectedAt: row.connectedAt ?? now,
+      expiresAt: now + IMPORT_TTL_MS.connected,
+    });
     if (!row.connectedAt) this.log.info(`Import #${row.id}: ${report.home} connected`);
     return updated;
   }
@@ -405,6 +707,7 @@ export class ImportService {
       status: row.status as ImportStatus,
       source: row.homeUrl ?? row.sourceUrl,
       siteSlug: site?.slug ?? parseJson<ImportRunBody>(row.choices)?.slug ?? null,
+      siteUrl: row.siteId ? (this.siteUrlOf(row.siteId) ?? null) : null,
       serverName: row.serverId ? (this.servers.rowById(row.serverId)?.name ?? null) : null,
       jobId: row.jobId,
       lastError: row.lastError,
@@ -443,7 +746,7 @@ export class ImportService {
   }
 
   private progressOf(row: ImportRow): ImportProgressDto | null {
-    const cursor = parseJson<ImportCursor>(row.cursor);
+    const cursor = this.cursorOf(row);
     if (!cursor) return null;
     return {
       phase: cursor.phase,
@@ -460,6 +763,11 @@ export class ImportService {
     return this.settings.get('phpVersions') ?? [];
   }
 
+  private requireWorker(): JobWorker {
+    if (!this.worker) throw new Error('The import service has no job queue');
+    return this.worker;
+  }
+
   private siteUrlOf(siteId: number): string | undefined {
     const site: Pick<SiteRow, 'domains'> | undefined = this.db
       .select({ domains: sites.domains })
@@ -470,15 +778,43 @@ export class ImportService {
     return primary ? `${this.config.tlsMode === 'none' ? 'http' : 'https'}://${primary}` : undefined;
   }
 
+  /** Best effort: the plugin cleans up and deactivates itself. One that cannot be reached is no reason to stop. */
+  private async tellPluginToFinish(row: ImportRow): Promise<void> {
+    if (!row.homeUrl || !row.endpointUrl) return;
+    const client = this.clientFor(row);
+    try {
+      await client.finish();
+    } catch (err) {
+      this.log.warn(`Import #${row.id}: could not tell the old site's plugin to finish (${err instanceof Error ? err.message : String(err)})`);
+    } finally {
+      client.close();
+    }
+  }
+
+  /** Remove the import's staging folder, wherever it is. */
+  private async clearStaging(row: ImportRow): Promise<void> {
+    if (!row.stagingPath || row.serverId === null || !this.servers.rowById(row.serverId)) return;
+    const base = path.join(this.config.srvRoot, 'wpl7-import');
+    await this.servers.handleFor(row.serverId).files.rm(safeJoin(base, path.basename(row.stagingPath)));
+  }
+
+  /**
+   * The site row an import reserved, released when nothing of the site was ever built from it:
+   * still `provisioning` or `error`, and no materialised files (the finish job's rollback puts
+   * them back in staging).
+   */
+  private releaseSiteRow(row: ImportRow): void {
+    if (!row.siteId) return;
+    const site = this.db.select().from(sites).where(eq(sites.id, row.siteId)).get();
+    if (!site || (site.status !== 'provisioning' && site.status !== 'error')) return;
+    if (this.cursorOf(row)?.materialized) return;
+    this.db.delete(sites).where(eq(sites.id, site.id)).run();
+  }
+
   /** An import waiting past its time expires, and its token goes with it. */
   private expireIfDue(row: ImportRow): ImportRow {
     if ((row.status !== 'pending' && row.status !== 'connected') || !row.expiresAt || row.expiresAt > Date.now()) return row;
-    return this.db
-      .update(imports)
-      .set({ status: 'expired', token: null, updatedAt: Date.now() })
-      .where(eq(imports.id, row.id))
-      .returning()
-      .get();
+    return this.mark(row.id, { status: 'expired', token: null });
   }
 }
 

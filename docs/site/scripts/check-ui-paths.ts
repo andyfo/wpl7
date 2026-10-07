@@ -34,6 +34,7 @@ export const IGNORE = new Set(
     'Application Passwords',
     'Add New Application Password',
     'Plugins → Add New',
+    'Plugins → Add New → Upload Plugin',
     'Add New Plugin',
     'Tools → Site Health',
     'Site Health',

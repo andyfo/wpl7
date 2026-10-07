@@ -236,18 +236,45 @@ describe('site imports API', () => {
     });
   });
 
-  it('cannot start an import in this version', async () => {
-    const { app, headers, create, connect } = await authedApp();
+  it('starts an import: the site is reserved and the pull queued in the server’s import lane', async () => {
+    const { app, world, headers, create, connect } = await authedApp();
     const { dto, token } = await create();
     await connect(token);
-    const res = await app.inject({
+    const run = (payload: Record<string, unknown>) => app.inject({ method: 'POST', url: `/api/imports/${dto.id}/run`, headers, payload });
+    // What the Confirm step has to get right first.
+    expect((await run({ title: 'Willow', slug: 'import' })).statusCode).toBe(400);
+    const unknown = await run({ title: 'Willow', slug: 'willow-pediatrics', deactivatePlugins: ['not-there'] });
+    expect(unknown.statusCode).toBe(400);
+    expect(unknown.json().error.message).toMatch(/no plugin not-there/);
+    const res = await run({ title: 'Willow Pediatrics', slug: 'willow-pediatrics', carryConstants: ['WP_MEMORY_LIMIT'] });
+    expect(res.statusCode, res.body).toBe(202);
+    expect(res.headers.location).toBe(`/api/jobs/${res.json().job.id}`);
+    expect(res.json().job).toMatchObject({ type: 'site.import', status: 'queued', siteSlug: 'willow-pediatrics' });
+    const site = world.db.select().from(sites).where(eq(sites.slug, 'willow-pediatrics')).get()!;
+    expect(site).toMatchObject({ status: 'provisioning', tablePrefix: 'wpx_', phpVersion: '8.2', isLive: 0 });
+    const detail = (await app.inject({ method: 'GET', url: `/api/imports/${dto.id}`, headers })).json() as ImportDto;
+    expect(detail).toMatchObject({ status: 'queued', siteSlug: 'willow-pediatrics', choices: { carryConstants: ['WP_MEMORY_LIMIT'] } });
+    // Once is enough.
+    expect((await run({ title: 'Willow Pediatrics', slug: 'willow-pediatrics' })).statusCode).toBe(409);
+    // A site name in use is refused.
+    const second = await create();
+    await connect(second.token);
+    const taken = await app.inject({
       method: 'POST',
-      url: `/api/imports/${dto.id}/run`,
+      url: `/api/imports/${second.dto.id}/run`,
       headers,
-      payload: { title: 'Willow Pediatrics', slug: 'willow-pediatrics' },
+      payload: { title: 'Again', slug: 'willow-pediatrics' },
     });
+    expect(taken.statusCode).toBe(409);
+  });
+
+  it('refuses to start an import the old site cannot be imported from', async () => {
+    const { app, headers, create, connect } = await authedApp();
+    const { dto, token } = await create();
+    await connect(token, sampleReport({ multisite: true }));
+    const res = await app.inject({ method: 'POST', url: `/api/imports/${dto.id}/run`, headers, payload: { title: 'W', slug: 'willow-pediatrics' } });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toBe('Available in the next version');
+    expect(res.json().error.message).toMatch(/multisite/);
   });
 
   it("keeps the old site's settings from a Read only key", async () => {

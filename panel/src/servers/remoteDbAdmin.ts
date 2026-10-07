@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { ExecPort } from '../lib/exec.js';
-import { assertDbIdentifier, DUMP_ARGS, grantPattern, type DbAdminPort } from '../services/dbAdmin.js';
+import { assertDbIdentifier, DUMP_ARGS, grantPattern, packetLimitFor, type DbAdminPort } from '../services/dbAdmin.js';
 
 /** MySQL string literal escaping (backslash escapes are active in MariaDB's default sql_mode). */
 const sqlQuote = (v: string) => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`;
@@ -120,7 +120,7 @@ export class RemoteDbAdminService implements DbAdminPort {
     try {
       const script =
         `set -o pipefail; zcat ${q(srcGzPath)} | docker exec -i ${this.container} ` +
-        `mariadb --defaults-extra-file=${cnf} ${dbName}`;
+        `mariadb --defaults-extra-file=${cnf} --max-allowed-packet=1G ${dbName}`;
       const res = await this.exec.run('bash', ['-c', script], { timeoutMs: 60 * 60_000 });
       if (res.exitCode !== 0) {
         throw new Error(`Database import failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
@@ -128,6 +128,20 @@ export class RemoteDbAdminService implements DbAdminPort {
     } finally {
       await this.exec.run('docker', ['exec', this.container, 'rm', '-f', cnf], { timeoutMs: 60_000 }).catch(() => undefined);
     }
+  }
+
+  async raisePacketLimit(bytes: number): Promise<number | null> {
+    const wanted = packetLimitFor(bytes);
+    const res = await this.exec.runWithInput(
+      'docker',
+      ['exec', '-i', this.container, 'sh', '-c', 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" -N -B'],
+      Readable.from(['SELECT @@GLOBAL.max_allowed_packet;\n']),
+      { timeoutMs: 60_000 },
+    );
+    if (res.exitCode !== 0) throw new Error(`mariadb admin command failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
+    if (Number(res.stdout.trim()) >= wanted) return null;
+    await this.sql(`SET GLOBAL max_allowed_packet = ${wanted};`);
+    return wanted;
   }
 }
 

@@ -37,6 +37,7 @@ for a reason; remove one once there is nothing left to watch.
 | [The DKIM signer's image: x86-64 only](#the-dkim-signers-image-x86-64-only) | Low | 2026-10-07 11:05 UTC | Every tag is amd64 only |
 | [setup-php: PHP 7.0 in CI](#setup-php-php-70-in-ci) | Low | 2026-10-07 15:07 UTC | `v2` is the newest major, 2.37.2 the latest release; 7.0 and 8.5 supported |
 | [The migration plugin's floor: WordPress 5.0 and PHP 7.0](#the-migration-plugins-floor-wordpress-50-and-php-70) | Medium | 2026-10-07 15:07 UTC | PHP 7.0 on 0.58% of sites, WordPress before 5.0 on 2.6%; CI installs 7.0 |
+| [The WordPress image's entrypoint, as an import relies on it](#the-wordpress-images-entrypoint-as-an-import-relies-on-it) | Medium | 2026-10-07 14:53 UTC | Seeds only an empty folder; writes wp-config.php only when absent |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -479,3 +480,25 @@ for a reason; remove one once there is nothing left to watch.
   - **WordPress 5.0 and older under about 1%:** the same for `Requires at least`.
   - **A new PHP release:** make it the matrix's upper end, and run the plugin on a real WordPress
     with that PHP and `WP_DEBUG_LOG` on (the official image has a `php8.x-apache` tag for each).
+
+## The WordPress image's entrypoint, as an import relies on it
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-07 14:53 UTC. `docker-entrypoint.sh` on docker-library/wordpress's
+  default branch copies WordPress into `/var/www/html` only when neither `index.php` nor
+  `wp-includes/version.php` is there, and writes `wp-config.php` from `wp-config-docker.php` only
+  when there is none (`! -s`), then chowns it to `www-data`. `wp-config-docker.php` reads the
+  table prefix from `WORDPRESS_TABLE_PREFIX` and ends with the `/* That's all, stop editing!` line.
+- **The problem:** an import (`panel/src/jobs/handlers/import.ts`) moves an old site's files into
+  the site folder without a `wp-config.php` and starts the container: the image must leave those
+  files alone and write a `wp-config.php` of its own, with the site's prefix, which the import then
+  adds the carried settings to with `wp config set` (placed above the "stop editing" line). The image
+  copies its own `.htaccess` only into an empty folder, which is why the finish job writes
+  WordPress's standard one when the old site had none.
+- **Check:** `gh api repos/docker-library/wordpress/contents/docker-entrypoint.sh --jq .content | base64 -d`
+  around the `index.php` and `wp-config.php` tests, and
+  `gh api repos/docker-library/wordpress/contents/wp-config-docker.php --jq .content | base64 -d | grep -n 'table_prefix\|stop editing'`.
+- **When it changes:** if the image starts seeding a folder that has WordPress in it, the import must
+  write its files after the first start instead of before. If it stops writing `wp-config.php`, the
+  finish job has to write one itself. Then run the import's Docker test (`panel/test/e2e/import/`).
+

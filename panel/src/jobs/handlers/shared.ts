@@ -310,7 +310,8 @@ export async function rewriteWordPressUrls(
   fallbackOldUrl: string,
   newUrl: string,
   wasRunning: boolean,
-  opts: { inside?: (container: string) => Promise<void> } = {},
+  /** `skipExtensions`: the rewrite itself runs with the site's plugins and theme left out (WpService). */
+  opts: { inside?: (container: string) => Promise<void>; skipExtensions?: boolean } = {},
 ): Promise<void> {
   // wp-cli runs via `docker exec`, so the container has to be up. Skipping the rewrite
   // for a stopped site left it flagged live while WordPress still redirected every
@@ -319,16 +320,18 @@ export async function rewriteWordPressUrls(
     ctx.info('Site is stopped; starting it briefly to rewrite the WordPress URLs…');
     await startSiteContainer(server, s, site, ctx);
   }
+  // Passed on only when asked for: every other caller's commands stay exactly as they were.
+  const wpOpts: [] | [{ skipExtensions: boolean }] = opts.skipExtensions ? [{ skipExtensions: true }] : [];
   try {
-    const currentUrl = (await server.wp.optionGet(site.containerName, 'home')) || fallbackOldUrl;
+    const currentUrl = (await server.wp.optionGet(site.containerName, 'home', ...wpOpts)) || fallbackOldUrl;
     if (currentUrl === newUrl) {
       ctx.info(`WordPress already uses ${newUrl}; no URL rewrite needed.`);
     } else {
       ctx.info(`Updating WordPress URLs (${currentUrl} -> ${newUrl})…`);
-      await server.wp.optionUpdate(site.containerName, 'home', newUrl);
-      await server.wp.optionUpdate(site.containerName, 'siteurl', newUrl);
+      await server.wp.optionUpdate(site.containerName, 'home', newUrl, ...wpOpts);
+      await server.wp.optionUpdate(site.containerName, 'siteurl', newUrl, ...wpOpts);
       ctx.info('Running search-replace across all tables (guids preserved)…');
-      const res = await server.wp.searchReplace(site.containerName, currentUrl, newUrl);
+      const res = await server.wp.searchReplace(site.containerName, currentUrl, newUrl, ...wpOpts);
       ctx.info(res.stdout.trim().split('\n').slice(-1)[0] ?? 'search-replace done');
       // Still inside the started-if-needed window: licensed plugins tie their activation to
       // the URL, and Breakdance keeps URLs in JSON that search-replace does not reach.

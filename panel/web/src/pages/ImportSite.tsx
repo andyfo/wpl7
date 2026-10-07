@@ -1,12 +1,15 @@
+// @docs sites/import
 import { useState } from 'react';
-import { Link, useSearchParams } from 'react-router';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ImportConnectionCodeDto, ImportDto } from '../../../shared/types';
 import { api } from '../api/client';
-import { useImport } from '../api/hooks';
-import { Button, Card, CopyField, ErrorNote, Spinner, Toggle } from '../components/ui';
+import { useImport, useJob } from '../api/hooks';
+import { Button, Card, ConfirmDialog, CopyField, ErrorNote, Spinner, Toggle } from '../components/ui';
+import { JobProgress } from '../components/JobProgress';
 import { ImportConfirm } from '../components/imports/ImportConfirm';
 import { ImportsList } from '../components/imports/ImportsList';
+import { formatBytes } from '../lib/format';
 import { IMPORT_STATUS_LABEL, IMPORT_STEPS, importStep } from '../lib/imports';
 
 /** Start the zip's download in the background: the page stays where it is. */
@@ -50,7 +53,8 @@ export function ImportSite() {
       {id === null && <ConnectStep imp={null} onCreated={(created) => setParams({ id: String(created.id) })} />}
       {imp.data && step === 0 && <ConnectStep imp={imp.data} onCreated={() => undefined} />}
       {imp.data && step === 1 && <ImportConfirm imp={imp.data} />}
-      {imp.data && step >= 2 && <ImportStatusCard imp={imp.data} />}
+      {imp.data && step === 2 && <ImportProgressCard imp={imp.data} />}
+      {imp.data && step === 3 && <ImportDoneCard imp={imp.data} />}
       {id === null && <ImportsList />}
     </div>
   );
@@ -166,13 +170,115 @@ function ConnectionCode({ id }: { id: number }) {
   );
 }
 
-/** Steps 3 and 4 for now: where the import stands. */
-function ImportStatusCard({ imp }: { imp: ImportDto }) {
+/** Step 3: the pull and the set-up, live; Stop, and Continue or Delete once it stopped. */
+function ImportProgressCard({ imp }: { imp: ImportDto }) {
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const job = useJob(imp.jobId);
+  const [confirm, setConfirm] = useState<'stop' | 'delete' | null>(null);
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['import', imp.id] });
+    void qc.invalidateQueries({ queryKey: ['imports'] });
+  };
+  const stop = useMutation({ mutationFn: () => api(`/api/jobs/${imp.jobId}/cancel`, { method: 'POST' }), onSuccess: refresh });
+  const retry = useMutation({ mutationFn: () => api(`/api/imports/${imp.id}/retry`, { method: 'POST' }), onSuccess: refresh });
+  const remove = useMutation({
+    mutationFn: () => api(`/api/imports/${imp.id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['imports'] });
+      void qc.invalidateQueries({ queryKey: ['sites'] });
+      void navigate('/sites/import');
+    },
+  });
+  const p = imp.progress;
+  const failed = imp.status === 'failed';
+  const running = imp.status === 'queued' || imp.status === 'pulling';
+
   return (
     <Card title={IMPORT_STATUS_LABEL[imp.status]}>
-      <div className="space-y-2 text-sm">
-        <p>{imp.source}</p>
-        {imp.lastError && <ErrorNote error={imp.lastError} />}
+      <div className="space-y-4 text-sm">
+        <p className="text-neutral-600">
+          {imp.source} → {imp.siteSlug}
+        </p>
+        {p && (p.phase === 'files' || p.phase === 'snapshot') && (
+          <p>
+            Files {p.filesDone.toLocaleString('en-US')} of {p.filesTotal.toLocaleString('en-US')} · {formatBytes(p.bytesDone)} of{' '}
+            {formatBytes(p.bytesTotal)}
+          </p>
+        )}
+        {p && (p.phase === 'db' || p.phase === 'done') && (
+          <p>
+            Files {p.filesDone.toLocaleString('en-US')} · {formatBytes(p.bytesDone)} · Tables {p.tablesDone} of {p.tablesTotal}
+          </p>
+        )}
+        {(imp.status === 'pulled' || imp.status === 'finishing') && <p>Pull finished. Setting the site up…</p>}
+        {failed && imp.lastError && <ErrorNote error={imp.lastError} />}
+        <JobProgress job={job.job} logs={job.logs} />
+        <div className="flex flex-wrap gap-2">
+          {running && imp.jobId !== null && (
+            <Button variant="secondary" onClick={() => setConfirm('stop')} disabled={stop.isPending}>
+              Stop
+            </Button>
+          )}
+          {failed && (
+            <>
+              <Button onClick={() => retry.mutate()} disabled={retry.isPending}>
+                Continue
+              </Button>
+              <Button variant="secondary" onClick={() => setConfirm('delete')}>
+                Delete import
+              </Button>
+            </>
+          )}
+        </div>
+        <ErrorNote error={stop.error ?? retry.error ?? remove.error} />
+      </div>
+      {confirm === 'stop' && (
+        <ConfirmDialog
+          title="Stop the import"
+          message="The import stops at the next safe point. Continue resumes it."
+          confirmLabel="Stop"
+          onConfirm={() => stop.mutate()}
+          onClose={() => setConfirm(null)}
+        />
+      )}
+      {confirm === 'delete' && (
+        <ConfirmDialog
+          title="Delete import"
+          message="What was pulled so far is deleted, and the site name is free again."
+          confirmWord={imp.siteSlug ?? undefined}
+          confirmLabel="Delete import"
+          onConfirm={() => remove.mutate()}
+          onClose={() => setConfirm(null)}
+        />
+      )}
+    </Card>
+  );
+}
+
+/** Step 4: where the site is now, and what comes next. */
+function ImportDoneCard({ imp }: { imp: ImportDto }) {
+  const url = imp.siteUrl;
+  return (
+    <Card title="Imported">
+      <div className="space-y-3 text-sm">
+        {url && (
+          <p>
+            Imported:{' '}
+            <a className="underline" href={url} target="_blank" rel="noreferrer">
+              {url}
+            </a>
+          </p>
+        )}
+        <p>Search engines are discouraged until you go live.</p>
+        <p>
+          Log in with <b>Log in to WordPress</b> on the site page.
+        </p>
+        {imp.siteSlug && (
+          <Link to={`/sites/${imp.siteSlug}`}>
+            <Button>Open site page</Button>
+          </Link>
+        )}
       </div>
     </Card>
   );

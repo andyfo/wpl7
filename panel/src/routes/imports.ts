@@ -1,8 +1,10 @@
+// @docs sites/import
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { importCreateBody, importIdParams, importRunBody } from '../../shared/schemas.js';
 import type { ImportRow } from '../db/schema.js';
 import { actorName } from '../lib/audit.js';
+import { jobToDto, viewerOf } from '../lib/dto.js';
 import { attachmentDisposition } from '../lib/contentDisposition.js';
 import { PANEL_VERSION } from '../lib/version.js';
 import { PluginRefusal } from '../services/imports.js';
@@ -49,16 +51,22 @@ export function registerImportRoutes(app: FastifyInstance, deps: AppDeps): void 
     reply.header('cache-control', 'no-store').send(deps.imports.connectionCode(req.params.id)),
   );
 
-  r.post('/api/imports/:id/run', { schema: { params: importIdParams, body: importRunBody } }, async (req) => {
-    deps.imports.run(req.params.id, req.body);
+  r.post('/api/imports/:id/run', { schema: { params: importIdParams, body: importRunBody } }, async (req, reply) => {
+    const { job } = deps.imports.start(req.params.id, req.body);
+    return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
+  });
+
+  r.post('/api/imports/:id/retry', { schema: { params: importIdParams } }, async (req, reply) => {
+    const { job } = deps.imports.retry(req.params.id);
+    return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });
 
   r.post('/api/imports/:id/disconnect', { schema: { params: importIdParams } }, async (req) =>
-    deps.imports.toDto(deps.imports.disconnect(req.params.id)),
+    deps.imports.toDto(await deps.imports.disconnect(req.params.id)),
   );
 
   r.delete('/api/imports/:id', { schema: { params: importIdParams } }, async (req, reply) => {
-    deps.imports.delete(req.params.id);
+    await deps.imports.delete(req.params.id);
     return reply.status(204).send();
   });
 

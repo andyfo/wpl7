@@ -221,6 +221,7 @@ async function main(): Promise<void> {
   // Circular by nature: the reconciler enqueues jobs, the worker runs handlers that need
   // the service. Attached once here rather than threaded through every handler.
   offsite.attachWorker(worker);
+  importsService.attachWorker(worker);
   const schedulers = new Schedulers(core, worker);
   const wporg = new WporgDirectoryService();
   const users = new UsersService(db);
@@ -256,6 +257,8 @@ async function main(): Promise<void> {
   const app = await buildServer(deps);
 
   worker.reconcileOnBoot();
+  // After the worker's sweep, which fails the jobs a restart cut short: their imports follow.
+  importsService.reconcileOnBoot();
   worker.start();
   schedulers.start();
 

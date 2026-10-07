@@ -12,7 +12,7 @@ import {
   useSiteHistory,
   useSiteTraffic,
 } from '../api/hooks';
-import type { BackupDto } from '../../../shared/types';
+import type { BackupDto, SiteDetail as SiteDetailDto } from '../../../shared/types';
 import { api } from '../api/client';
 import {
   Button,
@@ -222,6 +222,7 @@ function OverviewTab({ slug }: { slug: string }) {
           </div>
         </div>
       )}
+      {s.importSource?.connected && s.importSource.status === 'done' && <ImportedBanner slug={slug} source={s.importSource} />}
       <Card>
         <div className="flex flex-wrap items-center gap-2">
           <Button small variant="secondary" onClick={() => run.mutate({ path: `/api/sites/${slug}/start` })}>Start</Button>
@@ -451,6 +452,45 @@ function MoveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
         </div>
       )}
     </Modal>
+  );
+}
+
+/**
+ * A site that came through an import, while the plugin on its old site still answers the panel:
+ * where it came from, and the way to cut that tie.
+ */
+function ImportedBanner({ slug, source }: { slug: string; source: NonNullable<SiteDetailDto['importSource']> }) {
+  const qc = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const host = (() => {
+    try {
+      return source.url ? new URL(source.url).hostname : 'the old site';
+    } catch {
+      return 'the old site';
+    }
+  })();
+  const disconnect = () => {
+    setBusy(true);
+    setError(null);
+    void api(`/api/imports/${source.importId}/disconnect`, { method: 'POST' })
+      .then(() => qc.invalidateQueries({ queryKey: ['site', slug] }))
+      .catch(setError)
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+      <div className="font-medium">Imported from {host}</div>
+      <p className="mt-1">The migration plugin on the old site is still connected.</p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button small disabled={busy} onClick={disconnect}>
+          Disconnect
+        </Button>
+      </div>
+      <div className="mt-2">
+        <ErrorNote error={error} />
+      </div>
+    </div>
   );
 }
 

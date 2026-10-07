@@ -37,6 +37,9 @@ export function Sites() {
               ))}
             </select>
           )}
+          <Link to="/sites/import">
+            <Button variant="secondary">Import site</Button>
+          </Link>
           <Link to="/sites/new">
             <Button>New site</Button>
           </Link>

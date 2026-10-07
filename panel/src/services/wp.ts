@@ -48,6 +48,9 @@ export function asSiteUser(timeoutMs: number, env: string[] = []) {
  */
 const actingAs = (actor: string | undefined): string[] => (actor ? [`--user=${actor}`] : []);
 
+/** WP-CLI's flags for running a command with none of the site's plugins or themes loaded. */
+const skipping = (opts: { skipExtensions?: boolean }): string[] => (opts.skipExtensions ? ['--skip-plugins', '--skip-themes'] : []);
+
 /**
  * WP-CLI operations, executed inside the running site container via docker exec.
  * The wpl7-wordpress image bakes in wp-cli, so PHP version and mail setup always match the site.
@@ -365,13 +368,17 @@ export class WpService {
     );
   }
 
-  async optionUpdate(container: string, key: string, value: string): Promise<void> {
-    await this.runOk(container, ['option', 'update', key, value], 60_000);
+  /**
+   * `skipExtensions` runs it without the site's plugins and theme loaded: for a site that came from
+   * another host, where a plugin may fail without the cache server or the extension it had there.
+   */
+  async optionUpdate(container: string, key: string, value: string, opts: { skipExtensions?: boolean } = {}): Promise<void> {
+    await this.runOk(container, ['option', 'update', key, value, ...skipping(opts)], 60_000);
   }
 
   /** Current value of an option, or null when wp-cli cannot read it. */
-  async optionGet(container: string, key: string): Promise<string | null> {
-    const res = await this.run(container, ['option', 'get', key], 60_000);
+  async optionGet(container: string, key: string, opts: { skipExtensions?: boolean } = {}): Promise<string | null> {
+    const res = await this.run(container, ['option', 'get', key, ...skipping(opts)], 60_000);
     return res.exitCode === 0 ? res.stdout.trim() : null;
   }
 
@@ -414,10 +421,10 @@ export class WpService {
     return res.exitCode === 0;
   }
 
-  searchReplace(container: string, oldValue: string, newValue: string): Promise<RunResult> {
+  searchReplace(container: string, oldValue: string, newValue: string, opts: { skipExtensions?: boolean } = {}): Promise<RunResult> {
     return this.runOk(
       container,
-      ['search-replace', oldValue, newValue, '--all-tables', '--skip-columns=guid', '--report-changed-only'],
+      ['search-replace', oldValue, newValue, '--all-tables', '--skip-columns=guid', '--report-changed-only', ...skipping(opts)],
       600_000,
     );
   }

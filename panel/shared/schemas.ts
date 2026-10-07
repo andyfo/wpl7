@@ -144,6 +144,9 @@ export const jobTypes = [
   'site.updateDomains',
   'site.move',
   'site.moveFinalize',
+  // An import of an existing site: the pull from the old host, then the set-up from what it pulled.
+  'site.import',
+  'site.importFinish',
   'backup.create',
   'backup.restore',
   'backup.offsite',

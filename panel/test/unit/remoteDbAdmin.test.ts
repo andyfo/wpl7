@@ -67,7 +67,7 @@ describe('RemoteDbAdminService', () => {
     expect(login!.input).toBe('[client]\nuser=wp_demo\npassword="p\\"w\\\\d"\n');
     const cnf = /\/run\/wpl7-import-[0-9a-f]{16}\.cnf/.exec(login!.args[5]!)![0];
     expect(pipeline!.args[1]).toBe(
-      `set -o pipefail; zcat '/srv/wpl7-import/3/db.sql.gz' | docker exec -i wpl7-mariadb mariadb --defaults-extra-file=${cnf} wp_demo`,
+      `set -o pipefail; zcat '/srv/wpl7-import/3/db.sql.gz' | docker exec -i wpl7-mariadb mariadb --defaults-extra-file=${cnf} --max-allowed-packet=1G wp_demo`,
     );
     expect(cleanup!.args).toEqual(['exec', 'wpl7-mariadb', 'rm', '-f', cnf]);
     for (const call of exec.calls) {
@@ -84,6 +84,18 @@ describe('RemoteDbAdminService', () => {
       /Database import failed \(exit 1\): ERROR 1064/,
     );
     expect(exec.calls.at(-1)!.args.slice(0, 4)).toEqual(['exec', 'wpl7-mariadb', 'rm', '-f']);
+  });
+
+  it('raises the packet limit only when a statement needs more', async () => {
+    const exec = new FakeExec();
+    exec.results = [{ stdout: '16777216\n', stderr: '', exitCode: 0 }, { stdout: '', stderr: '', exitCode: 0 }];
+    const db = new RemoteDbAdminService(exec);
+    expect(await db.raisePacketLimit(20 * 1024 * 1024)).toBe(32 * 1024 * 1024);
+    expect(exec.calls[0]!.input).toBe('SELECT @@GLOBAL.max_allowed_packet;\n');
+    expect(exec.calls[1]!.input).toBe('SET GLOBAL max_allowed_packet = 33554432;');
+    exec.results = [{ stdout: '67108864\n', stderr: '', exitCode: 0 }];
+    expect(await db.raisePacketLimit(20 * 1024 * 1024)).toBeNull();
+    expect(exec.calls).toHaveLength(3);
   });
 
   it('fails loudly with stderr context', async () => {

@@ -63,6 +63,7 @@ import {
   serverSyncPluginsPayload,
 } from './handlers/servers.js';
 import { siteMove, siteMoveFinalize, siteMoveFinalizePayload, siteMovePayload } from './handlers/move.js';
+import { siteImport, siteImportFinish, siteImportFinishPayload, siteImportPayload, siteImportQueuedCancel } from './handlers/import.js';
 import { systemPostUpdate, systemPostUpdatePayload } from './handlers/systemUpdate.js';
 import { filesCompress, filesCompressPayload, filesExtract, filesExtractPayload } from './handlers/files.js';
 import { siteShell, siteShellPayload, wpCli, wpCliPayload, wpRest, wpRestPayload } from './handlers/exec.js';
@@ -139,6 +140,10 @@ const registry: Partial<Record<JobType, RegistryEntry>> = {
   'server.applySiteLimits': entry(serverApplySiteLimitsPayload, serverApplySiteLimits, 10 * 60_000) as RegistryEntry,
   'site.move': entry(siteMovePayload, siteMove, 180 * 60_000) as RegistryEntry,
   'site.moveFinalize': entry(siteMoveFinalizePayload, siteMoveFinalize, 15 * 60_000) as RegistryEntry,
+  // A whole day: a big site over a slow old host is hours of requests, in a lane of its own.
+  'site.import': entry(siteImportPayload, siteImport, 24 * 3600_000, siteImportQueuedCancel) as RegistryEntry,
+  // Bounded like a restore: everything it reads is on the server already.
+  'site.importFinish': entry(siteImportFinishPayload, siteImportFinish, 60 * 60_000) as RegistryEntry,
   // Lane-less: it queues per-server work rather than doing any, so holding a server's lane
   // would only stop the jobs it just created from starting.
   'system.postUpdate': entry(systemPostUpdatePayload, systemPostUpdate, 30 * 60_000) as RegistryEntry,
@@ -192,6 +197,7 @@ export const SITE_INTERRUPTING_JOBS: ReadonlySet<JobType> = new Set<JobType>([
   'site.reconcile',
   'site.updateDomains',
   'site.move',
+  'site.importFinish',
   'backup.restore',
   'wp.coreUpdate',
   'wp.pluginTask',

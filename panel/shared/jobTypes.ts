@@ -77,6 +77,17 @@ export const JOB_TYPE_INFO = {
     description: 'Removes the copy a move parked on the old server, once every hostname resolves to the new one.',
     category: 'sites',
   },
+  'site.import': {
+    label: 'Import site',
+    description:
+      "Pulls an existing site's files and database from the old host through the migration plugin into a staging folder on the server.",
+    category: 'sites',
+  },
+  'site.importFinish': {
+    label: 'Finish import',
+    description: 'Brings an imported site up from its staging folder: database, container, WordPress fixes and a first backup.',
+    category: 'sites',
+  },
   'site.shell': {
     label: 'Shell command',
     description: "Runs a shell command inside the site's container as www-data and keeps its output in the job log.",

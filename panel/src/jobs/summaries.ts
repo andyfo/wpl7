@@ -171,6 +171,9 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
         if (target === null) return null;
         return `To ${names.server?.(target) ?? `server #${target}`}`;
       }
+      case 'site.import':
+      case 'site.importFinish':
+        return str(p.sourceHost) ? `From ${str(p.sourceHost)}` : null;
       case 'site.shell':
         return str(p.command) ? maskShell(str(p.command)!) : null;
       case 'backup.create': {

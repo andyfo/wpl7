@@ -276,6 +276,13 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       },
       {
         method: 'POST',
+        path: '/api/imports/:id/retry',
+        summary: 'Go on with a stopped import: the pull from where it stopped, or the set-up',
+        job: true,
+        level: 'manage',
+      },
+      {
+        method: 'POST',
         path: '/api/imports/:id/disconnect',
         summary: "Stop the old site's plugin answering this import",
         returns: 'ImportDto',
