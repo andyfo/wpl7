@@ -52,7 +52,6 @@ import { seed } from '../src/db/seed.js';
 import { JobWorker } from '../src/jobs/worker.js';
 import { Schedulers } from '../src/jobs/schedulers.js';
 import { SystemInfoService } from '../src/servers/systemInfo.js';
-import { FeedbackService, type PostLike } from '../src/services/feedback.js';
 import {
   TerminalService,
   type OpenTerminal,
@@ -1217,11 +1216,6 @@ const refuseCloudflare = (): never => {
   throw new Error('test tried to reach Cloudflare; pass makeWorld({ dnsClient })');
 };
 
-/** Nothing in the suite may reach the network; a test that means to post supplies its own. */
-const refuseToLeaveTheSuite: PostLike = async (url) => {
-  throw new Error(`test tried to POST ${url}; pass makeWorld({ communityPost })`);
-};
-
 export async function makeWorld(
   opts: {
     exec?: ExecPort;
@@ -1233,8 +1227,6 @@ export async function makeWorld(
     dnsClient?: (token: string) => DnsClient;
     wporg?: FakeWporg;
     resolver?: DnsResolver;
-    /** The community's /feedback endpoint. Without one the suite refuses to leave the box. */
-    communityPost?: PostLike;
     github?: FakeGitHub;
     host?: FakeHostExec;
     geoip?: GeoIpService;
@@ -1462,7 +1454,6 @@ export async function makeWorld(
     wpBulk: new WpBulkService(core, worker, core.wpInventory),
     wporg,
     serverInfo: new SystemInfoService(servers, log, null, opts.resolver),
-    feedback: new FeedbackService(config, log, opts.communityPost ?? refuseToLeaveTheSuite),
     terminal: new TerminalService(db, config, servers, log, { connect: shell.connect }),
     // Never started: no timer runs in a test unless it calls `run()` / `runDueCustom()`.
     schedulers: new Schedulers(core, worker),

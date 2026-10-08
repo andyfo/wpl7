@@ -61,9 +61,10 @@ const envSchema = z.object({
   WPL7_GITHUB_TOKEN: z.string().default(''),
   /**
    * Where this project's community lives. The About and Support pages link it, and "a question
-   * or an idea" in the feedback dialog is posted to `<this>/feedback`. A fork with a community of
-   * its own points here instead; a fork with none should empty it rather than send its
-   * operators' questions to ours - the panel then offers neither the link nor the option.
+   * or an idea" in the feedback dialog opens `<this>/feedback/` in the operator's browser, filled
+   * in. A fork with a community of its own points here instead; a fork with none should empty it
+   * rather than send its operators' questions to ours - the panel then offers neither the link
+   * nor the option.
    */
   WPL7_COMMUNITY_URL: z.string().default('https://wpl7.com/community'),
   /** Where this install lives ON THE HOST - provision/compose.sh exports it. The panel

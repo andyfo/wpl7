@@ -1242,15 +1242,6 @@ export const jobDetailQuery = z.object({
  * A question or an idea, on its way to the project's community. Bugs and feature requests
  * never come here - the browser opens those as GitHub issues under the sender's own account.
  */
-export const feedbackBody = z
-  .object({
-    summary: z.string().min(1).max(120),
-    details: z.string().min(1).max(8000),
-    /** The build-and-machine block the dialog showed, or empty when it was switched off. */
-    environment: z.string().max(2000).default(''),
-  })
-  .strict();
-
 export const apiKeyCreateBody = z.object({
   name: z.string().min(1).max(100),
   /** Full unless asked otherwise, so a script that creates keys gets what it always got. */

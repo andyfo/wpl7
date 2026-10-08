@@ -176,8 +176,6 @@ const NOT_THROUGH_MCP = [
   // The migration plugin's own calls, which its import's token lets in.
   'POST /api/migrate/connect',
   'GET /api/migrate/status',
-  // Leaves the box.
-  'POST /api/feedback',
   // The Cloudflare token: a credential, and checking one sends it to Cloudflare.
   'POST /api/dns/check',
   'PUT /api/dns/token',
@@ -265,7 +263,7 @@ describe('access levels in the API catalog', () => {
     expect(rambling.map(key)).toEqual([]);
   });
 
-  it('keeps sign-in, accounts, keys, binary streams and the feedback form away from MCP', () => {
+  it('keeps sign-in, accounts, keys, and binary streams away from MCP', () => {
     const excluded = API_DOC_ENDPOINTS.filter((e) => mcpToolGroup(e) === null).map(key);
     expect(excluded.sort()).toEqual([...NOT_THROUGH_MCP].sort());
     expect(API_DOC_ENDPOINTS.filter((e) => e.open && e.mcp !== false).map(key)).toEqual([]);

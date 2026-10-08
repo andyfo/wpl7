@@ -1,9 +1,15 @@
 // @docs panel/appearance
 import { useState } from 'react';
 import type { ServerSystemInfoDto, SystemVersionDto } from '../../../shared/types';
-import { api } from '../api/client';
-import { environmentBlock, feedbackText, feedbackUrl, type FeedbackKind } from '../lib/feedback';
-import { Button, ErrorNote, ExternalLinkIcon, Field, inputClass, Modal, Toggle } from './ui';
+import {
+  COMMUNITY_DETAILS_MAX,
+  environmentBlock,
+  feedbackText,
+  feedbackUrl,
+  openInCommunity,
+  type FeedbackKind,
+} from '../lib/feedback';
+import { Button, ExternalLinkIcon, Field, inputClass, Modal, Toggle } from './ui';
 
 const KINDS: { id: FeedbackKind; label: string; hint: string }[] = [
   { id: 'bug', label: 'Something is broken', hint: 'It does not do what it says it does.' },
@@ -16,10 +22,10 @@ const KINDS: { id: FeedbackKind; label: string; hint: string }[] = [
  *
  * A bug or a feature request is composed here and opened as a GitHub issue under the
  * sender's own account: nothing is posted from the panel, and every character is readable
- * on GitHub before they submit it. A question has nowhere like that to go - an issue tracker
- * is the wrong place and a forum wants no GitHub account - so that one is posted on by the
- * panel to the community (POST /api/feedback), which the dialog says plainly, with the
- * environment block shown in full either way.
+ * on GitHub before they submit it. A question goes the same way to the community instead -
+ * an issue tracker is the wrong place for it and a forum wants no GitHub account: the browser
+ * opens the community's new-topic page with it filled in, and the sender signs in, reads it
+ * over and posts it there. The panel itself sends nothing either way.
  */
 export function FeedbackDialog({
   repoUrl,
@@ -42,9 +48,6 @@ export function FeedbackDialog({
   const [details, setDetails] = useState('');
   const [includeEnv, setIncludeEnv] = useState(true);
   const [copied, setCopied] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [sendError, setSendError] = useState<unknown>(null);
 
   const environment = environmentBlock(version, host, node);
   const draft = {
@@ -63,42 +66,6 @@ export function FeedbackDialog({
     setTimeout(() => setCopied(false), 1500);
   };
 
-  const sendToCommunity = async () => {
-    setSending(true);
-    setSendError(null);
-    try {
-      await api('/api/feedback', {
-        method: 'POST',
-        body: { summary: draft.summary, details: draft.details, environment: draft.environment },
-      });
-      setSent(true);
-    } catch (err) {
-      setSendError(err);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  if (sent) {
-    return (
-      <Modal title="Sent" onClose={onClose}>
-        <div className="space-y-4 text-sm text-neutral-700">
-          <p>
-            Your question is waiting at{' '}
-            <a className="underline" href={communityUrl} target="_blank" rel="noreferrer noopener">
-              {communityUrl.replace(/^https:\/\//, '')} <ExternalLinkIcon />
-            </a>
-            . Read it over there and post it when you are happy with it — it is not public yet, and answers happen
-            there rather than in the panel.
-          </p>
-          <div className="flex justify-end">
-            <Button onClick={onClose}>Close</Button>
-          </div>
-        </div>
-      </Modal>
-    );
-  }
-
   return (
     <Modal title="Send feedback" onClose={onClose}>
       <div className="space-y-4 text-sm">
@@ -107,10 +74,7 @@ export function FeedbackDialog({
             <button
               key={k.id}
               type="button"
-              onClick={() => {
-                setKind(k.id);
-                setSendError(null);
-              }}
+              onClick={() => setKind(k.id)}
               className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
                 kind === k.id ? 'border-neutral-400 bg-neutral-50' : 'border-neutral-200 hover:bg-neutral-50'
               }`}
@@ -144,6 +108,7 @@ export function FeedbackDialog({
             className={`${inputClass} min-h-32 font-normal`}
             value={details}
             onChange={(e) => setDetails(e.target.value)}
+            maxLength={kind === 'question' ? COMMUNITY_DETAILS_MAX : undefined}
           />
         </Field>
 
@@ -161,12 +126,11 @@ export function FeedbackDialog({
 
         {kind === 'question' ? (
           <p className="text-xs text-neutral-500">
-            This one is sent by the panel to{' '}
+            Nothing is sent from this panel. The button opens{' '}
             <a className="underline" href={communityUrl} target="_blank" rel="noreferrer noopener">
               {communityUrl.replace(/^https:\/\//, '')}
-            </a>
-            , where you can read it over and post it yourself — nothing is public until you do. Exactly what is above
-            is what goes, and nothing else.
+            </a>{' '}
+            in a new tab with this filled in. Sign in or join there, then post it — nothing is public until you do.
           </p>
         ) : (
           <p className="text-xs text-neutral-500">
@@ -184,8 +148,6 @@ export function FeedbackDialog({
           </p>
         )}
 
-        <ErrorNote error={sendError} />
-
         <div className="flex flex-wrap justify-end gap-2">
           <Button variant="ghost" onClick={onClose}>
             Cancel
@@ -194,8 +156,14 @@ export function FeedbackDialog({
             {copied ? 'Copied!' : 'Copy'}
           </Button>
           {kind === 'question' ? (
-            <Button disabled={!ready || sending} onClick={() => void sendToCommunity()}>
-              {sending ? 'Sending…' : 'Send to community'}
+            <Button
+              disabled={!ready}
+              onClick={() => {
+                openInCommunity(communityUrl, draft);
+                onClose();
+              }}
+            >
+              Open in the community <ExternalLinkIcon />
             </Button>
           ) : (
             <Button
