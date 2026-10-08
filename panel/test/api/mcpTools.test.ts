@@ -131,7 +131,7 @@ describe('calls through the MCP tools', () => {
     });
   });
 
-  it('never reaches sign-in, accounts, keys, binary streams or the feedback form', async () => {
+  it('never reaches sign-in, accounts, keys, or binary streams', async () => {
     const { client } = await panel();
     const full = client('full');
     const refusals = [
@@ -143,7 +143,6 @@ describe('calls through the MCP tools', () => {
       await full.call('wpl7_api_dangerous', { method: 'POST', path: '/api/api-keys', body: { name: 'mine' } }),
       await full.call('wpl7_api_dangerous', { method: 'DELETE', path: '/api/api-keys/activity' }),
       await full.call('wpl7_api_get', { path: '/api/backups/1/download' }),
-      await full.call('wpl7_api_change', { method: 'POST', path: '/api/feedback', body: { summary: 'x', details: 'y' } }),
     ];
     for (const r of refusals) {
       expect(r.isError).toBe(true);

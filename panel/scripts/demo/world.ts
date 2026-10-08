@@ -108,8 +108,6 @@ export async function buildWorld(): Promise<TestWorld> {
     resolver: demoResolver,
     github,
     wporg,
-    // The feedback dialog is never sent from the demo.
-    communityPost: async () => ({ status: 200, text: async () => '' }),
   });
   return world;
 }

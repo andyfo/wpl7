@@ -21,9 +21,6 @@ const ALLOWED_WHILE_UPDATING = new Set([
   // The Update page's own controls, so a stuck update can still be looked at and retried.
   '/api/system/update',
   '/api/system/update/check',
-  // Writes nothing here, and the minute an update has gone wrong is the likeliest minute
-  // anyone wants to say so.
-  '/api/feedback',
 ]);
 
 export function registerMaintenanceGuard(app: FastifyInstance, system: SystemUpdateService): void {
