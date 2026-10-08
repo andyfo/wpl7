@@ -1,0 +1,112 @@
+---
+title: Import a site
+description: Bring an existing WordPress site in from another host, through a plugin you install on the old site.
+sidebar:
+  order: 3
+sources:
+  - panel/web/src/pages/ImportSite.tsx
+  - panel/web/src/components/imports/*.tsx
+  - panel/src/routes/imports.ts
+  - panel/src/services/imports.ts
+  - panel/src/services/importInspect.ts
+  - panel/src/services/importPull.ts
+  - panel/src/services/importSql.ts
+  - panel/src/jobs/handlers/import.ts
+  - panel/src/jobs/handlers/importRefresh.ts
+  - panel/src/services/importListing.ts
+  - panel/src/lib/outboundGuard.ts
+  - panel/migrate-plugin/wpl7-migrate/**/*.php
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+An import copies a WordPress site from the host it runs on now into a new site on the panel. You
+install a plugin the panel gives you on the old site. The panel then pulls the files and the
+database through it, while the old site keeps running.
+
+<Screenshot name="site-import" alt="The Confirm step of an import: what the old site reported, a warning, and the new site's name" />
+
+## Before you start
+
+- An administrator login on the old site, to install a plugin.
+- HTTPS on the old site. A site without it can still be imported, with the switch below.
+- The panel reachable from the old site at its own address, `PANEL_DOMAIN`.
+- Free disk on the server the site goes to: about two and a half times the site's size.
+
+## Import a site
+
+1. Open **Sites** and choose **Import site**.
+2. Turn on **The old site has no HTTPS** only if it has none. Choose **Download plugin**.
+3. On the old site, install the zip under **Plugins → Add New → Upload Plugin**, and activate it.
+4. Back in the panel, wait for the old site to connect. The page moves on to **Confirm** by itself.
+5. Read what the old site reported and the warnings. Set the **Site name (slug)**, the
+   **PHP version** and what to leave behind.
+6. Choose **Start import**, and follow the copy on the page.
+7. When the page says **Imported**, choose **Open site page**.
+
+The plugin's zip holds the import's own key. Install it on the one site you import, and do not
+share it. If the plugin asks for a panel address and a connection code, open **The plugin asks for
+a connection code** under the steps and copy both.
+
+## What happens
+
+Two jobs run. **Import site** lists the old site's files, then copies them and the database in
+short requests, into a staging folder on the server. It writes down how far it got, so
+**Continue** goes on from there after **Stop** or a failure.
+
+**Finish import** builds the site from that folder on its [dev address](/docs/reference/glossary/#dev-domain).
+The database is imported as the site's own database user. The site gets a new `wp-config.php`
+with the settings you carried over, and the old address is replaced with the dev address in the
+database. The plugins, drop-ins and must-use plugins you chose are left behind, and so is the
+migration plugin. Search engines are discouraged, a first backup is taken and a malware scan is
+queued.
+
+## After the import
+
+- The site keeps its users, passwords and language. **Log in to WordPress** on its page works as
+  on any site.
+- **Go live** moves it to its domain and allows search engines again. See
+  [Domains and going live](/docs/sites/domains/).
+- The plugin on the old site stays connected until you choose **Disconnect** on the site page,
+  or delete the import. Then it deactivates itself.
+
+## Refresh before going live
+
+A shop or a site with comments keeps changing on the old host while you check the new copy.
+**Refresh from source** copies those changes, as the last step before you go live.
+
+1. Check the imported site on its dev address.
+2. On the site page, choose **Refresh from source** and type the site name to confirm.
+3. When the refresh is done, choose **Go live** and point the domain at the panel.
+
+The refresh takes a backup of the site first. The old site shows visitors a maintenance page
+while the panel copies its database again, whole. Files added or changed there since the last
+pull are copied. Files deleted there are deleted here too, unless they were changed here or the
+old site could not list their folder.
+
+Changes made in this site's database since the import are lost. If the refresh fails after it
+started replacing, the backup is put back.
+
+## Limits
+
+- Multisite networks and WordPress in a subfolder cannot be imported.
+- Symbolic links, and tables without the site's table prefix, are not copied. Neither are views,
+  triggers and stored routines.
+- A database row too large for the old host to read in one go is not copied. The job log names
+  it, with its table.
+- The old site keeps serving during the import. Changes made there in the meantime can be
+  missing until a refresh.
+- The old site serves visitors again when a refresh ends. Orders or comments taken there after
+  that are not copied.
+- A refresh needs the plugin connected. After **Disconnect**, import the site again instead.
+- `wp-config.php` is the panel's own. Database settings, keys, salts, paths and cache settings
+  are never carried over.
+- The first copy of a big site can take hours.
+
+## Related
+
+- [Create a site](/docs/sites/create/)
+- [Domains and going live](/docs/sites/domains/)
+- [How backups work](/docs/backups/overview/)
+- [Malware scans](/docs/security/malware-scans/)
+- [What leaves your server](/docs/security/privacy/)

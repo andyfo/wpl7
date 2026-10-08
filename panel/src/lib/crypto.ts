@@ -36,3 +36,14 @@ export function generatePassword(length = 24): string {
 export function generateSecret(bytes = 24): string {
   return crypto.randomBytes(bytes).toString('base64url');
 }
+
+/**
+ * Whether two secrets are the same, in time that does not depend on where they first differ: a
+ * plain `===` returns sooner the earlier the difference, which is what a guesser times. A length
+ * difference is told at once; the length of a token is not the secret part of it.
+ */
+export function sameSecret(a: string, b: string): boolean {
+  const left = Buffer.from(a, 'utf8');
+  const right = Buffer.from(b, 'utf8');
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}

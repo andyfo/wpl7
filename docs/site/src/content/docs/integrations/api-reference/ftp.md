@@ -2,7 +2,7 @@
 title: FTP & SFTP logins
 description: Logins for desktop FTP and SFTP clients, each kept to one site's files. There are none by default, and nothing FTP runs on a server until one of its sites has a login.
 sidebar:
-  order: 2.04
+  order: 2.05
 sources:
   - panel/shared/apiDocs.ts
 ---

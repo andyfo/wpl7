@@ -8,7 +8,7 @@ import { requireRunning } from './wp.js';
 
 export const siteMalwareScanPayload = z.object({
   siteId: z.number().int(),
-  trigger: z.enum(['schedule', 'manual', 'rescan']).default('manual'),
+  trigger: z.enum(['schedule', 'manual', 'rescan', 'import']).default('manual'),
 });
 
 /**

@@ -190,12 +190,13 @@ ones the panel's pickers offer. Every new site has WordPress's bundled plugins �
 Dolly — removed right after the install, before the requested plugins go on.
 `discourageSearchEngines` defaults to **true**: the site is created with WordPress's "Discourage
 search engines from indexing this site" (Settings → Reading) switched on. Pass `false` for a site
-that should be indexed from the start — nothing else turns it off later, go-live included.
+that should be indexed from the start. Going live turns it off unless its `allowSearchEngines` is
+`false`.
 | `GET /sites/:slug` | – | `SiteDetail` (incl. `containerState` — `unknown` when the hosting server cannot be reached; the rest is served from the registry — `url`, monitoring snapshot) |
 | `DELETE /sites/:slug` | `?finalBackup=true\|false` (default true; `false` skips the final backup) `&deleteBackups=true\|false` (default false) | `202 {job}` — `deleteBackups=true` also deletes the backups the site already has, offsite copies included: once the site is gone, its job queues a `backup.delete` for them (`result.backupDeleteJobId`). The final backup is not among them, so with both the site leaves exactly one backup behind (`result.finalBackupId`); when a final backup was asked for but the files were already gone, its newest complete backup stays instead |
 | `POST /sites/:slug/start` · `/stop` · `/restart` | – | `202 {job}` |
 | `PUT /sites/:slug/php` | `{phpVersion}` | `202 {job}` — auto-rollback if the site stops responding |
-| `POST /sites/:slug/go-live` | `{domains: [primary, ...aliases], keepDevAlias?: true, manageDns?: false}` | `202 {job}` — `manageDns: true` creates the A records first, through the Cloudflare token in Settings → DNS, for the domains whose zone it reaches |
+| `POST /sites/:slug/go-live` | `{domains: [primary, ...aliases], keepDevAlias?: true, allowSearchEngines?: true, manageDns?: false}` | `202 {job}` — `manageDns: true` creates the A records first, through the Cloudflare token in Settings → DNS, for the domains whose zone it reaches; `allowSearchEngines` unticks WordPress's "Discourage search engines" once the URLs are rewritten |
 | `PUT /sites/:slug/domains` | `{domains}` | `202 {job}` — general domain edit |
 | `POST /sites/:slug/move` | `{targetServerId, quiesce?: "maintenance"\|"stop"\|"none"}` | `202 {job}` — default quiesce: live site `maintenance`, dev site `none`; see docs/multi-server.md |
 | `POST /sites/:slug/move/finalize` | – | `202 {job}` — tear down the source copy of a moved site now instead of waiting for DNS verification |
@@ -205,6 +206,23 @@ that should be indexed from the start — nothing else turns it off later, go-li
 | `PUT /sites/:slug/backups-enabled` | `{enabled}` | `SiteDetail` (sync) — take this site in or out of the scheduled backup run (`backupCron`, which is not necessarily nightly). Only that run: manual, pre-restore, move and final backups still happen either way (docs/backup-restore.md) |
 | `PUT /sites/:slug/offsite-enabled` | `{enabled}` | `SiteDetail` (sync) — stop (or resume) copying this site's backups to the offsite destinations. Copies already made are kept |
 | `GET /sites/:slug/traffic` | `?days=1..365` (default 30) | `SiteTrafficDto` — visitor statistics; see below |
+
+### Site imports
+Bringing an existing WordPress site in (docs/site-lifecycle.md → Import). The last two are the migration
+plugin's own calls; its import's token goes in `X-WPL7-Import-Token`, never in `Authorization`.
+
+| Method & path | Body / query | Returns |
+|---|---|---|
+| `GET /imports` | – | `{items: ImportSummaryDto[]}` — newest first, with status and progress |
+| `POST /imports` | `{sourceUrl?, allowHttp?: false}` | `201 ImportDto` — `409` without a `PANEL_DOMAIN` in production: the old site has no address to reach the panel at |
+| `GET /imports/:id` | – | `ImportDto` (Manage: it quotes the old wp-config.php's settings; secret-looking values masked) |
+| `GET /imports/:id/plugin` | – | the plugin zip for this import, its token inside; `409` once the import is done, expired or disconnected |
+| `POST /imports/:id/run` | `{title, slug, serverId?, phpVersion?, locale?, carryConstants?, deactivatePlugins?, removeDropins?, removeMuPlugins?, rewritePaths?: true}` | `202 {job}` (`site.import`) — `409` until the old site connected, or when a warning blocks the import |
+| `POST /imports/:id/retry` | – | `202 {job}` — a failed import: the pull from its cursor, or the set-up when the pull was done |
+| `POST /imports/:id/disconnect` | – | `ImportDto` — the token goes; the plugin is asked to stop first |
+| `DELETE /imports/:id` | – | `204` — `409` while a job works on it; removes its staging folder and the site row it reserved when that never became a site |
+| `POST /migrate/connect` | the old site's report | `{ok, import: {id, status, label}, panel_version}` — `401` unknown token, `409` running or bound to another site, `410` expired, `426` another protocol, `422` a report it cannot read |
+| `GET /migrate/status` | – | `MigrateStatusDto` |
 
 ### Backups
 | Method & path | Body / query | Returns |

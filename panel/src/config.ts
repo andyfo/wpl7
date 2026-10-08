@@ -200,6 +200,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     provisionBundle: fsExistsSync('/app/bundle') ? '/app/bundle' : path.resolve(process.cwd(), '..'),
     /** The bundled catalog (plugin recipes); `panel/catalog` in a checkout, baked into the image. */
     catalogDir: fsExistsSync('/app/catalog') ? '/app/catalog' : path.resolve(process.cwd(), 'catalog'),
+    /** The migration plugin an import hands out (`wpl7-migrate/` in here); `panel/migrate-plugin` in a checkout. */
+    migratePluginDir: fsExistsSync('/app/migrate-plugin') ? '/app/migrate-plugin' : path.resolve(process.cwd(), 'migrate-plugin'),
     catalog: {
       /** null = fetching is off; only the bundled recipes are used. */
       url: e.WPL7_CATALOG_URL.trim() === 'off' ? null : e.WPL7_CATALOG_URL.trim() || DEFAULT_CATALOG_URL,

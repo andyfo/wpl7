@@ -5,6 +5,8 @@ import type { RecipeHook } from './recipes.js';
 import type {
   BackupType,
   CopyStatus,
+  ImportRunBody,
+  ImportStatus,
   JobCategory,
   JobOrigin,
   JobStatus,
@@ -83,6 +85,8 @@ export interface SiteDetail extends SiteSummary {
   adminUser: string | null;
   adminEmail: string | null;
   dbName: string;
+  /** The prefix of the site's WordPress tables: `wp_`, or what an imported site came with. */
+  tablePrefix: string;
   /** 'unknown' = the hosting server could not be asked (unreachable); the rest of the detail is served from the registry. */
   containerState: 'running' | 'created' | 'exited' | 'missing' | 'unknown';
   url: string;
@@ -101,6 +105,141 @@ export interface SiteDetail extends SiteSummary {
     hostsPending: string[];
     since: number;
   } | null;
+  /**
+   * The import this site came from, when it did. `connected`: the plugin on the old site still
+   * answers it. `refreshJobId`: the refresh from the old site that is queued or running.
+   */
+  importSource: {
+    importId: number;
+    url: string | null;
+    status: ImportStatus;
+    connected: boolean;
+    importedAt: number | null;
+    refreshJobId: number | null;
+  } | null;
+}
+
+// ---------------------------------------------------------------------------
+// Site imports
+
+/** Something the Confirm step tells the admin about the old site. `blocking`: the import cannot start. */
+export interface ImportWarning {
+  code: string;
+  blocking: boolean;
+  message: string;
+}
+
+/** A constant from the old wp-config.php that can be carried over. The value itself stays on the panel. */
+export interface ImportConstantDto {
+  name: string;
+  type: 'string' | 'bool' | 'int' | 'float' | 'null';
+  /** The value as shown: masked when the name reads like a secret. */
+  preview: string;
+  /** Ticked on the Confirm step to begin with. */
+  ticked: boolean;
+  /** Why it starts unticked. */
+  note: string | null;
+}
+
+/** What the Confirm step starts with. */
+export interface ImportSuggestionsDto {
+  title: string;
+  slug: string;
+  phpVersion: string | null;
+  deactivatePlugins: string[];
+  removeDropins: string[];
+  removeMuPlugins: string[];
+}
+
+/** The old site, as its plugin reported it. */
+export interface ImportSourceDto {
+  home: string;
+  siteurl: string;
+  title: string;
+  wpVersion: string;
+  phpVersion: string;
+  tablePrefix: string;
+  locale: string;
+  /** The old site's "Search engine visibility". */
+  searchEnginesAllowed: boolean;
+  https: boolean;
+  abspath: string;
+  files: { count: number; bytes: number; partial: boolean };
+  db: { server: string; bytes: number; tables: number };
+  plugins: { slug: string; name: string; version: string; active: boolean }[];
+  theme: { slug: string; name: string; version: string } | null;
+  dropins: string[];
+  muPlugins: { file: string; name: string }[];
+  pluginVersion: string;
+}
+
+/** How far a pull has got. */
+export interface ImportProgressDto {
+  phase: 'snapshot' | 'files' | 'db' | 'done';
+  filesDone: number;
+  filesTotal: number;
+  bytesDone: number;
+  bytesTotal: number;
+  tablesDone: number;
+  tablesTotal: number;
+}
+
+/** One import in the list. */
+export interface ImportSummaryDto {
+  id: number;
+  status: ImportStatus;
+  /** The old site's address once it connected, else what the admin typed (or null). */
+  source: string | null;
+  siteSlug: string | null;
+  /** The new site's address, once there is a site. */
+  siteUrl: string | null;
+  serverName: string | null;
+  jobId: number | null;
+  lastError: string | null;
+  progress: ImportProgressDto | null;
+  createdAt: number;
+  startedAt: number | null;
+  importedAt: number | null;
+  expiresAt: number | null;
+}
+
+/** One import in full: the Connect, Confirm and Import steps read it. Never carries the token. */
+export interface ImportDto extends ImportSummaryDto {
+  allowHttp: boolean;
+  /** The plugin on the old site can still be reached through this import (its token is live). */
+  connected: boolean;
+  /** The personalised plugin can be downloaded (`GET /api/imports/:id/plugin`). */
+  canDownload: boolean;
+  connectedAt: number | null;
+  report: ImportSourceDto | null;
+  warnings: ImportWarning[];
+  /** Why Start import is refused right now, or null. */
+  blockedReason: string | null;
+  suggestions: ImportSuggestionsDto | null;
+  constants: ImportConstantDto[];
+  choices: ImportRunBody | null;
+}
+
+/** For the plugin's own form, when it came without its connection file (`GET /api/imports/:id/code`). */
+export interface ImportConnectionCodeDto {
+  /** The panel's address, as the plugin calls it. */
+  panel: string;
+  /** The import's token. */
+  code: string;
+}
+
+/** What the plugin's admin page shows while the panel works (`GET /api/migrate/status`). */
+export interface MigrateStatusDto {
+  status: ImportStatus;
+  phase: ImportProgressDto['phase'] | null;
+  filesDone: number;
+  filesTotal: number;
+  bytesDone: number;
+  bytesTotal: number;
+  tablesDone: number;
+  tablesTotal: number;
+  siteUrl?: string;
+  message?: string;
 }
 
 export interface JobDto {
@@ -1843,7 +1982,7 @@ export interface RuleRejectionDto {
 
 export interface ScanDto {
   id: number;
-  /** 'schedule' | 'manual' | 'rescan'. */
+  /** 'schedule' | 'manual' | 'rescan' | 'import'. */
   trigger: string;
   status: ScanOutcome;
   startedAt: number;

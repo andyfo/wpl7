@@ -91,13 +91,10 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (req.body.manageDns) requireAccess(req, 'full', 'writing DNS records (manageDns)');
     const current = deps.sites.bySlug(req.params.slug);
     holdSigningDomains(req, req.body.domains, JSON.parse(current.domains) as string[]);
-    const job = deps.sites.updateDomains(
-      req.params.slug,
-      req.body.domains,
-      req.body.keepDevAlias,
-      true,
-      req.body.manageDns,
-    );
+    const job = deps.sites.updateDomains(req.params.slug, req.body.domains, req.body.keepDevAlias, true, {
+      manageDns: req.body.manageDns,
+      allowSearchEngines: req.body.allowSearchEngines,
+    });
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });
 

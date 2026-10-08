@@ -2,7 +2,7 @@
 title: WordPress on one site
 description: The snapshot (/wp/status) is a database read and answers instantly, even for a stopped site. Anything that changes the install is a job.
 sidebar:
-  order: 2.02
+  order: 2.03
 sources:
   - panel/shared/apiDocs.ts
 ---

@@ -141,6 +141,20 @@
       "when": 1790916924545,
       "tag": "0019_panel_files",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1791381185584,
+      "tag": "0020_table_prefix",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1791382260437,
+      "tag": "0021_site_imports",
+      "breakpoints": true
     }
   ]
 }

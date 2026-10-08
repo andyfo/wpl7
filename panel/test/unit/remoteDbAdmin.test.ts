@@ -56,6 +56,48 @@ describe('RemoteDbAdminService', () => {
     expect(call.args[1]).toContain('wp_demo');
   });
 
+  it('imports as the site user without its password in any argv, and removes the login file', async () => {
+    const exec = new FakeExec();
+    await new RemoteDbAdminService(exec).importFromAs('/srv/wpl7-import/3/db.sql.gz', 'wp_demo', 'wp_demo', 'p"w\\d');
+    const [login, pipeline, cleanup] = exec.calls;
+    // The login goes over stdin into a file only root in the MariaDB container can read.
+    expect(login!.method).toBe('runWithInput');
+    expect(login!.args.slice(0, 5)).toEqual(['exec', '-i', 'wpl7-mariadb', 'sh', '-c']);
+    expect(login!.args[5]).toMatch(/^umask 077; cat > \/run\/wpl7-import-[0-9a-f]{16}\.cnf$/);
+    expect(login!.input).toBe('[client]\nuser=wp_demo\npassword="p\\"w\\\\d"\n');
+    const cnf = /\/run\/wpl7-import-[0-9a-f]{16}\.cnf/.exec(login!.args[5]!)![0];
+    expect(pipeline!.args[1]).toBe(
+      `set -o pipefail; zcat '/srv/wpl7-import/3/db.sql.gz' | docker exec -i wpl7-mariadb mariadb --defaults-extra-file=${cnf} --max-allowed-packet=1G wp_demo`,
+    );
+    expect(cleanup!.args).toEqual(['exec', 'wpl7-mariadb', 'rm', '-f', cnf]);
+    for (const call of exec.calls) {
+      expect(call.args.join(' ')).not.toContain('p"w');
+      expect(call.args.join(' ')).not.toContain('MYSQL_PWD');
+      expect(call.args.join(' ')).not.toContain('MARIADB_ROOT_PASSWORD');
+    }
+  });
+
+  it('removes the login file when the import fails', async () => {
+    const exec = new FakeExec();
+    exec.results = [{ stdout: '', stderr: '', exitCode: 0 }, { stdout: '', stderr: 'ERROR 1064', exitCode: 1 }];
+    await expect(new RemoteDbAdminService(exec).importFromAs('/x/db.sql.gz', 'wp_demo', 'wp_demo', 'pw')).rejects.toThrow(
+      /Database import failed \(exit 1\): ERROR 1064/,
+    );
+    expect(exec.calls.at(-1)!.args.slice(0, 4)).toEqual(['exec', 'wpl7-mariadb', 'rm', '-f']);
+  });
+
+  it('raises the packet limit only when a statement needs more', async () => {
+    const exec = new FakeExec();
+    exec.results = [{ stdout: '16777216\n', stderr: '', exitCode: 0 }, { stdout: '', stderr: '', exitCode: 0 }];
+    const db = new RemoteDbAdminService(exec);
+    expect(await db.raisePacketLimit(20 * 1024 * 1024)).toBe(32 * 1024 * 1024);
+    expect(exec.calls[0]!.input).toBe('SELECT @@GLOBAL.max_allowed_packet;\n');
+    expect(exec.calls[1]!.input).toBe('SET GLOBAL max_allowed_packet = 33554432;');
+    exec.results = [{ stdout: '67108864\n', stderr: '', exitCode: 0 }];
+    expect(await db.raisePacketLimit(20 * 1024 * 1024)).toBeNull();
+    expect(exec.calls).toHaveLength(3);
+  });
+
   it('fails loudly with stderr context', async () => {
     const exec = new FakeExec();
     exec.results = [{ stdout: '', stderr: 'boom', exitCode: 1 }];

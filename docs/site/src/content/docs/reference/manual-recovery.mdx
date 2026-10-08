@@ -29,7 +29,7 @@ root is `/srv/backups` unless the server's location was moved on **Backups → S
 |---|---|
 | `db.sql.gz` | A `mariadb-dump --single-transaction` of the site's database |
 | `files.tar.gz` | The site's `wordpress/` folder, its `config/` folder and `site.json` |
-| `manifest.json` | The slug, title, domains, dev address, PHP and WordPress versions, locale, database name and user, and the table prefix `wp_` |
+| `manifest.json` | The slug, title, domains, dev address, PHP and WordPress versions, locale, database name and user, and the table prefix: `wp_`, unless the site was imported |
 | `sha256sums` | The SHA-256 checksums of the two archives |
 
 The names on the server follow from the slug. For Northwind Bakery, slug `northwind-bakery`:
@@ -214,7 +214,8 @@ snapshot are gone, and logins deleted since come back.
 - The `wordpress/` folder from `files.tar.gz` as `/var/www/html`, owned by uid 33.
 - The database settings as the variables `WORDPRESS_DB_HOST`, `WORDPRESS_DB_NAME`,
   `WORDPRESS_DB_USER` and `WORDPRESS_DB_PASSWORD`, because the site's `wp-config.php` reads them
-  from the environment. The table prefix is `wp_`.
+  from the environment. An imported site also needs `WORDPRESS_TABLE_PREFIX`, set to the table
+  prefix in the manifest; every other site's is `wp_`, the image's default.
 
 ## Limits
 

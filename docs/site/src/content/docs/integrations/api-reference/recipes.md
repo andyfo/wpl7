@@ -2,7 +2,7 @@
 title: Plugin recipes
 description: How the panel activates pro-plugin licenses (docs/licenses.md). Recipes come from the public catalog, the bundled files or your own JSON; what you enter for their inputs is stored per recipe, and secret inputs such as license keys are never returned.
 sidebar:
-  order: 2.14
+  order: 2.15
 sources:
   - panel/shared/apiDocs.ts
 ---

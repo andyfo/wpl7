@@ -33,6 +33,7 @@ import {
   loadSite,
   probeSite,
   restartSiteContainer,
+  rewriteWordPressUrls,
   runLicenseHook,
   shouldSiteRun,
   siteDomains,
@@ -767,6 +768,11 @@ export const siteUpdateDomainsPayload = z.object({
   keepDevAlias: z.boolean(),
   goLive: z.boolean(),
   manageDns: z.boolean().default(false),
+  /**
+   * Untick WordPress's "Discourage search engines" once the site answers on its real domains.
+   * Go-live only. False for jobs queued before it existed, which left the setting alone.
+   */
+  allowSearchEngines: z.boolean().default(false),
 });
 
 /**
@@ -858,12 +864,25 @@ export async function siteUpdateDomains(
   await replaceContainer(ctx, server, s, siteRuntimeFrom(s.settings), site, { site: finalSite, domains: newList }, { site, domains: transition }, wasRunning);
 
   const newUrl = siteUrl(s.config, newPrimary);
+  // A site going live stops asking search engines to stay away (decided in the Go live dialog).
+  // In the same started-if-needed window as the rewrite; never a reason to fail a go-live.
+  const allowSearch = ctx.payload.goLive && ctx.payload.allowSearchEngines;
+  const inside = allowSearch
+    ? async (container: string) => {
+        ctx.info('Allowing search engines to index the site…');
+        try {
+          await server.wp.searchEngineVisibility(container, true);
+        } catch (err) {
+          ctx.warn(`Could not allow search engines (${errMsg(err)}); untick Discourage search engines in Settings -> Reading.`);
+        }
+      }
+    : undefined;
   // Running sites are always asked what URL WordPress currently uses (an earlier, partially
   // applied attempt may have left the database ahead of or behind the row); a stopped site
-  // is only started for the rewrite when the primary actually changes.
-  if (wasRunning || newPrimary !== oldPrimary) {
+  // is only started for the rewrite when the primary actually changes, or to allow search engines.
+  if (wasRunning || newPrimary !== oldPrimary || allowSearch) {
     try {
-      await rewriteWordPressUrls(ctx, s, server, site, siteUrl(s.config, oldPrimary), newUrl, wasRunning);
+      await rewriteWordPressUrls(ctx, s, server, site, siteUrl(s.config, oldPrimary), newUrl, wasRunning, { inside });
     } catch (err) {
       ctx.error(
         `WordPress URL rewrite failed (${errMsg(err)}); restoring the transition router so the old canonical ` +
@@ -905,52 +924,6 @@ async function releaseLicenses(ctx: JobContext<unknown>, s: CoreServices, server
     await runLicenseHook(ctx, s, server, site, 'beforeRemove', { url: siteUrl(s.config, siteDomains(site)[0]!) });
   } catch (err) {
     ctx.warn(`Could not release plugin licenses before deleting (${errMsg(err)}); free them at the vendor if the license counts sites.`);
-  }
-}
-
-/**
- * Point WordPress (home/siteurl + content) at `newUrl`. The current URL is read from
- * WordPress itself rather than derived from the registry row, so the rewrite is resumable:
- * whatever an earlier attempt left behind, it converges on `newUrl`.
- */
-async function rewriteWordPressUrls(
-  ctx: JobContext<unknown>,
-  s: CoreServices,
-  server: ServerHandle,
-  site: SiteRow,
-  fallbackOldUrl: string,
-  newUrl: string,
-  wasRunning: boolean,
-): Promise<void> {
-  // wp-cli runs via `docker exec`, so the container has to be up. Skipping the rewrite
-  // for a stopped site left it flagged live while WordPress still redirected every
-  // request to the old dev URL - visible only once someone started it again.
-  if (!wasRunning) {
-    ctx.info('Site is stopped; starting it briefly to rewrite the WordPress URLs…');
-    await startSiteContainer(server, s, site, ctx);
-  }
-  try {
-    const currentUrl = (await server.wp.optionGet(site.containerName, 'home')) || fallbackOldUrl;
-    if (currentUrl === newUrl) {
-      ctx.info(`WordPress already uses ${newUrl}; no URL rewrite needed.`);
-      return;
-    }
-    ctx.info(`Updating WordPress URLs (${currentUrl} -> ${newUrl})…`);
-    await server.wp.optionUpdate(site.containerName, 'home', newUrl);
-    await server.wp.optionUpdate(site.containerName, 'siteurl', newUrl);
-    ctx.info('Running search-replace across all tables (guids preserved)…');
-    const res = await server.wp.searchReplace(site.containerName, currentUrl, newUrl);
-    ctx.info(res.stdout.trim().split('\n').slice(-1)[0] ?? 'search-replace done');
-    // Still inside the started-if-needed window: licensed plugins tie their activation to
-    // the URL, and Breakdance keeps URLs in JSON that search-replace does not reach.
-    await runLicenseHook(ctx, s, server, site, 'afterUrlChange', { url: newUrl, oldUrl: currentUrl, newUrl });
-  } finally {
-    if (!wasRunning) {
-      ctx.info('Stopping the site again (it was stopped before the domain change).');
-      await server.docker.stopContainer(site.containerName).catch((err) => {
-        ctx.warn(`Could not stop the site again: ${errMsg(err)}`);
-      });
-    }
   }
 }
 

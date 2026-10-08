@@ -171,6 +171,10 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
         if (target === null) return null;
         return `To ${names.server?.(target) ?? `server #${target}`}`;
       }
+      case 'site.import':
+      case 'site.importFinish':
+      case 'site.importRefresh':
+        return str(p.sourceHost) ? `From ${str(p.sourceHost)}` : null;
       case 'site.shell':
         return str(p.command) ? maskShell(str(p.command)!) : null;
       case 'backup.create': {
@@ -241,7 +245,15 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
       case 'plugin.zipCheck':
         return typeof p.pluginId === 'number' ? `Catalog zip #${p.pluginId}` : null;
       case 'site.malwareScan':
-        return p.trigger === 'schedule' ? 'On schedule' : p.trigger === 'rescan' ? 'Again, after its files changed' : p.trigger === 'manual' ? 'Asked for' : null;
+        return p.trigger === 'schedule'
+          ? 'On schedule'
+          : p.trigger === 'rescan'
+            ? 'Again, after its files changed'
+            : p.trigger === 'manual'
+              ? 'Asked for'
+              : p.trigger === 'import'
+                ? 'After the import'
+                : null;
       default:
         return null;
     }

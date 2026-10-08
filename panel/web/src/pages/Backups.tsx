@@ -39,6 +39,7 @@ const SITE_KINDS: { id: BackupType; label: string }[] = [
   { id: 'pre_update', label: 'Before an update' },
   { id: 'pre_restore', label: 'Before a restore' },
   { id: 'move', label: 'Server move' },
+  { id: 'import', label: 'Import' },
 ];
 
 /** The Site filter's value for "every deleted site"; a slug never starts with @. */

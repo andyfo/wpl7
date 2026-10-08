@@ -34,7 +34,9 @@ is now. If either step fails, nothing has changed and the site keeps running.
 Then it stops the site and pauses the site's FTP and SFTP logins. It replaces the database with the
 backup's and swaps in the files. The previous files stay next to the new ones, in
 `wordpress.pre-restore-<time>`, for at least a day. A backup taken on another PHP version moves the
-site back to that version, if the panel still offers it.
+site back to that version, if the panel still offers it. A backup whose tables have another prefix
+gives the site that prefix: that happens when a site restores a backup of a deleted site that had
+the same name.
 
 Last, it starts the site. If the site's address changed since the backup, WordPress's URLs are
 rewritten to the current one, and the site's [recipes](/docs/plugins/recipes/) run for the new
