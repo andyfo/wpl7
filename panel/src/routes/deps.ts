@@ -4,7 +4,6 @@ import type { Schedulers } from '../jobs/schedulers.js';
 import type { SitesService } from '../services/sites.js';
 import type { ApiKeysService } from '../services/apiKeys.js';
 import type { ApiActivityService } from '../services/apiActivity.js';
-import type { FeedbackService } from '../services/feedback.js';
 import type { PluginCatalogService } from '../services/pluginCatalog.js';
 import type { SystemInfoService } from '../servers/systemInfo.js';
 import type { TerminalService } from '../servers/terminal.js';
@@ -30,8 +29,6 @@ export interface AppDeps extends CoreServices {
   /** OAuth sign-in for AI apps connecting over MCP: the window, the connections, the tokens. */
   oauth: OAuthService;
   pluginCatalog: PluginCatalogService;
-  /** Questions and ideas, forwarded to the project's community. */
-  feedback: FeedbackService;
   /** Fleet-wide WordPress bulk runs (batches) and the fleet scan's bookkeeping. */
   wpBulk: WpBulkService;
   /** wordpress.org plugin directory, for the catalog typeahead and slug validation. */

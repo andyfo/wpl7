@@ -1471,15 +1471,6 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         mcp: false,
       },
       {
-        method: 'POST',
-        path: '/api/feedback',
-        summary: "Send a question or an idea to this install's community; bugs go to GitHub from the browser",
-        input: '{summary, details, environment?}',
-        returns: '{ok: true}',
-        level: 'full',
-        mcp: false,
-      },
-      {
         method: 'GET',
         path: '/api/meta',
         summary: 'PHP versions, locales, servers, dev domain, timezone - what the forms are built from',

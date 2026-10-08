@@ -15,7 +15,6 @@ import { OffsiteService } from './services/offsite.js';
 import { StorageService } from './services/storage.js';
 import { LocalHostExec } from './servers/hostExec.js';
 import { SystemInfoService } from './servers/systemInfo.js';
-import { FeedbackService } from './services/feedback.js';
 import { DnsService } from './services/dns.js';
 import { DnsAccount } from './services/dnsAccount.js';
 import { TraefikDnsSync } from './services/traefikDns.js';
@@ -235,7 +234,6 @@ async function main(): Promise<void> {
     wpBulk: new WpBulkService(core, worker, core.wpInventory),
     wporg,
     serverInfo: new SystemInfoService(servers, log, hostExec),
-    feedback: new FeedbackService(config, log),
     terminal: new TerminalService(db, config, servers, log),
     schedulers,
   };

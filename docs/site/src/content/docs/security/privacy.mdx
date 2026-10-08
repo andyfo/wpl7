@@ -13,7 +13,6 @@ sources:
   - panel/src/services/aiRanges.ts
   - panel/src/services/geoip.ts
   - panel/src/services/dns.ts
-  - panel/src/services/feedback.ts
   - panel/src/services/mail.ts
   - panel/src/services/mailDns.ts
   - panel/src/services/housekeeping.ts
@@ -49,10 +48,12 @@ server's address.
 | wordpress.org's plugin directory | You search it, or add a plugin from it | Your search words, or the plugin's slug | Only when you use it |
 | Cloudflare's API | With a Cloudflare token: checking it, site records, going live through Cloudflare, mail records, wildcard certificates. Each server's Traefik also uses it for the wildcard certificate's DNS check. | The token, zone and record names, and record values such as a server's address | Remove the token |
 | Your DNS resolver | Mail checks, going live, moving a site | The names and addresses being checked | Only when you use them |
-| The project's community, `wpl7.com/community` | You choose **Send to community** for **A question or an idea**, under **Send feedback** on the About page | What you typed, and the build and machine details while **Include what this install is** is on | None. Nothing is sent until you choose it. |
 
-A bug report or a feature request from the same dialog opens on GitHub in your browser, under your
-own account. The panel sends nothing for it.
+**Send feedback** on the About page sends nothing from the panel. A bug report or a feature request
+opens on GitHub in your browser, under your own account. A question or an idea opens the
+community's forum, `wpl7.com/community`, in a new tab with your text filled in. Your browser sends
+what you typed there, with the build and machine details while **Include what this install is** is
+on. Nothing is public until you post it.
 
 ## Mail the panel sends
 

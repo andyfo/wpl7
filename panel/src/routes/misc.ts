@@ -6,7 +6,6 @@ import { z } from 'zod';
 import {
   apiActivityQuery,
   apiKeyCreateBody,
-  feedbackBody,
   historyQuery,
   settingsUpdateBody,
   siteSlugParam,
@@ -68,16 +67,6 @@ export function registerMiscRoutes(app: FastifyInstance, deps: AppDeps): void {
       repoUrl: deps.config.repoUrl,
       communityUrl: deps.config.communityUrl,
     };
-  });
-
-  /**
-   * Send a question or an idea to the project's community (services/feedback.ts). The only
-   * feedback that leaves through the panel: a bug or a feature request is opened as a GitHub
-   * issue by the browser, under the sender's own account, and never arrives here.
-   */
-  r.post('/api/feedback', { schema: { body: feedbackBody } }, async (req) => {
-    await deps.feedback.send(req.body);
-    return { ok: true };
   });
 
   // ------------------------------------------------------------------ monitor
