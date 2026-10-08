@@ -221,6 +221,30 @@ describe('importing a site', () => {
     expect(w.db.select().from(sites).where(eq(sites.slug, 'willow')).get()!.status).toBe('running');
   });
 
+  it('keeps the site when the files cannot be moved back to staging', async () => {
+    const { w, id } = await connected();
+    w.docker.failAfter.set('createSiteContainer', 'network attach failed');
+    const staging = path.join(w.config.srvRoot, 'wpl7-import', String(id), 'wordpress');
+    const files = w.servers.handleFor(1).files;
+    const rename = files.rename.bind(files);
+    files.rename = async (from, to) => {
+      if (to === staging) throw new Error('rename: Device or resource busy');
+      return rename(from, to);
+    };
+    w.core.imports.start(id, CHOICES);
+    const row = await settle(w, id);
+    expect(row.status).toBe('failed');
+    expect(w.core.imports.cursorOf(row)).toMatchObject({ phase: 'done', materialized: true });
+    expect(logOf(w, row.jobId!)).toContain("warn: The files are still in the site's folder. Continue moves them back and tries the set-up again.");
+    const wordpress = sitePaths(w.config, 'willow').wordpress;
+    expect(fs.existsSync(path.join(wordpress, 'index.php'))).toBe(true);
+
+    // Deleting the import leaves the site, and its name, to the site's own Delete.
+    await w.core.imports.delete(id);
+    expect(w.db.select().from(sites).where(eq(sites.slug, 'willow')).get()).toMatchObject({ status: 'error' });
+    expect(fs.existsSync(path.join(wordpress, 'index.php'))).toBe(true);
+  });
+
   it('imports onto another server', async () => {
     const w = await makeWorld({ exec: hostExec });
     const s2 = w.addSshServer('s2', { real: true });

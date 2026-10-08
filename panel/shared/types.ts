@@ -105,8 +105,18 @@ export interface SiteDetail extends SiteSummary {
     hostsPending: string[];
     since: number;
   } | null;
-  /** The import this site came from, when it did. `connected`: the plugin on the old site still answers it. */
-  importSource: { importId: number; url: string | null; status: ImportStatus; connected: boolean; importedAt: number | null } | null;
+  /**
+   * The import this site came from, when it did. `connected`: the plugin on the old site still
+   * answers it. `refreshJobId`: the refresh from the old site that is queued or running.
+   */
+  importSource: {
+    importId: number;
+    url: string | null;
+    status: ImportStatus;
+    connected: boolean;
+    importedAt: number | null;
+    refreshJobId: number | null;
+  } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,7 +146,6 @@ export interface ImportSuggestionsDto {
   title: string;
   slug: string;
   phpVersion: string | null;
-  locale: string;
   deactivatePlugins: string[];
   removeDropins: string[];
   removeMuPlugins: string[];

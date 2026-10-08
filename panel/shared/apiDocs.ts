@@ -270,7 +270,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         path: '/api/imports/:id/run',
         summary: 'Start pulling the site, with the choices of the Confirm step',
         input:
-          '{title, slug, serverId?, phpVersion?, locale?, carryConstants?, deactivatePlugins?, removeDropins?, removeMuPlugins?, rewritePaths?: true}',
+          '{title, slug, serverId?, phpVersion?, carryConstants?, deactivatePlugins?, removeDropins?, removeMuPlugins?, rewritePaths?: true}',
         job: true,
         level: 'manage',
       },

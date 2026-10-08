@@ -465,7 +465,9 @@ function ImportedBanner({ slug, source }: { slug: string; source: NonNullable<Si
   const [error, setError] = useState<unknown>(null);
   const [confirmRefresh, setConfirmRefresh] = useState(false);
   const refresh = useRunJob([['site', slug], ['backups', slug]]);
-  const refreshing = refresh.isPending || (refresh.job !== null && !isTerminal(refresh.job.status));
+  // One started in another tab, or before this page was opened.
+  const elsewhere = source.refreshJobId !== null && source.refreshJobId !== refresh.jobId;
+  const refreshing = refresh.isPending || (refresh.job !== null && !isTerminal(refresh.job.status)) || elsewhere;
   const host = (() => {
     try {
       return source.url ? new URL(source.url).hostname : 'the old site';
@@ -491,11 +493,21 @@ function ImportedBanner({ slug, source }: { slug: string; source: NonNullable<Si
             Refresh from source
           </Button>
         </span>
-        <Button small disabled={busy} onClick={disconnect}>
-          Disconnect
-        </Button>
+        <span title={refreshing ? 'A refresh is running.' : undefined}>
+          <Button small disabled={busy || refreshing} onClick={disconnect}>
+            Disconnect
+          </Button>
+        </span>
       </div>
       <div className="mt-2 space-y-2">
+        {elsewhere && (
+          <p>
+            A refresh is running.{' '}
+            <Link className="underline" to={`/jobs/${source.refreshJobId}`}>
+              Open its job
+            </Link>
+          </p>
+        )}
         <ErrorNote error={error ?? refresh.error} />
         <JobProgress job={refresh.job} logs={refresh.logs} />
       </div>

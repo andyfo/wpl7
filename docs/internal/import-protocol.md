@@ -310,6 +310,8 @@ files. Before any snapshot, `status` answers `snapshot_id: null`, `done: false` 
 `warnings` counts entries by flag (section 7), plus `special` (sockets, fifos and devices, which are
 not listed), `too_long` (paths over 4096 bytes, not listed) and `excluded` once per pattern, with
 how many entries it left out. A folder left out counts once; nothing below it is looked at.
+The root row counts too, though the file list never shows it: an `unreadable` that no entry of
+the list accounts for is ABSPATH itself, listed in part or not at all.
 
 With `follow: "inside"`, a link whose target is inside ABSPATH and not left out is listed as what
 it points to: a file entry, or a folder entry that is walked. Both keep the flag `link` and the

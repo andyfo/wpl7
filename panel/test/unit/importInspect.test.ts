@@ -118,7 +118,6 @@ describe('inspecting a report', () => {
       title: 'Willow Pediatrics',
       slug: 'willow-pediatrics',
       phpVersion: '8.2',
-      locale: 'en_US',
       deactivatePlugins: ['redis-cache'],
       removeDropins: ['object-cache.php', 'advanced-cache.php'],
       removeMuPlugins: ['wpengine-security-auditor.php'],

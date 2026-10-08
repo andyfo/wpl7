@@ -473,8 +473,6 @@ export const importRunBody = z
     serverId: z.number().int().positive().optional(),
     /** Left out, the offered version nearest to the old site's. */
     phpVersion: phpVersionSchema.optional(),
-    /** Left out, what the old site uses. */
-    locale: localeSchema.optional(),
     /** Constants from the old site's wp-config.php to define in the new one. */
     carryConstants: z.array(z.string().regex(CONSTANT_NAME_RE)).max(500).default([]),
     /** Plugins to deactivate once the site is up. */

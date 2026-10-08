@@ -268,6 +268,16 @@ describe('site imports API', () => {
     expect(taken.statusCode).toBe(409);
   });
 
+  it("keeps the old site's language", async () => {
+    const { app, world, headers, create, connect } = await authedApp();
+    const { dto, token } = await create();
+    await connect(token, sampleReport({ locale: 'de_DE' }));
+    const run = (payload: Record<string, unknown>) => app.inject({ method: 'POST', url: `/api/imports/${dto.id}/run`, headers, payload });
+    expect((await run({ title: 'Willow', slug: 'willow-pediatrics', locale: 'fr_FR' })).statusCode).toBe(400);
+    expect((await run({ title: 'Willow', slug: 'willow-pediatrics' })).statusCode).toBe(202);
+    expect(world.db.select().from(sites).where(eq(sites.slug, 'willow-pediatrics')).get()!.locale).toBe('de_DE');
+  });
+
   it('refuses to start an import the old site cannot be imported from', async () => {
     const { app, headers, create, connect } = await authedApp();
     const { dto, token } = await create();

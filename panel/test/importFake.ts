@@ -33,6 +33,7 @@ interface Entry {
   data?: Buffer;
   mtime: number;
   link?: string;
+  flags?: string[];
 }
 
 const sha256 = (data: Buffer | string) => crypto.createHash('sha256').update(data).digest('hex');
@@ -68,6 +69,11 @@ export class FakeSourceSite {
   createComments: Record<string, string> = {};
   /** What the snapshot says about the listing (link, special, excluded, …). */
   snapshotWarnings: { code: string; count?: number; detail?: string }[] = [];
+  /**
+   * Files and folders the old site cannot read, `''` for its own folder: flagged `unreadable`, with
+   * nothing below a folder listed, and counted in the snapshot's warnings like the plugin's root row.
+   */
+  unreadable = new Set<string>();
   /** Entries per page of `files`, whatever the panel asks for: small, so a pull takes several batches. */
   pageSize = 1000;
   /** Called with every action before it is answered. */
@@ -114,6 +120,15 @@ export class FakeSourceSite {
   /** A file deleted on the old site between pulls. */
   deleteFile(path: string): void {
     delete this.opts.files[path];
+  }
+
+  /** A file moved on the old site between pulls, its times kept: what renaming its folder does. */
+  moveFile(from: string, to: string): void {
+    this.opts.files[to] = this.opts.files[from]!;
+    delete this.opts.files[from];
+    const mtime = this.mtimes.get(from);
+    if (mtime !== undefined) this.mtimes.set(to, mtime);
+    this.mtimes.delete(from);
   }
 
   /** The file changes on the old site once the snapshot has it: its next read sees the new content. */
@@ -181,20 +196,25 @@ export class FakeSourceSite {
   private walk(): void {
     this.files = [];
     let id = 0;
-    const paths = Object.keys(this.opts.files).sort();
+    const hidden = (p: string) => [...this.unreadable].some((d) => d === '' || p.startsWith(`${d}/`));
+    const all = Object.keys(this.opts.files).sort();
     const dirs = new Set<string>();
-    for (const p of paths) {
+    for (const p of all) {
       const parts = p.split('/');
       for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'));
     }
+    const paths = all.filter((p) => !hidden(p));
     // Folders first, then everything else, the way a breadth-first walk lists them.
-    for (const d of [...dirs].sort()) this.files.push({ id: ++id, path: d, type: 'd', mtime: 1_700_000_000 });
+    for (const d of [...dirs].sort()) {
+      if (hidden(d)) continue;
+      this.files.push({ id: ++id, path: d, type: 'd', mtime: 1_700_000_000, ...(this.unreadable.has(d) ? { flags: ['unreadable'] } : {}) });
+    }
     for (const p of paths) {
       const f = this.opts.files[p]!;
       const mtime = this.mtimes.get(p) ?? 1_700_000_000;
       if (f === 'dir') this.files.push({ id: ++id, path: p, type: 'd', mtime });
       else if (typeof f === 'object' && !Buffer.isBuffer(f)) this.files.push({ id: ++id, path: p, type: 'l', link: f.link, mtime });
-      else this.files.push({ id: ++id, path: p, type: 'f', data: Buffer.from(f), mtime });
+      else this.files.push({ id: ++id, path: p, type: 'f', data: Buffer.from(f), mtime, ...(this.unreadable.has(p) ? { flags: ['unreadable'] } : {}) });
     }
   }
 
@@ -244,13 +264,14 @@ export class FakeSourceSite {
           this.snapshotSteps++;
         }
         const done = this.snapshotSteps >= 1;
+        const unreadable = this.files.filter((f) => f.flags?.includes('unreadable')).length + (this.unreadable.has('') ? 1 : 0);
         return this.json(200, {
           snapshot_id: this.snapshotId,
           done,
           entries: done ? this.files.length : Math.floor(this.files.length / 2),
           bytes: this.files.reduce((n, f) => n + (f.data?.length ?? 0), 0),
           dirs_pending: done ? 0 : 1,
-          warnings: done ? this.snapshotWarnings : [],
+          warnings: done ? [...this.snapshotWarnings, ...(unreadable > 0 ? [{ code: 'unreadable', count: unreadable }] : [])] : [],
         });
       }
       case 'files': {
@@ -272,7 +293,7 @@ export class FakeSourceSite {
               md: f.type === 'd' ? '755' : '644',
               t: f.type,
               ...(f.link ? { l: f.link } : {}),
-              ...(this.since !== null && f.type === 'f' && f.mtime < this.since ? { f: ['unchanged'] } : {}),
+              ...(f.flags ? { f: f.flags } : this.since !== null && f.type === 'f' && f.mtime < this.since ? { f: ['unchanged'] } : {}),
               ...(utf8.toString('utf8') === f.path ? {} : { pb: utf8.toString('base64') }),
               ...(f.data && f.data.length <= 1024 * 1024 ? { h: sha256(f.data) } : {}),
             };

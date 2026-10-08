@@ -390,7 +390,6 @@ export function inspectReport(report: MigrateReport, opts: { offeredPhp: string[
     title: report.title.trim() || hostOf(report.home) || 'Imported site',
     slug: slugify(hostOf(report.home) ?? report.title),
     phpVersion: php,
-    locale: report.locale || 'en_US',
     deactivatePlugins: report.plugins.filter((p) => p.active && HOST_BOUND_PLUGINS.has(p.slug)).map((p) => p.slug),
     removeDropins: report.dropins.filter((d) => isDropin(d) && HOST_BOUND_DROPINS.has(d)),
     removeMuPlugins: report.mu_plugins

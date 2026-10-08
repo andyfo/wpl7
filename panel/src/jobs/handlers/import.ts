@@ -20,6 +20,7 @@ import {
   type FileEntry,
   type ImportPullClient,
   type PingAnswer,
+  type SnapshotAnswer,
 } from '../../services/importPull.js';
 import { buildSiteContainerSpec, sitePaths, siteRuntimeFrom, siteTlsFor } from '../../services/siteSpec.js';
 import { restoreSiteOnServer, type ProtectionHold } from './restoreSite.js';
@@ -263,7 +264,7 @@ export async function siteImport(ctx: JobContext<z.infer<typeof siteImportPayloa
 /**
  * Every file of the old site, listed by its plugin in steps it can finish within its time limit.
  * `since` (unix seconds), for a refresh: files not changed from then on are listed as `unchanged`,
- * and not copied.
+ * and not copied. Returns the listing's totals.
  */
 export async function listFiles(
   ctx: JobContext<unknown>,
@@ -271,7 +272,7 @@ export async function listFiles(
   cursor: ImportCursor,
   commit: () => Promise<void>,
   opts: { since?: number } = {},
-): Promise<void> {
+): Promise<SnapshotAnswer> {
   ctx.info("Listing the old site's files…");
   const start = () => {
     cursor.listedAt = Math.floor(Date.now() / 1000) + client.state.skewS;
@@ -302,6 +303,7 @@ export async function listFiles(
   cursor.phase = 'files';
   await commit();
   ctx.info(`Listed ${count(snap.entries)} files and folders, ${bytesText(snap.bytes)}.`);
+  return snap;
 }
 
 /**
@@ -333,7 +335,8 @@ function listingNote(w: { code: string; count?: number; detail?: string }): { le
 
 /**
  * The files, page by page of the listing, into the staging folder. `onPage` sees every page of the
- * listing as it arrives, files left unchanged since a refresh's `since` included.
+ * listing as it arrives, files left unchanged since a refresh's `since` included. `alreadyThere`
+ * says whether such a file is on the copy already; one that is not is copied all the same.
  */
 export async function pullFiles(
   ctx: JobContext<unknown>,
@@ -343,7 +346,7 @@ export async function pullFiles(
   wordpressDir: string,
   cursor: ImportCursor,
   commit: () => Promise<void>,
-  opts: { onPage?: (entries: FileEntry[]) => void } = {},
+  opts: { onPage?: (entries: FileEntry[]) => void; alreadyThere?: (entry: FileEntry) => boolean } = {},
 ): Promise<void> {
   ctx.info(cursor.filesAfterId > 0 ? 'Copying the files, from where the last run stopped…' : 'Copying the files…');
   const maxBytes = Math.max(64 * 1024, ping.limits.max_bytes);
@@ -476,7 +479,8 @@ export async function pullFiles(
               let runBytes = 0;
               for (let j = i; j < entries.length && run.length < 200; j++) {
                 const e = entries[j]!;
-                if (e.t !== 'f' || e.s > SMALL_FILE || (e.f ?? []).length > 0 || skip.has(e.p) || importPathProblem(entryPath(e).bytes)) break;
+                const flagged = (e.f ?? []).some((f) => f !== 'unchanged');
+                if (e.t !== 'f' || e.s > SMALL_FILE || flagged || skip.has(e.p) || importPathProblem(entryPath(e).bytes)) break;
                 if (runBytes + e.s > maxBytes && run.length > 0) break;
                 run.push(e);
                 runBytes += e.s;
@@ -561,7 +565,7 @@ export async function pullFiles(
       throw err;
     }
     opts.onPage?.(page.entries);
-    const fresh = page.entries.filter((e) => !(e.f ?? []).includes('unchanged'));
+    const fresh = page.entries.filter((e) => !((e.f ?? []).includes('unchanged') && (opts.alreadyThere?.(e) ?? true)));
     if (fresh.length > 0) await writePage(fresh, false);
     // Unchanged files after the last one copied are done with too.
     const last = page.entries.at(-1);
@@ -977,12 +981,18 @@ export async function siteImportFinish(ctx: JobContext<z.infer<typeof siteImport
     ctx.error(`Setting the site up failed: ${errMsg(err)}`);
     await ctx.runCompensations();
     updateSiteRow(s.db, site.id, { status: 'error' });
+    // Where the files are now, whatever the rollback managed: while they are in the site's folder,
+    // deleting the import keeps the site (releaseSiteRow). A server that does not answer counts
+    // as having them there.
+    const inStaging = await server.files.exists(wordpressDir).catch(() => false);
+    const inSite = !inStaging && (await server.files.exists(paths.wordpress).catch(() => true));
     s.imports.mark(row.id, {
       status: 'failed',
       lastError: err instanceof JobCanceledError ? 'Stopped' : errMsg(err),
-      cursor: JSON.stringify({ ...cursor, materialized: false }),
+      cursor: JSON.stringify({ ...cursor, materialized: inSite }),
     });
-    ctx.info('The pulled copy is back in staging. Continue tries the set-up again.');
+    if (inStaging) ctx.info('The pulled copy is back in staging. Continue tries the set-up again.');
+    else if (inSite) ctx.warn("The files are still in the site's folder. Continue moves them back and tries the set-up again.");
     if (protection.release) {
       protection.release();
       await s.security.kick(server.id);

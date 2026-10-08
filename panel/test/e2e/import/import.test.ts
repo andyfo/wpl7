@@ -263,6 +263,7 @@ describe.skipIf(!ENABLED).each(cases)('importing from $wp on $db', (c) => {
         'cd wp-content/uploads',
         `head -c ${5 * MIB} /dev/urandom > big.bin`,
         'mkdir -p 2024/01 && printf hello > 2024/01/hello.txt && : > empty.txt',
+        'mkdir -p 2023/05 && printf kept > 2023/05/kept.txt',
         'ln -s ../../index.php inside-link && ln -s /etc/passwd outside-link',
         // A name that is not UTF-8. The host side stores it under macOS too, which refuses one.
         ...(process.platform === 'darwin' ? [] : ["printf latin1 > \"$(printf 'caf\\351').txt\""]),
@@ -426,6 +427,8 @@ describe.skipIf(!ENABLED).each(cases)('importing from $wp on $db', (c) => {
   it('refreshes the copy: what changed on the old site arrives, what was deleted there goes', async () => {
     await wp(['post', 'create', '--post_title=Written after the import', '--post_status=publish']);
     await sh('printf changed > wp-content/uploads/2024/01/hello.txt && printf new > wp-content/uploads/after.txt && rm wp-content/uploads/empty.txt');
+    // A folder the old site can no longer list: what is in it stays on the copy.
+    await docker(['exec', names.wp, 'chmod', '000', '/var/www/html/wp-content/uploads/2023']);
     // Visitors of the old site, all the while.
     const seen = new Set<number>();
     const visitors = setInterval(() => {
@@ -450,10 +453,20 @@ describe.skipIf(!ENABLED).each(cases)('importing from $wp on $db', (c) => {
     expect(fs.readFileSync(path.join(wordpress, 'wp-content/uploads/after.txt'), 'utf8')).toBe('new');
     expect(fs.existsSync(path.join(wordpress, 'wp-content/uploads/empty.txt'))).toBe(false);
     expect(fs.existsSync(path.join(wordpress, 'wp-content/uploads/big.bin'))).toBe(true);
+    expect(fs.readFileSync(path.join(wordpress, 'wp-content/uploads/2023/05/kept.txt'), 'utf8')).toBe('kept');
+    expect(logOf(w, job.id)).toContain('warn: Kept 1 file in folders the old site could not list.');
     expect(dumps).toHaveLength(2);
     expect(zlib.gunzipSync(fs.readFileSync(dumps[1]!)).toString('utf8')).toContain('Written after the import');
     // The old site is open again.
     expect((await request(port, 'GET', '/')).status).toBe(200);
+
+    // The folder can be listed again, and its file was deleted there: the next refresh deletes it here.
+    await docker(['exec', names.wp, 'chmod', '755', '/var/www/html/wp-content/uploads/2023']);
+    await sh('rm wp-content/uploads/2023/05/kept.txt');
+    const again = w.core.imports.refresh(importId);
+    await settle(w, importId, 15 * 60_000);
+    expect(w.db.select().from(jobs).where(eq(jobs.id, again.id)).get()!.status, logOf(w, again.id).join('\n')).toBe('succeeded');
+    expect(fs.existsSync(path.join(wordpress, 'wp-content/uploads/2023/05/kept.txt'))).toBe(false);
   }, 20 * 60_000);
 
   it('lets go of the old site on Disconnect', async () => {

@@ -5,9 +5,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { ImportDto } from '../../../../shared/types';
 import { api } from '../../api/client';
 import { useMeta } from '../../api/hooks';
-import { formatBytes } from '../../lib/format';
+import { formatBytes, localeName } from '../../lib/format';
 import { Button, Card, ConfirmDialog, ErrorNote, Field, Toggle, inputClass } from '../ui';
-import { LocaleSelect } from '../LocaleSelect';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/;
 
@@ -25,7 +24,6 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
   const [slug, setSlug] = useState(s.slug);
   const [serverId, setServerId] = useState<number | null>(null);
   const [phpVersion, setPhpVersion] = useState<string | null>(s.phpVersion);
-  const [locale, setLocale] = useState(s.locale);
   const [constants, setConstants] = useState(() => new Set(imp.constants.filter((c) => c.ticked).map((c) => c.name)));
   const [plugins, setPlugins] = useState(() => new Set(s.deactivatePlugins));
   const [dropins, setDropins] = useState(() => new Set(s.removeDropins));
@@ -53,7 +51,6 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
           slug,
           ...(multiServer ? { serverId: effServerId } : {}),
           ...(phpVersion ? { phpVersion } : {}),
-          locale,
           carryConstants: [...constants],
           deactivatePlugins: [...plugins],
           removeDropins: [...dropins],
@@ -81,6 +78,7 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
           <Fact label="WordPress" value={report.wpVersion} />
           <Fact label="PHP" value={report.phpVersion} />
           <Fact label="Table prefix" value={report.tablePrefix} />
+          <Fact label="Language" value={localeName(meta.data?.locales, report.locale)} />
           <Fact
             label="Files"
             value={`${report.files.count.toLocaleString('en-US')} · ${formatBytes(report.files.bytes)}${report.files.partial ? ' (estimate)' : ''}`}
@@ -143,9 +141,6 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
                   </option>
                 ))}
               </select>
-            </Field>
-            <Field label="Language">
-              <LocaleSelect value={locale} onChange={setLocale} />
             </Field>
           </div>
         </div>

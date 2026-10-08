@@ -63,8 +63,8 @@ queued.
 
 ## After the import
 
-- The site keeps its users and passwords. **Log in to WordPress** on its page works as on any
-  site.
+- The site keeps its users, passwords and language. **Log in to WordPress** on its page works as
+  on any site.
 - **Go live** moves it to its domain and allows search engines again. See
   [Domains and going live](/docs/sites/domains/).
 - The plugin on the old site stays connected until you choose **Disconnect** on the site page,
@@ -81,7 +81,8 @@ A shop or a site with comments keeps changing on the old host while you check th
 
 The refresh takes a backup of the site first. The old site shows visitors a maintenance page
 while the panel copies its database again, whole. Files added or changed there since the last
-pull are copied. Files deleted there are deleted here too, unless they were changed here.
+pull are copied. Files deleted there are deleted here too, unless they were changed here or the
+old site could not list their folder.
 
 Changes made in this site's database since the import are lost. If the refresh fails after it
 started replacing, the backup is put back.

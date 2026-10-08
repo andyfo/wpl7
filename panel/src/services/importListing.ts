@@ -10,6 +10,9 @@ export interface ListedFile {
   m: number;
 }
 
+/** The flags of a file the pull lists but cannot read, and so never copies. */
+export const NOT_READ = ['unreadable', 'too_large'];
+
 /**
  * The old site's files as the last pull listed them, kept by the panel on its own disk while the
  * import can still be refreshed, with the time the listing began. A refresh copies what changed
@@ -17,9 +20,10 @@ export interface ListedFile {
  * listing, and removes the copy only while that still has the listed size and time: a file
  * changed on the new copy stays.
  *
- * Only regular files with a UTF-8 path are written down; a refresh never removes anything else.
- * One file per import, of gzip members appended page by page: a pull that resumes appends a page
- * again, and the later line wins.
+ * It says what the copy has: only regular files with a UTF-8 path that the pull could read are
+ * written down, and a refresh never removes anything else. What a refresh could not read or list,
+ * it keeps the earlier record of (`carry`). One file per import, of gzip members appended page by
+ * page: a pull that resumes appends a page again, and the later line wins.
  */
 export interface Listing {
   files: Map<string, ListedFile>;
@@ -44,7 +48,20 @@ export class ImportListings {
 
   append(id: number, entries: FileEntry[], which: 'current' | 'next' = 'current'): void {
     let text = '';
-    for (const e of entries) if (e.t === 'f' && !e.pb) text += `${JSON.stringify([e.p, e.s, e.m])}\n`;
+    for (const e of entries) {
+      if (e.t === 'f' && !e.pb && !(e.f ?? []).some((f) => NOT_READ.includes(f))) text += `${JSON.stringify([e.p, e.s, e.m])}\n`;
+    }
+    this.write(id, which, text);
+  }
+
+  /** Into a refresh's listing: records of the one before, for files this one could not read or list. */
+  carry(id: number, files: Iterable<[string, ListedFile]>): void {
+    let text = '';
+    for (const [p, f] of files) text += `${JSON.stringify([p, f.s, f.m])}\n`;
+    this.write(id, 'next', text);
+  }
+
+  private write(id: number, which: 'current' | 'next', text: string): void {
     if (!text) return;
     fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     fs.appendFileSync(this.file(id, which), zlib.gzipSync(text), { mode: 0o600 });

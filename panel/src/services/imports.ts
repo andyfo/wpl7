@@ -262,9 +262,9 @@ export class ImportService {
    */
   async delete(id: number): Promise<void> {
     const row = this.get(id);
-    if (IMPORT_BUSY.includes(row.status as ImportStatus)) {
-      throw conflict('The import is running. Stop its job first.');
-    }
+    this.assertIdle(row);
+    // The token goes before anything is awaited: no job can start on the import meanwhile.
+    if (row.token) this.mark(row.id, { token: null });
     if (row.token && row.status !== 'pending') await this.tellPluginToFinish(row);
     await this.clearStaging(row);
     this.listings.drop(row.id);
@@ -281,14 +281,11 @@ export class ImportService {
    */
   async disconnect(id: number): Promise<ImportRow> {
     const row = this.get(id);
-    if (IMPORT_BUSY.includes(row.status as ImportStatus)) {
-      throw conflict('The import is running. Stop its job first.');
-    }
-    if (row.token && row.status !== 'pending') await this.tellPluginToFinish(row);
-    this.listings.drop(row.id);
+    this.assertIdle(row);
+    // The token goes before anything is awaited: no refresh can start meanwhile.
     const now = Date.now();
     const waiting = row.status === 'pending' || row.status === 'connected';
-    return this.db
+    const updated = this.db
       .update(imports)
       .set({
         token: null,
@@ -299,6 +296,28 @@ export class ImportService {
       .where(eq(imports.id, row.id))
       .returning()
       .get();
+    this.listings.drop(row.id);
+    if (row.token && row.status !== 'pending') await this.tellPluginToFinish(row);
+    return updated;
+  }
+
+  /**
+   * The queued or running refresh of this import, if any. The import stays `done` while one
+   * runs, so its status does not show it.
+   */
+  activeRefresh(id: number): JobRow | undefined {
+    return this.db
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.type, 'site.importRefresh'), inArray(jobs.status, ['queued', 'running'])))
+      .all()
+      .find((job) => refreshedImport(job.payload) === id);
+  }
+
+  /** Refused while a job works on the import: one of its own, or a refresh. */
+  private assertIdle(row: ImportRow): void {
+    if (IMPORT_BUSY.includes(row.status as ImportStatus)) throw conflict('The import is running. Stop its job first.');
+    if (this.activeRefresh(row.id)) throw conflict('A refresh from the old site is running. Stop its job first.');
   }
 
   /** The import that is making, or failed to make, this site; a site with one cannot be deleted. */
@@ -320,6 +339,7 @@ export class ImportService {
       status: row.status as ImportStatus,
       connected: row.token !== null,
       importedAt: row.importedAt,
+      refreshJobId: row.status === 'done' && row.token ? (this.activeRefresh(row.id)?.id ?? null) : null,
     };
   }
 
@@ -357,7 +377,7 @@ export class ImportService {
       ...choices.removeDropins.map((d) => `wp-content/${d}`),
       ...choices.removeMuPlugins.map((m) => `wp-content/mu-plugins/${m}`),
     ];
-    const stored: ImportRunBody = { ...choices, serverId: server.id, phpVersion, locale: choices.locale ?? report.locale ?? 'en_US' };
+    const stored: ImportRunBody = { ...choices, serverId: server.id, phpVersion };
     const now = Date.now();
     try {
       return this.db.transaction(() => {
@@ -372,7 +392,8 @@ export class ImportService {
             isLive: 0,
             keepDevAlias: 1,
             phpVersion,
-            locale: stored.locale!,
+            // WordPress keeps the old site's language: it is in the database that comes along.
+            locale: report.locale || 'en_US',
             status: 'provisioning',
             dbName: dbIdentifier(choices.slug),
             dbUser: dbIdentifier(choices.slug),
@@ -460,6 +481,7 @@ export class ImportService {
     const site = row.siteId ? this.db.select().from(sites).where(eq(sites.id, row.siteId)).get() : undefined;
     if (!site) throw conflict('The site this import made is gone.');
     if (site.status !== 'running' && site.status !== 'stopped') throw conflict(`The site is ${site.status}; refresh it once that is over.`);
+    if (this.activeRefresh(row.id)) throw conflict('A refresh from the old site is running already.');
     return worker.enqueue(
       'site.importRefresh',
       { importId: row.id, sourceHost: hostOf(row.homeUrl) },
@@ -468,7 +490,10 @@ export class ImportService {
   }
 
   /** The pull's client for this import, carrying on with what an earlier run learned about the old host. */
-  clientFor(row: ImportRow, opts: { state?: Partial<PullState>; canceled?: () => boolean; log?: (line: string) => void } = {}): ImportPullClient {
+  clientFor(
+    row: ImportRow,
+    opts: { state?: Partial<PullState>; canceled?: () => boolean; log?: (line: string) => void; attempts?: number } = {},
+  ): ImportPullClient {
     if (!row.token || !row.homeUrl || !row.endpointUrl) throw new Error('This import is not connected to an old site');
     return new ImportPullClient({
       importId: row.id,
@@ -482,6 +507,7 @@ export class ImportService {
       state: opts.state,
       canceled: opts.canceled,
       log: opts.log,
+      attempts: opts.attempts,
     });
   }
 
@@ -852,6 +878,16 @@ export class ImportService {
   private expireIfDue(row: ImportRow): ImportRow {
     if ((row.status !== 'pending' && row.status !== 'connected') || !row.expiresAt || row.expiresAt > Date.now()) return row;
     return this.mark(row.id, { status: 'expired', token: null });
+  }
+}
+
+/** The import a `site.importRefresh` payload names; null for one that cannot be read. */
+function refreshedImport(payload: string): number | null {
+  try {
+    const id = (JSON.parse(payload) as { importId?: unknown }).importId;
+    return typeof id === 'number' ? id : null;
+  } catch {
+    return null;
   }
 }
 
