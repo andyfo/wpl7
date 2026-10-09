@@ -2,7 +2,7 @@
 title: This install, and updating it
 description: What this install is, the release the hourly check found, and applying it (docs/updating.md). Writes are refused with 503 while an update is in flight.
 sidebar:
-  order: 2.2
+  order: 2.21
 sources:
   - panel/shared/apiDocs.ts
 ---

@@ -78,6 +78,9 @@ import { MalwareScanService } from '../src/services/malwareScan.js';
 import { PluginZipChecks } from '../src/services/pluginZipChecks.js';
 import { QuarantineService } from '../src/services/quarantine.js';
 import { ImportService } from '../src/services/imports.js';
+import { ConnectionsService } from '../src/services/connections.js';
+import { ExternalBackupService } from '../src/services/externalBackup.js';
+import { AlertService } from '../src/services/alerts.js';
 import type { HostPort } from '../src/servers/hostPort.js';
 import { ApiKeysService } from '../src/services/apiKeys.js';
 import { ApiActivityService } from '../src/services/apiActivity.js';
@@ -1393,6 +1396,13 @@ export async function makeWorld(
     throw new Error(`test tried to reach ${req.url.host}; set core.imports.transport to a FakeSourceSite's`);
   };
   importsService.retrySleep = async () => undefined;
+  const connections = new ConnectionsService(db, config, settings, servers, log);
+  // The same for a site connected through WPL7 Connect: a test hands it a fake site (test/connectFake.ts).
+  connections.lookup = async () => [{ address: '203.0.113.81', family: 4 }];
+  connections.transport = async (req) => {
+    throw new Error(`test tried to reach ${req.url.host}; set core.connections.transport to a FakeConnectedSite's`);
+  };
+  connections.retrySleep = async () => undefined;
   traffic.onEvents((serverId, events, chunk) => {
     securityEvents.fold(events);
     security.noteTraefikLog(chunk);
@@ -1431,12 +1441,22 @@ export async function makeWorld(
     panelFiles,
     quarantine,
     imports: importsService,
+    connections,
     log,
   } as unknown as CoreServices;
   core.wpInventory = new WpInventoryService(core, vulnerabilities);
+  core.externalBackups = new ExternalBackupService(core);
+  core.alerts = new AlertService(core);
+  // The hourly check of each external site and every uptime probe are what the alerts hear from.
+  core.connections.attachEvents({ checked: (site, conn) => core.alerts.connectorChecked(site, conn) });
+  core.monitor.attachExternal(core.connections, {
+    probed: (site, reading) => core.alerts.probed(site, reading),
+    certificate: (site, expiresAt) => core.alerts.certificate(site, expiresAt),
+  });
   const worker = new JobWorker(db, core);
   offsite.attachWorker(worker);
   importsService.attachWorker(worker);
+  connections.attachWorker(worker);
   const shell = new FakeShell();
   const wporg = opts.wporg ?? new FakeWporg();
   const users = new UsersService(db);

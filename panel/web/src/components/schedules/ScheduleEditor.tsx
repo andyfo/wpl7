@@ -225,9 +225,14 @@ const sameTarget = (a: ScheduleTarget | null, b: ScheduleTarget | null): boolean
   return true;
 };
 
-/** Why a site would be left out of a run of this action, or null. Mirrors src/jobs/actions.ts. */
+/** Why a site would be left out of a run of this action, or null. Mirrors ineligible() in src/jobs/actions.ts. */
 function skipReason(action: ScheduleAction, site: SiteSummary): string | null {
   if (site.status === 'provisioning' || site.status === 'deleting') return site.status;
+  if (site.kind === 'external') {
+    const info: { external: boolean; externalRefusal?: string } = SCHEDULE_ACTION_INFO[action];
+    if (!info.external) return `external: ${info.externalRefusal ?? 'cannot take this'}`;
+    return site.status === 'connected' ? null : site.status;
+  }
   if (action === 'backup') return null;
   if (action === 'site.start') return site.status === 'running' ? 'already running' : null;
   return site.status === 'running' ? null : site.status;
@@ -332,7 +337,9 @@ function SiteChecklist({
                 />
                 <span className="font-medium">{site.slug}</span>
                 <span className="min-w-0 truncate text-xs text-neutral-500">{site.title}</span>
-                {multiServer && <span className="shrink-0 text-xs text-neutral-400">{site.serverName}</span>}
+                {multiServer && (
+                  <span className="shrink-0 text-xs text-neutral-400">{site.kind === 'external' ? 'External' : site.serverName}</span>
+                )}
                 {skip && <span className="ml-auto shrink-0 text-[11px] text-amber-700">{skip} — skipped</span>}
               </label>
             </li>
@@ -539,11 +546,13 @@ export function ScheduleEditor({
     .join(' · ');
 
   const runningCount = sites.filter((s) => s.status === 'running').length;
+  const externalCount = sites.filter((s) => s.kind === 'external' && s.status === 'connected').length;
   const serverSites = (id: number | null) =>
     sites.filter((s) => s.serverId === id && (d.action === 'site.start' ? s.status === 'stopped' : s.status === 'running')).length;
   const chosenSite = siteBySlug.get(d.site);
   const chosenSkip = chosenSite ? skipReason(d.action, chosenSite) : null;
-  const serverGroups = [...new Set(sites.map((s) => s.serverName))];
+  const groupOf = (s: SiteSummary) => (s.kind === 'external' ? 'External' : s.serverName);
+  const serverGroups = [...new Set(sites.map(groupOf))];
 
   return (
     <ActionDialog
@@ -604,7 +613,7 @@ export function ScheduleEditor({
                   ? serverGroups.map((group) => (
                       <optgroup key={group} label={group}>
                         {sites
-                          .filter((s) => s.serverName === group)
+                          .filter((s) => groupOf(s) === group)
                           .map((s) => (
                             <option key={s.slug} value={s.slug}>
                               {s.slug}
@@ -641,6 +650,10 @@ export function ScheduleEditor({
               {runningCount} {runningCount === 1 ? 'site is' : 'sites are'} running right now. Each run takes the sites running
               at that moment, so a site created later is included and a stopped one is left out
               {d.action === 'backup' ? ', as is a site with scheduled backups switched off' : ''}.
+              {externalCount > 0 &&
+                (info.external
+                  ? ` Connected external sites are included too (${externalCount} now).`
+                  : ' External sites are left out.')}
             </p>
           )}
           {d.mode === 'server' && (

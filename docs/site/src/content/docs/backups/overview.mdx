@@ -5,6 +5,7 @@ sidebar:
   order: 1
 sources:
   - panel/src/services/backup.ts
+  - panel/src/services/externalBackup.ts
   - panel/src/services/dbAdmin.ts
   - panel/src/jobs/handlers/backups.ts
   - panel/src/jobs/handlers/offsite.ts
@@ -58,7 +59,8 @@ adds one backup per site.
 ## When backups are taken
 
 **Schedule (cron)** in **Settings → Backups** sets the scheduled run, every day at 03:00 by default,
-on the panel server's clock. Each run backs up every running site, then the panel's own database.
+on the panel server's clock. Each run backs up every running site and every connected
+[site hosted elsewhere](/docs/sites/external/), then the panel's own database.
 To leave one site out of that run, switch off **Include this site in the periodic backups** on its
 **Backups** tab. Every other kind is still taken for it.
 
@@ -83,6 +85,15 @@ that server, and a restore has to run there. So a backup left behind by a move c
 onto the moved site, unless it has an [offsite copy](/docs/backups/offsite/). **Fetch back** then
 brings it onto the site's current server. One offsite destination serves every server: each server
 uploads its own backups.
+
+## Sites hosted elsewhere
+
+A site hosted elsewhere is backed up through WPL7 Connect, onto the server chosen as **Keep backups
+on**. That server keeps a copy of the site's files, and each backup copies only what changed since
+the one before. The backup holds the same four files. `files.tar.gz` holds the site's `wordpress`
+folder, `wp-config.php` included. `db.sql.gz` is read in pages while the site keeps serving, not in
+one transaction. Such a backup is restored by hand, as
+[Restore and download](/docs/backups/restore/#restore-a-site-hosted-elsewhere) shows.
 
 ## Limits
 

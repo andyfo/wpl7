@@ -92,6 +92,9 @@ export class FakeSourceSite {
   /** The current snapshot's `since`: files not changed from then on are listed as unchanged. */
   private since: number | null = null;
 
+  /** The plugin's REST namespace and query variable, and the header its answers carry. */
+  protected readonly plugin: { name: string; marker: string };
+
   constructor(
     readonly opts: {
       token: string;
@@ -102,9 +105,11 @@ export class FakeSourceSite {
       tables: FakeTable[];
       maxBytes?: number;
     },
+    plugin: { name: string; marker: string } = { name: 'wpl7-migrate', marker: 'x-wpl7-protocol' },
   ) {
+    this.plugin = plugin;
     this.home = `https://${opts.host ?? 'willow-pediatrics.example'}`;
-    this.endpoint = `${this.home}/wp-json/wpl7-migrate/v1/`;
+    this.endpoint = `${this.home}/wp-json/${plugin.name}/v1/`;
   }
 
   failNext(action: string, ...how: (number | 'network')[]): void {
@@ -151,45 +156,62 @@ export class FakeSourceSite {
 
   transport: PullTransport = async (req: PullRequest): Promise<PullResponse> => {
     const url = req.url;
+    const rest = `/wp-json/${this.plugin.name}/v1/`;
     let action: string | null = null;
-    if (url.pathname.startsWith('/wp-json/wpl7-migrate/v1/')) {
+    let via: 'rest' | 'query' = 'rest';
+    if (url.pathname.startsWith(rest)) {
       if (this.blockRest) return { status: 404, headers: { 'content-type': 'text/html' }, body: Buffer.from('<h1>Not Found</h1>') };
-      action = url.pathname.slice('/wp-json/wpl7-migrate/v1/'.length);
-    } else if (url.searchParams.has('wpl7-migrate')) {
-      action = url.searchParams.get('wpl7-migrate');
+      action = url.pathname.slice(rest.length);
+    } else if (url.searchParams.has(this.plugin.name)) {
+      action = url.searchParams.get(this.plugin.name);
+      via = 'query';
     }
     if (!action) return { status: 404, headers: { 'content-type': 'text/html' }, body: Buffer.from('nope') };
     this.requests.push(action);
     const failure = this.failures.get(action)?.shift();
     if (failure === 'network') throw new Error('socket hang up');
     if (typeof failure === 'number') return this.error(failure, 'internal');
+    const before = this.beforeSignature(action, req, via);
+    if (before) return before;
 
-    // The signature, as the plugin checks it.
-    const id = req.headers['x-wpl7-import-id'];
-    const ts = Number(req.headers['x-wpl7-timestamp']);
-    const nonce = req.headers['x-wpl7-nonce'] ?? '';
-    const sig = req.headers['x-wpl7-signature'] ?? '';
     const now = Math.floor(Date.now() / 1000) + this.clockSkewS;
-    if (id !== String(this.opts.importId)) return this.error(401, 'unauthorized');
-    const expected = `v1=${signRequest(this.opts.token, canonicalRequest(this.opts.importId, action, ts, nonce, req.body))}`;
-    if (sig !== expected) return this.error(401, 'unauthorized');
-    if (Math.abs(now - ts) > 300) return this.error(401, 'stale', { time: now });
+    const refused = this.verify(action, req, now);
+    if (refused) return refused;
+    const nonce = req.headers['x-wpl7-nonce'] ?? '';
     if (this.seen.has(nonce)) return this.error(401, 'replay');
     this.seen.add(nonce);
     const params = JSON.parse(req.body.toString('utf8') || '{}') as Record<string, unknown>;
     this.onRequest?.(action, params);
-    return this.answer(action, params, now);
+    return this.answer(action, params, now, via);
   };
 
-  private json(status: number, body: unknown, extra: Record<string, string> = {}): PullResponse {
+  /** What answers before the plugin is reached at all (a site that fails as it loads): nothing, here. */
+  protected beforeSignature(_action: string, _req: PullRequest, _via: 'rest' | 'query'): PullResponse | null {
+    return null;
+  }
+
+  /** The signature and the time window, as the plugin checks them: the refusal, or null. */
+  protected verify(action: string, req: PullRequest, now: number): PullResponse | null {
+    const id = req.headers['x-wpl7-import-id'];
+    const ts = Number(req.headers['x-wpl7-timestamp']);
+    const nonce = req.headers['x-wpl7-nonce'] ?? '';
+    const sig = req.headers['x-wpl7-signature'] ?? '';
+    if (id !== String(this.opts.importId)) return this.error(401, 'unauthorized');
+    const expected = `v1=${signRequest(this.opts.token, canonicalRequest(this.opts.importId, action, ts, nonce, req.body))}`;
+    if (sig !== expected) return this.error(401, 'unauthorized');
+    if (Math.abs(now - ts) > 300) return this.error(401, 'stale', { time: now });
+    return null;
+  }
+
+  protected json(status: number, body: unknown, extra: Record<string, string> = {}): PullResponse {
     return {
       status,
-      headers: { 'content-type': 'application/json; charset=utf-8', 'x-wpl7-protocol': '1', 'cache-control': 'no-store', ...extra },
+      headers: { 'content-type': 'application/json; charset=utf-8', [this.plugin.marker]: '1', 'cache-control': 'no-store', ...extra },
       body: Buffer.from(JSON.stringify(body)),
     };
   }
 
-  private error(status: number, code: string, extra: Record<string, unknown> = {}): PullResponse {
+  protected error(status: number, code: string, extra: Record<string, unknown> = {}): PullResponse {
     return this.json(status, { error: { code, ...extra } });
   }
 
@@ -241,7 +263,7 @@ export class FakeSourceSite {
   /** Size and mtime as listed. */
   private listed = new Map<number, { s: number; m: number }>();
 
-  private answer(action: string, p: Record<string, unknown>, now: number): PullResponse {
+  protected answer(action: string, p: Record<string, unknown>, now: number, _via: 'rest' | 'query' = 'rest'): PullResponse {
     switch (action) {
       case 'ping':
         return this.json(200, {
@@ -321,7 +343,7 @@ export class FakeSourceSite {
             status: 200,
             headers: {
               'content-type': 'application/octet-stream',
-              'x-wpl7-protocol': '1',
+              [this.plugin.marker]: '1',
               'x-wpl7-size': String(file.data!.length),
               'x-wpl7-mtime': String(file.mtime),
               'x-wpl7-range-sha256': sha256(slice),

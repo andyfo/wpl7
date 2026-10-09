@@ -73,6 +73,17 @@ export async function runHousekeeping(
   if (importsCleared > 0) log.info(`Imports: cleared ${importsCleared} that waited or failed too long`);
   checkCanceled();
 
+  // Sites hosted elsewhere: connections that waited for their plugin too long, and the copies of
+  // sites that were removed since.
+  const connectionsCleared = s.connections.prune();
+  result.connectionsCleared = connectionsCleared;
+  if (connectionsCleared > 0) log.info(`Connections: cleared ${connectionsCleared} that waited too long`);
+  result.copiesRemoved = await s.externalBackups.pruneOrphans((line) => log.info(line)).catch((err: unknown) => {
+    log.warn(`Clearing away the copies of removed sites failed: ${errorText(err)}`);
+    return 0;
+  });
+  checkCanceled();
+
   result.movesFinalized = await autoFinalizeMoves(s, s.worker, log, resolvers);
   checkCanceled();
 
@@ -143,7 +154,11 @@ export async function runHousekeeping(
     if (feed.fetched > 0 || feed.failed > 0) {
       log.info(`Vulnerability feed: ${feed.fetched} slug(s) refreshed${feed.failed > 0 ? `, ${feed.failed} failed` : ''}`);
     }
-    if (feed.fetched > 0) s.wpInventory.recount();
+    if (feed.fetched > 0) {
+      s.wpInventory.recount();
+      // A new advisory against a version a site already runs is news.
+      await s.alerts.vulnerabilities().catch((err: unknown) => log.warn(`Vulnerability alerts failed: ${errorText(err)}`));
+    }
   }
   const forgotten = s.vulnerabilities.pruneUnreferenced();
   if (forgotten > 0) log.info(`Vulnerability feed: dropped ${forgotten} unreferenced slug(s)`);

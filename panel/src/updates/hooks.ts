@@ -3,6 +3,7 @@ import type { JobContext } from '../jobs/context.js';
 import type { CoreServices } from '../services/index.js';
 import { asc } from 'drizzle-orm';
 import { sites } from '../db/schema.js';
+import { hostedSites } from '../lib/siteKind.js';
 import { compareVersions } from '../services/updates.js';
 import { sweepHardening } from '../services/siteHardening.js';
 
@@ -52,7 +53,7 @@ export const HOOKS: UpdateHook[] = [
     version: '0.2.0',
     title: 'Re-apply the container policy to every site',
     async run({ job, services }) {
-      const rows = services.db.select().from(sites).orderBy(asc(sites.id)).all();
+      const rows = services.db.select().from(sites).where(hostedSites()).orderBy(asc(sites.id)).all();
       const queued: string[] = [];
       const busy: string[] = [];
       for (const site of rows) {

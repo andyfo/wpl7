@@ -75,7 +75,8 @@ export function MalwareScanSettingsCard({ s, set }: { s: ScanSettings; set: <K e
         </div>
         <p className="measure text-xs text-neutral-500">
           At most three scans run at a time across all servers, one per server, and none on a server using more than 90% of its memory. What they
-          found is on <Link className="underline" to="/sites/security">Sites → Security</Link>. New serious findings are emailed to the alert address -
+          found is on <Link className="underline" to="/sites/security">Sites → Security</Link>. New serious findings are emailed to the{' '}
+          <Link className="underline" to="/settings#alerts">alert address</Link> -
           at most once every six hours per site.
         </p>
       </div>

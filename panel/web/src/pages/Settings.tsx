@@ -32,6 +32,10 @@ interface PanelSettings {
   mailAlertPerSitePerHour: number;
   mailSuspendPerSitePerHour: number;
   alertEmail: string;
+  alertsSiteDown: boolean;
+  alertsVulnerabilities: boolean;
+  alertsBackups: boolean;
+  alertsConnector: boolean;
   siteCpuLimit: number;
   siteMemoryLimitMb: number;
   sitePidsLimit: number;
@@ -82,6 +86,7 @@ const CARD_TAB: Record<string, TabId> = {
   cloudflare: 'dns',
   wildcard: 'dns',
   monitoring: 'monitoring',
+  alerts: 'monitoring',
   statistics: 'monitoring',
   updates: 'updates',
 };
@@ -117,7 +122,11 @@ const SETTING_TAB: Record<keyof PanelSettings, TabId> = {
   mailRetentionDays: 'mail',
   mailAlertPerSitePerHour: 'mail',
   mailSuspendPerSitePerHour: 'mail',
-  alertEmail: 'mail',
+  alertEmail: 'monitoring',
+  alertsSiteDown: 'monitoring',
+  alertsVulnerabilities: 'monitoring',
+  alertsBackups: 'monitoring',
+  alertsConnector: 'monitoring',
   monitorUptimeIntervalSec: 'monitoring',
   monitorStatsIntervalSec: 'monitoring',
   monitorDuIntervalMin: 'monitoring',
@@ -568,13 +577,6 @@ function MailTab({ s, set }: TabProps) {
           <input className={inputClass} type="number" min={0} value={s.mailSuspendPerSitePerHour}
             onChange={(e) => set('mailSuspendPerSitePerHour', Number(e.target.value))} />
         </Field>
-        <Field
-          label="Send alerts to"
-          hint="Empty = log only."
-        >
-          <input className={inputClass} type="email" placeholder="you@example.com" value={s.alertEmail ?? ''}
-            onChange={(e) => set('alertEmail', e.target.value)} />
-        </Field>
       </div>
     </Card>
   );
@@ -602,6 +604,26 @@ function MonitoringTab({ s, set }: TabProps) {
           </Field>
         </div>
         <p className="mt-2 text-xs text-neutral-500">Interval changes apply after a panel restart.</p>
+      </Card>
+
+      <Card title="Alerts" id="alerts">
+        <div className="space-y-4">
+          <Field label="Send alerts to" hint="Empty = log only.">
+            <input className={inputClass} type="email" placeholder="you@example.com" value={s.alertEmail ?? ''}
+              onChange={(e) => set('alertEmail', e.target.value)} />
+          </Field>
+          <div className="space-y-2">
+            <Toggle checked={s.alertsSiteDown} onChange={(v) => set('alertsSiteDown', v)} label="Site down, and back up" />
+            <Toggle checked={s.alertsVulnerabilities} onChange={(v) => set('alertsVulnerabilities', v)} label="New vulnerabilities" />
+            <Toggle checked={s.alertsBackups} onChange={(v) => set('alertsBackups', v)} label="Failed backups" />
+            <Toggle
+              checked={s.alertsConnector}
+              onChange={(v) => set('alertsConnector', v)}
+              label="External sites: WPL7 Connect not answering, certificate expiring"
+            />
+          </div>
+          <p className="text-xs text-neutral-500">Suspended mail, malware findings, failed offsite copies and new releases are always sent.</p>
+        </div>
       </Card>
 
       <Card title="Visitor statistics" id="statistics">

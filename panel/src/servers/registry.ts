@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import dns from 'node:dns/promises';
 import Docker from 'dockerode';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { servers, sites, type ServerRow } from '../db/schema.js';
 import type { Config } from '../config.js';
@@ -22,6 +22,7 @@ import { readPanelPrivateKey } from './keys.js';
 import { siteImage } from '../services/siteSpec.js';
 import type { Logger } from '../services/index.js';
 import type { ServerCheck } from '../../shared/types.js';
+import { hostedSites, externalSites } from '../lib/siteKind.js';
 
 export { ServerUnreachableError } from './sshConnection.js';
 
@@ -370,8 +371,14 @@ export class ServerRegistry {
     return { ok, checks };
   }
 
+  /** The sites this server hosts. External sites are not hosted anywhere: see externalCountFor. */
   sitesCountFor(serverId: number): number {
-    return this.db.select({ id: sites.id }).from(sites).where(eq(sites.serverId, serverId)).all().length;
+    return this.db.select({ id: sites.id }).from(sites).where(and(eq(sites.serverId, serverId), hostedSites())).all().length;
+  }
+
+  /** The sites hosted elsewhere whose backups this server keeps. */
+  externalCountFor(serverId: number): number {
+    return this.db.select({ id: sites.id }).from(sites).where(and(eq(sites.serverId, serverId), externalSites())).all().length;
   }
 
   async closeAll(): Promise<void> {

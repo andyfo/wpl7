@@ -8,6 +8,7 @@ import type { DnsAccount } from './dnsAccount.js';
 import type { TraefikDnsSync } from './traefikDns.js';
 import { traefikLabels } from './labels.js';
 import { queueReconcile, type HardeningSweep } from './siteHardening.js';
+import { hostedSites } from '../lib/siteKind.js';
 
 /**
  * Why a server cannot share a wildcard certificate from `provider`, or null when it can. Every
@@ -73,7 +74,7 @@ export async function sweepWildcardSites(
   serverIds?: number[],
 ): Promise<HardeningSweep> {
   const sweep: HardeningSweep = { queued: [], busy: [] };
-  const rows = s.db.select().from(sites).orderBy(asc(sites.id)).all();
+  const rows = s.db.select().from(sites).where(hostedSites()).orderBy(asc(sites.id)).all();
   for (const server of s.servers.listRows()) {
     if (serverIds && !serverIds.includes(server.id)) continue;
     if (server.status === 'unreachable' || server.status === 'provisioning') continue;

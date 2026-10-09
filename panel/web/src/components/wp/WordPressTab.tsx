@@ -43,14 +43,16 @@ function ActionError({ error }: { error: unknown }) {
 
 export function WordPressTab({ slug }: { slug: string }) {
   const site = useSite(slug);
-  const running = site.data?.containerState === 'running';
+  // A site hosted elsewhere is worked on through WPL7 Connect while it is connected.
+  const external = site.data?.kind === 'external';
+  const running = external ? site.data?.status === 'connected' : site.data?.containerState === 'running';
   const isLive = site.data?.isLive ?? false;
   const status = useWpStatus(slug);
   // Every WordPress job ends by re-reading the snapshot, so the status query is what has
   // to be invalidated when one finishes - not a plugin list that no longer exists.
   const run = useRunJob([['wp-status', slug]]);
   const qc = useQueryClient();
-  const maintenanceQuery = useWpMaintenance(slug, !!running);
+  const maintenanceQuery = useWpMaintenance(slug, !!running && !external);
   const [resetUser, setResetUser] = useState('');
   const [resetResult, setResetResult] = useState<string | null>(null);
   const [testEmailTo, setTestEmailTo] = useState('');
@@ -156,12 +158,13 @@ export function WordPressTab({ slug }: { slug: string }) {
       >
         {!running && (
           <p className="mb-3 rounded-lg bg-neutral-50 px-3 py-2 text-xs text-neutral-600">
-            The site container is not running — these numbers are from the last scan.
+            {external ? 'The site is disconnected' : 'The site container is not running'} — these numbers are from the last scan.
           </p>
         )}
         {neverScanned ? (
           <EmptyState>
-            Not scanned yet. {running ? 'Use “Check now”' : 'Start the site, then use “Check now”'}.
+            Not scanned yet.{' '}
+            {running ? 'Use “Check now”' : external ? 'Reconnect the site, then use “Check now”' : 'Start the site, then use “Check now”'}.
           </EmptyState>
         ) : (
           <>
@@ -201,7 +204,7 @@ export function WordPressTab({ slug }: { slug: string }) {
                 onClick={() =>
                   setPending({
                     title: 'Update everything on this site',
-                    message: `${allOps.length} update${allOps.length === 1 ? '' : 's'} will run in one job, in order, inside this site's container.`,
+                    message: `${allOps.length} update${allOps.length === 1 ? '' : 's'} will run in one job, in order, ${external ? 'through WPL7 Connect' : "inside this site's container"}.`,
                     ops: allOps,
                   })
                 }
@@ -375,100 +378,104 @@ export function WordPressTab({ slug }: { slug: string }) {
         />
       </Card>
 
-      <SiteRecipesCard slug={slug} />
+      {!external && <SiteRecipesCard slug={slug} />}
 
       {/* ------------------------------------------------------ site tools */}
-      <Card title="Maintenance mode">
-        <Toggle
-          // While the PUT is in flight the switch shows where it is going, not where it was:
-          // the query still holds the old answer until the refetch lands, and snapping back
-          // for that second reads as a click that did not register.
-          checked={maintenanceTo ?? maintenanceQuery.data ?? false}
-          disabled={!running || maintenanceQuery.isLoading}
-          busy={busy === 'maintenance'}
-          onChange={(v) =>
-            void sync('maintenance', async () => {
-              setMaintenanceTo(v);
-              try {
-                await api(`/api/sites/${slug}/wp/maintenance`, { method: 'PUT', body: { enabled: v } });
-                await qc.invalidateQueries({ queryKey: ['wp-maintenance', slug] });
-              } finally {
-                setMaintenanceTo(null);
-              }
-            })
-          }
-          label={`Show the maintenance page to visitors${maintenanceQuery.isLoading ? ' (checking…)' : ''}`}
-        />
-        <p className="mt-2 text-xs text-neutral-500">
-          {running
-            ? 'WordPress stops honouring the marker ten minutes after it is set.'
-            : 'The site container is not running, so the marker cannot be set.'}
-        </p>
-        <ActionError error={errorOf('maintenance')} />
-      </Card>
+      {!external && (
+        <Card title="Maintenance mode">
+          <Toggle
+            // While the PUT is in flight the switch shows where it is going, not where it was:
+            // the query still holds the old answer until the refetch lands, and snapping back
+            // for that second reads as a click that did not register.
+            checked={maintenanceTo ?? maintenanceQuery.data ?? false}
+            disabled={!running || maintenanceQuery.isLoading}
+            busy={busy === 'maintenance'}
+            onChange={(v) =>
+              void sync('maintenance', async () => {
+                setMaintenanceTo(v);
+                try {
+                  await api(`/api/sites/${slug}/wp/maintenance`, { method: 'PUT', body: { enabled: v } });
+                  await qc.invalidateQueries({ queryKey: ['wp-maintenance', slug] });
+                } finally {
+                  setMaintenanceTo(null);
+                }
+              })
+            }
+            label={`Show the maintenance page to visitors${maintenanceQuery.isLoading ? ' (checking…)' : ''}`}
+          />
+          <p className="mt-2 text-xs text-neutral-500">
+            {running
+              ? 'WordPress stops honouring the marker ten minutes after it is set.'
+              : 'The site container is not running, so the marker cannot be set.'}
+          </p>
+          <ActionError error={errorOf('maintenance')} />
+        </Card>
+      )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Reset a user's password">
-          <div className="flex gap-2">
-            <input
-              className={`${inputClass} max-w-sm`}
-              placeholder="username or email"
-              value={resetUser}
-              onChange={(e) => setResetUser(e.target.value)}
-            />
-            <Button
-              small
-              disabled={!resetUser.trim() || busy === 'reset' || !running}
-              onClick={() =>
-                void sync('reset', async () => {
-                  const res = await api<{ newPassword: string }>(`/api/sites/${slug}/wp/users/reset-password`, {
-                    method: 'POST',
-                    body: { user: resetUser.trim() },
-                  });
-                  setResetResult(res.newPassword);
-                })
-              }
-            >
-              {busy === 'reset' ? 'Resetting…' : 'Reset'}
-            </Button>
-          </div>
-          {resetResult && (
-            <div className="mt-3">
-              <p className="mb-1 text-xs text-neutral-600">New password (shown once):</p>
-              <CopyField value={resetResult} />
+      {!external && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card title="Reset a user's password">
+            <div className="flex gap-2">
+              <input
+                className={`${inputClass} max-w-sm`}
+                placeholder="username or email"
+                value={resetUser}
+                onChange={(e) => setResetUser(e.target.value)}
+              />
+              <Button
+                small
+                disabled={!resetUser.trim() || busy === 'reset' || !running}
+                onClick={() =>
+                  void sync('reset', async () => {
+                    const res = await api<{ newPassword: string }>(`/api/sites/${slug}/wp/users/reset-password`, {
+                      method: 'POST',
+                      body: { user: resetUser.trim() },
+                    });
+                    setResetResult(res.newPassword);
+                  })
+                }
+              >
+                {busy === 'reset' ? 'Resetting…' : 'Reset'}
+              </Button>
             </div>
-          )}
-          <ActionError error={errorOf('reset')} />
-        </Card>
+            {resetResult && (
+              <div className="mt-3">
+                <p className="mb-1 text-xs text-neutral-600">New password (shown once):</p>
+                <CopyField value={resetResult} />
+              </div>
+            )}
+            <ActionError error={errorOf('reset')} />
+          </Card>
 
-        <Card title="Send test email">
-          <div className="flex gap-2">
-            <input
-              className={`${inputClass} max-w-sm`}
-              placeholder="you@example.com"
-              value={testEmailTo}
-              onChange={(e) => setTestEmailTo(e.target.value)}
-            />
-            <Button
-              small
-              disabled={!testEmailTo.trim() || busy === 'email' || !running}
-              onClick={() =>
-                void sync('email', async () => {
-                  const res = await api<{ accepted: boolean; detail: string }>(`/api/sites/${slug}/wp/test-email`, {
-                    method: 'POST',
-                    body: { to: testEmailTo.trim() },
-                  });
-                  setTestEmailResult(res.detail);
-                })
-              }
-            >
-              {busy === 'email' ? 'Sending…' : 'Send'}
-            </Button>
-          </div>
-          {testEmailResult && <p className="mt-2 text-xs text-neutral-600">{testEmailResult}</p>}
-          <ActionError error={errorOf('email')} />
-        </Card>
-      </div>
+          <Card title="Send test email">
+            <div className="flex gap-2">
+              <input
+                className={`${inputClass} max-w-sm`}
+                placeholder="you@example.com"
+                value={testEmailTo}
+                onChange={(e) => setTestEmailTo(e.target.value)}
+              />
+              <Button
+                small
+                disabled={!testEmailTo.trim() || busy === 'email' || !running}
+                onClick={() =>
+                  void sync('email', async () => {
+                    const res = await api<{ accepted: boolean; detail: string }>(`/api/sites/${slug}/wp/test-email`, {
+                      method: 'POST',
+                      body: { to: testEmailTo.trim() },
+                    });
+                    setTestEmailResult(res.detail);
+                  })
+                }
+              >
+                {busy === 'email' ? 'Sending…' : 'Send'}
+              </Button>
+            </div>
+            {testEmailResult && <p className="mt-2 text-xs text-neutral-600">{testEmailResult}</p>}
+            <ActionError error={errorOf('email')} />
+          </Card>
+        </div>
+      )}
 
       <Card
         title="WP-CLI console (advanced)"
@@ -507,7 +514,11 @@ export function WordPressTab({ slug }: { slug: string }) {
             )}
             <ActionError error={errorOf('cli')} />
             <p className="text-xs text-neutral-400">
-              Runs inside the site container as www-data, with a 55s limit. Quoted arguments are supported.
+              {external
+                ? `Runs only commands a plugin registered with WPL7 Connect${
+                    site.data?.external?.commands.length ? `: ${site.data.external.commands.join(', ')}` : '. None here does.'
+                  }`
+                : 'Runs inside the site container as www-data, with a 55s limit. Quoted arguments are supported.'}
             </p>
           </div>
         )}

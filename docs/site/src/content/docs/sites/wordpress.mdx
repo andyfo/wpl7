@@ -2,9 +2,10 @@
 title: Manage WordPress
 description: "One-click admin login, password resets, maintenance mode, the WP-CLI console, and plugin changes on one site."
 sidebar:
-  order: 5
+  order: 6
 sources:
   - panel/web/src/components/wp/WordPressTab.tsx
+  - panel/web/src/components/WpAdminLoginButton.tsx
   - panel/web/src/components/wp/ComponentTable.tsx
   - panel/web/src/components/wp/BulkRunOptions.tsx
   - panel/web/src/pages/SiteDetail.tsx
@@ -72,12 +73,24 @@ Open **WP-CLI console (advanced)** with **show**. Type a command without the lea
 as `option get siteurl`, and choose **Run**. It runs inside the site's container as
 `www-data`, and stops after 55 seconds.
 
+## On a site hosted elsewhere
+
+A [site hosted elsewhere](/docs/sites/external/) has the same tab while it is connected. The panel
+works through WPL7 Connect, as the administrator set as **Acting as** on its **Settings** tab.
+
+- **Log in to WordPress** signs you in as that administrator.
+- An update that leaves the site not answering puts the updated plugins and themes back.
+- The console runs only commands that plugins registered with WPL7 Connect. Below it, the panel
+  names them.
+- **Recipes**, **Maintenance mode**, **Reset a user's password** and **Send test email** are not
+  there.
+
 ## Limits
 
 - Changes need the site to be running. A stopped site shows its last scan.
 - The panel does not renew the maintenance page, and **Log in to WordPress** does not work
   while it shows.
-- A failed update is not rolled back. Restore the backup from the **Backups** tab.
+- On a hosted site, a failed update is not rolled back. Restore the backup from the **Backups** tab.
 - Deleting a plugin leaves its database tables and options behind.
 - Longer commands belong in [your own scheduled jobs](/docs/automations/custom-jobs/).
 

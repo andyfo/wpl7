@@ -6,6 +6,7 @@ import type { TestWorld } from '../../test/helpers.js';
 import { seedServers } from './servers.js';
 import { presentSrvAs } from './paths.js';
 import { seedSites } from './sites.js';
+import { seedExternalSites } from './external.js';
 import { seedInventory } from './inventory.js';
 import { seedTraffic } from './traffic.js';
 import { seedBackups } from './backups.js';
@@ -23,6 +24,7 @@ export async function seedAll(world: TestWorld): Promise<void> {
   seedServers(world);
   presentSrvAs(world);
   seedSites(world);
+  seedExternalSites(world);
   seedInventory(world);
   seedTraffic(world);
   seedBackups(world);

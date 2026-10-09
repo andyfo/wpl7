@@ -35,6 +35,12 @@ its traffic. A row opens the site's page, whose tabs hold everything about that 
 With more than one server, a menu at the top shows the sites of one server only. Choose a row
 to open the site, or Cmd-click or Ctrl-click it to open the site in a new tab.
 
+[Sites hosted elsewhere](/docs/sites/external/) are in a card of their own, **External**, under the
+list. It shows their status, PHP version, updates, last backup, and when they were added.
+**Connect site** at the top adds one.
+
+<Screenshot name="sites-external" alt="The External card under the Sites list: one site online, one whose plugin does not answer" />
+
 ## Status and health
 
 Two readings decide the **Status** badge. The panel records what the last job left the site
@@ -56,6 +62,16 @@ check skips it. The site is checked again as the job ends.
 
 The list only knows the check. The site page also asks Docker about the container, so only it
 shows **No container** and **Unknown**.
+
+A site hosted elsewhere is checked at its own address, from the panel. Its plugin is asked every
+hour. It has badges of its own:
+
+| Badge | What it means |
+|---|---|
+| **Online** | The last check got an answer. |
+| **Offline** | The last check got no answer, or an error. |
+| **Plugin unreachable** | The site answers, but WPL7 Connect does not answer the panel. |
+| **Disconnected** | The panel no longer manages the site. **Reconnect** is on its **Settings** tab. |
 
 For a bad state, the site page shows a red banner with the cause and the button that repairs
 it. **Start** is for a container that exited or never ran, and **Restart** for one that runs
@@ -80,6 +96,9 @@ The page's header shows the site's title, its badges and its address. The tabs:
 On a fleet, **Overview** also offers **Move server**. Banners appear there when the site's
 outgoing mail is suspended, with **Resume mail**, and after a move, with **Finalize now**.
 
+A site hosted elsewhere has four of these tabs: **Overview**, **Backups**, **WordPress** and
+**Settings**. See [Sites hosted elsewhere](/docs/sites/external/).
+
 ## Limits
 
 - The list has no search and no selection. To change many sites at once, use
@@ -93,6 +112,7 @@ outgoing mail is suspended, with **Resume mail**, and after a move, with **Final
 ## Related
 
 - [Create a site](/docs/sites/create/)
+- [Sites hosted elsewhere](/docs/sites/external/)
 - [Site settings](/docs/sites/settings/)
 - [Bulk management](/docs/sites/bulk/)
 - [Servers and monitoring](/docs/servers/overview/)

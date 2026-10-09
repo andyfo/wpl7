@@ -22,6 +22,7 @@ import {
   type PingAnswer,
   type SnapshotAnswer,
 } from '../../services/importPull.js';
+import type { PluginClient } from '../../services/pluginClient.js';
 import { buildSiteContainerSpec, sitePaths, siteRuntimeFrom, siteTlsFor } from '../../services/siteSpec.js';
 import { restoreSiteOnServer, type ProtectionHold } from './restoreSite.js';
 import {
@@ -56,7 +57,7 @@ export const siteImportPayload = z.object({ importId: z.number().int(), sourceHo
 export const siteImportFinishPayload = siteImportPayload;
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
-const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
+export const shq = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
 const MIB = 1024 * 1024;
 
 /** One tar batch: what is extracted, and written down as done, in one go. */
@@ -72,7 +73,7 @@ const MAX_REREADS = 2;
 const LOG_BYTES = 256 * MIB;
 const LOG_FILES = 5000;
 
-function bytesText(bytes: number): string {
+export function bytesText(bytes: number): string {
   if (bytes < MIB) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
   if (bytes < 1024 ** 3) return `${(bytes / MIB).toFixed(bytes < 10 * MIB ? 1 : 0)} MB`;
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
@@ -114,7 +115,7 @@ function safeMode(md: string | undefined, dir: boolean): number {
  * Run `tar -x` into `dir` on the server, fed from a TarWriter as `produce` fills it. If tar stops
  * reading - it failed, the disk is full - the writer is told at once rather than left waiting.
  */
-async function extractInto(server: ServerHandle, dir: string, produce: (tar: TarWriter) => Promise<void>): Promise<void> {
+export async function extractInto(server: ServerHandle, dir: string, produce: (tar: TarWriter) => Promise<void>): Promise<void> {
   const tar = new TarWriter();
   tar.on('error', () => undefined);
   let producing = true;
@@ -268,7 +269,7 @@ export async function siteImport(ctx: JobContext<z.infer<typeof siteImportPayloa
  */
 export async function listFiles(
   ctx: JobContext<unknown>,
-  client: ImportPullClient,
+  client: PluginClient,
   cursor: ImportCursor,
   commit: () => Promise<void>,
   opts: { since?: number } = {},
@@ -340,7 +341,7 @@ function listingNote(w: { code: string; count?: number; detail?: string }): { le
  */
 export async function pullFiles(
   ctx: JobContext<unknown>,
-  client: ImportPullClient,
+  client: PluginClient,
   ping: PingAnswer,
   server: ServerHandle,
   wordpressDir: string,

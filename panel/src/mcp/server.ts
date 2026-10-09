@@ -67,8 +67,8 @@ function buildServer(c: ToolContext): McpServer {
  */
 function instructionsFor(principal: McpPrincipal, origin: string): string {
   return [
-    `This is the WPL7 panel at ${origin}. WPL7 is a self-hosted WordPress hosting panel: every site runs in its own`,
-    "container on one of the panel's servers, with backups, mail, visitor statistics and a job queue for anything slow.",
+    `This is the WPL7 panel at ${origin}. WPL7 is a self-hosted WordPress hosting panel: every site it hosts runs in its`,
+    "own container on one of the panel's servers, with backups, mail, visitor statistics and a job queue for anything slow.",
     `These tools call its REST API as ${principal.label}, with ${ACCESS_LABELS[principal.access]} access.`,
     '',
     'Other WPL7 panels may be connected alongside this one, each under its own name. They share nothing: a site called',

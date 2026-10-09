@@ -95,6 +95,7 @@ import type {
   MailStatsDto,
   ServerCheck,
 } from '../../shared/types.js';
+import { hostedSites } from '../lib/siteKind.js';
 
 export { MAIL_CONTAINER, DKIM_CONTAINER } from './stack.js';
 /** Where the DKIM volume is mounted inside wpl7-dkim (see deploy/docker-compose.yml). */
@@ -366,7 +367,7 @@ export class MailService {
 
   senderOwners(): SenderOwner[] {
     const owners: SenderOwner[] = [];
-    for (const site of this.db.select().from(sites).all()) {
+    for (const site of this.db.select().from(sites).where(hostedSites()).all()) {
       const login = mailLogin(site.slug);
       for (const domain of JSON.parse(site.domains) as string[]) owners.push({ domain, login });
       if (site.devHostname) owners.push({ domain: site.devHostname, login });
@@ -425,7 +426,7 @@ export class MailService {
     await handle.files.writeFile(dkim.senderLogins, renderSenderLogins(this.signerOwners(opts.extraOwners)));
 
     const wanted = new Map<string, string>();
-    for (const site of this.db.select().from(sites).all()) {
+    for (const site of this.db.select().from(sites).where(hostedSites()).all()) {
       if (!site.mailPassword) continue;
       wanted.set(mailLogin(site.slug), site.mailPassword);
       // LEGACY(ceo) - delete in 0.3.0. Same password under the pre-rename realm, so a site
@@ -703,7 +704,7 @@ export class MailService {
       devDomains.find((dev) => host === dev || host.endsWith(`.${dev}`)) ?? host;
 
     const byDomain = new Map<string, Set<string>>();
-    for (const site of this.db.select().from(sites).all()) {
+    for (const site of this.db.select().from(sites).where(hostedSites()).all()) {
       if (serverId !== undefined && site.serverId !== serverId) continue;
       for (const host of JSON.parse(site.domains) as string[]) {
         const domain = collapse(host);

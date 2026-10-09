@@ -210,7 +210,9 @@ export function Dashboard() {
                     <td className="pr-3">
                       <SiteHealthBadge health={healthOf(site)} />
                     </td>
-                    {multiServer && <td className="pr-3 text-xs text-neutral-500">{site.serverName}</td>}
+                    {multiServer && (
+                      <td className="pr-3 text-xs text-neutral-500">{site.kind === 'external' ? 'External' : site.serverName}</td>
+                    )}
                     <td className="pr-3 text-xs text-neutral-500">PHP {site.phpVersion}</td>
                     <td className="pr-3 text-xs text-neutral-500">
                       {m?.cpuPct != null ? `${m.cpuPct.toFixed(1)}%` : '—'}

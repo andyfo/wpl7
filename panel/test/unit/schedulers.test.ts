@@ -45,6 +45,7 @@ describe('built-in schedules', () => {
       'housekeeping',
       'wp-cron',
       'uptime',
+      'external-check',
       'site-stats',
       'server-stats',
       'disk-usage',

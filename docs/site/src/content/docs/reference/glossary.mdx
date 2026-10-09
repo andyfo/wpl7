@@ -62,6 +62,10 @@ A signature the relay adds to each outgoing message, which receivers check again
 
 A DNS record that tells receivers what to do with mail from a domain that fails SPF and DKIM, and where to send reports, as [SPF, DKIM and DMARC explained](/docs/mail/records/) describes.
 
+## External site
+
+A WordPress site that runs on another host and is managed from the panel through WPL7 Connect, as [Sites hosted elsewhere](/docs/sites/external/) describes.
+
 ## Fetch back
 
 Copying an offsite-only backup from its destination onto the site's current server with **Fetch back**, so it can be restored or downloaded, as [Offsite copies](/docs/backups/offsite/) explains.
@@ -156,7 +160,7 @@ How many scheduled backups of each site are kept, on the server and at each dest
 
 ## Rollback
 
-Going back to the state before a failed operation, such as a failed update that restores the previous panel, bundle and database, as [Updating WPL7](/docs/panel/updating/) explains.
+Going back to the state before a failed operation: a failed update that restores the previous panel, bundle and database, as [Updating WPL7](/docs/panel/updating/) explains, or the plugins and themes put back after an update broke a [site hosted elsewhere](/docs/sites/external/).
 
 ## Schedule
 
@@ -172,7 +176,7 @@ A machine that runs the WPL7 stack, either the panel's own server or a worker, a
 
 ## Site
 
-One WordPress install with its own container, database, network and files, as [The Sites list](/docs/sites/overview/) shows.
+One WordPress install the panel manages: with its own container, database, network and files on one of the servers, or on another host as an [external site](#external-site). [The Sites list](/docs/sites/overview/) shows both.
 
 ## Site protection
 
@@ -209,6 +213,10 @@ One certificate for every name under a server's dev domain, shared by its dev si
 ## Worker
 
 A server that runs sites but no panel, set up and driven by the panel over SSH, as [Add a server](/docs/servers/add/) explains.
+
+## WPL7 Connect
+
+The plugin a site hosted elsewhere runs, which answers only requests the panel signed, as [Sites hosted elsewhere](/docs/sites/external/) describes.
 
 ## WP-CLI console
 

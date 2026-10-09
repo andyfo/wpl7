@@ -129,6 +129,13 @@ export interface ScheduleActionInfo {
   targets: readonly ScheduleTargetKind[];
   /** The job type it queues (one per site for site targets). */
   jobType: JobType;
+  /**
+   * It runs on sites hosted elsewhere too (through WPL7 Connect). Those have no container to
+   * start, stop or open a shell in, and run only the WP-CLI commands their plugins registered.
+   */
+  external: boolean;
+  /** For a site hosted elsewhere that cannot take it: what it cannot be. */
+  externalRefusal?: string;
 }
 
 const SITE_TARGETS = ['sites', 'server', 'all'] as const;
@@ -141,6 +148,7 @@ export const SCHEDULE_ACTION_INFO = {
     category: 'backups',
     targets: SITE_TARGETS,
     jobType: 'backup.create',
+    external: true,
   },
   'site.restart': {
     label: 'Restart sites',
@@ -148,6 +156,8 @@ export const SCHEDULE_ACTION_INFO = {
     category: 'sites',
     targets: SITE_TARGETS,
     jobType: 'site.restart',
+    external: false,
+    externalRefusal: 'cannot be restarted',
   },
   'site.start': {
     label: 'Start sites',
@@ -155,6 +165,8 @@ export const SCHEDULE_ACTION_INFO = {
     category: 'sites',
     targets: ['sites', 'server'],
     jobType: 'site.start',
+    external: false,
+    externalRefusal: 'cannot be started',
   },
   'site.stop': {
     label: 'Stop sites',
@@ -162,6 +174,8 @@ export const SCHEDULE_ACTION_INFO = {
     category: 'sites',
     targets: ['sites', 'server'],
     jobType: 'site.stop',
+    external: false,
+    externalRefusal: 'cannot be stopped',
   },
   'wp.scan': {
     label: 'Scan WordPress inventory',
@@ -169,6 +183,7 @@ export const SCHEDULE_ACTION_INFO = {
     category: 'wordpress',
     targets: SITE_TARGETS,
     jobType: 'wp.scanAll',
+    external: true,
   },
   'wp.update': {
     label: 'Update plugins, themes and WordPress',
@@ -177,6 +192,7 @@ export const SCHEDULE_ACTION_INFO = {
     category: 'wordpress',
     targets: SITE_TARGETS,
     jobType: 'wp.bulkTask',
+    external: true,
   },
   'panel.snapshot': {
     label: 'Panel snapshot',
@@ -184,13 +200,16 @@ export const SCHEDULE_ACTION_INFO = {
     category: 'backups',
     targets: ['panel'],
     jobType: 'panel.snapshot',
+    external: false,
   },
   'wp.cli': {
     label: 'WP-CLI command',
-    description: "Runs a WP-CLI command in each site's container. Its output goes to the job log.",
+    description:
+      "Runs a WP-CLI command in each site's container. A site hosted elsewhere runs only the commands its plugins registered with WPL7 Connect. Its output goes to the job log.",
     category: 'wordpress',
     targets: SITE_TARGETS,
     jobType: 'wp.cli',
+    external: true,
   },
   'site.shell': {
     label: 'Shell command',
@@ -199,6 +218,8 @@ export const SCHEDULE_ACTION_INFO = {
     category: 'sites',
     targets: SITE_TARGETS,
     jobType: 'site.shell',
+    external: false,
+    externalRefusal: 'runs no shell commands',
   },
   'wp.rest': {
     label: 'REST API request',
@@ -207,6 +228,7 @@ export const SCHEDULE_ACTION_INFO = {
     category: 'wordpress',
     targets: SITE_TARGETS,
     jobType: 'wp.rest',
+    external: true,
   },
 } as const satisfies Record<ScheduleAction, ScheduleActionInfo>;
 

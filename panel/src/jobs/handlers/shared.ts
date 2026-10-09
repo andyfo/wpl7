@@ -16,10 +16,18 @@ import type { ServerHandle } from '../../servers/registry.js';
 import { httpProbe } from '../../lib/httpProbe.js';
 import type { RecipeHook } from '../../../shared/recipes.js';
 import type { HookVars, RecipeOutcome } from '../../services/licenses.js';
+import { isExternal, type SiteKinds } from '../../lib/siteKind.js';
 
-export function loadSite(db: Db, siteId: number): SiteRow {
+/**
+ * The site a job works on. An external site is refused unless the job is one that works for both
+ * kinds and says so: a job written for hosted sites must never reach Docker with one.
+ */
+export function loadSite(db: Db, siteId: number, opts: { kinds?: SiteKinds } = {}): SiteRow {
   const site = db.select().from(sites).where(eq(sites.id, siteId)).get();
   if (!site) throw new Error(`Site #${siteId} no longer exists`);
+  if ((opts.kinds ?? 'hosted') === 'hosted' && isExternal(site)) {
+    throw new Error(`"${site.slug}" is an external site: this job works only for sites the panel hosts.`);
+  }
   return site;
 }
 
@@ -372,4 +380,29 @@ export async function runLicenseHook(
     );
     return [];
   }
+}
+
+/**
+ * wp-cli needs a running container. Starting a stopped site is fine, but leaving it
+ * running afterwards contradicts the site's own `stopped` status - the panel then showed
+ * "stopped" for a site that was serving traffic (and burning memory). Returns a restore
+ * function the caller must run in a `finally`.
+ */
+export async function requireRunning(
+  ctx: JobContext<unknown>,
+  server: ServerHandle,
+  s: MountServices,
+  site: SiteRow,
+): Promise<() => Promise<void>> {
+  const state = await server.docker.containerState(site.containerName);
+  if (state === 'missing') throw new Error('Site container does not exist');
+  if (state === 'running') return async () => undefined;
+  ctx.info('Site is stopped; starting it for this operation…');
+  await startSiteContainer(server, s, site, ctx);
+  return async () => {
+    ctx.info('Stopping the site again (it was stopped before this operation).');
+    await server.docker.stopContainer(site.containerName).catch((err) => {
+      ctx.warn(`Could not stop the site again: ${err instanceof Error ? err.message : err}`);
+    });
+  };
 }
