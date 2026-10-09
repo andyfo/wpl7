@@ -61,6 +61,28 @@ export const SITES: DemoSite[] = [
 /** The old site an import is connected to, waiting on its Confirm step (imports.ts). */
 export const IMPORT_SOURCE = 'https://willow-pediatrics.example';
 
+export interface DemoExternalSite {
+  slug: string;
+  title: string;
+  home: string;
+  php: string;
+  /** Days since it was added. */
+  ageDays: number;
+  /** The server that keeps its backups. */
+  storage: number;
+  /** Whether WPL7 Connect answered the panel's last check. */
+  reachable: boolean;
+}
+
+/** Sites hosted elsewhere, managed through WPL7 Connect (external.ts). */
+export const EXTERNAL_SITES: DemoExternalSite[] = [
+  { slug: 'meadow-vet', title: 'Meadow Vet Clinic', home: 'https://meadowvet.example', php: '8.3', ageDays: 41, storage: 1, reachable: true },
+  { slug: 'granite-gym', title: 'Granite Gym', home: 'https://granitegym.example', php: '8.2', ageDays: 23, storage: 1, reachable: false },
+];
+
+/** A site hosted elsewhere whose plugin has just connected, waiting on its Confirm step (external.ts). */
+export const CONNECT_SOURCE = 'https://riverside-books.example';
+
 /** The site that was deleted: only its backups remain, on sin1. */
 export const DELETED_SITE = { slug: 'old-portfolio', server: 3 };
 

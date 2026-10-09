@@ -89,7 +89,7 @@ export function registerMiscRoutes(app: FastifyInstance, deps: AppDeps): void {
     '/api/monitor/sites/:slug/history',
     { schema: { params: slugParams, querystring: historyQuery } },
     async (req) => {
-      const site = deps.sites.bySlug(req.params.slug);
+      const site = deps.sites.bySlug(req.params.slug, { kinds: 'any' });
       return { samples: deps.monitor.history(site.id, req.query.hours) };
     },
   );

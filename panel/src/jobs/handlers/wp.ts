@@ -1,35 +1,33 @@
 // @docs plugins/overview, plugins/updates, sites/bulk
-import { asc, eq } from 'drizzle-orm';
+import { asc } from 'drizzle-orm';
 import { z } from 'zod';
-import { plugins, sites, type SiteRow } from '../../db/schema.js';
+import { sites, type SiteRow } from '../../db/schema.js';
 import { wpComponentActions, wpComponentKinds } from '../../../shared/schemas.js';
 import type { WpBulkOpResult } from '../../../shared/types.js';
 import { policyOps } from '../../../shared/wpOps.js';
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
-import { loadSite, probeSite, siteDomains, siteUrl, startSiteContainer, type MountServices } from './shared.js';
+import { loadSite, requireRunning, siteDomains, siteUrl } from './shared.js';
+import { backendFor, type SiteBackend } from '../../services/siteBackend.js';
+import { isExternal } from '../../lib/siteKind.js';
 
 export const wpCoreUpdatePayload = z.object({ siteId: z.number().int() });
 
 export async function wpCoreUpdate(ctx: JobContext<z.infer<typeof wpCoreUpdatePayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
-  const server = s.servers.handleFor(site.serverId);
-  const restoreState = await requireRunning(ctx, server, s, site);
+  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
+  const backend = backendFor(s, site);
+  const restoreState = await backend.prepare(ctx);
   try {
-    const before = await server.wp.coreVersion(site.containerName);
-    ctx.info(`Updating WordPress core (current: ${before ?? 'unknown'})…`);
-    const { update } = await server.wp.coreUpdate(site.containerName);
-    ctx.info(update.stdout.trim().split('\n').slice(-1)[0] ?? 'Core update finished');
-    const after = await server.wp.coreVersion(site.containerName);
-    ctx.info(`Core version now: ${after ?? 'unknown'}`);
-    ctx.setResult({ from: before, to: after });
+    const { from, to } = await backend.coreUpdate(ctx);
+    ctx.setResult({ from, to });
   } finally {
     // Every WordPress job leaves the snapshot current - the panel reads that snapshot
     // everywhere now, so a job that changes a site without re-reading it makes the UI lie
     // until the next scheduled scan.
-    await rescanQuietly(ctx, s, site, server);
+    await rescanQuietly(ctx, s, site, backend);
     await restoreState();
+    backend.close();
   }
 }
 
@@ -48,64 +46,37 @@ export const wpPluginTaskPayload = z.object({
 });
 
 export async function wpPluginTask(ctx: JobContext<z.infer<typeof wpPluginTaskPayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
-  const server = s.servers.handleFor(site.serverId);
-  const restoreState = await requireRunning(ctx, server, s, site);
+  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
+  const backend = backendFor(s, site);
+  const restoreState = await backend.prepare(ctx);
   try {
-    await runPluginTask(ctx, s, site, server);
+    await runPluginTask(ctx, backend);
   } finally {
     // See wpCoreUpdate: the inventory snapshot is what the site page renders, so an
     // install/activate/deactivate/delete has to be reflected in it before the job ends.
-    await rescanQuietly(ctx, s, site, server);
+    await rescanQuietly(ctx, s, site, backend);
     await restoreState();
+    backend.close();
   }
 }
 
-/**
- * The WordPress user a plugin or theme change runs as: the site's administrator, as when an admin
- * makes it in wp-admin (services/wp.ts actingAs says why). A site without one - or whose users
- * cannot be listed - gets the change as nobody, as before, with a word in the log.
- */
-async function actorFor(ctx: JobContext<unknown>, server: ServerHandle, site: SiteRow): Promise<string | undefined> {
-  try {
-    const admin = await server.wp.siteAdministrator(site.containerName, site.wpAdminUser);
-    if (admin) return String(admin.id);
-    ctx.warn('This site has no administrator account, so the change runs as no WordPress user.');
-  } catch (err) {
-    ctx.warn(`Could not find the site's administrator (${errorText(err)}); the change runs as no WordPress user.`);
+/** One plugin or theme updated on its own, outside a bulk run: the update, or why it failed. */
+async function updateOne(ctx: JobContext<unknown>, backend: SiteBackend, kind: 'plugin' | 'theme', name: string, actor: string | undefined): Promise<void> {
+  if (backend.kind === 'hosted') {
+    await backend.componentAction(kind, name, 'update', actor);
+    return;
   }
-  return undefined;
+  const [result] = await backend.updateMany(ctx, kind, [name], actor);
+  if (!result?.ok) throw new Error(result?.error ?? 'The update failed');
 }
 
-async function runPluginTask(
-  ctx: JobContext<z.infer<typeof wpPluginTaskPayload>>,
-  s: CoreServices,
-  site: ReturnType<typeof loadSite>,
-  server: ServerHandle,
-): Promise<void> {
-  const actor = await actorFor(ctx, server, site);
+async function runPluginTask(ctx: JobContext<z.infer<typeof wpPluginTaskPayload>>, backend: SiteBackend): Promise<void> {
+  const actor = await backend.actor(ctx);
   if (ctx.payload.action === 'install') {
     const source = ctx.payload.source;
     if (!source) throw new Error('install requires a source');
-    if (source.kind === 'wporg') {
-      ctx.info(`Installing plugin ${source.slug} from wordpress.org…`);
-      await server.wp.installPluginSlug(site.containerName, source.slug, ctx.payload.activate, actor);
-      ctx.setResult({ installed: source.slug });
-    } else {
-      const row = s.db.select().from(plugins).where(eq(plugins.id, source.id)).get();
-      if (!row) throw new Error(`Catalog plugin #${source.id} not found`);
-      if (row.kind === 'zip') {
-        if (!row.zipPath) throw new Error('Catalog entry has no zip file');
-        ctx.info(`Installing plugin "${row.name}" from uploaded zip…`);
-        const { PluginSyncService } = await import('../../services/pluginSync.js');
-        await new PluginSyncService(s.db, s.config, s.servers).ensureZipOnServer(server, row.zipPath);
-        await server.wp.installPluginZip(site.containerName, row.zipPath, ctx.payload.activate, actor);
-      } else {
-        ctx.info(`Installing plugin ${row.slug} from wordpress.org…`);
-        await server.wp.installPluginSlug(site.containerName, row.slug, ctx.payload.activate, actor);
-      }
-      ctx.setResult({ installed: row.slug });
-    }
+    const installed = await backend.install(ctx, source, ctx.payload.activate, actor);
+    ctx.setResult({ installed });
     return;
   }
 
@@ -114,14 +85,15 @@ async function runPluginTask(
   if (ctx.payload.action === 'delete') {
     ctx.info(`Deactivating and deleting plugin ${name}…`);
     try {
-      await server.wp.pluginAction(site.containerName, name, 'deactivate', actor);
+      await backend.componentAction('plugin', name, 'deactivate', actor);
     } catch {
       ctx.warn(`Deactivate failed (plugin may already be inactive); continuing with delete.`);
     }
-    await server.wp.pluginAction(site.containerName, name, 'delete', actor);
+    await backend.componentAction('plugin', name, 'delete', actor);
   } else {
     ctx.info(`Running plugin ${ctx.payload.action} for ${name}…`);
-    await server.wp.pluginAction(site.containerName, name, ctx.payload.action, actor);
+    if (ctx.payload.action === 'update') await updateOne(ctx, backend, 'plugin', name, actor);
+    else await backend.componentAction('plugin', name, ctx.payload.action, actor);
   }
   ctx.setResult({ [ctx.payload.action]: name });
 }
@@ -181,21 +153,24 @@ export const wpThemeTaskPayload = z.object({
  * activating, updating and removing one is fleet maintenance.
  */
 export async function wpThemeTask(ctx: JobContext<z.infer<typeof wpThemeTaskPayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
-  const server = s.servers.handleFor(site.serverId);
-  const restoreState = await requireRunning(ctx, server, s, site);
+  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
+  const backend = backendFor(s, site);
+  const restoreState = await backend.prepare(ctx);
   try {
-    const actor = await actorFor(ctx, server, site);
+    const actor = await backend.actor(ctx);
     ctx.info(`Running theme ${ctx.payload.action} for ${ctx.payload.name}…`);
     // wp-cli refuses to delete the active theme or the active theme's parent without
-    // --force, which the panel never passes - that refusal is the safety rail.
-    await server.wp.themeAction(site.containerName, ctx.payload.name, ctx.payload.action, actor);
+    // --force, which the panel never passes - that refusal is the safety rail. WPL7 Connect
+    // refuses the same.
+    if (ctx.payload.action === 'update') await updateOne(ctx, backend, 'theme', ctx.payload.name, actor);
+    else await backend.componentAction('theme', ctx.payload.name, ctx.payload.action, actor);
     ctx.setResult({ [ctx.payload.action]: ctx.payload.name });
   } finally {
     // Before restoreState(), not after: a stopped site is stopped again in there, and a scan
     // needs the container up.
-    await rescanQuietly(ctx, s, site, server);
+    await rescanQuietly(ctx, s, site, backend);
     await restoreState();
+    backend.close();
   }
 }
 
@@ -241,70 +216,114 @@ type BulkPayload = z.infer<typeof wpBulkTaskPayload>;
  * how a fleet quietly rots.
  */
 export async function wpBulkTask(ctx: JobContext<BulkPayload>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
-  const server = s.servers.handleFor(site.serverId);
+  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
+  const backend = backendFor(s, site);
   const results: WpBulkOpResult[] = [];
   let backupId: number | null = null;
   let healthy: boolean | null = null;
+  const rolledBack: string[] = [];
+  let rollbackFailed: string | null = null;
+  let answeredBefore: boolean | null = null;
 
-  const restoreState = await requireRunning(ctx, server, s, site);
+  const restoreState = await backend.prepare(ctx);
   let nothingToDo = false;
   try {
     let ops: BulkOp[] = ctx.payload.ops ?? [];
     if (ctx.payload.policy) {
-      ops = await opsForPolicy(ctx, s, site, server, ctx.payload.policy);
+      ops = await opsForPolicy(ctx, s, site, backend, ctx.payload.policy);
       nothingToDo = ops.length === 0;
     }
     if (nothingToDo) return;
 
     if (ctx.payload.backupFirst) {
       ctx.info('Taking a pre-update backup…');
-      // The monitor's own probes and wp-cron are paused for the site while a backup runs,
-      // the same way a manual backup does it.
-      s.monitor.busySlugs.add(site.slug);
-      try {
-        // An update schedule's backups are `scheduled` ones: retention bounds them. A nightly
-        // policy taking `pre_update` backups - which nothing ever prunes - fills the disk.
-        const type = ctx.payload.policy ? 'scheduled' : 'pre_update';
-        const row = await s.backup.create(site, type, { jobId: ctx.jobId, log: (l, m) => ctx.log(l, m) });
-        backupId = row.id;
-        ctx.info(`Pre-update backup #${row.id} complete.`);
-      } finally {
-        s.monitor.busySlugs.delete(site.slug);
-      }
+      // An update schedule's backups are `scheduled` ones: retention bounds them. A nightly
+      // policy taking `pre_update` backups - which nothing ever prunes - fills the disk.
+      const type = ctx.payload.policy ? 'scheduled' : 'pre_update';
+      const row = await backend.backupFirst(ctx, type);
+      backupId = row.id;
+      ctx.info(`Pre-update backup #${row.id} complete.`);
     }
     ctx.checkCanceled();
 
-    await runOps(ctx, server, site, ops, results);
+    // A site hosted elsewhere that did not answer before the run is not the run's to roll back.
+    answeredBefore = backend.kind === 'external' && ctx.payload.healthCheck ? await backend.healthy() : null;
+    if (answeredBefore === false) ctx.warn('The site did not answer before the update; an update will not be rolled back for it.');
+
+    await runOps(ctx, backend, ops, results);
 
     if (ctx.payload.healthCheck) {
-      const host = siteDomains(site)[0] ?? '';
+      const host = backend.kind === 'hosted' ? (siteDomains(site)[0] ?? '') : (s.connections.homeOf(site.id) ?? '');
       if (!host) {
         ctx.warn('Health check skipped: the site has no hostname to ask for.');
       } else {
         ctx.info(`Checking that ${host} still answers…`);
-        // Same retry window every other health check in the panel uses, so "the site
-        // answers" means one thing across backups, moves, PHP switches and updates.
-        healthy = await probeSite(server, site.containerName, host, s.config.probeTimeoutMs);
+        healthy = await backend.healthy();
         ctx.log(healthy ? 'info' : 'error', healthy ? `${host} answers.` : `${host} did not answer.`);
+        if (!healthy && answeredBefore === true) {
+          // WPL7 Connect kept a copy of every plugin and theme it updated: put them back, then ask again.
+          const back = await backend.rollback(ctx);
+          for (const item of back) {
+            if (item.ok) {
+              rolledBack.push(item.slug);
+              ctx.info(`${item.slug}: put back as it was before the update.`);
+            } else {
+              rollbackFailed ??= item.error ?? 'no reason given';
+              ctx.error(`${item.slug}: could not be put back: ${item.error ?? 'no reason given'}`);
+            }
+          }
+          for (const r of results) if (r.slug !== null && rolledBack.includes(r.slug)) r.rolledBack = true;
+          if (rolledBack.length > 0) {
+            healthy = await backend.healthy();
+            ctx.log(healthy ? 'info' : 'error', healthy ? `${host} answers again.` : `${host} still does not answer.`);
+          }
+        }
       }
     }
+    // A run that left the site answering has no use for the copies a rollback would have used.
+    if (healthy !== false) await backend.cleanup(ctx);
   } finally {
     // In the finally, so a cancelled or timed-out run still records what it managed to do
     // - the worker persists whatever the context holds on every exit path.
-    ctx.setResult({ ops: results, backupId, healthy, ...(nothingToDo ? { nothingToDo: true } : {}) });
+    ctx.setResult({
+      ops: results,
+      backupId,
+      healthy,
+      ...(answeredBefore === false ? { answeredBefore } : {}),
+      ...(rolledBack.length > 0 ? { rolledBack } : {}),
+      ...(nothingToDo ? { nothingToDo: true } : {}),
+    });
     // The snapshot is re-read before the container is stopped again - a scan needs it up,
     // and the whole point of the run is that the panel now knows the new state. A policy run
     // with nothing to do scanned a moment ago.
-    if (!nothingToDo) await rescanQuietly(ctx, s, site, server);
+    if (!nothingToDo) await rescanQuietly(ctx, s, site, backend);
     await restoreState();
+    backend.close();
   }
 
   const failed = results.filter((r) => !r.ok);
+  if (rolledBack.length > 0) {
+    throw new Error(
+      `The site stopped answering after the update, so WPL7 Connect put back ${rolledBack.join(', ')}` +
+        (healthy ? '; it answers again' : '; it still does not answer') +
+        (backupId ? `. Backup #${backupId} holds the site as it was before` : ''),
+    );
+  }
+  if (healthy === false && answeredBefore === false) {
+    throw new Error(
+      'The site did not answer before the update either; nothing was rolled back' +
+        (failed.length > 0 ? `. ${failed.length} of ${results.length} operations also failed` : ''),
+    );
+  }
   if (healthy === false) {
     throw new Error(
       `The site stopped answering after the update` +
-        (backupId ? ` - restore backup #${backupId} from the Backups tab to go back` : '') +
+        (rollbackFailed ? ` and could not be rolled back (${rollbackFailed})` : '') +
+        (backupId
+          ? backend.kind === 'hosted'
+            ? ` - restore backup #${backupId} from the Backups tab to go back`
+            : ` - backup #${backupId} holds it as it was: restore it by hand from its download`
+          : '') +
         (failed.length > 0 ? `; ${failed.length} of ${results.length} operations also failed` : ''),
     );
   }
@@ -317,14 +336,6 @@ export async function wpBulkTask(ctx: JobContext<BulkPayload>, s: CoreServices):
 }
 
 /**
- * Run the operations, collecting an outcome for each and carrying on after a failure.
- *
- * Updates of one kind are coalesced into a single `wp plugin update a b c --format=json`
- * call - one WordPress bootstrap instead of twenty - and the JSON array it prints is split
- * back out per slug. Everything else is one call each, because that is the only way a
- * "deactivate" that fails can be told from the one after it.
- */
-/**
  * An update policy, turned into operations against a scan taken now: the same choice the
  * site page's "Update all" / "Fix vulnerable" makes (shared/wpOps.ts), filtered to the kinds
  * the policy covers.
@@ -333,11 +344,11 @@ async function opsForPolicy(
   ctx: JobContext<BulkPayload>,
   s: CoreServices,
   site: SiteRow,
-  server: ServerHandle,
+  backend: SiteBackend,
   policy: NonNullable<BulkPayload['policy']>,
 ): Promise<BulkOp[]> {
   ctx.info('Checking what has an update…');
-  await s.wpInventory.scanSite(site, server, { log: (l, m) => ctx.log(l, m) });
+  await s.wpInventory.scanSite(site, backend, { log: (l, m) => ctx.log(l, m) });
   const status = s.wpInventory.statusFor(site);
   if (status.partial) {
     ctx.warn('The scan was partial (a plugin failed to load), so some updates may not be listed.');
@@ -352,15 +363,17 @@ async function opsForPolicy(
   return ops;
 }
 
-async function runOps(
-  ctx: JobContext<BulkPayload>,
-  server: ServerHandle,
-  site: SiteRow,
-  ops: BulkOp[],
-  results: WpBulkOpResult[],
-): Promise<void> {
+/**
+ * Run the operations, collecting an outcome for each and carrying on after a failure.
+ *
+ * Updates of one kind go to the backend together: on a hosted site that is a single
+ * `wp plugin update a b c --format=json` call - one WordPress bootstrap instead of twenty - split
+ * back out per slug; WPL7 Connect takes them one at a time. Everything else is one call each,
+ * because that is the only way a "deactivate" that fails can be told from the one after it.
+ */
+async function runOps(ctx: JobContext<BulkPayload>, backend: SiteBackend, ops: BulkOp[], results: WpBulkOpResult[]): Promise<void> {
   // Core updates are WordPress's own and run as nobody; plugins and themes run as the admin.
-  const actor = ops.some((op) => op.kind !== 'core') ? await actorFor(ctx, server, site) : undefined;
+  const actor = ops.some((op) => op.kind !== 'core') ? await backend.actor(ctx) : undefined;
   const updates = {
     plugin: ops.filter((o) => o.kind === 'plugin' && o.action === 'update' && o.slug).map((o) => o.slug!),
     theme: ops.filter((o) => o.kind === 'theme' && o.action === 'update' && o.slug).map((o) => o.slug!),
@@ -368,7 +381,7 @@ async function runOps(
   for (const kind of ['plugin', 'theme'] as const) {
     if (updates[kind].length === 0) continue;
     ctx.checkCanceled();
-    results.push(...(await updateGroup(ctx, server, site, kind, updates[kind], actor)));
+    results.push(...(await backend.updateMany(ctx, kind, updates[kind], actor)));
   }
 
   for (const op of ops) {
@@ -382,17 +395,17 @@ async function runOps(
           // Deleting an active plugin leaves WordPress with a dangling active entry, so
           // deactivate first. An already-inactive plugin makes that step fail harmlessly.
           try {
-            await server.wp.pluginAction(site.containerName, slug, 'deactivate', actor);
+            await backend.componentAction('plugin', slug, 'deactivate', actor);
           } catch {
             ctx.warn(`${slug}: deactivate before delete failed (already inactive?); continuing.`);
           }
         }
         ctx.info(`Plugin ${op.action}: ${slug}`);
-        await server.wp.pluginAction(site.containerName, slug, op.action, actor);
+        await backend.componentAction('plugin', slug, op.action, actor);
       } else {
         if (op.action === 'deactivate') throw new Error('themes cannot be deactivated; activate another one instead');
         ctx.info(`Theme ${op.action}: ${slug}`);
-        await server.wp.themeAction(site.containerName, slug, op.action, actor);
+        await backend.componentAction('theme', slug, op.action, actor);
       }
     } catch (err) {
       result.ok = false;
@@ -406,11 +419,9 @@ async function runOps(
     ctx.checkCanceled();
     const result: WpBulkOpResult = { kind: 'core', slug: null, action: 'update', ok: true, from: null, to: null, error: null };
     try {
-      result.from = await server.wp.coreVersion(site.containerName);
-      ctx.info(`Updating WordPress core (current: ${result.from ?? 'unknown'})…`);
-      await server.wp.coreUpdate(site.containerName);
-      result.to = await server.wp.coreVersion(site.containerName);
-      ctx.info(`Core version now: ${result.to ?? 'unknown'}`);
+      const { from, to } = await backend.coreUpdate(ctx);
+      result.from = from;
+      result.to = to;
     } catch (err) {
       result.ok = false;
       result.error = errorText(err);
@@ -418,56 +429,6 @@ async function runOps(
     }
     results.push(result);
   }
-}
-
-/** One coalesced update call, split back into one outcome per slug. */
-async function updateGroup(
-  ctx: JobContext<BulkPayload>,
-  server: ServerHandle,
-  site: SiteRow,
-  kind: 'plugin' | 'theme',
-  slugs: string[],
-  actor: string | undefined,
-): Promise<WpBulkOpResult[]> {
-  ctx.info(`Updating ${slugs.length} ${kind}${slugs.length === 1 ? '' : 's'}: ${slugs.join(', ')}`);
-  let rows: Awaited<ReturnType<ServerHandle['wp']['updateMany']>>;
-  try {
-    rows = await server.wp.updateMany(site.containerName, kind, slugs, actor);
-  } catch (err) {
-    const error = errorText(err);
-    ctx.error(`wp ${kind} update failed outright: ${error}`);
-    return slugs.map((slug) => ({ kind, slug, action: 'update', ok: false, from: null, to: null, error }));
-  }
-  const byName = new Map(rows.rows.map((row) => [row.name, row]));
-  return slugs.map((slug) => {
-    const row = byName.get(slug);
-    if (!row) {
-      // wp-cli said nothing about this one: it was not in the list it acted on (a
-      // concurrent update, or a slug that vanished since the scan).
-      ctx.warn(`${slug}: wp ${kind} update reported no result`);
-      return {
-        kind,
-        slug,
-        action: 'update' as const,
-        ok: false,
-        from: null,
-        to: null,
-        error: `wp ${kind} update reported no result (exit ${rows.exitCode}): ${rows.output.slice(0, 200)}`,
-      };
-    }
-    const ok = row.status.toLowerCase() === 'updated';
-    if (ok) ctx.info(`${slug}: ${row.oldVersion ?? '?'} → ${row.newVersion ?? '?'}`);
-    else ctx.error(`${slug}: update reported "${row.status}"`);
-    return {
-      kind,
-      slug,
-      action: 'update' as const,
-      ok,
-      from: row.oldVersion,
-      to: row.newVersion,
-      error: ok ? null : `wp-cli reported "${row.status}"`,
-    };
-  });
 }
 
 export const wpScanAllPayload = z.object({
@@ -488,9 +449,18 @@ export async function wpScanAll(ctx: JobContext<z.infer<typeof wpScanAllPayload>
   const all = s.db.select().from(sites).orderBy(asc(sites.id)).all();
   const candidates = all.filter((site) => (wanted ? wanted.has(site.id) : true));
   const byServer = new Map<number, SiteRow[]>();
+  // Sites hosted elsewhere: asked through WPL7 Connect, one after another, beside the servers.
+  const external: SiteRow[] = [];
   let skippedStopped = 0;
   let skippedBusy = 0;
   for (const site of candidates) {
+    if (isExternal(site)) {
+      if (site.status !== 'connected') skippedStopped++;
+      // A backup pulling the site meanwhile changes nothing WordPress would list.
+      else if (changingWordPress(s, site.id)) skippedBusy++;
+      else external.push(site);
+      continue;
+    }
     if (site.status !== 'running') {
       skippedStopped++;
       continue;
@@ -503,9 +473,10 @@ export async function wpScanAll(ctx: JobContext<z.infer<typeof wpScanAllPayload>
     list.push(site);
     byServer.set(site.serverId, list);
   }
-  const total = [...byServer.values()].reduce((n, list) => n + list.length, 0);
+  const total = [...byServer.values()].reduce((n, list) => n + list.length, 0) + external.length;
   ctx.info(
-    `Scanning ${total} running site(s) across ${byServer.size} server(s)` +
+    `Scanning ${total} site(s) across ${byServer.size} server(s)` +
+      `${external.length > 0 ? ` and ${external.length} hosted elsewhere` : ''}` +
       `${skippedStopped > 0 ? `; ${skippedStopped} not running` : ''}` +
       `${skippedBusy > 0 ? `; ${skippedBusy} busy with another job` : ''}`,
   );
@@ -514,8 +485,8 @@ export async function wpScanAll(ctx: JobContext<z.infer<typeof wpScanAllPayload>
   let failed = 0;
   // Parallel across servers, sequential within one: the same shape wpCronTick uses, so a
   // fleet pass is bounded by its slowest server rather than by the sum of every site.
-  await Promise.all(
-    [...byServer.entries()].map(async ([serverId, list]) => {
+  await Promise.all([
+    ...[...byServer.entries()].map(async ([serverId, list]) => {
       let server: ServerHandle;
       try {
         server = s.servers.handleFor(serverId);
@@ -539,7 +510,22 @@ export async function wpScanAll(ctx: JobContext<z.infer<typeof wpScanAllPayload>
         }
       }
     }),
-  );
+    (async () => {
+      for (const site of external) {
+        ctx.checkCanceled();
+        const backend = backendFor(s, site);
+        try {
+          await s.wpInventory.scanSite(site, backend, { log: (l, m) => ctx.log(l, m), refreshFeed: false });
+          scanned++;
+        } catch (err) {
+          failed++;
+          ctx.warn(`"${site.slug}" could not be scanned: ${errorText(err)}`);
+        } finally {
+          backend.close();
+        }
+      }
+    })(),
+  ]);
 
   if (s.vulnerabilities.enabled) {
     const refs = s.wpInventory.refsForSites();
@@ -552,8 +538,20 @@ export async function wpScanAll(ctx: JobContext<z.infer<typeof wpScanAllPayload>
     ctx.info('Vulnerability feed is switched off in Settings; installed versions were not checked.');
   }
   s.wpInventory.recount();
+  // New findings go out by email (services/alerts.ts); a failure there is no failure of the scan.
+  await s.alerts.vulnerabilities(ctx.payload.siteIds).catch((err: unknown) => ctx.warn(`Vulnerability alerts failed: ${errorText(err)}`));
   ctx.setResult({ scanned, failed, skippedStopped, skippedBusy });
   if (scanned === 0 && failed > 0) throw new Error(`Every site in the pass failed to scan (${failed})`);
+}
+
+/** Jobs that change a site's WordPress: an inventory taken while one runs would be stale at once. */
+const WORDPRESS_CHANGES = ['wp.bulkTask', 'wp.pluginTask', 'wp.themeTask', 'wp.coreUpdate'];
+
+function changingWordPress(s: CoreServices, siteId: number): boolean {
+  const row = s.db.$client
+    .prepare(`SELECT id FROM jobs WHERE site_id = ? AND status IN ('queued','running') AND type IN (${WORDPRESS_CHANGES.map(() => '?').join(',')}) LIMIT 1`)
+    .get(siteId, ...WORDPRESS_CHANGES) as { id: number } | undefined;
+  return row !== undefined;
 }
 
 /** True when this site already has a queued or running job (other than the caller's). */
@@ -569,14 +567,9 @@ function hasActiveJob(s: CoreServices, siteId: number): boolean {
  * successful operation into a failed job: the operation happened either way, and the next
  * scheduled pass picks the inventory up.
  */
-async function rescanQuietly(
-  ctx: JobContext<unknown>,
-  s: CoreServices,
-  site: SiteRow,
-  server: ServerHandle,
-): Promise<void> {
+async function rescanQuietly(ctx: JobContext<unknown>, s: CoreServices, site: SiteRow, via: ServerHandle | SiteBackend): Promise<void> {
   try {
-    await s.wpInventory.scanSite(site, server, { log: (l, m) => ctx.log(l, m) });
+    await s.wpInventory.scanSite(site, via, { log: (l, m) => ctx.log(l, m) });
   } catch (err) {
     ctx.warn(`Could not refresh the WordPress inventory afterwards: ${errorText(err)}`);
   }
@@ -584,27 +577,5 @@ async function rescanQuietly(
 
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-/**
- * wp-cli needs a running container. Starting a stopped site is fine, but leaving it
- * running afterwards contradicts the site's own `stopped` status - the panel then showed
- * "stopped" for a site that was serving traffic (and burning memory). Returns a restore
- * function the caller must run in a `finally`.
- */
-export async function requireRunning(
-  ctx: JobContext<unknown>,
-  server: ServerHandle,
-  s: MountServices,
-  site: SiteRow,
-): Promise<() => Promise<void>> {
-  const state = await server.docker.containerState(site.containerName);
-  if (state === 'missing') throw new Error('Site container does not exist');
-  if (state === 'running') return async () => undefined;
-  ctx.info('Site is stopped; starting it for this operation…');
-  await startSiteContainer(server, s, site, ctx);
-  return async () => {
-    ctx.info('Stopping the site again (it was stopped before this operation).');
-    await server.docker.stopContainer(site.containerName).catch((err) => {
-      ctx.warn(`Could not stop the site again: ${err instanceof Error ? err.message : err}`);
-    });
-  };
-}
+// Moved to shared.ts with the site backends (services/siteBackend.ts); still imported from here.
+export { requireRunning } from './shared.js';

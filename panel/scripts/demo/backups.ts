@@ -10,7 +10,7 @@ import { backupCopies, backupDestinations, backups } from '../../src/db/schema.j
 import { tsStamp } from '../../src/services/backup.js';
 import type { TestWorld } from '../../test/helpers.js';
 import { DAY, HOUR, MINUTE, ago, DEMO_NOW } from './clock.js';
-import { DELETED_SITE, SERVERS, SITES, rng, seedOf } from './data.js';
+import { DELETED_SITE, EXTERNAL_SITES, SERVERS, SITES, rng, seedOf } from './data.js';
 import { INVENTORY, WORDPRESS } from './plugins.js';
 import { siteIds } from './sites.js';
 
@@ -52,6 +52,14 @@ export function seedBackups(world: TestWorld): void {
     for (let n = nights - 1; n >= 0; n--) {
       const createdAt = today3am - n * DAY + Math.round(next() * 9 * MINUTE);
       add(site.slug, site.server, 'scheduled', createdAt, Math.round(site.diskMb * MB * (0.52 + next() * 0.04)));
+    }
+  }
+  // Sites hosted elsewhere, pulled through WPL7 Connect onto fra1 with the others.
+  for (const site of EXTERNAL_SITES) {
+    const next = rng(seedOf(`backups:${site.slug}`));
+    for (let n = Math.min(10, site.ageDays) - 1; n >= 0; n--) {
+      const createdAt = today3am - n * DAY + Math.round(next() * 9 * MINUTE);
+      add(site.slug, site.storage, 'scheduled', createdAt, Math.round(1115 * MB * (0.5 + next() * 0.04)), { phpVersion: site.php });
     }
   }
   add('northwind-bakery', 1, 'manual', ago(2 * DAY + 4 * HOUR), Math.round(1840 * MB * 0.55), { note: 'Before the menu redesign' });

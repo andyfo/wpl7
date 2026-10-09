@@ -2,7 +2,8 @@
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { backups, type BackupRow } from '../../db/schema.js';
+import { backups, type BackupRow, type SiteRow } from '../../db/schema.js';
+import { JobCanceledError } from '../../lib/errors.js';
 import { TABLE_PREFIX_RE, backupTypes } from '../../../shared/schemas.js';
 import type { CoreServices } from '../../services/index.js';
 import type { JobContext } from '../context.js';
@@ -18,6 +19,7 @@ import {
   updateSiteRow,
 } from './shared.js';
 import { sites } from '../../db/schema.js';
+import { isExternal } from '../../lib/siteKind.js';
 
 export const backupCreatePayload = z.object({
   siteId: z.number().int(),
@@ -26,18 +28,32 @@ export const backupCreatePayload = z.object({
 });
 
 export async function backupCreate(ctx: JobContext<z.infer<typeof backupCreatePayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
-  s.monitor.busySlugs.add(site.slug);
+  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
   try {
-    const row = await s.backup.create(site, ctx.payload.type, {
-      note: ctx.payload.note,
-      jobId: ctx.jobId,
-      log: (l, m) => ctx.log(l, m),
-    });
+    const row = await createBackup(ctx, s, site);
     ctx.setResult({ backupId: row.id, sizeBytes: row.sizeBytes });
     // Offsite copies are reconciled on a one-minute tick; kicking it here is only so a
     // fresh backup starts uploading immediately rather than up to a minute later.
     s.offsite.kick();
+  } catch (err) {
+    // A failed backup is worth an email (services/alerts.ts); one that was stopped is not.
+    if (!(err instanceof JobCanceledError)) {
+      await s.alerts.backupFailed(site, err instanceof Error ? err.message : String(err)).catch(() => undefined);
+    }
+    throw err;
+  }
+}
+
+/** The backup itself: pulled through WPL7 Connect for a site hosted elsewhere (services/externalBackup.ts). */
+async function createBackup(ctx: JobContext<z.infer<typeof backupCreatePayload>>, s: CoreServices, site: SiteRow): Promise<BackupRow> {
+  if (isExternal(site)) return s.externalBackups.create(ctx, site, ctx.payload.type, { note: ctx.payload.note });
+  s.monitor.busySlugs.add(site.slug);
+  try {
+    return await s.backup.create(site, ctx.payload.type, {
+      note: ctx.payload.note,
+      jobId: ctx.jobId,
+      log: (l, m) => ctx.log(l, m),
+    });
   } finally {
     s.monitor.busySlugs.delete(site.slug);
   }
@@ -54,6 +70,10 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
   if (backup.status !== 'complete') throw new Error('Only complete backups can be restored');
   const site = s.db.select().from(sites).where(eq(sites.slug, backup.siteSlug)).get();
   if (!site) throw new Error(`Site "${backup.siteSlug}" no longer exists (restore-as-new-site is not supported yet)`);
+  if (isExternal(site)) throw new Error('Restore a site hosted elsewhere by hand: download its files and database.');
+  if ((await readManifest(s, backup.serverId, backup.path))?.kind === 'external') {
+    throw new Error('This is a backup of a site hosted elsewhere: restore it by hand from its download.');
+  }
   if (backup.serverId !== site.serverId) {
     throw new Error(
       `Backup #${backup.id} lives on server #${backup.serverId} but the site now runs on server #${site.serverId}; ` +
@@ -185,7 +205,7 @@ async function readManifest(
   s: CoreServices,
   serverId: number,
   dir: string,
-): Promise<{ phpVersion?: string; domains?: string[]; tablePrefix?: string } | null> {
+): Promise<{ phpVersion?: string; domains?: string[]; tablePrefix?: string; kind?: string } | null> {
   try {
     const files = s.servers.handleFor(serverId).files;
     return JSON.parse(await files.readFile(path.join(dir, 'manifest.json')));

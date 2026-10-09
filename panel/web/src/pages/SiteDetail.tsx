@@ -42,6 +42,9 @@ import {
 } from '../components/backups/BackupParts';
 import { describeCron } from '../../../shared/cron';
 import { JobProgress } from '../components/JobProgress';
+import { WpAdminLoginButton } from '../components/WpAdminLoginButton';
+import { ExternalOverview } from '../components/external/ExternalOverview';
+import { ExternalSettings } from '../components/external/ExternalSettings';
 import { Sparkline } from '../components/Sparkline';
 import { WordPressTab } from '../components/wp/WordPressTab';
 import { FilesTab } from '../components/files/FilesTab';
@@ -62,13 +65,17 @@ const SITE_TABS = [
   { id: 'settings', label: 'Settings' },
 ];
 
+/** A site hosted elsewhere has no container, files or traffic log here: what WPL7 Connect reaches. */
+const EXTERNAL_TABS = SITE_TABS.filter((t) => ['overview', 'backups', 'wordpress', 'settings'].includes(t.id));
+
 export function SiteDetail() {
   const { slug = '' } = useParams();
   const site = useSite(slug);
   // In the URL, so a folder in the Files tab (and the file open in its editor) can be linked
   // to, and reloading the page stays where it was.
   const [params, setParams] = useSearchParams();
-  const tab = SITE_TABS.some((t) => t.id === params.get('tab')) ? params.get('tab')! : 'overview';
+  const tabs = site.data?.kind === 'external' ? EXTERNAL_TABS : SITE_TABS;
+  const tab = tabs.some((t) => t.id === params.get('tab')) ? params.get('tab')! : 'overview';
   const setTab = (id: string) => setParams(id === 'overview' ? {} : { tab: id });
 
   // Only a site that never loaded is an error page. A refresh that fails - the 15-second
@@ -84,6 +91,7 @@ export function SiteDetail() {
   }
   if (!site.data) return <Spinner />;
   const s = site.data;
+  const external = s.kind === 'external';
 
   return (
     <div className="space-y-6">
@@ -92,7 +100,7 @@ export function SiteDetail() {
           <div className="flex items-center gap-3">
             <h1 className="page-title">{s.title}</h1>
             <SiteHealthBadge health={siteHealth(s)} />
-            <StatusBadge status={s.isLive ? 'live' : 'dev'} />
+            {external ? <StatusBadge status="external" /> : <StatusBadge status={s.isLive ? 'live' : 'dev'} />}
           </div>
           <a
             href={s.url}
@@ -110,9 +118,9 @@ export function SiteDetail() {
 
       {site.isError && <ErrorNote error={site.error} />}
 
-      <Tabs tabs={SITE_TABS} active={tab} onChange={setTab} />
+      <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
-      {tab === 'overview' && <OverviewTab slug={slug} />}
+      {tab === 'overview' && (external ? <ExternalOverview slug={slug} /> : <OverviewTab slug={slug} />)}
       {tab === 'visitors' && <VisitorsTab slug={slug} />}
       {tab === 'security' && <SiteSecurityTab slug={slug} />}
       {tab === 'backups' && <BackupsTab slug={slug} />}
@@ -120,7 +128,7 @@ export function SiteDetail() {
       {/* Keyed: another site's page is a fresh tab, never this one's selection or dialogs. */}
       {tab === 'files' && <FilesTab key={slug} slug={slug} />}
       {tab === 'ftp' && <FtpTab key={slug} slug={slug} />}
-      {tab === 'settings' && <SettingsTab slug={slug} />}
+      {tab === 'settings' && (external ? <ExternalSettings slug={slug} /> : <SettingsTab slug={slug} />)}
     </div>
   );
 }
@@ -290,56 +298,6 @@ function OverviewTab({ slug }: { slug: string }) {
       {goLiveOpen && <GoLiveModal slug={slug} onClose={() => setGoLiveOpen(false)} />}
       {moveOpen && <MoveModal slug={slug} onClose={() => setMoveOpen(false)} />}
     </div>
-  );
-}
-
-/**
- * One-click WordPress admin login: the panel mints a single-use token and this opens a tab
- * that spends it. The tab is opened synchronously inside the click handler and pointed at
- * the URL afterwards - opening it once the request has resolved is what popup blockers
- * stop. Blocked anyway: the link is offered instead (single-use, expires in two minutes).
- */
-function WpAdminLoginButton({ slug, running }: { slug: string; running: boolean }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<unknown>(null);
-  const [blockedUrl, setBlockedUrl] = useState<string | null>(null);
-
-  const login = async () => {
-    setBusy(true);
-    setError(null);
-    setBlockedUrl(null);
-    const tab = window.open('', '_blank');
-    if (tab) tab.opener = null; // the customer's site never gets a handle on the panel window
-    try {
-      const res = await api<{ url: string }>(`/api/sites/${slug}/wp/admin-login`, { method: 'POST' });
-      if (tab) tab.location.replace(res.url);
-      else setBlockedUrl(res.url);
-    } catch (err) {
-      tab?.close();
-      setError(err);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <>
-      <Button small variant="secondary" disabled={!running || busy} onClick={() => void login()}>
-        {busy ? 'Signing in…' : 'Log in to WordPress'}
-      </Button>
-      {blockedUrl && (
-        <a
-          className="inline-flex items-center gap-1 text-xs underline"
-          href={blockedUrl}
-          target="_blank"
-          rel="noreferrer"
-        >
-          Popup blocked — open wp-admin (link works once, for two minutes)
-          <ExternalLinkIcon />
-        </a>
-      )}
-      <ErrorNote error={error} />
-    </>
   );
 }
 
@@ -1016,6 +974,12 @@ function BackupsTab({ slug }: { slug: string }) {
           <ErrorNote error={actionError} />
           <JobProgress job={run.job} logs={run.logs} />
         </div>
+        {site.data?.external && (
+          <p className="mb-3 text-xs text-neutral-500">
+            {meta.data?.multiServer ? `Kept on ${site.data.external.storageServerName}. ` : ''}
+            To restore, download the files and the database, and put them back on the site&apos;s host.
+          </p>
+        )}
         {(backups.data ?? []).length === 0 ? (
           <EmptyState>No backups yet.</EmptyState>
         ) : (
@@ -1072,7 +1036,7 @@ function BackupsTab({ slug }: { slug: string }) {
                   <td className="py-2 text-right">
                     <BackupActions
                       backup={b}
-                      canRestore
+                      canRestore={site.data?.kind !== 'external'}
                       onRestore={() => setRestoreId(b.id)}
                       onFetch={() => setFetchFor(b)}
                       onDelete={() => setDeleteId(b.id)}
@@ -1126,15 +1090,15 @@ function SettingsTab({ slug }: { slug: string }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [finalBackup, setFinalBackup] = useState(true);
   const [deleteBackups, setDeleteBackups] = useState(false);
+  const deleted = run.job?.type === 'site.delete' && run.job.status === 'succeeded';
+  useEffect(() => {
+    if (deleted) void navigate('/sites');
+  }, [deleted, navigate]);
   const s = site.data;
   if (!s) return <Spinner />;
 
   const effPhp = phpVersion ?? s.phpVersion;
   const effDomains = domainsText ?? s.domains.filter((d) => d !== s.devHostname).join(' ');
-  const deleted = run.job?.type === 'site.delete' && run.job.status === 'succeeded';
-  useEffect(() => {
-    if (deleted) navigate('/sites');
-  }, [deleted, navigate]);
 
   return (
     <div className="space-y-4">

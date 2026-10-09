@@ -21,17 +21,17 @@ import {
   wpCliHelpQuery,
 } from '../../shared/schemas.js';
 import { badGateway, badRequest, conflict, notFound } from '../lib/errors.js';
-import { createAdminLoginLink } from '../services/adminLogin.js';
 import { jobToDto, viewerOf } from '../lib/dto.js';
 import { audit } from '../lib/audit.js';
 import { execLane } from '../jobs/lanes.js';
 import { maskRestRoute } from '../jobs/summaries.js';
 import type { RunResult } from '../services/docker.js';
 import { godmodeAnswer } from '../services/wp.js';
-import { restTargetOf, sendWpRest } from '../services/wpRest.js';
 import type { AppDeps } from './deps.js';
 import type { SiteRow } from '../db/schema.js';
 import type { ServerHandle } from '../servers/registry.js';
+import { ContainerBackend, backendFor, type SiteBackend } from '../services/siteBackend.js';
+import { isExternal } from '../lib/siteKind.js';
 
 // Addressing an existing site: no reserved-name check, see siteSlugParam.
 const slugParams = z.object({ slug: siteSlugParam });
@@ -76,6 +76,29 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
     return { site, server };
   };
 
+  /**
+   * A site WordPress work can reach now: a hosted one whose container runs, or one hosted
+   * elsewhere whose WPL7 Connect is connected. The backend says how (services/siteBackend.ts).
+   */
+  const reachableSite = async (slug: string): Promise<{ site: SiteRow; backend: SiteBackend }> => {
+    const site = deps.sites.bySlug(slug, { kinds: 'any' });
+    if (isExternal(site)) {
+      if (site.status !== 'connected') throw conflict(`"${site.slug}" is disconnected. Reconnect it from its Settings tab.`);
+      return { site, backend: backendFor(deps, site) };
+    }
+    const { server } = await requireRunningSite(slug);
+    return { site, backend: new ContainerBackend(deps, site, server) };
+  };
+
+  /** A site a WordPress job can be queued for: either kind, an external one only while connected. */
+  const jobSite = (slug: string): SiteRow => {
+    const site = deps.sites.bySlug(slug, { kinds: 'any' });
+    if (isExternal(site) && site.status !== 'connected') throw conflict(`"${site.slug}" is disconnected. Reconnect it from its Settings tab.`);
+    return site;
+  };
+
+  /** The lane a site's command runs in: its server's exec lane, or the external lanes (picked by the queue). */
+
   r.get('/api/sites/:slug/wp/plugins', { schema: { params: slugParams } }, async (req) => {
     const { site, server } = await requireRunningSite(req.params.slug);
     return { items: await server.wp.listPlugins(site.containerName) };
@@ -95,7 +118,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
    * scanned", which the UI shows as such.
    */
   r.get('/api/sites/:slug/wp/status', { schema: { params: slugParams } }, async (req) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { kinds: 'any' });
     return deps.wpInventory.statusFor(site);
   });
 
@@ -108,17 +131,22 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
     '/api/sites/:slug/wp/scan',
     { schema: { params: slugParams }, config: { rateLimit: { max: 10, timeWindow: 60_000 } } },
     async (req) => {
-      const { site, server } = await requireRunningSite(req.params.slug);
-      await deps.wpInventory.scanSite(site, server, {
-        log: (level, message) => req.log[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info'](message),
-      });
+      const { site, backend } = await reachableSite(req.params.slug);
+      try {
+        await deps.wpInventory.scanSite(site, backend, {
+          log: (level, message) => req.log[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'info'](message),
+        });
+      } finally {
+        backend.close();
+      }
+      await deps.alerts.vulnerabilities([site.id]).catch((err: unknown) => req.log.warn(`Vulnerability alerts failed: ${String(err)}`));
       return deps.wpInventory.statusFor(site);
     },
   );
 
   for (const action of ['activate', 'update'] as const) {
     r.post(`/api/sites/:slug/wp/themes/:name/${action}`, { schema: { params: pluginParams } }, async (req, reply) => {
-      const site = deps.sites.bySlug(req.params.slug);
+      const site = jobSite(req.params.slug);
       const job = deps.worker.enqueue(
         'wp.themeTask',
         { siteId: site.id, action, name: req.params.name },
@@ -129,7 +157,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
   }
 
   r.delete('/api/sites/:slug/wp/themes/:name', { schema: { params: pluginParams } }, async (req, reply) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = jobSite(req.params.slug);
     const job = deps.worker.enqueue(
       'wp.themeTask',
       { siteId: site.id, action: 'delete', name: req.params.name },
@@ -146,7 +174,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
     '/api/sites/:slug/wp/bulk',
     { schema: { params: slugParams, body: wpBulkOpsBody } },
     async (req, reply) => {
-      const site = deps.sites.bySlug(req.params.slug);
+      const site = jobSite(req.params.slug);
       // Validated against the snapshot, exactly as the fleet endpoint does: an op that
       // cannot possibly work is a 400 now rather than a failed job in two minutes.
       const ops = deps.wpBulk.validateOps(site, req.body.ops);
@@ -165,7 +193,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
   );
 
   r.post('/api/sites/:slug/wp/core-update', { schema: { params: slugParams } }, async (req, reply) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = jobSite(req.params.slug);
     const job = deps.worker.enqueue(
       'wp.coreUpdate',
       { siteId: site.id },
@@ -178,7 +206,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
     '/api/sites/:slug/wp/plugins',
     { schema: { params: slugParams, body: wpPluginInstallBody } },
     async (req, reply) => {
-      const site = deps.sites.bySlug(req.params.slug);
+      const site = jobSite(req.params.slug);
       const job = deps.worker.enqueue(
         'wp.pluginTask',
         { siteId: site.id, action: 'install', source: req.body.source, activate: req.body.activate },
@@ -190,7 +218,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   for (const action of ['activate', 'deactivate', 'update'] as const) {
     r.post(`/api/sites/:slug/wp/plugins/:name/${action}`, { schema: { params: pluginParams } }, async (req, reply) => {
-      const site = deps.sites.bySlug(req.params.slug);
+      const site = jobSite(req.params.slug);
       const job = deps.worker.enqueue(
         'wp.pluginTask',
         { siteId: site.id, action, name: req.params.name },
@@ -201,7 +229,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
   }
 
   r.delete('/api/sites/:slug/wp/plugins/:name', { schema: { params: pluginParams } }, async (req, reply) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = jobSite(req.params.slug);
     const job = deps.worker.enqueue(
       'wp.pluginTask',
       { siteId: site.id, action: 'delete', name: req.params.name },
@@ -257,10 +285,14 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
    * in a link a browser can be tricked into following.
    */
   r.post('/api/sites/:slug/wp/admin-login', { schema: { params: slugParams } }, async (req) => {
-    const { site, server } = await requireRunningSite(req.params.slug);
-    const link = await createAdminLoginLink(server, site, deps.config, deps.panelFiles);
-    req.log.info(`Site "${site.slug}": minted a one-click WordPress login for "${link.user}"`);
-    return link;
+    const { site, backend } = await reachableSite(req.params.slug);
+    try {
+      const link = await backend.loginLink();
+      req.log.info(`Site "${site.slug}": minted a one-click WordPress login for "${link.user}"`);
+      return link;
+    } finally {
+      backend.close();
+    }
   });
 
   r.post('/api/sites/:slug/wp/cli', { schema: { params: slugParams, body: wpCliBody } }, async (req, reply) => {
@@ -268,10 +300,12 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (queued && waitsOnGodmode(command.args)) {
       throw badRequest(GODMODE_WAIT_REFUSAL, [{ path: 'async', message: 'a WP Godmode wait cannot be queued' }]);
     }
-    const { site, server } = await requireRunningSite(req.params.slug);
+    const { site, backend } = await reachableSite(req.params.slug);
     if (queued) {
+      backend.close();
       // A job in the server's exec lane: its output lands in the job log as it runs, and
-      // nothing else on the machine waits for it (src/jobs/handlers/exec.ts).
+      // nothing else on the machine waits for it (src/jobs/handlers/exec.ts). The queue puts a
+      // site hosted elsewhere's in the external lanes instead.
       const job = deps.worker.enqueue(
         'wp.cli',
         { siteId: site.id, ...command, timeoutMin },
@@ -281,8 +315,12 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
       audit(req, 'wpCli', site.slug, 'queue', { job: job.id });
       return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
     }
-    const res = await server.wp.run(site.containerName, command.args, SYNC_WP_MS, { input: command.stdin });
-    return { stdout: res.stdout, stderr: res.stderr, exitCode: res.exitCode };
+    try {
+      const res = await backend.run(command.args, { stdin: command.stdin, timeoutMs: SYNC_WP_MS });
+      return { stdout: res.stdout, stderr: res.stderr, exitCode: res.exitCode };
+    } finally {
+      backend.close();
+    }
   });
 
   /**
@@ -294,14 +332,22 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
     '/api/sites/:slug/wp/cli/help',
     { schema: { params: slugParams, querystring: wpCliHelpQuery }, config: { rateLimit: { max: 60, timeWindow: 60_000 } } },
     async (req) => {
-      const { site, server } = await requireRunningSite(req.params.slug);
+      const { site, backend } = await reachableSite(req.params.slug);
       const words = req.query.command ? req.query.command.split(' ') : [];
       const args = ['help', ...words];
-      const res = await server.wp.run(site.containerName, args, 30_000, { outputCap: 256 * 1024 });
+      let res: RunResult;
+      try {
+        res = await backend.help(words);
+      } finally {
+        backend.close();
+      }
       if (res.exitCode !== 0 && /is not a registered (wp command|subcommand)/.test(`${res.stderr}\n${res.stdout}`)) {
         throw notFound(
-          `This site has no \`wp ${words.join(' ')}\`: neither WP-CLI nor a plugin here adds it. ` +
-            `GET /api/sites/${site.slug}/wp/cli/help lists what does exist.`,
+          isExternal(site)
+            ? `This site has no \`wp ${words.join(' ')}\`: no plugin here registered it with WPL7 Connect. ` +
+                `GET /api/sites/${site.slug}/wp/cli/help lists what does exist.`
+            : `This site has no \`wp ${words.join(' ')}\`: neither WP-CLI nor a plugin here adds it. ` +
+                `GET /api/sites/${site.slug}/wp/cli/help lists what does exist.`,
         );
       }
       if (res.exitCode !== 0) {
@@ -324,6 +370,36 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
   const godmodeRuns = new Map<string, { result: Promise<RunResult>; callers: number; hangUp: AbortController }>();
 
   /**
+   * A Godmode command on a site hosted elsewhere. A host ends a web request after 30 to 60
+   * seconds, so `chat wait` goes in steps of at most WAIT_STEP_S: asked again with the time
+   * that is left, for as long as the chat is still working, up to what the caller asked for.
+   * One request to the panel, several to the site; the caller sees one answer. A caller who hung
+   * up is not asked for again.
+   */
+  async function waitInSteps(backend: SiteBackend, args: string[], timeoutMs: number, signal: AbortSignal): Promise<RunResult> {
+    const at = args.findIndex((a) => a.startsWith('--timeout='));
+    const isWait = args[1] === 'chat' && args[2] === 'wait' && at !== -1;
+    if (!isWait) return backend.run(args, { timeoutMs, signal });
+    let left = Number(args[at]!.slice('--timeout='.length)) || 0;
+    for (;;) {
+      const step = Math.max(1, Math.min(WAIT_STEP_S, left));
+      const stepArgs = [...args];
+      stepArgs[at] = `--timeout=${step}`;
+      const started = Date.now();
+      const res = await backend.run(stepArgs, { timeoutMs: (step + 20) * 1000, signal });
+      left -= Math.max(step, Math.round((Date.now() - started) / 1000));
+      if (res.exitCode !== 0 || left <= 0 || signal.aborted) return res;
+      let state: unknown;
+      try {
+        state = (godmodeAnswer(res, 'godmode chat wait') as { state?: unknown }).state;
+      } catch {
+        return res;
+      }
+      if (state !== 'working') return res;
+    }
+  }
+
+  /**
    * Run a `wp godmode` command the panel built, for a caller who will poll it again and again:
    * - the same command already running for someone else - an app retrying a wait its client gave
    *   up on - is joined, not run a second time;
@@ -331,12 +407,14 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
    *   on too, which frees its connection (the command itself ends at its deadline).
    */
   async function askGodmode(slug: string, args: string[], timeoutMs: number, reply: FastifyReply): Promise<Record<string, unknown>> {
-    const { site, server } = await requireRunningSite(slug);
-    const key = `${site.containerName}\0${args.join('\0')}`;
+    const { site, backend } = await reachableSite(slug);
+    const key = `${site.kind}:${site.id}\0${args.join('\0')}`;
     let run = godmodeRuns.get(key);
     if (!run) {
       const hangUp = new AbortController();
-      const result = server.wp.run(site.containerName, args, timeoutMs, { signal: hangUp.signal });
+      const result = (isExternal(site) ? waitInSteps(backend, args, timeoutMs, hangUp.signal) : backend.run(args, { timeoutMs, signal: hangUp.signal })).finally(
+        () => backend.close(),
+      );
       const started = { result, callers: 0, hangUp };
       godmodeRuns.set(key, started);
       const done = () => {
@@ -382,6 +460,8 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
    * the server's exec lane - one command at a time for every site on the machine - all along.
    */
   const MAX_CHARS = '--max-chars=20000';
+  /** The longest wait one request to a site hosted elsewhere asks for. */
+  const WAIT_STEP_S = 25;
   /** Reads and lists; a wait gets its seconds on top, up to the synchronous deadline. */
   const GODMODE_READ_MS = 30_000;
 
@@ -437,10 +517,11 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
   });
 
   r.post('/api/sites/:slug/wp/rest', { schema: { params: slugParams, body: wpRestBody } }, async (req, reply) => {
-    const { site, server } = await requireRunningSite(req.params.slug);
+    const { site, backend } = await reachableSite(req.params.slug);
     const { async: queued, timeoutMin, ...request } = req.body;
     const what = { method: request.method, route: maskRestRoute(request.route), user: request.auth?.username ?? null };
     if (queued) {
+      backend.close();
       const job = deps.worker.enqueue(
         'wp.rest',
         { siteId: site.id, ...request, timeoutMin },
@@ -451,13 +532,14 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
       return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
     }
     // Answered within this request, like a synchronous wp-cli call: curl gives up at 45 s,
-    // and the exec behind it ten seconds later - inside the ~55 s a request is given.
-    const res = await sendWpRest(server.docker, site.containerName, {
-      ...request,
-      ...restTargetOf(site, deps.config),
-      timeoutMs: 45_000,
-      bodyCap: 1024 * 1024,
-    });
+    // and the exec behind it ten seconds later - inside the ~55 s a request is given. A site
+    // hosted elsewhere runs it through WPL7 Connect, as the user `auth` names.
+    let res;
+    try {
+      res = await backend.rest(request, { timeoutMs: 45_000, bodyCap: 1024 * 1024 });
+    } finally {
+      backend.close();
+    }
     audit(req, 'wpRest', site.slug, 'request', { ...what, status: res.status });
     if (res.status === null) throw badGateway(`The site did not answer: ${res.error ?? 'no answer came back'}`);
     return res;

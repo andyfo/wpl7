@@ -1,6 +1,6 @@
 // @docs servers/add
 import { PassThrough, Readable, Writable } from 'node:stream';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { servers, sites } from '../../db/schema.js';
 import type { CoreServices } from '../../services/index.js';
@@ -13,6 +13,7 @@ import { shellQuote } from '../../servers/sshExec.js';
 import { readPanelPrivateKey, readPanelPublicKey } from '../../servers/keys.js';
 import { hostExec } from '../../lib/exec.js';
 import { PANEL_VERSION } from '../../lib/version.js';
+import { hostedSites } from '../../lib/siteKind.js';
 
 export const serverSyncPluginsPayload = z.object({
   serverId: z.number().int(),
@@ -65,7 +66,7 @@ export async function serverApplySiteLimits(
   const rows = s.db
     .select()
     .from(sites)
-    .where(eq(sites.serverId, handle.id))
+    .where(and(eq(sites.serverId, handle.id), hostedSites()))
     .orderBy(asc(sites.id))
     .all()
     .filter((site) => site.status !== 'provisioning' && site.status !== 'deleting');

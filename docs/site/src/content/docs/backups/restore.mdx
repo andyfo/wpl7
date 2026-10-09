@@ -7,6 +7,7 @@ sources:
   - panel/src/jobs/handlers/backups.ts
   - panel/src/routes/backups.ts
   - panel/src/services/backup.ts
+  - panel/src/services/externalBackup.ts
   - panel/web/src/components/backups/BackupParts.tsx
 ---
 
@@ -55,10 +56,35 @@ the previous files are.
 
 ## Download a backup
 
-Choose **Download** on a complete backup. You get one `.tar` file, named after the site and the
-backup's time, that holds the four backup files. It streams from the server that keeps the backup.
-To restore it without the panel, follow [Manual recovery without the
+Choose **Download** on a complete backup, then what to download. Each file is named after the site
+and the backup's time, and streams from the server that keeps the backup.
+
+| Choice | What you get |
+|---|---|
+| **Everything** | One `.tar` file that holds the four backup files. |
+| **Files** | The site's files, as `files.tar.gz`. They are its `wordpress` folder. |
+| **Database** | The database, as one `.sql.gz` file that phpMyAdmin imports as it is. |
+
+To restore a hosted site without the panel, follow [Manual recovery without the
 panel](/docs/reference/manual-recovery/).
+
+## Restore a site hosted elsewhere
+
+A [site hosted elsewhere](/docs/sites/external/) has no **Restore**. Put a backup back on its host by
+hand:
+
+1. Choose **Download** on the backup, then **Files**. Do it again for **Database**.
+2. Unpack the files. Copy what is in the `wordpress` folder over the site's WordPress folder, by FTP
+   or with the host's file manager.
+3. Import the database into the site's database, with phpMyAdmin or with `mysql`:
+
+```bash
+gunzip < shop-20261009-030000-database.sql.gz | mysql -u wp_user -p wp_database
+```
+
+The files hold the site's `wp-config.php`, with the database settings it had at the time of the
+backup. On a host where they changed since, keep the current `wp-config.php`. WPL7 Connect's
+settings are in the database, so the site stays connected after a restore.
 
 ## Limits
 
@@ -66,6 +92,7 @@ panel](/docs/reference/manual-recovery/).
 - A backup restores only onto the site of the same name, on the server that holds the backup.
   From another server, fetch it back from an offsite copy, or move the site back first.
 - A deleted site's backup has no **Restore**. Create a site with the same name first.
+- A site hosted elsewhere is restored by hand, as above.
 - The panel's own database is restored by hand, never from the panel.
 - The files a restore set aside are deleted by the nightly housekeeping, a day or more later.
 - An API key needs Manage access to restore, and Full access to download the panel's own database.
@@ -75,4 +102,5 @@ panel](/docs/reference/manual-recovery/).
 - [How backups work](/docs/backups/overview/)
 - [Offsite copies](/docs/backups/offsite/)
 - [Manual recovery without the panel](/docs/reference/manual-recovery/)
+- [Sites hosted elsewhere](/docs/sites/external/)
 - [FTP and SFTP logins](/docs/sites/ftp-sftp/)

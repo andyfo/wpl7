@@ -32,6 +32,8 @@ export interface SiteHealthInput {
   lastCheckedAt?: number | null;
   /** Live Docker state; omitted on screens that only have the sites list. */
   containerState?: 'running' | 'created' | 'exited' | 'missing' | 'unknown' | null;
+  /** A site hosted elsewhere: whether its WPL7 Connect answered the panel's last request. */
+  external?: { reachable: boolean | null } | null;
 }
 
 export interface SiteHealth {
@@ -64,6 +66,7 @@ const RECREATE_ACTION = { label: 'Recreate container', path: 'reconcile' } as co
 export function siteHealth(input: SiteHealthInput): SiteHealth {
   const { status, up = null, httpStatus = null, lastCheckedAt = null, containerState = null } = input;
   const checked = lastCheckedAt ? ` Checked ${timeAgo(lastCheckedAt)}.` : '';
+  if (input.external) return externalHealth(input, input.external, checked);
 
   if (status === 'provisioning') {
     return { label: 'Creating', tone: 'busy', detail: 'Still being created - it serves nothing yet.' };
@@ -186,4 +189,33 @@ function probeReason(httpStatus: number | null): string {
   if (httpStatus === 404) return 'it answered 404 - no route matches this hostname, or WordPress served a 404 for the home page';
   if (httpStatus >= 500) return `it answered ${httpStatus} - PHP or WordPress is erroring`;
   return `it answered ${httpStatus}`;
+}
+
+/**
+ * A site hosted elsewhere: no container to read and nothing the panel can repair, so no action.
+ * Its own address is probed as a hosted site's is; its plugin answers the hourly check.
+ */
+function externalHealth(input: SiteHealthInput, external: { reachable: boolean | null }, checked: string): SiteHealth {
+  const { status, up = null, httpStatus = null } = input;
+  if (status === 'deleting') return { label: 'Removing', tone: 'busy', detail: 'Being removed from the panel.' };
+  if (status === 'disconnected') {
+    return { label: 'Disconnected', tone: 'idle', detail: 'The panel no longer manages this site. Reconnect it on its Settings tab.' };
+  }
+  if (up === false) {
+    return {
+      label: 'Offline',
+      tone: 'bad',
+      detail: `${httpStatus === null ? 'Nothing answered' : `It answered ${httpStatus}`} at its address.${checked}`,
+    };
+  }
+  if (external.reachable === false) {
+    return {
+      label: 'Plugin unreachable',
+      tone: 'bad',
+      detail: 'WPL7 Connect on the site does not answer the panel.',
+      fix: 'A firewall or security plugin may block the panel: let requests to /wp-json/wpl7-connect/ and ?wpl7-connect= through.',
+    };
+  }
+  if (up === null) return { label: 'Checking', tone: 'unknown', detail: 'No check has completed yet.' };
+  return { label: 'Online', tone: 'ok', detail: `Answering requests.${checked}` };
 }

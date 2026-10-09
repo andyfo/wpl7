@@ -7,11 +7,25 @@ import { serverStats, siteStats, sites, type SiteRow } from '../db/schema.js';
 import type { Config } from '../config.js';
 import type { ServerMonitorDto, ServerStatsDto, SiteMonitorDto } from '../../shared/types.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
-import { httpProbeOnce } from '../lib/httpProbe.js';
+import { httpProbeOnce, type ExternalProbe } from '../lib/httpProbe.js';
+import { externalSites, isExternal } from '../lib/siteKind.js';
 import { sitePaths } from './siteSpec.js';
 
 /** The site states the monitor looks at; mid-create and mid-delete are a job's to report. */
 const MONITORED = ['running', 'stopped', 'error'];
+
+/** How the monitor reaches sites hosted elsewhere: their address, and a probe of their own (ConnectionsService). */
+export interface ExternalSites {
+  homeOf(siteId: number): string | null;
+  probe: ExternalProbe;
+  recordCert(siteId: number, expiresAt: number | null): void;
+}
+
+/** Who hears about each probe that ran (services/alerts.ts). */
+export interface ProbeListeners {
+  probed(site: SiteRow, reading: { ok: boolean; status: number | null; error?: string | null }): Promise<void>;
+  certificate(site: SiteRow, expiresAt: number | null): Promise<void>;
+}
 /** How long the check at the end of a job gives a container that has just started to answer. */
 const SETTLE_MS = 10_000;
 
@@ -29,12 +43,19 @@ export class MonitorService {
    */
   private changes = new Map<number, { holds: number; seq: number }>();
   private changeSeq = 0;
+  private external: ExternalSites | null = null;
+  private listeners: ProbeListeners | null = null;
 
   constructor(
     private readonly db: Db,
     private readonly config: Config,
     private readonly servers: ServerRegistry,
   ) {}
+
+  attachExternal(external: ExternalSites, listeners: ProbeListeners): void {
+    this.external = external;
+    this.listeners = listeners;
+  }
 
   private activeSites(): SiteRow[] {
     return this.db
@@ -81,8 +102,10 @@ export class MonitorService {
     // domains - and a job that begins or ends on the site later in the tick makes that stale.
     const seq = this.changeSeq;
     const byServer = this.activeSitesByServer();
-    await Promise.all(
-      [...byServer.entries()].map(async ([serverId, list]) => {
+    // Sites hosted elsewhere are asked directly, one after another, beside the servers' groups.
+    const external = this.db.select().from(sites).where(and(externalSites(), eq(sites.status, 'connected'))).all();
+    await Promise.all([
+      ...[...byServer.entries()].map(async ([serverId, list]) => {
         let handle: ServerHandle | null = null;
         try {
           handle = this.servers.handleFor(serverId);
@@ -91,7 +114,47 @@ export class MonitorService {
         }
         for (const site of list) await this.check(site, handle, () => this.changedSince(site.id, seq));
       }),
-    );
+      (async () => {
+        for (const site of external) await this.checkExternal(site, () => this.changedSince(site.id, seq));
+      })(),
+    ]);
+  }
+
+  /**
+   * Probe a site hosted elsewhere at its home page, and record it as a hosted one's probe is;
+   * the certificate's expiry goes with the connection. With `settleMs`, a failed probe is tried
+   * again until that long has passed (the check that ends a job's hold).
+   */
+  private async checkExternal(site: SiteRow, stale: () => boolean, settleMs = 0): Promise<void> {
+    if (stale() || !this.external) return;
+    const home = this.external.homeOf(site.id);
+    if (!home) return;
+    const entry = this.entryFor(site.id, site.slug, site.serverId);
+    const deadline = Date.now() + settleMs;
+    let reading = await this.external.probe(home);
+    while (!reading.ok && Date.now() < deadline && !stale()) {
+      await new Promise((r) => setTimeout(r, 1000));
+      reading = await this.external.probe(home);
+    }
+    if (stale()) return;
+    entry.up = reading.ok;
+    entry.httpStatus = reading.status;
+    entry.httpMs = reading.ok ? reading.ms : null;
+    entry.lastCheckedAt = Date.now();
+    this.db.insert(siteStats).values({ siteId: site.id, ts: Date.now(), up: reading.ok ? 1 : 0, httpMs: entry.httpMs }).run();
+    this.external.recordCert(site.id, reading.certExpiresAt);
+    await this.tell(site, reading, reading.certExpiresAt);
+  }
+
+  /** The alerts hear of every probe that ran; their failures are logged, never the monitor's. */
+  private async tell(site: SiteRow, reading: { ok: boolean; status: number | null; error?: string }, certExpiresAt?: number | null): Promise<void> {
+    if (!this.listeners) return;
+    try {
+      await this.listeners.probed(site, { ok: reading.ok, status: reading.status, error: reading.error ?? null });
+      if (certExpiresAt !== undefined) await this.listeners.certificate(site, certExpiresAt);
+    } catch {
+      /* an alert that could not be worked out is no reason to lose the reading */
+    }
   }
 
   /**
@@ -135,6 +198,10 @@ export class MonitorService {
    */
   private async recheck(siteId: number, stale: () => boolean): Promise<void> {
     const site = this.db.select().from(sites).where(eq(sites.id, siteId)).get();
+    if (site && isExternal(site)) {
+      if (site.status === 'connected') await this.checkExternal(site, stale, Math.min(this.config.probeTimeoutMs, SETTLE_MS));
+      return;
+    }
     if (!site || !MONITORED.includes(site.status)) return;
     let handle: ServerHandle | null = null;
     try {
@@ -191,6 +258,7 @@ export class MonitorService {
       .insert(siteStats)
       .values({ siteId: site.id, ts: Date.now(), up: up ? 1 : 0, httpMs: entry.httpMs })
       .run();
+    await this.tell(site, attempt);
   }
 
   async tickContainerStats(): Promise<void> {

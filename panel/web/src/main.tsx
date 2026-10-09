@@ -13,6 +13,7 @@ import { Servers } from './pages/Servers';
 import { ServerDetail } from './pages/ServerDetail';
 import { NewSite } from './pages/NewSite';
 import { ImportSite } from './pages/ImportSite';
+import { ConnectSite } from './pages/ConnectSite';
 import { BulkManagement } from './pages/BulkManagement';
 import { SitesSecurity } from './pages/SitesSecurity';
 import { ServersSecurity } from './pages/ServersSecurity';
@@ -62,6 +63,8 @@ const pages: RouteObject[] = [
   { path: 'sites/security', element: <SitesSecurity /> },
   // Reserved like "bulk" too.
   { path: 'sites/import', element: <ImportSite /> },
+  // And "connect".
+  { path: 'sites/connect', element: <ConnectSite /> },
   { path: 'sites/:slug', element: <SiteDetail /> },
   { path: 'plugins', element: <Plugins /> },
   { path: 'plugins/recipes', element: <Recipes /> },

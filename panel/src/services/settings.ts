@@ -47,6 +47,14 @@ export interface PanelSettings {
   mailSuspendPerSitePerHour: number;
   /** Where the panel emails operational alerts (mail suspensions). Empty = log only. */
   alertEmail: string;
+  /** Email when a site stops answering, and when it is back (services/alerts.ts). */
+  alertsSiteDown: boolean;
+  /** Email when a vulnerability appears on a site. */
+  alertsVulnerabilities: boolean;
+  /** Email when a backup fails. */
+  alertsBackups: boolean;
+  /** Email when WPL7 Connect on a site hosted elsewhere stops answering, or its certificate is about to expire. */
+  alertsConnector: boolean;
   /** CPU cores a site container may use (fractional allowed). 0 = uncapped. */
   siteCpuLimit: number;
   /** Memory ceiling per site container. */
@@ -156,6 +164,10 @@ const KEY_MAP: Record<keyof PanelSettings, string> = {
   mailAlertPerSitePerHour: 'mail.alertPerSitePerHour',
   mailSuspendPerSitePerHour: 'mail.suspendPerSitePerHour',
   alertEmail: 'alerts.email',
+  alertsSiteDown: 'alerts.siteDown',
+  alertsVulnerabilities: 'alerts.vulnerabilities',
+  alertsBackups: 'alerts.backups',
+  alertsConnector: 'alerts.connector',
   siteCpuLimit: 'site.cpuLimit',
   siteMemoryLimitMb: 'site.memoryLimitMb',
   sitePidsLimit: 'site.pidsLimit',

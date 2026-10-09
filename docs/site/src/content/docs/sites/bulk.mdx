@@ -2,7 +2,7 @@
 title: Bulk management
 description: "Update plugins, themes and WordPress on many sites at once, with a backup first and a health check after."
 sidebar:
-  order: 11
+  order: 12
 sources:
   - panel/web/src/pages/BulkManagement.tsx
   - panel/web/src/pages/bulkSelection.ts
@@ -31,6 +31,10 @@ The filter chips combine: **Vulnerable** with **Has update** shows exactly what 
 fix. **Inactive** and **Closed on wp.org** find plugins to remove. Search by name or slug, pick
 a server on a fleet, and tick **Include stopped sites** to show those too.
 
+With [sites hosted elsewhere](/docs/sites/external/) in the panel, **Hosted**, **External** and
+**All** choose which kind the table shows. Their rows say **External** where a hosted site's server
+is.
+
 The numbers come from the last scan. **Rescan all** scans every running site now.
 
 ## Run a bulk change
@@ -51,8 +55,8 @@ asked for on those sites again. **Recent bulk runs** keeps the earlier runs.
 ## What happens
 
 Each server runs one job at a time, so a server's sites take their turn while servers work in
-parallel. Each job takes the backup if asked, then runs the changes inside the site's
-container, with WordPress last. It then checks that the site answers and scans it again. A job
+parallel. Sites hosted elsewhere share two lanes of their own. Each job takes the backup if asked,
+then runs the changes inside the site's container, or through WPL7 Connect, with WordPress last. It then checks that the site answers and scans it again. A job
 fails when a change or the check fails.
 
 A selection with any item that cannot run the action is refused whole, and nothing is queued.

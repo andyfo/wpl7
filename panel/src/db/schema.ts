@@ -88,6 +88,17 @@ export const sites = sqliteTable(
     /** 0 = this site's backups are never copied to an offsite destination. */
     offsiteEnabled: integer('offsite_enabled').notNull().default(1),
     diskBytes: integer('disk_bytes'),
+    /**
+     * 'hosted' | 'external'. An external site is hosted elsewhere and reached through the WPL7
+     * Connect plugin (site_connections). It fills the columns above that only a hosted site has
+     * meaningfully: `server_id` is the server that keeps its backups, `php_version` the PHP it
+     * reported, `domains` its home's host, `db_name`, `db_user`, `db_password` and
+     * `container_name` are '', `mail_password` is NULL, and `disk_bytes` is the size of its copy
+     * on that server. Its status is 'connected', 'disconnected' or 'deleting', never 'running',
+     * and SitesService.bySlug and the jobs' loadSite refuse it unless the caller asks for either
+     * kind: that is what keeps its empty container fields from ever reaching Docker.
+     */
+    kind: text('kind').notNull().default('hosted'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -1556,3 +1567,120 @@ export const imports = sqliteTable(
 );
 
 export type ImportRow = typeof imports.$inferSelect;
+
+/**
+ * A connection to a WordPress site hosted elsewhere, through the WPL7 Connect plugin
+ * (docs/internal/connect-protocol.md). Pending until the plugin enrolls and the site is added;
+ * then it belongs to its site, one per site. A reconnect is a second, pending row naming the site
+ * in `for_site_id`: when its plugin enrolls, it replaces the site's row.
+ *
+ * The private key signs every request the panel makes to the site. It is a credential like the
+ * site database passwords in `sites`: it never leaves the panel, and no DTO or log carries it.
+ */
+export const siteConnections = sqliteTable(
+  'site_connections',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    siteId: integer('site_id').references(() => sites.id, { onDelete: 'set null' }),
+    /** The site a pending reconnect is for; NULL for a new connection. */
+    forSiteId: integer('for_site_id').references(() => sites.id, { onDelete: 'cascade' }),
+    /** 'pending' | 'enrolled' | 'active' | 'disconnected' | 'expired' */
+    status: text('status').notNull(),
+    /** The enrollment token, while the plugin may still enroll with it; NULL once the site is added. */
+    token: text('token'),
+    /** sha256 of the token: how the plugin's enroll call finds its connection. */
+    tokenHash: text('token_hash').notNull(),
+    /** Ed25519, PKCS8 PEM. NULL once disconnected. */
+    privateKey: text('private_key'),
+    /** The matching public key, raw 32 bytes in base64url: what the plugin holds. */
+    publicKey: text('public_key').notNull(),
+    /** 1 = the site may be reached over plain http. */
+    allowHttp: integer('allow_http').notNull().default(0),
+    /** What the admin typed, if anything; the site's real address is `home_url`. */
+    sourceUrl: text('source_url'),
+    /** The site's home, bound at the first enroll: no other site can enroll with the token. */
+    homeUrl: text('home_url'),
+    endpointUrl: text('endpoint_url'),
+    /** 'rest' | 'query' | NULL: what reached the plugin last. */
+    transport: text('transport'),
+    /** The plugin's clock minus the panel's, in seconds. */
+    skewS: integer('skew_s').notNull().default(0),
+    /** A shorter time per request than the plugin's own, learned from gateway timeouts; NULL = the plugin's. */
+    budgetMs: integer('budget_ms'),
+    pluginVersion: text('plugin_version'),
+    protocol: integer('protocol'),
+    /** JSON: the site's report as the plugin last sent it (enroll, info), checked. */
+    report: text('report'),
+    /** JSON ConnectWarning[]: what the report and the last ping say. */
+    warnings: text('warnings'),
+    /** JSON string[]: the commands plugins registered on the connector. */
+    commands: text('commands'),
+    /** The administrator updates and logins run as. */
+    actAsUserId: integer('act_as_user_id'),
+    actAsLogin: text('act_as_login'),
+    lastContactAt: integer('last_contact_at'),
+    lastError: text('last_error'),
+    lastErrorAt: integer('last_error_at'),
+    /** Hourly checks failed in a row; the plugin-unreachable alert goes out at 3. */
+    failCount: integer('fail_count').notNull().default(0),
+    /** When the site's TLS certificate expires, from the uptime probe. */
+    certExpiresAt: integer('cert_expires_at'),
+    lastBackupAt: integer('last_backup_at'),
+    /** The version of WPL7 Connect the panel last offered the site (ping's `offer`). */
+    offeredVersion: text('offered_version'),
+    /** When the panel last reached the plugin while the site was being added (Check again). */
+    checkedAt: integer('checked_at'),
+    createdBy: text('created_by'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    enrolledAt: integer('enrolled_at'),
+    addedAt: integer('added_at'),
+    /** When a pending or enrolled connection expires (24 h); NULL once the site is added. */
+    expiresAt: integer('expires_at'),
+  },
+  (t) => [
+    uniqueIndex('site_connections_token_hash_idx').on(t.tokenHash),
+    // NULLs are distinct in a SQLite unique index: any number of pending rows, one row per site.
+    uniqueIndex('site_connections_site_idx').on(t.siteId),
+    index('site_connections_status_idx').on(t.status),
+  ],
+);
+
+export type SiteConnectionRow = typeof siteConnections.$inferSelect;
+
+/**
+ * What the alerts (services/alerts.ts) last said about a site, so a restart neither repeats an
+ * alert nor misses a recovery. One row per condition that is on: `down:<siteId>`,
+ * `backup:<siteId>`, `connector:<siteId>`, `cert:<siteId>`.
+ */
+export const alertStates = sqliteTable('alert_states', {
+  key: text('key').primaryKey(),
+  siteId: integer('site_id').references(() => sites.id, { onDelete: 'cascade' }),
+  /** When the condition began. */
+  since: integer('since').notNull(),
+  /** When the alert went out; NULL = not (yet). */
+  notifiedAt: integer('notified_at'),
+  detail: text('detail'),
+});
+
+export type AlertStateRow = typeof alertStates.$inferSelect;
+
+/**
+ * The vulnerabilities an alert has already named, per site: a new one is mailed once. A row
+ * goes when its component is no longer vulnerable, so a regression is new again.
+ */
+export const vulnNotices = sqliteTable(
+  'vuln_notices',
+  {
+    siteId: integer('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    /** 'plugin' | 'theme' | 'core' */
+    kind: text('kind').notNull(),
+    slug: text('slug').notNull(),
+    /** The feed's advisory id, or 'closed' for a plugin closed on wordpress.org. */
+    advisory: text('advisory').notNull(),
+    notifiedAt: integer('notified_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.siteId, t.kind, t.slug, t.advisory] })],
+);

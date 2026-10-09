@@ -21,7 +21,7 @@ import { generateSecret, sameSecret, sha256Hex } from '../lib/crypto.js';
 import { panelUrl } from '../lib/panelUrl.js';
 import { PANEL_VERSION } from '../lib/version.js';
 import { containerName, dbIdentifier, isValidSlug, safeJoin } from '../lib/slug.js';
-import { zipOf, type ZipEntry } from '../lib/zipWriter.js';
+import { pluginFolderZip } from '../lib/zipWriter.js';
 import { OutboundRefusedError, assertAllowedSource, type LookupFn } from '../lib/outboundGuard.js';
 import { importLane } from '../jobs/lanes.js';
 import type { JobWorker } from '../jobs/worker.js';
@@ -165,7 +165,7 @@ const parseJson = <T>(raw: string | null): T | null => {
 };
 
 /** A PHP single-quoted string literal. */
-const phpString = (v: string) => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+export const phpString = (v: string) => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 
 const hostOf = (url: string | null): string => {
   try {
@@ -629,36 +629,19 @@ export class ImportService {
     if (!fs.existsSync(path.join(root, 'wpl7-migrate.php'))) {
       throw conflict(`The migration plugin is not in this build of the panel (${root})`);
     }
-    const entries: ZipEntry[] = [{ name: 'wpl7-migrate/' }];
-    const walk = (dir: string, rel: string) => {
-      for (const item of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-        const relPath = `${rel}${item.name}`;
-        // Never a stray one from testing: this import's own is added below.
-        if (relPath === 'connection.php') continue;
-        if (item.isDirectory()) {
-          entries.push({ name: `wpl7-migrate/${relPath}/` });
-          walk(path.join(dir, item.name), `${relPath}/`);
-        } else if (item.isFile()) {
-          let data = fs.readFileSync(path.join(dir, item.name));
-          if (/\.(php|txt)$/.test(item.name)) {
-            data = Buffer.from(data.toString('utf8').replaceAll('0.0.0-dev', PANEL_VERSION), 'utf8');
-          }
-          entries.push({ name: `wpl7-migrate/${relPath}`, data });
-        }
-      }
-    };
-    walk(root, '');
-    entries.push({
-      name: 'wpl7-migrate/connection.php',
-      data:
-        '<?php\n' +
-        '// WPL7 Migrate: the panel this download came from. Read once at activation, then deleted.\n' +
-        "defined('ABSPATH') || exit;\n" +
-        `return array('panel' => ${phpString(origin)}, 'import' => ${row.id}, 'token' => ${phpString(row.token)}, ` +
-        `'issued' => ${Math.floor(Date.now() / 1000)});\n`,
-      mode: 0o644,
-    });
-    return { name: `wpl7-migrate-${row.id}.zip`, data: zipOf(entries) };
+    const data = pluginFolderZip(root, 'wpl7-migrate', PANEL_VERSION, [
+      {
+        name: 'connection.php',
+        data:
+          '<?php\n' +
+          '// WPL7 Migrate: the panel this download came from. Read once at activation, then deleted.\n' +
+          "defined('ABSPATH') || exit;\n" +
+          `return array('panel' => ${phpString(origin)}, 'import' => ${row.id}, 'token' => ${phpString(row.token)}, ` +
+          `'issued' => ${Math.floor(Date.now() / 1000)});\n`,
+        mode: 0o644,
+      },
+    ]);
+    return { name: `wpl7-migrate-${row.id}.zip`, data };
   }
 
   /** The import a plugin's call names with its token; null for one that is unknown or disconnected. */

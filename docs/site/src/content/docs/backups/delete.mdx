@@ -66,6 +66,9 @@ too** as well. Once the site is gone, a **Delete backups** job removes them, rem
 included. The final backup is not among them, so with both switches on, the site leaves exactly one
 backup behind. With only the second switch on, nothing of the site is left.
 
+<Since v="0.3.0-beta.3" /> **Remove from panel** on a [site hosted elsewhere](/docs/sites/external/)
+takes no final backup. Its backups stay, unless **Also delete its backups** is on.
+
 ## Limits
 
 - A deleted backup cannot be recovered, from the server or from a destination the panel cleared.

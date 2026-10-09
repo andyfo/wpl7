@@ -392,6 +392,10 @@ export function generateJobTypes(): string[] {
         ['Both servers', 'A move holds the lanes of both servers it works on.'],
         ['Shared queue', 'Jobs that belong to no server run one at a time among themselves.'],
         ['A named lane', 'Jobs in a named lane run one at a time within it, beside the server lanes. A lane marked one per server has a lane for each server.'],
+        [
+          '`external-0`, `external-1`',
+          'Every job of a [site hosted elsewhere](/docs/sites/external/) runs in one of these two, whatever lane its type takes below. Each such site always gets the same one.',
+        ],
       ],
     ),
     '',

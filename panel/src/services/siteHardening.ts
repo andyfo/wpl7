@@ -4,6 +4,7 @@ import { sites, type SiteRow } from '../db/schema.js';
 import type { JobWorker } from '../jobs/worker.js';
 import type { ContainerPolicy } from '../../shared/security.js';
 import type { CoreServices } from './index.js';
+import { hostedSites } from '../lib/siteKind.js';
 
 /**
  * The part of a site's protection that lives inside its container rather than in front of
@@ -136,7 +137,7 @@ export function queueReconcile(
  */
 export async function sweepHardening(s: CoreServices, worker: Pick<JobWorker, 'enqueue' | 'activeSiteJob'>): Promise<HardeningSweep> {
   const sweep: HardeningSweep = { queued: [], busy: [] };
-  const rows = s.db.select().from(sites).orderBy(asc(sites.id)).all();
+  const rows = s.db.select().from(sites).where(hostedSites()).orderBy(asc(sites.id)).all();
   for (const server of s.servers.listRows()) {
     if (server.status === 'unreachable' || server.status === 'provisioning') continue;
     let containers: { name: string; labels: Record<string, string> }[];

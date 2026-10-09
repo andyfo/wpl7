@@ -2,7 +2,7 @@
 title: Files (Web FTP)
 description: A site's files, relative to its WordPress folder (path='' is the folder itself). Everything runs inside the site's own container as www-data, so it can do what the site's own PHP can, no more.
 sidebar:
-  order: 2.04
+  order: 2.05
 sources:
   - panel/shared/apiDocs.ts
 ---

@@ -145,6 +145,19 @@ file, then choose **Restart** on the site. Traefik ends a request that takes ove
 arrive, so the **Files** tab uploads in chunks. A file too large for WordPress's media uploader
 can go up there instead, up to 2 GiB.
 
+### A site hosted elsewhere shows Plugin unreachable
+
+<Since v="0.3.0-beta.3" /> The site answers, but WPL7 Connect does not answer the panel. The
+site's **Overview** tab shows the last error.
+
+- A firewall or a security plugin on the site blocks the panel. Let requests to
+  `/wp-json/wpl7-connect/` and `?wpl7-connect=` through, from the panel's address.
+- WPL7 Connect was deactivated or deleted. Choose **Reconnect** on the site's **Settings** tab and
+  install the new download.
+- The site's address changed. The **Overview** tab says so: choose **Use the new address**.
+
+See [Sites hosted elsewhere](/docs/sites/external/).
+
 ## Certificates
 
 ### The site shows a certificate warning

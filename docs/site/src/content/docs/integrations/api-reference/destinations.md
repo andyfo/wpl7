@@ -2,7 +2,7 @@
 title: Offsite destinations
 description: "Credentials are write-only: they go in with secrets and read back as secretsSet - the names on file, never the values."
 sidebar:
-  order: 2.09
+  order: 2.1
 sources:
   - panel/shared/apiDocs.ts
 ---

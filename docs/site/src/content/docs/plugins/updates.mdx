@@ -7,6 +7,8 @@ sources:
   - panel/src/services/vulnerabilities.ts
   - panel/src/services/wpInventory.ts
   - panel/src/jobs/handlers/wp.ts
+  - panel/src/services/siteBackend.ts
+  - panel/src/services/alerts.ts
   - panel/shared/wpOps.ts
   - panel/shared/scheduleActions.ts
   - panel/web/src/components/wp/WordPressTab.tsx
@@ -77,6 +79,14 @@ last, then the check. It fails when an update fails or the site stops answering,
 names the backup to go back to. Nothing is rolled back by itself: restore that backup from the
 site's **Backups** tab.
 
+On a [site hosted elsewhere](/docs/sites/external/), the check also asks WPL7 Connect. If the site
+answered before the update and stops answering after it, the plugins and themes the job updated are
+put back as they were. The job then fails, and its log says what was put back. WordPress itself is
+not put back.
+
+With **New vulnerabilities** on in **Settings → Monitoring**, a vulnerability newly found on one of
+your sites is emailed to the alert address. The first email lists every one found so far.
+
 ## Update many sites
 
 On **Sites → Bulk management**, select rows and choose **Update**. Each site gets its own job, with
@@ -97,8 +107,8 @@ backups, so retention removes the old ones.
 ## Limits
 
 - A new advisory shows once the panel next refreshes that slug, up to a day later.
-- A failed update is not undone automatically. Restoring the backup also undoes every other change
-  made to the site since.
+- On a hosted site, a failed update is not undone automatically. Restoring the backup also undoes
+  every other change made to the site since.
 - Where no fixed release exists, **Fix vulnerable** leaves the plugin as it is. Deactivating it is
   your decision.
 

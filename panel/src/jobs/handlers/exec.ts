@@ -7,7 +7,9 @@ import type { RunResult } from '../../services/docker.js';
 import type { CoreServices } from '../../services/index.js';
 import { redactorFor } from '../../services/offsite.js';
 import { asSiteUser } from '../../services/wp.js';
-import { restTargetOf, sendWpRest, wpErrorOf, type WpRestResponse } from '../../services/wpRest.js';
+import { wpErrorOf, type WpRestResponse } from '../../services/wpRest.js';
+import { ContainerBackend, backendFor, type SiteBackend } from '../../services/siteBackend.js';
+import { isExternal } from '../../lib/siteKind.js';
 import type { JobContext } from '../context.js';
 import { maskCliArgs, maskRestRoute, maskShell, sizeText, stdinNote } from '../summaries.js';
 import { loadSite } from './shared.js';
@@ -127,18 +129,36 @@ function promptedValues(args: readonly string[], stdin: string | undefined): (li
 }
 
 export async function wpCli(ctx: JobContext<z.infer<typeof wpCliPayload>>, s: CoreServices): Promise<void> {
-  const { site, server } = await runningSite(ctx, s);
-  ctx.checkCanceled();
-  const { args, stdin, timeoutMin } = ctx.payload;
-  ctx.info(`$ wp ${maskCliArgs(args).join(' ')}${stdin === undefined ? '' : ` ${stdinNote(stdin)}`}`);
-  const log = outputLog(ctx);
-  const mask = promptedValues(args, stdin);
-  const res = await server.wp.run(site.containerName, args, timeoutMin * 60_000, {
-    onOutput: (line) => log.onOutput(mask(line)),
-    outputCap: OUTPUT_CAP,
-    input: stdin,
-  });
-  log.finish(res);
+  const backend = await commandBackend(ctx, s);
+  try {
+    ctx.checkCanceled();
+    const { args, stdin, timeoutMin } = ctx.payload;
+    ctx.info(`$ wp ${maskCliArgs(args).join(' ')}${stdin === undefined ? '' : ` ${stdinNote(stdin)}`}`);
+    const log = outputLog(ctx);
+    const mask = promptedValues(args, stdin);
+    // A site hosted elsewhere runs only the commands its plugins registered with WPL7 Connect,
+    // and answers when it is done: its output lands in the log then.
+    const res = await backend.run(args, {
+      timeoutMs: timeoutMin * 60_000,
+      onOutput: (line) => log.onOutput(mask(line)),
+      outputCap: OUTPUT_CAP,
+      stdin,
+    });
+    log.finish(res);
+  } finally {
+    backend.close();
+  }
+}
+
+/** Where a command of a site runs: its running container, or WPL7 Connect for a site hosted elsewhere. */
+async function commandBackend(ctx: JobContext<{ siteId: number }>, s: CoreServices): Promise<SiteBackend> {
+  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
+  if (isExternal(site)) {
+    if (site.status !== 'connected') throw new Error(`"${site.slug}" is disconnected. Reconnect it from its Settings tab.`);
+    return backendFor(s, site);
+  }
+  const { server } = await runningSite(ctx, s);
+  return new ContainerBackend(s, site, server);
 }
 
 export async function siteShell(ctx: JobContext<z.infer<typeof siteShellPayload>>, s: CoreServices): Promise<void> {
@@ -183,7 +203,15 @@ function bodyLines(res: WpRestResponse): string[] {
 }
 
 export async function wpRest(ctx: JobContext<z.infer<typeof wpRestPayload>>, s: CoreServices): Promise<void> {
-  const { site, server } = await runningSite(ctx, s);
+  const backend = await commandBackend(ctx, s);
+  try {
+    await sendRest(ctx, backend);
+  } finally {
+    backend.close();
+  }
+}
+
+async function sendRest(ctx: JobContext<z.infer<typeof wpRestPayload>>, backend: SiteBackend): Promise<void> {
   ctx.checkCanceled();
   const { method, route, body, auth, timeoutMin } = ctx.payload;
   // Nothing an endpoint echoes back - a debug route printing its request headers - puts the
@@ -197,24 +225,17 @@ export async function wpRest(ctx: JobContext<z.infer<typeof wpRestPayload>>, s: 
         ]
       : [],
   );
+  const external = backend.kind === 'external';
   ctx.info(
     [
       `${method} ${maskRestRoute(route)}`,
-      auth ? `as "${auth.username}" (application password)` : 'not signed in',
+      auth ? (external ? `as "${auth.username}"` : `as "${auth.username}" (application password)`) : 'not signed in',
       body !== undefined ? `JSON body, ${sizeText(Buffer.byteLength(JSON.stringify(body)))}` : null,
     ]
       .filter(Boolean)
       .join(' · '),
   );
-  const res = await sendWpRest(server.docker, site.containerName, {
-    method,
-    route,
-    body,
-    auth,
-    ...restTargetOf(site, s.config),
-    timeoutMs: timeoutMin * 60_000,
-    bodyCap: REST_BODY_CAP,
-  });
+  const res = await backend.rest({ method, route, body, auth }, { timeoutMs: timeoutMin * 60_000, bodyCap: REST_BODY_CAP });
   if (res.status === null) throw new Error(`The request did not complete: ${redact(res.error ?? 'no answer came back')}`);
 
   ctx.info(
@@ -237,7 +258,8 @@ export async function wpRest(ctx: JobContext<z.infer<typeof wpRestPayload>>, s: 
     const why = wpErrorOf(res);
     // WordPress answers a password it rejects as if none had been sent ("You are not currently
     // logged in"), which reads like the sign-in was never tried.
-    const rejected = auth && res.status === 401 ? ` - WordPress did not accept the application password for "${auth.username}"` : '';
+    const rejected =
+      auth && res.status === 401 && !external ? ` - WordPress did not accept the application password for "${auth.username}"` : '';
     throw new Error(`The site answered HTTP ${res.status} ${res.statusText}${why ? `: ${redact(why)}` : ''}${rejected}`.trim());
   }
   ctx.info(`Finished (HTTP ${res.status}).`);

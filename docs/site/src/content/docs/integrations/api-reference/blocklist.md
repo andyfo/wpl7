@@ -2,7 +2,7 @@
 title: Blocked addresses
 description: Addresses refused on every server - by the network firewall for direct visitors, by Traefik behind a trusted proxy - and those that never are.
 sidebar:
-  order: 2.12
+  order: 2.13
 sources:
   - panel/shared/apiDocs.ts
 ---

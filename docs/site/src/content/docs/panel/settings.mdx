@@ -9,6 +9,7 @@ sources:
   - panel/web/src/components/security/SettingsCards.tsx
   - panel/web/src/components/UpdatesCard.tsx
   - panel/src/services/settings.ts
+  - panel/src/services/alerts.ts
   - panel/src/db/seed.ts
 ---
 
@@ -63,11 +64,8 @@ and [Site protection](/docs/security/site-protection/). The fleet's default prot
 | **Keep traffic history for (days)** | 30 |
 | **Flag a site above (messages / hour)** | 200 |
 | **Suspend a site above (messages / hour)** | 1,000 |
-| **Send alerts to** | Empty |
 
-**Send alerts to** is where the panel emails you about suspended mail, malware findings, failing
-offsite copies and new releases. Empty, alerts only go to the panel's log. The mail relay itself is
-set in `deploy/.env`, as [How mail works](/docs/mail/overview/) explains.
+The mail relay itself is set in `deploy/.env`, as [How mail works](/docs/mail/overview/) explains.
 
 ## DNS
 
@@ -86,6 +84,22 @@ certificate, as [Cloudflare DNS](/docs/integrations/cloudflare/) describes.
 
 New intervals apply after a panel restart. Turning off **Record visitor addresses** deletes the
 addresses already stored. See [Visitor statistics](/docs/sites/visitors/).
+
+### Alerts
+
+<Since v="0.3.0-beta.3" /> **Send alerts to** is where the panel emails you. Empty, alerts only go
+to the panel's log. Suspended mail, malware findings, failed offsite copies and new releases are
+always sent there. Four switches, all on by default, add these:
+
+| Switch | Emails when |
+|---|---|
+| **Site down, and back up** | A site misses three uptime checks in a row, and again when it answers |
+| **New vulnerabilities** | A scan finds a known vulnerability not emailed before |
+| **Failed backups** | A backup fails, at most once a day per site |
+| **External sites: WPL7 Connect not answering, certificate expiring** | The plugin of a [site hosted elsewhere](/docs/sites/external/) misses three hourly checks, and a week before that site's certificate expires |
+
+Each alert is sent once, and kept track of across restarts. A site that is back up, or a certificate
+that was renewed, ends it.
 
 ## Updates
 

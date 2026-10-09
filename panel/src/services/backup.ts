@@ -273,6 +273,17 @@ export class BackupService {
     }
   }
 
+  /** A backup's manifest.json, or null when it cannot be read. */
+  async readManifest(backup: BackupRow): Promise<{ kind?: string; tablePrefix?: string; phpVersion?: string } | null> {
+    try {
+      return JSON.parse(await this.handleForBackup(backup).files.readFile(path.join(backup.path, 'manifest.json'))) as {
+        kind?: string;
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async verifyChecksums(backup: BackupRow): Promise<void> {
     const h = this.handleForBackup(backup);
     const sums = await h.files.readFile(path.join(backup.path, 'sha256sums'));
