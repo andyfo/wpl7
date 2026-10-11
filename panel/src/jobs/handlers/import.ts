@@ -336,8 +336,9 @@ function listingNote(w: { code: string; count?: number; detail?: string }): { le
 
 /**
  * The files, page by page of the listing, into the staging folder. `onPage` sees every page of the
- * listing as it arrives, files left unchanged since a refresh's `since` included. `alreadyThere`
- * says whether such a file is on the copy already; one that is not is copied all the same.
+ * listing as it arrives, before any of it is copied, files left unchanged since a refresh's
+ * `since` included. `alreadyThere` says whether such a file is on the copy already; one that is
+ * not is copied all the same.
  */
 export async function pullFiles(
   ctx: JobContext<unknown>,
@@ -347,7 +348,7 @@ export async function pullFiles(
   wordpressDir: string,
   cursor: ImportCursor,
   commit: () => Promise<void>,
-  opts: { onPage?: (entries: FileEntry[]) => void; alreadyThere?: (entry: FileEntry) => boolean } = {},
+  opts: { onPage?: (entries: FileEntry[]) => void | Promise<void>; alreadyThere?: (entry: FileEntry) => boolean } = {},
 ): Promise<void> {
   ctx.info(cursor.filesAfterId > 0 ? 'Copying the files, from where the last run stopped…' : 'Copying the files…');
   const maxBytes = Math.max(64 * 1024, ping.limits.max_bytes);
@@ -565,7 +566,7 @@ export async function pullFiles(
       }
       throw err;
     }
-    opts.onPage?.(page.entries);
+    await opts.onPage?.(page.entries);
     const fresh = page.entries.filter((e) => !((e.f ?? []).includes('unchanged') && (opts.alreadyThere?.(e) ?? true)));
     if (fresh.length > 0) await writePage(fresh, false);
     // Unchanged files after the last one copied are done with too.

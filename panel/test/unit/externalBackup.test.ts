@@ -157,6 +157,23 @@ describe('backups of a site hosted elsewhere', () => {
     expect(packed).not.toContain(`wordpress/${plugin}.old/akismet.php`);
   });
 
+  it('puts the file the site has in place of a folder into the copy, instead of failing on it', async () => {
+    const page = 'wp-content/cache/page';
+    const { w, fake } = await externalWorld({ real: true, fake: { files: { ...shopFiles(), [`${page}/index.html`]: 'cached' } } });
+    await backupOnce(w);
+    fake.deleteFile(`${page}/index.html`);
+    fake.writeFile(page, 'a file now');
+    const { job, log, result } = await backupOnce(w);
+    expect(job.status, log.join('\n')).toBe('succeeded');
+    expect(log.join('\n')).not.toContain('Kept');
+    const mirror = w.core.externalBackups.mirrorOf({ slug: 'shop' }).wordpress;
+    expect(fs.readFileSync(path.join(mirror, page), 'utf8')).toBe('a file now');
+    const row = w.db.select().from(backups).where(eq(backups.id, result!.backupId as number)).get()!;
+    const packed = tarList(path.join(row.path, 'files.tar.gz'));
+    expect(packed).toContain(`wordpress/${page}`);
+    expect(packed).not.toContain(`wordpress/${page}/index.html`);
+  });
+
   it('hands out the files and the database of a backup on their own', async () => {
     const { w } = await externalWorld({ real: true });
     const { result } = await backupOnce(w);

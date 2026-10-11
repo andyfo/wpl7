@@ -251,6 +251,12 @@ export class ExternalBackupService {
     const before = this.listings.read(site.id);
     const since = before?.listedAt != null ? before.listedAt - 300 : undefined;
     const inCopy = await h.files.filesBelow(wordpress);
+    // The folders the copy has files in. tar cannot put a file over one: where the site has a file
+    // in its place now, the folder goes first, or this backup and every one after it would fail.
+    const foldersInCopy = new Set<string>();
+    for (const file of inCopy.keys()) {
+      for (let slash = file.indexOf('/'); slash !== -1; slash = file.indexOf('/', slash + 1)) foldersInCopy.add(file.slice(0, slash));
+    }
     const listedNow = new Map<string, 'folder' | 'other'>();
     let unreadableListed = 0;
     // Nothing is left behind: wp-config.php is the site's, and a backup restored by hand needs it.
@@ -263,12 +269,18 @@ export class ExternalBackupService {
     cursor.bytesTotal = 0;
     this.listings.reset(site.id, 'next', cursor.listedAt);
     await pullFiles(ctx, client, ping, h, wordpress, cursor, nothing, {
-      onPage: (entries) => {
+      onPage: async (entries) => {
         for (const e of entries) {
           const flags = e.f ?? [];
           if (flags.includes('unreadable')) unreadableListed++;
           if (e.pb) continue;
           listedNow.set(e.p, e.t === 'd' && !flags.some((f) => NOT_LOOKED_INTO.includes(f)) ? 'folder' : 'other');
+          if (e.t === 'f' && foldersInCopy.has(e.p)) {
+            await h.files.rm(path.join(wordpress, e.p));
+            for (const file of [...inCopy.keys()]) if (file.startsWith(`${e.p}/`)) inCopy.delete(file);
+            for (const folder of [...foldersInCopy]) if (folder === e.p || folder.startsWith(`${e.p}/`)) foldersInCopy.delete(folder);
+            ctx.info(`"${e.p}" is a file on the site now, not a folder: removed the folder from the copy.`);
+          }
         }
       },
       // Unchanged by its times is not enough: the files of a folder renamed on the site keep
