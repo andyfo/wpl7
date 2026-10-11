@@ -1,17 +1,18 @@
 // @docs backups/overview, backups/restore, sites/external
 import path from 'node:path';
-import { PassThrough, Readable } from 'node:stream';
+import { Readable } from 'node:stream';
 import { eq } from 'drizzle-orm';
 import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
 import { backups, sites, type BackupRow, type SiteRow } from '../db/schema.js';
 import type { BackupType } from '../../shared/schemas.js';
+import type { FileBelow } from '../lib/files.js';
 import { safeJoin } from '../lib/slug.js';
 import { externalSites } from '../lib/siteKind.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
 import type { JobContext } from '../jobs/context.js';
 import { initialCursor } from './imports.js';
-import { ImportListings, NOT_READ, type ListedFile } from './importListing.js';
+import { ImportListings } from './importListing.js';
 import { DUMP_PREAMBLE, DUMP_TRAILER, checkSqlPage } from './importSql.js';
 import type { PingAnswer, PluginClient } from './pluginClient.js';
 import type { BackupService } from './backup.js';
@@ -30,11 +31,11 @@ import { listedGone } from '../jobs/handlers/importRefresh.js';
  * ordinary WPL7 backup is packed - `files.tar.gz`, `db.sql.gz`, `manifest.json`, `sha256sums` -
  * so retention, offsite copies, downloads and relocation treat it like any other.
  *
- * What was listed is written down on the panel (the import's ImportListings, a folder of its
- * own, keyed by site id) and advances only when a backup succeeds: a failed one leaves the
- * record as it was, and the next run copies everything changed since the last good one. What is
- * removed from the copy is decided from the copy itself, not from that record: a run that failed
- * after pulling files leaves the copy ahead of it.
+ * When the last good listing began is written down on the panel (the import's ImportListings, a
+ * folder of its own, keyed by site id), and advances only when a backup succeeds: a failed one
+ * leaves it as it was, and the next run copies everything changed since the last good one. What
+ * the copy holds is read from the copy itself, at the start of every run: a run that failed after
+ * copying or removing files leaves it unlike any listing.
  */
 
 /** Removes, in the copy's folder (`$1`), the regular files the rest of its arguments name, and prints how many. */
@@ -44,9 +45,6 @@ for file in "$@"; do
   if [ -f "$file" ] && [ ! -L "$file" ]; then rm -f -- "$file" && removed=$((removed + 1)); fi
 done
 echo "$removed"`;
-
-/** Prints every regular file in the copy's folder (`$1`), NUL after each, so any name survives. */
-const LIST_FILES_SCRIPT = `cd -- "$1" || exit 2; find . -type f -print0`;
 
 /** Removes the folders its arguments name, in the copy's folder (`$1`), where they are empty. */
 const REMOVE_EMPTY_DIRS = `cd -- "$1" || exit 2; shift
@@ -71,7 +69,7 @@ export interface ExternalBackupDeps {
 }
 
 export class ExternalBackupService {
-  /** The site's files as the last good backup listed them. */
+  /** When the last good backup's listing began: the next lists what changed from then on. */
   readonly listings: ImportListings;
 
   constructor(private readonly s: ExternalBackupDeps) {
@@ -252,8 +250,8 @@ export class ExternalBackupService {
   private async refreshMirror(ctx: JobContext<unknown>, client: PluginClient, ping: PingAnswer, h: ServerHandle, site: SiteRow, wordpress: string): Promise<void> {
     const before = this.listings.read(site.id);
     const since = before?.listedAt != null ? before.listedAt - 300 : undefined;
+    const inCopy = await h.files.filesBelow(wordpress);
     const listedNow = new Map<string, 'folder' | 'other'>();
-    const carried: [string, ListedFile][] = [];
     let unreadableListed = 0;
     // Nothing is left behind: wp-config.php is the site's, and a backup restored by hand needs it.
     const cursor = initialCursor([]);
@@ -271,23 +269,20 @@ export class ExternalBackupService {
           if (flags.includes('unreadable')) unreadableListed++;
           if (e.pb) continue;
           listedNow.set(e.p, e.t === 'd' && !flags.some((f) => NOT_LOOKED_INTO.includes(f)) ? 'folder' : 'other');
-          const was = e.t === 'f' && flags.some((f) => NOT_READ.includes(f)) ? before?.files.get(e.p) : undefined;
-          if (was) carried.push([e.p, was]);
         }
-        this.listings.append(site.id, entries, 'next');
       },
       // Unchanged by its times is not enough: the files of a folder renamed on the site keep
-      // theirs, and are new at their path.
+      // theirs, and are new at their path. Nor is the last good listing: a run that failed since
+      // may have removed the file from the copy, or copied in another version. The copy is asked.
       alreadyThere: (e) => {
-        const was = e.pb ? undefined : before?.files.get(e.p);
-        return was !== undefined && was.s === e.s && was.m === e.m;
+        const there = e.t === 'f' && !e.pb ? inCopy.get(e.p) : undefined;
+        return there !== undefined && there.sizeBytes === e.s && there.mtimeS === e.m;
       },
     });
     if ((listing.warnings?.find((w) => w.code === 'unreadable')?.count ?? 0) > unreadableListed) {
       throw new Error("The site's own folder could not be listed in full. Check its permissions on the host.");
     }
-    const unlisted = await this.removeUnlisted(ctx, h, wordpress, before?.files, listedNow);
-    this.listings.carry(site.id, [...carried, ...unlisted]);
+    await this.removeUnlisted(ctx, h, wordpress, inCopy, listedNow);
     const { links, unreadable, changed } = cursor.skipped;
     if (links > 0) ctx.warn(`${links} symbolic link${links === 1 ? ' was' : 's were'} not copied.`);
     if (unreadable > 0) ctx.warn(`${unreadable} file${unreadable === 1 ? '' : 's'} could not be read on the site and ${unreadable === 1 ? 'is' : 'are'} not in the backup.`);
@@ -299,27 +294,23 @@ export class ExternalBackupService {
 
   /**
    * The copy made to hold what the site listed: every file in it that this listing does not name
-   * is removed, then the folders that leaves empty. What the copy holds is read from the server:
-   * a backup that failed after pulling files leaves files there that no record names, and the
-   * site may have deleted them since. A file in a folder the site could not look into this time
-   * stays, and its record with it. Nothing in the copy is a link, so a plain `rm` is safe.
+   * is removed, then the folders that leaves empty. `inCopy` is what the copy held before this
+   * run's pull, which added only files the listing names. A file in a folder the site could not
+   * look into this time stays. Nothing in the copy is a link, so a plain `rm` is safe.
    */
   private async removeUnlisted(
     ctx: JobContext<unknown>,
     h: ServerHandle,
     wordpress: string,
-    before: Map<string, ListedFile> | undefined,
+    inCopy: Map<string, FileBelow>,
     now: Map<string, 'folder' | 'other'>,
-  ): Promise<[string, ListedFile][]> {
+  ): Promise<void> {
     const gone: string[] = [];
-    const unlisted: [string, ListedFile][] = [];
     let kept = 0;
-    for (const file of await this.filesInCopy(h, wordpress)) {
+    for (const file of inCopy.keys()) {
       if (now.has(file) || importPathProblem(Buffer.from(file, 'utf8'))) continue;
       if (!listedGone(file, now)) {
         kept++;
-        const listed = before?.get(file);
-        if (listed) unlisted.push([file, listed]);
         continue;
       }
       gone.push(file);
@@ -349,40 +340,6 @@ export class ExternalBackupService {
       await h.exec.run('sh', ['-c', REMOVE_EMPTY_DIRS, 'sh', wordpress, ...deepestFirst.slice(i, i + 600)], { timeoutMs: 5 * 60_000 });
     }
     if (removed > 0) ctx.info(`Removed ${removed} file${removed === 1 ? '' : 's'} the site deleted since the last backup.`);
-    return unlisted;
-  }
-
-  /**
-   * Every regular file in the copy, by its path in it. Streamed, as a big site's list outgrows what
-   * a command's output may hold. A name that is not UTF-8 is left out: no listing names it either,
-   * so it is kept rather than guessed at.
-   */
-  private async filesInCopy(h: ServerHandle, wordpress: string): Promise<string[]> {
-    const chunks: Buffer[] = [];
-    const out = new PassThrough();
-    out.on('data', (chunk: Buffer) => chunks.push(chunk));
-    const drained = new Promise<void>((resolve) => out.on('end', resolve));
-    const res = await h.exec.runToStream('sh', ['-c', LIST_FILES_SCRIPT, 'sh', wordpress], out, { timeoutMs: 10 * 60_000 });
-    // A local command's pipe ends the stream itself; make sure every byte is in either way.
-    if (!out.writableEnded) out.end();
-    await drained;
-    if (res.exitCode !== 0) throw new Error(`Listing the copy of the site failed: ${res.stderr.trim().slice(0, 300)}`);
-    const all = Buffer.concat(chunks);
-    const utf8 = new TextDecoder('utf-8', { fatal: true });
-    const files: string[] = [];
-    for (let at = 0; at < all.length; ) {
-      const end = all.indexOf(0, at);
-      const name = all.subarray(at, end === -1 ? all.length : end);
-      at = end === -1 ? all.length : end + 1;
-      let text: string;
-      try {
-        text = utf8.decode(name);
-      } catch {
-        continue;
-      }
-      if (text.startsWith('./')) files.push(text.slice(2));
-    }
-    return files;
   }
 
   /**

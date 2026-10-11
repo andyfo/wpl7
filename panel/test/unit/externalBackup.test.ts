@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { backups } from '../../src/db/schema.js';
 import { makeApp } from '../helpers.js';
-import { connectionRow, externalWorld, runJob, siteRow } from '../connectWorld.js';
+import { connectionRow, externalWorld, runJob, shopFiles, siteRow } from '../connectWorld.js';
 
 /** Backups of a site hosted elsewhere: a copy kept up to date, and an ordinary backup packed from it. */
 
@@ -128,6 +128,33 @@ describe('backups of a site hosted elsewhere', () => {
     expect(packed).not.toContain('wordpress/wp-content/uploads/added.txt');
     expect(packed).not.toContain('wordpress/index.php');
     expect(packed).toContain('wordpress/wp-content/uploads/2026/10/photo.jpg');
+  });
+
+  it('copies again what a failed run changed in the copy, once the site has it back as it was', async () => {
+    // A plugin's folder set aside for a new version, and put back after a backup failed: its
+    // files come back with the times the last good backup listed, but the copy no longer has them.
+    const plugin = 'wp-content/plugins/akismet';
+    const { w, fake } = await externalWorld({ real: true, fake: { files: { ...shopFiles(), [`${plugin}/readme.txt`]: 'Akismet 5' } } });
+    await backupOnce(w);
+    const mirror = w.core.externalBackups.mirrorOf({ slug: 'shop' }).wordpress;
+    for (const f of ['akismet.php', 'readme.txt']) fake.moveFile(`${plugin}/${f}`, `${plugin}.old/${f}`);
+    fake.writeFile(`${plugin}/akismet.php`, '<?php /* Plugin Name: Akismet Anti-spam, version 6 */');
+    fake.failNext('sql', 403);
+    expect((await backupOnce(w)).job.status).toBe('failed');
+    expect(fs.readFileSync(path.join(mirror, plugin, 'akismet.php'), 'utf8')).toContain('version 6');
+    expect(fs.existsSync(path.join(mirror, plugin, 'readme.txt'))).toBe(false);
+
+    fake.deleteFile(`${plugin}/akismet.php`);
+    for (const f of ['akismet.php', 'readme.txt']) fake.moveFile(`${plugin}.old/${f}`, `${plugin}/${f}`);
+    const { job, log, result } = await backupOnce(w);
+    expect(job.status, log.join('\n')).toBe('succeeded');
+    expect(fs.readFileSync(path.join(mirror, plugin, 'akismet.php'), 'utf8')).toBe(shopFiles()[`${plugin}/akismet.php`]);
+    expect(fs.readFileSync(path.join(mirror, plugin, 'readme.txt'), 'utf8')).toBe('Akismet 5');
+    expect(fs.existsSync(path.join(mirror, `${plugin}.old`))).toBe(false);
+    const row = w.db.select().from(backups).where(eq(backups.id, result!.backupId as number)).get()!;
+    const packed = tarList(path.join(row.path, 'files.tar.gz'));
+    expect(packed).toContain(`wordpress/${plugin}/readme.txt`);
+    expect(packed).not.toContain(`wordpress/${plugin}.old/akismet.php`);
   });
 
   it('hands out the files and the database of a backup on their own', async () => {

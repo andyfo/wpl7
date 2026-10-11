@@ -125,6 +125,7 @@ export class FakeSourceSite {
   /** A file deleted on the old site between pulls. */
   deleteFile(path: string): void {
     delete this.opts.files[path];
+    this.mtimes.delete(path);
   }
 
   /** A file moved on the old site between pulls, its times kept: what renaming its folder does. */
@@ -133,6 +134,7 @@ export class FakeSourceSite {
     delete this.opts.files[from];
     const mtime = this.mtimes.get(from);
     if (mtime !== undefined) this.mtimes.set(to, mtime);
+    else this.mtimes.delete(to);
     this.mtimes.delete(from);
   }
 

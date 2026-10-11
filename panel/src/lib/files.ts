@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import crypto from 'node:crypto';
-import { Readable } from 'node:stream';
+import { PassThrough, Readable } from 'node:stream';
 import type { ExecPort } from './exec.js';
 
 /**
@@ -41,6 +41,12 @@ export interface FileStat {
   id: string;
 }
 
+/** A regular file `filesBelow` found: its size, and its mtime in whole unix seconds. */
+export interface FileBelow {
+  sizeBytes: number;
+  mtimeS: number;
+}
+
 /**
  * The checks below - exists, isDirectory, stat, readOptional - answer "not there" only when
  * that is what the path is. A check that could not be made throws: on a server, a command that
@@ -74,6 +80,12 @@ export interface FilesPort {
   rm(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   readdir(path: string): Promise<string[]>;
+  /**
+   * Every regular file below a folder, by its path in it (`wp-content/index.php`). Links are not
+   * followed, and a name that is not UTF-8 is left out, with everything below it. Empty for a
+   * folder that is not there; one that cannot be read in full throws.
+   */
+  filesBelow(dir: string): Promise<Map<string, FileBelow>>;
   stat(path: string): Promise<FileStat | null>;
   statvfs(path: string): Promise<{ totalBytes: number; freeBytes: number } | null>;
   sha256(path: string): Promise<string>;
@@ -189,6 +201,33 @@ export class LocalFiles implements FilesPort {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw err;
     }
+  }
+
+  async filesBelow(dir: string): Promise<Map<string, FileBelow>> {
+    const found = new Map<string, FileBelow>();
+    if (!(await this.isDirectory(dir))) return found;
+    const utf8 = new TextDecoder('utf-8', { fatal: true });
+    // By bytes, as `find` sees names: a string path would turn a name that is not UTF-8 into another.
+    const walk = async (at: Buffer, prefix: string): Promise<void> => {
+      const files: [Buffer, string][] = [];
+      const folders: [Buffer, string][] = [];
+      for (const entry of await fsp.readdir(at, { withFileTypes: true, encoding: 'buffer' })) {
+        let name: string;
+        try {
+          name = utf8.decode(entry.name);
+        } catch {
+          continue;
+        }
+        const full = Buffer.concat([at, Buffer.from('/'), entry.name]);
+        if (entry.isDirectory()) folders.push([full, `${prefix}${name}/`]);
+        else if (entry.isFile()) files.push([full, `${prefix}${name}`]);
+      }
+      const stats = await Promise.all(files.map(([full]) => fsp.lstat(full, { bigint: true })));
+      stats.forEach((st, i) => found.set(files[i]![1], { sizeBytes: Number(st.size), mtimeS: Number(st.mtimeMs / 1000n) }));
+      for (const [full, inside] of folders) await walk(full, inside);
+    };
+    await walk(Buffer.from(dir), '');
+    return found;
   }
 
   async stat(path: string): Promise<FileStat | null> {
@@ -338,6 +377,47 @@ export class ExecFiles implements FilesPort {
     const res = await this.exec.run('ls', ['-1A', '--', path]);
     if (res.exitCode !== 0) throw new Error(`ls ${path} failed: ${res.stderr.trim()}`);
     return res.stdout.split('\n').filter(Boolean);
+  }
+
+  async filesBelow(dir: string): Promise<Map<string, FileBelow>> {
+    // Streamed, as a big site's list outgrows what a command's output may hold. NUL after each
+    // file, so any name survives; the mtime as `find` gives it, cut to the second.
+    const chunks: Buffer[] = [];
+    const out = new PassThrough();
+    out.on('data', (chunk: Buffer) => chunks.push(chunk));
+    const drained = new Promise<void>((resolve) => out.on('end', resolve));
+    const res = await this.exec.runToStream(
+      'sh',
+      ['-c', `[ -d "$1" ] || exit ${NOT_THERE}; cd -- "$1" && exec find . -type f -printf '%s %T@ %P\\0'`, 'sh', dir],
+      out,
+      { timeoutMs: 10 * 60_000 },
+    );
+    // A local command's pipe ends the stream itself; make sure every byte is in either way.
+    if (!out.writableEnded) out.end();
+    await drained;
+    const found = new Map<string, FileBelow>();
+    if (res.exitCode === NOT_THERE) return found;
+    if (res.exitCode !== 0) throw new Error(`find ${dir} failed (exit ${res.exitCode}): ${res.stderr.trim().slice(0, 300)}`);
+    const all = Buffer.concat(chunks);
+    const utf8 = new TextDecoder('utf-8', { fatal: true });
+    for (let at = 0; at < all.length; ) {
+      const end = all.indexOf(0, at);
+      const line = all.subarray(at, end === -1 ? all.length : end);
+      at = end === -1 ? all.length : end + 1;
+      const afterSize = line.indexOf(0x20);
+      const afterTime = line.indexOf(0x20, afterSize + 1);
+      if (afterSize < 1 || afterTime === -1) throw new Error(`find ${dir} answered "${line.toString('latin1').slice(0, 80)}"`);
+      let name: string;
+      try {
+        name = utf8.decode(line.subarray(afterTime + 1));
+      } catch {
+        continue;
+      }
+      const sizeBytes = Number(line.subarray(0, afterSize).toString('latin1'));
+      const mtimeS = Number(line.subarray(afterSize + 1, afterTime).toString('latin1').split('.')[0]);
+      found.set(name, { sizeBytes, mtimeS });
+    }
+    return found;
   }
 
   async stat(path: string): Promise<FileStat | null> {
