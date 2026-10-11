@@ -1,20 +1,31 @@
 import { eq } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { alertStates, siteConnections, siteStats, sites, vulnNotices } from '../../src/db/schema.js';
-import { AlertService, DOWN_AFTER } from '../../src/services/alerts.js';
+import { AlertService, DOWN_AFTER, RETRY_MS } from '../../src/services/alerts.js';
 import type { VulnFinding } from '../../src/services/wpInventory.js';
 import { makeWorld, type TestWorld } from '../helpers.js';
 import { connectionRow, externalWorld, siteRow } from '../connectWorld.js';
 
 /** Emails about sites (services/alerts.ts): what goes out, once, and what a restart keeps. */
 
-function capture(w: TestWorld) {
-  const sent: { subject: string; body: string }[] = [];
+/**
+ * The emails the panel hands the relay, with an alert address set. `takes` says whether the relay
+ * takes the nth one (from 1); a refused one is still listed, with `taken` false.
+ */
+function capture(w: TestWorld, takes: (n: number) => boolean = () => true) {
+  const sent: { subject: string; body: string; taken: boolean }[] = [];
+  w.core.settings.set('alertEmail', 'ops@example.com');
   w.core.mail.notifyOperator = async (subject, body) => {
-    sent.push({ subject, body });
-    return true;
+    const taken = takes(sent.length + 1);
+    sent.push({ subject, body, taken });
+    return taken;
   };
   return sent;
+}
+
+/** The panel's clock, moved on: the retry of an alert the relay refused waits RETRY_MS. */
+function later(ms: number) {
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + ms });
 }
 
 function hostedSite(w: TestWorld, slug = 'blog', status = 'running') {
@@ -39,6 +50,10 @@ function hostedSite(w: TestWorld, slug = 'blog', status = 'running') {
 }
 
 describe('alerts', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('says a site is down after three failed checks, once, and that it is back with how long it was down', async () => {
     const w = await makeWorld();
     const sent = capture(w);
@@ -158,5 +173,80 @@ describe('alerts', () => {
     w.db.update(sites).set({ status: 'disconnected' }).where(eq(sites.id, site.id)).run();
     await w.core.monitor.tickUptime();
     expect(w.db.select().from(siteStats).where(eq(siteStats.siteId, site.id)).all()).toHaveLength(2);
+  });
+
+  it('tries a down alert the relay did not take again, and only every few minutes', async () => {
+    const w = await makeWorld();
+    const sent = capture(w, (n) => n > 1);
+    const site = hostedSite(w);
+    for (let i = 0; i < DOWN_AFTER + 1; i++) await w.core.alerts.probed(site, { ok: false, status: 502 });
+    expect(sent.map((m) => [m.subject, m.taken])).toEqual([['My Blog is down', false]]);
+    later(RETRY_MS);
+    await w.core.alerts.probed(site, { ok: false, status: 502 });
+    await w.core.alerts.probed(site, { ok: false, status: 502 });
+    expect(sent.map((m) => [m.subject, m.taken])).toEqual([
+      ['My Blog is down', false],
+      ['My Blog is down', true],
+    ]);
+    await w.core.alerts.probed(site, { ok: true, status: 200 });
+    expect(sent.at(-1)).toMatchObject({ subject: 'My Blog is back up', taken: true });
+  });
+
+  it('still says an outage the relay never took, when it is over', async () => {
+    const w = await makeWorld();
+    let relayUp = false;
+    const sent = capture(w, () => relayUp);
+    const site = hostedSite(w);
+    for (let i = 0; i < DOWN_AFTER; i++) await w.core.alerts.probed(site, { ok: false, status: null, error: 'timeout' });
+    relayUp = true;
+    await w.core.alerts.probed(site, { ok: true, status: 200 });
+    expect(sent.map((m) => [m.subject, m.taken])).toEqual([
+      ['My Blog is down', false],
+      ['My Blog is back up', true],
+    ]);
+    expect(sent[1]!.body).toMatch(/It was down for \d+ min/);
+  });
+
+  it('logs an alert without an address once, and neither retries it nor sends its recovery', async () => {
+    const w = await makeWorld();
+    const sent = capture(w);
+    w.core.settings.set('alertEmail', '');
+    const site = hostedSite(w);
+    for (let i = 0; i < DOWN_AFTER; i++) await w.core.alerts.probed(site, { ok: false, status: 500 });
+    later(RETRY_MS);
+    await w.core.alerts.probed(site, { ok: false, status: 500 });
+    await w.core.alerts.probed(site, { ok: true, status: 200 });
+    expect(sent).toEqual([]);
+  });
+
+  it('tries the connector and certificate alerts again when the relay did not take them', async () => {
+    const { w, fake, site } = await externalWorld();
+    const sent = capture(w, (n) => n > 1);
+    fake.connection = null;
+    for (let i = 0; i < 3; i++) await w.core.connections.checkSite(siteRow(w));
+    expect(sent.map((m) => m.taken)).toEqual([false]);
+    // The next hourly check.
+    later(3600_000);
+    await w.core.connections.checkSite(siteRow(w));
+    expect(sent.map((m) => [m.subject, m.taken])).toEqual([
+      ['WPL7 Connect on Example Shop does not answer', false],
+      ['WPL7 Connect on Example Shop does not answer', true],
+    ]);
+
+    sent.length = 0;
+    let relayUp = false;
+    w.core.mail.notifyOperator = async (subject, body) => {
+      sent.push({ subject, body, taken: relayUp });
+      return relayUp;
+    };
+    await w.core.alerts.certificate(siteRow(w), Date.now() + 3 * 24 * 3600_000);
+    await w.core.alerts.certificate(siteRow(w), Date.now() + 3 * 24 * 3600_000);
+    expect(sent).toHaveLength(1);
+    relayUp = true;
+    later(3600_000 + RETRY_MS);
+    await w.core.alerts.certificate(siteRow(w), Date.now() + 3 * 24 * 3600_000);
+    await w.core.alerts.certificate(siteRow(w), Date.now() + 3 * 24 * 3600_000);
+    expect(sent.map((m) => m.taken)).toEqual([false, true]);
+    expect(site.id).toBe(siteRow(w).id);
   });
 });

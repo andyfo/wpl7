@@ -160,7 +160,7 @@ export class ConnectClient extends PluginClient {
    * `running`, and is polled with `op` until it is done or `timeoutMs` passes.
    */
   async update(
-    params: { op: string; kind: 'plugin' | 'theme' | 'core' | 'db'; slug?: string; version?: string },
+    params: { op: string; kind: 'plugin' | 'theme' | 'core' | 'db'; slug?: string; version?: string; user?: string },
     opts: { pollMs?: number; timeoutMs?: number } = {},
   ): Promise<OpAnswer> {
     let answer: OpAnswer;
@@ -203,6 +203,8 @@ export class ConnectClient extends PluginClient {
     action: 'activate' | 'deactivate' | 'delete' | 'install';
     source?: { wporg: string } | { url: string };
     activate?: boolean;
+    /** The administrator it runs as (section 6): hooks of the change see who made it. */
+    user?: string;
   }): Promise<{ ok: boolean; status?: string; error?: string }> {
     const answer = await this.call('component', params, { attempts: 2, timeoutMs: 10 * 60_000, pass: [404] });
     if (answer.status === 404) return { ok: false, error: `${params.kind === 'plugin' ? 'Plugin' : 'Theme'} "${params.slug}" is not installed on the site.` };

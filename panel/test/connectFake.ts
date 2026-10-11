@@ -65,6 +65,8 @@ export class FakeConnectedSite extends FakeSourceSite {
   logins: { user: string; url: string }[] = [];
   /** Updates the site ran, as `kind:slug`, and rollbacks and clean-ups the panel asked for. */
   updates: string[] = [];
+  /** Who each update and plugin or theme change ran as (`user`), as `action:kind:slug=user`. */
+  actedAs: string[] = [];
   rollbacks: { op: string; items: { kind: string; slug: string }[]; skipPlugins: string[]; skipTheme: boolean }[] = [];
   cleanups: string[] = [];
   /** The update offer the last ping carried. */
@@ -304,6 +306,7 @@ export class FakeConnectedSite extends FakeSourceSite {
   }
 
   private update(p: Record<string, unknown>): PullResponse {
+    this.actedAs.push(`update:${String(p.kind)}:${String(p.slug ?? p.version ?? '')}=${typeof p.user === 'string' ? p.user : '-'}`);
     const op = String(p.op ?? '');
     if (!/^[a-z0-9]{16,64}$/.test(op)) return this.error(422, 'unsupported', { detail: 'op' });
     if ((this.extra.fs_method ?? 'direct') !== 'direct') return this.error(422, 'unsupported', { detail: 'filesystem' });
@@ -349,6 +352,7 @@ export class FakeConnectedSite extends FakeSourceSite {
     const kind = String(p.kind);
     const slug = String(p.slug);
     const action = String(p.action);
+    this.actedAs.push(`${action}:${kind}:${slug}=${typeof p.user === 'string' ? p.user : '-'}`);
     if (kind === 'plugin' && slug === 'wpl7-connect' && (action === 'deactivate' || action === 'delete')) {
       return this.json(200, { ok: false, error: 'WPL7 Connect connects this site to the panel.' });
     }

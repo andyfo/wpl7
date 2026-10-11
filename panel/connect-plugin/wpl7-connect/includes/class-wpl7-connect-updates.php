@@ -26,7 +26,7 @@ final class WPL7_Connect_Updates
     // -- update ------------------------------------------------------------------------------
 
     /**
-     * The `update` action: { op, kind: plugin | theme | core | db, slug?, version? }, one item.
+     * The `update` action: { op, kind: plugin | theme | core | db, slug?, version?, user? }, one item.
      * A plugin, theme or db update answers when it is done. A core update answers `running` and
      * goes on after the answer has gone where PHP-FPM can finish the response early; elsewhere
      * it runs within the request. Returns a response, or [response, what runs after it].
@@ -40,6 +40,7 @@ final class WPL7_Connect_Updates
         }
         $slug = $kind === 'plugin' || $kind === 'theme' ? self::slug_param($params) : null;
         $version = $kind === 'core' ? self::version_param($params) : null;
+        self::act_as($params);
         self::require_admin();
         WPL7_Connect_Server::long_request(0);
         if ($kind === 'db') {
@@ -278,8 +279,8 @@ final class WPL7_Connect_Updates
 
     /**
      * The `component` action: { kind: plugin | theme, slug, action: activate | deactivate |
-     * delete | install, source?, activate? }. Answers { ok, status } or { ok: false, error } when
-     * WordPress refused.
+     * delete | install, source?, activate?, user? }. Answers { ok, status } or { ok: false, error }
+     * when WordPress refused.
      */
     public static function component($params)
     {
@@ -292,6 +293,7 @@ final class WPL7_Connect_Updates
             throw new WPL7_Connect_Error(422, 'unsupported', ['detail' => 'action']);
         }
         $slug = self::slug_param($params);
+        self::act_as($params);
         self::require_admin();
         if ($action === 'install') {
             return self::install($kind, $params);
@@ -897,6 +899,24 @@ final class WPL7_Connect_Updates
         if (!function_exists('wp_update_plugins')) {
             require_once ABSPATH . WPINC . '/update.php';
         }
+    }
+
+    /**
+     * The administrator the panel acts as (`user`, an id, email or login, as `rest` and `login` take
+     * one), signed in for the rest of this request, as WP-CLI's --user does: what the change runs -
+     * an update's hooks, an activation or uninstall routine - sees who made it. It must still be
+     * able to manage the site, else 422 with `detail: "user"`. Without `user`, no one is.
+     */
+    private static function act_as($params)
+    {
+        if (!array_key_exists('user', $params) || $params['user'] === null) {
+            return;
+        }
+        $user = is_string($params['user']) || is_int($params['user']) ? WPL7_Connect_Rest::find_user((string) $params['user']) : false;
+        if (!$user || !user_can($user, 'manage_options')) {
+            throw new WPL7_Connect_Error(422, 'unsupported', ['detail' => 'user']);
+        }
+        wp_set_current_user($user->ID, $user->user_login);
     }
 
     private static function require_file_mods()

@@ -197,6 +197,10 @@ add_filter('site_transient_update_plugins', function ($value) {
     }
     return $value;
 });
+// Who an update ran as: the administrator the panel acts as, not no one.
+add_action('upgrader_process_complete', function () {
+    update_option('e2e_upgraded_by', get_current_user_id());
+});
 add_filter('wpl7_connect_commands', function (array $commands) {
     $commands['hello'] = array(
         'summary' => 'Says hello',
@@ -395,6 +399,7 @@ describe.skipIf(!ENABLED).each(cases)('a site on $wp with $db, through WPL7 Conn
     const first = await runJob(w, good.json().job.id, 5 * 60_000);
     expect(first.job.status, first.log.join('\n')).toBe('succeeded');
     expect(await pluginVersion('e2e-sample')).toBe('1.1');
+    expect((await wp(['option', 'get', 'e2e_upgraded_by'])).stdout.trim()).toBe('1');
     // The copy kept for a rollback is gone once the site answered; the folder keeps its guard.
     expect((await sh('ls wp-content/wpl7-rollback 2>/dev/null | grep -v "^index.php$" | wc -l')).stdout.trim()).toBe('0');
 

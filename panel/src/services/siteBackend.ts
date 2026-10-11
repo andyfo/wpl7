@@ -368,8 +368,11 @@ export class ConnectorBackend implements SiteBackend {
     return this.conn.actAsLogin ?? undefined;
   }
 
-  /** One `update` per item, each with its own op: the copy a rollback puts back is kept per op. */
-  async updateMany(ctx: JobContext<unknown>, kind: 'plugin' | 'theme', slugs: string[]): Promise<WpBulkOpResult[]> {
+  /**
+   * One `update` per item, each with its own op: the copy a rollback puts back is kept per op. Run
+   * as `actor`, the administrator the site acts as, so the update's hooks see who made it.
+   */
+  async updateMany(ctx: JobContext<unknown>, kind: 'plugin' | 'theme', slugs: string[], actor: string | undefined): Promise<WpBulkOpResult[]> {
     ctx.info(`Updating ${slugs.length} ${kind}${slugs.length === 1 ? '' : 's'}: ${slugs.join(', ')}`);
     const client = this.client(ctx);
     const results: WpBulkOpResult[] = [];
@@ -387,17 +390,17 @@ export class ConnectorBackend implements SiteBackend {
       }
       const op = crypto.randomBytes(8).toString('hex');
       try {
-        const answer = await client.update({ op, kind, slug });
+        const answer = await client.update({ op, kind, slug, ...(actor ? { user: actor } : {}) });
         const r = answer.result ?? { ok: false, from: null, to: null, rollback: false, error: 'The site gave no result.' };
         if (r.ok && r.rollback) this.updated.push({ kind, slug, op });
         if (r.ok) ctx.info(`${slug}: ${r.from ?? '?'} → ${r.to ?? '?'}`);
+        else ctx.error(`${slug}: ${r.error ?? 'the update failed'}`);
         if (r.ok && kind === 'plugin' && slug === CONNECT_PLUGIN) {
           // The new version answers from the next request on: the site page shows it now, not after the hourly check.
           const ping = await client.ping().catch(() => null);
           const row = this.s.connections.findForSite(this.site.id);
           if (ping && row) this.s.connections.mark(row.id, { pluginVersion: ping.plugin, protocol: ping.protocol, offeredVersion: null });
         }
-        else ctx.error(`${slug}: ${r.error ?? 'the update failed'}`);
         results.push({ kind, slug, action: 'update', ok: r.ok, from: r.from, to: r.to, error: r.ok ? null : (r.error ?? 'The update failed.') });
       } catch (err) {
         const detail = err instanceof PluginSourceError ? (err.details?.detail as string | undefined) : undefined;
@@ -416,15 +419,15 @@ export class ConnectorBackend implements SiteBackend {
     return results;
   }
 
-  async componentAction(kind: 'plugin' | 'theme', slug: string, action: 'activate' | 'deactivate' | 'delete' | 'update'): Promise<void> {
+  async componentAction(kind: 'plugin' | 'theme', slug: string, action: 'activate' | 'deactivate' | 'delete' | 'update', actor: string | undefined): Promise<void> {
     if (action === 'update') throw new Error('An external site updates through updateMany, which keeps a copy to roll back to');
     if (kind === 'theme' && action === 'deactivate') throw new Error('themes cannot be deactivated; activate another one instead');
-    const answer = await this.client().component({ kind, slug, action });
+    const answer = await this.client().component({ kind, slug, action, ...(actor ? { user: actor } : {}) });
     this.remember();
     if (!answer.ok) throw new Error(answer.error ?? `${action} failed`);
   }
 
-  async install(ctx: JobContext<unknown>, source: InstallSource, activate: boolean): Promise<string> {
+  async install(ctx: JobContext<unknown>, source: InstallSource, activate: boolean, actor: string | undefined): Promise<string> {
     let slug: string;
     let from: { wporg: string } | { url: string };
     if (source.kind === 'wporg') {
@@ -445,7 +448,7 @@ export class ConnectorBackend implements SiteBackend {
         from = { wporg: row.slug };
       }
     }
-    const answer = await this.client(ctx).component({ kind: 'plugin', slug, action: 'install', source: from, activate });
+    const answer = await this.client(ctx).component({ kind: 'plugin', slug, action: 'install', source: from, activate, ...(actor ? { user: actor } : {}) });
     this.remember();
     if (!answer.ok) throw new Error(answer.error ?? 'The install failed');
     return slug;
@@ -459,10 +462,12 @@ export class ConnectorBackend implements SiteBackend {
     const from = status?.coreVersion ?? null;
     ctx.info(`Updating WordPress core (current: ${from ?? 'unknown'}) to ${target}…`);
     const client = this.client(ctx);
-    const answer = await client.update({ op: crypto.randomBytes(8).toString('hex'), kind: 'core', version: target }, { pollMs: this.s.config.nodeEnv === 'test' ? 0 : 5000 });
+    const actor = await this.actor();
+    const as = actor ? { user: actor } : {};
+    const answer = await client.update({ op: crypto.randomBytes(8).toString('hex'), kind: 'core', version: target, ...as }, { pollMs: this.s.config.nodeEnv === 'test' ? 0 : 5000 });
     const r = answer.result;
     if (!r?.ok) throw new Error(r?.error ?? 'The core update failed');
-    const db = await client.update({ op: crypto.randomBytes(8).toString('hex'), kind: 'db' });
+    const db = await client.update({ op: crypto.randomBytes(8).toString('hex'), kind: 'db', ...as });
     if (db.result && !db.result.ok) ctx.warn(`The database upgrade after the core update failed: ${db.result.error ?? 'no reason given'}`);
     this.remember();
     ctx.info(`Core version now: ${r.to ?? 'unknown'}`);

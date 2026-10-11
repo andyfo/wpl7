@@ -278,8 +278,14 @@ The vectors' `inventory` cases give rows for fixed inputs.
 
 ### update, op, rollback, cleanup
 
-`update`: `{ "op": "<id>", "kind": "plugin" | "theme" | "core" | "db", "slug"?: "<name>", "version"?: "<version>" }`.
+`update`: `{ "op": "<id>", "kind": "plugin" | "theme" | "core" | "db", "slug"?: "<name>", "version"?: "<version>", "user"?: "<login, email or id>" }`.
 `op` is the panel's id for this one change, `^[a-z0-9]{16,64}$`. One item per call.
+
+`user`, here and in `component`, is the administrator the change runs as. The plugin signs it in
+for the rest of the request (`wp_set_current_user`), as WP-CLI's `--user` does, so what the change
+runs - an update's hooks, an activation or uninstall routine - sees who made it. It must be able
+to `manage_options`, else **422** `unsupported` with `detail: "user"`. Without it no one is signed
+in. The panel sends the administrator the site acts as.
 
 ```json
 { "op": "4f1c0e9a7b2d6e8f", "state": "done", "result": { "ok": true, "from": "5.7.2", "to": "5.8", "rollback": true } }
@@ -291,8 +297,8 @@ back to was made.
 
 An `update` with an op id that exists runs again; it is not taken for a repeat. The copies an
 update keeps are recorded in its op, and merged when several updates share one op, so one op per
-item and one op per run both work. The checks come in this order: the parameters (**422**), the
-component (**404**), `DISALLOW_FILE_MODS` (**422** `file_mods`), then the filesystem (**422**
+item and one op per run both work. The checks come in this order: the parameters, `user` among
+them (**422**), the component (**404**), `DISALLOW_FILE_MODS` (**422** `file_mods`), then the filesystem (**422**
 `filesystem`).
 
 - **plugin** (`slug` is the inventory's `name`): the plugin is found by its folder, or by its file
@@ -351,7 +357,7 @@ panel's check as if it were fine.
 
 ### component
 
-`{ "kind": "plugin" | "theme", "slug": "<name>", "action": "activate" | "deactivate" | "delete" | "install", "source"?: ..., "activate"?: false }`
+`{ "kind": "plugin" | "theme", "slug": "<name>", "action": "activate" | "deactivate" | "delete" | "install", "source"?: ..., "activate"?: false, "user"?: "<login, email or id>" }`
 
 | kind, action | Does |
 |---|---|

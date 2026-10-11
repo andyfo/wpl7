@@ -105,6 +105,31 @@ describe('backups of a site hosted elsewhere', () => {
     expect(w.core.externalBackups.listings.read(siteRow(w).id)?.listedAt).toBe(listedBefore?.listedAt);
   });
 
+  it('drops what a failed run pulled, once the site no longer has it', async () => {
+    const { w, fake } = await externalWorld({ real: true });
+    await backupOnce(w);
+    const mirror = w.core.externalBackups.mirrorOf({ slug: 'shop' }).wordpress;
+    // A run that pulls a new file and a changed one, then fails on the database.
+    fake.writeFile('wp-content/uploads/added.txt', 'added');
+    fake.writeFile('index.php', '<?php // changed in the run that failed');
+    fake.failNext('sql', 403);
+    expect((await backupOnce(w)).job.status).toBe('failed');
+    expect(fs.readFileSync(path.join(mirror, 'wp-content/uploads/added.txt'), 'utf8')).toBe('added');
+    // The site deletes both before the next backup, which no listing of a good backup ever named.
+    fake.deleteFile('wp-content/uploads/added.txt');
+    fake.deleteFile('index.php');
+    const { job, log, result } = await backupOnce(w);
+    expect(job.status, log.join('\n')).toBe('succeeded');
+    expect(fs.existsSync(path.join(mirror, 'wp-content/uploads/added.txt'))).toBe(false);
+    expect(fs.existsSync(path.join(mirror, 'index.php'))).toBe(false);
+    expect(log).toContain('info: Removed 2 files the site deleted since the last backup.');
+    const row = w.db.select().from(backups).where(eq(backups.id, result!.backupId as number)).get()!;
+    const packed = tarList(path.join(row.path, 'files.tar.gz'));
+    expect(packed).not.toContain('wordpress/wp-content/uploads/added.txt');
+    expect(packed).not.toContain('wordpress/index.php');
+    expect(packed).toContain('wordpress/wp-content/uploads/2026/10/photo.jpg');
+  });
+
   it('hands out the files and the database of a backup on their own', async () => {
     const { w } = await externalWorld({ real: true });
     const { result } = await backupOnce(w);

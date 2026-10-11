@@ -48,6 +48,10 @@ describe('a site hosted elsewhere: inventory and updates', () => {
     ]);
     expect(result!.healthy).toBe(true);
     expect(fake.updates).toEqual(['plugin:akismet', 'theme:twentytwentyfour']);
+    // As the administrator the site acts as, so the updates' hooks see who made them.
+    expect(fake.actedAs).toEqual(['update:plugin:akismet=admin', 'update:theme:twentytwentyfour=admin']);
+    // A run that went well logs no error.
+    expect(log.filter((line) => line.startsWith('error:'))).toEqual([]);
     expect(fake.cleanups).toHaveLength(2);
     expect(fake.rollbacks).toEqual([]);
     // Rescanned at the end: the snapshot says what the site has now.
@@ -150,5 +154,20 @@ describe('a site hosted elsewhere: inventory and updates', () => {
     expect(installed.job.status).toBe('succeeded');
     expect(installed.result).toEqual({ installed: 'classic-editor' });
     expect(fake.plugins.get('classic-editor')!.status).toBe('inactive');
+  });
+
+  it('makes plugin and theme changes, installs and core updates as the administrator the site acts as', async () => {
+    const { w, fake } = await externalWorld();
+    await scan(w);
+    const site = siteRow(w);
+    const ref = { id: site.id, slug: site.slug, serverId: site.serverId };
+    const run = async (type: Parameters<typeof w.worker.enqueue>[0], payload: Record<string, unknown>) => {
+      const { job, log } = await runJob(w, w.worker.enqueue(type, { siteId: site.id, ...payload } as never, ref).id);
+      expect(job.status, log.join('\n')).toBe('succeeded');
+    };
+    await run('wp.pluginTask', { action: 'activate', name: 'hello' });
+    await run('wp.pluginTask', { action: 'install', source: { kind: 'wporg', slug: 'classic-editor' }, activate: true });
+    await run('wp.themeTask', { action: 'activate', name: 'twentytwentyfour' });
+    expect(fake.actedAs).toEqual(['activate:plugin:hello=admin', 'install:plugin:classic-editor=admin', 'activate:theme:twentytwentyfour=admin']);
   });
 });

@@ -15,7 +15,9 @@ import type { VulnFinding, WpInventoryService } from './wpInventory.js';
  * has a switch in Settings → Monitoring. Without an address they are only logged.
  *
  * What was said is kept in the database (`alert_states`, `vuln_notices`), so a restart neither
- * repeats an alert nor misses a recovery.
+ * repeats an alert nor misses a recovery. An alert the relay did not take is tried again, at most
+ * every RETRY_MS, for as long as it is due; and one never delivered still gets its recovery email,
+ * which says how long the trouble lasted.
  */
 
 /** Failed probes in a row before a site counts as down: three minutes at the default interval. */
@@ -29,6 +31,8 @@ const CERT_RENEWED_MS = 14 * 24 * 3600_000;
 const BACKUP_QUIET_MS = 24 * 3600_000;
 /** Raw errors in an email are cut here. */
 const MAX_ERROR = 500;
+/** An alert the relay did not take is tried again this long after. */
+export const RETRY_MS = 10 * 60_000;
 
 export interface AlertDeps {
   db: Db;
@@ -39,13 +43,35 @@ export interface AlertDeps {
   log: Logger;
 }
 
-interface DownDetail {
-  fails: number;
-  /** The alert was due: sent, or logged for want of an address. */
+/** What an alert state keeps besides its kind's own facts. */
+interface Delivery {
+  /** The alert was said: sent, logged for want of an address, or not to be sent (its switch is off). */
   raised?: boolean;
+  /** When the relay last did not take it: tried again RETRY_MS later. */
+  triedAt?: number;
+}
+
+interface DownDetail extends Delivery {
+  fails: number;
   status?: number | null;
   error?: string | null;
 }
+
+/**
+ * `sent`: the relay took it. `logged`: no alert address is set, so the log is where it went, and
+ * there is nothing to try again. `failed`: the relay did not take it.
+ */
+type Outcome = 'sent' | 'logged' | 'failed';
+
+const parse = <T extends object>(raw: string | null | undefined): Partial<T> => {
+  if (!raw) return {};
+  try {
+    const value = JSON.parse(raw) as unknown;
+    return value && typeof value === 'object' ? (value as Partial<T>) : {};
+  } catch {
+    return {};
+  }
+};
 
 const clip = (text: string) => (text.length > MAX_ERROR ? `${text.slice(0, MAX_ERROR)}…` : text);
 
@@ -94,27 +120,56 @@ export class AlertService {
     return (JSON.parse(site.domains) as string[])[0] ?? site.slug;
   }
 
-  private async send(subject: string, lines: string[]): Promise<boolean> {
+  private async send(subject: string, lines: string[]): Promise<Outcome> {
+    if (!(this.s.settings.get('alertEmail') ?? '').trim()) {
+      this.s.log.warn(`Alert not emailed (no alert address configured in Settings): ${subject}`);
+      return 'logged';
+    }
     try {
-      return await this.s.mail.notifyOperator(subject, lines.join('\n'));
+      return (await this.s.mail.notifyOperator(subject, lines.join('\n'))) ? 'sent' : 'failed';
     } catch (err) {
       this.s.log.warn(`Alert not sent (${subject}): ${err instanceof Error ? err.message : String(err)}`);
-      return false;
+      return 'failed';
     }
   }
 
   /**
+   * An alert that is due and not said yet, said now if its switch is on and the last try is
+   * RETRY_MS old: `next` and the `notifiedAt` to keep come back changed to match.
+   */
+  private async deliver<D extends Delivery>(
+    next: D,
+    notifiedAt: number | null,
+    on: boolean,
+    message: () => [string, string[]],
+  ): Promise<{ next: D; notifiedAt: number | null }> {
+    if (next.raised) return { next, notifiedAt };
+    const now = Date.now();
+    if (!on) return { next: { ...next, raised: true, triedAt: undefined }, notifiedAt };
+    if (next.triedAt !== undefined && now - next.triedAt < RETRY_MS) return { next, notifiedAt };
+    const [subject, lines] = message();
+    const outcome = await this.send(subject, lines);
+    if (outcome === 'failed') return { next: { ...next, triedAt: now }, notifiedAt };
+    return { next: { ...next, raised: true, triedAt: undefined }, notifiedAt: outcome === 'sent' ? now : notifiedAt };
+  }
+
+  /** Whether trouble that is over gets its recovery email: it was emailed, or it was due and never got through. */
+  private recoveryDue(row: AlertStateRow, detail: Delivery): boolean {
+    return row.notifiedAt !== null || !detail.raised;
+  }
+
+  /**
    * One uptime probe of a site, hosted or not, that actually ran. Down after DOWN_AFTER failures
-   * in a row; back up at the first good answer after an alert went out.
+   * in a row; back up at the first good answer once that was due.
    */
   async probed(site: SiteRow, reading: { ok: boolean; status: number | null; error?: string | null }): Promise<void> {
     const key = `down:${site.id}`;
     const row = this.state(key);
-    const detail: DownDetail = row?.detail ? (JSON.parse(row.detail) as DownDetail) : { fails: 0 };
+    const detail = { fails: 0, ...parse<DownDetail>(row?.detail) } as DownDetail;
     if (reading.ok) {
       if (!row) return;
       this.drop(key);
-      if (row.notifiedAt && this.enabled('alertsSiteDown')) {
+      if (detail.fails >= DOWN_AFTER && this.recoveryDue(row, detail) && this.enabled('alertsSiteDown')) {
         await this.send(`${site.title} is back up`, [
           `${this.addressOf(site)} answers again. It was down for ${duration(Date.now() - row.since)}, from ${utc(row.since)}.`,
           '',
@@ -124,20 +179,21 @@ export class AlertService {
       return;
     }
     const now = Date.now();
-    const next: DownDetail = { ...detail, fails: detail.fails + 1, status: reading.status, error: reading.error ?? null };
+    let next: DownDetail = { ...detail, fails: detail.fails + 1, status: reading.status, error: reading.error ?? null };
     let notifiedAt = row?.notifiedAt ?? null;
-    if (next.fails >= DOWN_AFTER && !detail.raised) {
-      next.raised = true;
-      if (this.enabled('alertsSiteDown')) {
+    if (next.fails >= DOWN_AFTER) {
+      ({ next, notifiedAt } = await this.deliver(next, notifiedAt, this.enabled('alertsSiteDown'), () => {
         const what = reading.status !== null ? `HTTP ${reading.status}` : `no answer${reading.error ? `: ${clip(reading.error)}` : ''}`;
-        const sent = await this.send(`${site.title} is down`, [
-          `${this.addressOf(site)} did not answer the panel's last ${next.fails} checks (${what}).`,
-          `The first failed check was at ${utc(row?.since ?? now)}.`,
-          '',
-          this.pageOf(site),
-        ]);
-        if (sent) notifiedAt = now;
-      }
+        return [
+          `${site.title} is down`,
+          [
+            `${this.addressOf(site)} did not answer the panel's last ${next.fails} checks (${what}).`,
+            `The first failed check was at ${utc(row?.since ?? now)}.`,
+            '',
+            this.pageOf(site),
+          ],
+        ];
+      }));
     }
     this.put({ key, siteId: site.id, since: row?.since ?? now, notifiedAt, detail: JSON.stringify(next) });
   }
@@ -149,7 +205,7 @@ export class AlertService {
     const row = this.state(key);
     const now = Date.now();
     if (row?.notifiedAt && now - row.notifiedAt < BACKUP_QUIET_MS) return;
-    const sent = await this.send(`The backup of ${site.title} failed`, [
+    const outcome = await this.send(`The backup of ${site.title} failed`, [
       `The backup of ${this.addressOf(site)} failed at ${utc(now)}:`,
       clip(error),
       '',
@@ -157,17 +213,19 @@ export class AlertService {
       '',
       this.pageOf(site),
     ]);
-    this.put({ key, siteId: site.id, since: row?.since ?? now, notifiedAt: sent ? now : (row?.notifiedAt ?? null), detail: clip(error) });
+    // One the relay did not take is tried again at the next failure.
+    this.put({ key, siteId: site.id, since: row?.since ?? now, notifiedAt: outcome === 'failed' ? (row?.notifiedAt ?? null) : now, detail: clip(error) });
   }
 
   /** The hourly check of WPL7 Connect on a site hosted elsewhere. */
   async connectorChecked(site: SiteRow, conn: SiteConnectionRow): Promise<void> {
     const key = `connector:${site.id}`;
     const row = this.state(key);
+    const detail = parse<Delivery & { error: string | null }>(row?.detail);
     if (conn.failCount === 0) {
       if (!row) return;
       this.drop(key);
-      if (row.notifiedAt && this.enabled('alertsConnector')) {
+      if (this.recoveryDue(row, detail) && this.enabled('alertsConnector')) {
         await this.send(`WPL7 Connect on ${site.title} answers again`, [
           `The panel reaches ${this.addressOf(site)} again, after ${duration(Date.now() - row.since)}.`,
           '',
@@ -176,22 +234,25 @@ export class AlertService {
       }
       return;
     }
-    if (conn.failCount < CONNECTOR_AFTER || row) return;
+    if (conn.failCount < CONNECTOR_AFTER || detail.raised) return;
     const now = Date.now();
-    const since = conn.lastContactAt ?? now;
-    let notifiedAt: number | null = null;
-    if (this.enabled('alertsConnector')) {
-      const sent = await this.send(`WPL7 Connect on ${site.title} does not answer`, [
-        `The panel could not reach WPL7 Connect on ${this.addressOf(site)} in its last ${conn.failCount} hourly checks.`,
-        conn.lastError ? `The last answer: ${clip(conn.lastError)}` : '',
-        '',
-        "Until it answers, the site gets no backups and no updates. Check that the site is up and the plugin active; if the plugin was replaced, reconnect the site from its Settings tab.",
-        '',
-        this.pageOf(site),
-      ].filter((line, i, all) => line !== '' || all[i - 1] !== ''));
-      if (sent) notifiedAt = now;
-    }
-    this.put({ key, siteId: site.id, since, notifiedAt, detail: conn.lastError ? clip(conn.lastError) : null });
+    const { next, notifiedAt } = await this.deliver(
+      { ...detail, error: conn.lastError ? clip(conn.lastError) : null },
+      row?.notifiedAt ?? null,
+      this.enabled('alertsConnector'),
+      () => [
+        `WPL7 Connect on ${site.title} does not answer`,
+        [
+          `The panel could not reach WPL7 Connect on ${this.addressOf(site)} in its last ${conn.failCount} hourly checks.`,
+          conn.lastError ? `The last answer: ${clip(conn.lastError)}` : '',
+          '',
+          "Until it answers, the site gets no backups and no updates. Check that the site is up and the plugin active; if the plugin was replaced, reconnect the site from its Settings tab.",
+          '',
+          this.pageOf(site),
+        ].filter((line, i, all) => line !== '' || all[i - 1] !== ''),
+      ],
+    );
+    this.put({ key, siteId: site.id, since: row?.since ?? conn.lastContactAt ?? now, notifiedAt, detail: JSON.stringify(next) });
   }
 
   /** The certificate the uptime probe saw on a site hosted elsewhere. */
@@ -199,24 +260,24 @@ export class AlertService {
     if (expiresAt === null) return;
     const key = `cert:${site.id}`;
     const row = this.state(key);
-    const left = expiresAt - Date.now();
+    const detail = parse<Delivery & { expiresAt: number }>(row?.detail);
+    const now = Date.now();
+    const left = expiresAt - now;
     if (row && left > CERT_RENEWED_MS) {
       this.drop(key);
       return;
     }
-    if (row || left > CERT_WARN_MS) return;
-    const now = Date.now();
-    let notifiedAt: number | null = null;
-    if (this.enabled('alertsConnector')) {
-      const sent = await this.send(`The certificate of ${site.title} expires ${left <= 0 ? 'now' : `in ${duration(left)}`}`, [
+    if (left > CERT_WARN_MS || detail.raised) return;
+    const { next, notifiedAt } = await this.deliver({ ...detail, expiresAt }, row?.notifiedAt ?? null, this.enabled('alertsConnector'), () => [
+      `The certificate of ${site.title} expires ${left <= 0 ? 'now' : `in ${duration(left)}`}`,
+      [
         `The TLS certificate of ${this.addressOf(site)} ${left <= 0 ? 'expired' : 'expires'} at ${utc(expiresAt)}. Visitors then see a warning instead of the site.`,
         'Renew it where the site is hosted.',
         '',
         this.pageOf(site),
-      ]);
-      if (sent) notifiedAt = now;
-    }
-    this.put({ key, siteId: site.id, since: now, notifiedAt, detail: String(expiresAt) });
+      ],
+    ]);
+    this.put({ key, siteId: site.id, since: row?.since ?? now, notifiedAt, detail: JSON.stringify(next) });
   }
 
   /**
@@ -260,7 +321,7 @@ export class AlertService {
     }
     if (fresh.length === 0) return 0;
     const count = fresh.reduce((n, f) => n + f.findings.length, 0);
-    let sent = true;
+    let outcome: Outcome = 'sent';
     if (this.enabled('alertsVulnerabilities')) {
       const lines: string[] = [];
       for (const { site, findings: list } of fresh) {
@@ -272,11 +333,11 @@ export class AlertService {
         }
         lines.push(`  ${this.pageOf(site)}`, '');
       }
-      sent = await this.send(count === 1 ? 'A new vulnerability on your sites' : `${count} new vulnerabilities on your sites`, lines);
+      outcome = await this.send(count === 1 ? 'A new vulnerability on your sites' : `${count} new vulnerabilities on your sites`, lines);
     }
     // Recorded once it was said (or it would say it every pass), and when alerts are off: switching
-    // them on later does not mail a backlog.
-    if (sent || !this.enabled('alertsVulnerabilities')) {
+    // them on later does not mail a backlog. One the relay did not take is tried at the next pass.
+    if (outcome !== 'failed') {
       const at = Date.now();
       for (const { site, findings: list } of fresh) {
         for (const f of list) {
