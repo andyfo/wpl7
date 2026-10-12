@@ -41,6 +41,7 @@ import type { JobStatus } from '../../shared/schemas.js';
 import { canPutBack, canReinstall, manualQuarantineProblem } from './scanPolicy.js';
 import type { ZipFlag } from './pluginZipChecks.js';
 import type { CoreServices } from './index.js';
+import { hostedSites } from '../lib/siteKind.js';
 
 type Deps = Pick<CoreServices, 'db' | 'security' | 'securityEvents' | 'blocklist' | 'malwareScan' | 'pluginZipChecks' | 'servers' | 'settings'>;
 
@@ -220,6 +221,7 @@ export function securityOverview(s: Deps, now = Date.now()): SecurityOverviewDto
   const rows: SecuritySiteRowDto[] = s.db
     .select()
     .from(sites)
+    .where(hostedSites())
     .orderBy(sites.slug)
     .all()
     .map((site) => {
@@ -274,6 +276,7 @@ export function fleetScans(s: Deps): { items: ({ slug: string; title: string; se
     items: s.db
       .select()
       .from(sites)
+      .where(hostedSites())
       .orderBy(sites.slug)
       .all()
       .map((site) => ({ slug: site.slug, title: site.title, serverName: serverName.get(site.serverId) ?? null, ...siteScanDto(s, site) })),

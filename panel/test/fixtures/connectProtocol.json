@@ -1,0 +1,937 @@
+{
+  "about": "Shared test vectors for the WPL7 Connect protocol (docs/internal/connect-protocol.md). panel/connect-plugin/tests/run.php checks the plugin against them, and the panel's tests read the same file. The key pair is for tests only: it signs nothing anywhere else.",
+  "protocol": 1,
+  "keyPair": {
+    "seedHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "publicKey": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+    "privateKeyPem": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f\n-----END PRIVATE KEY-----\n"
+  },
+  "signature": [
+    {
+      "name": "ping with an empty object",
+      "connectionId": "7",
+      "home": "https://example.com",
+      "action": "ping",
+      "timestamp": 1759843200,
+      "nonce": "00112233445566778899aabbccddeeff",
+      "body": "{}",
+      "homeHeader": "https%3A%2F%2Fexample.com",
+      "bodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "canonical": "WPL7-CONNECT-V1\n7\nhttps://example.com\nping\n1759843200\n00112233445566778899aabbccddeeff\n44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "signature": "ed25519=_4sD7IiXBOZtSqO6Ti8W3e9PManGmUp7Oka0D0cQsdeElBzRqnLy1_jkKCCKNPyZBJyVc75vbmr1N1OF96anAw"
+    },
+    {
+      "name": "info with an empty body",
+      "connectionId": "7",
+      "home": "https://example.com",
+      "action": "info",
+      "timestamp": 1759843201,
+      "nonce": "ffeeddccbbaa99887766554433221100",
+      "body": "",
+      "homeHeader": "https%3A%2F%2Fexample.com",
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "WPL7-CONNECT-V1\n7\nhttps://example.com\ninfo\n1759843201\nffeeddccbbaa99887766554433221100\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "signature": "ed25519=aBFPnGcVXXdFsHTTkAxorOHU06Lhu-LYgjCicCB7McE7BqV05QGtEcqNPo1KlT7rqsuKWTaX4dB_CvxyNgC2Dw"
+    },
+    {
+      "name": "update with text that is not ASCII",
+      "connectionId": "42",
+      "home": "https://shop.example.org",
+      "action": "update",
+      "timestamp": 1759843500,
+      "nonce": "0123456789abcdef0123456789abcdef",
+      "body": "{\"op\":\"4f1c0e9a7b2d6e8f\",\"kind\":\"plugin\",\"slug\":\"café\"}",
+      "homeHeader": "https%3A%2F%2Fshop.example.org",
+      "bodySha256": "6dc1cdd6b3565a52688afd4a4eb34f89cd037779b6342a41a445d9c17f54d9e9",
+      "canonical": "WPL7-CONNECT-V1\n42\nhttps://shop.example.org\nupdate\n1759843500\n0123456789abcdef0123456789abcdef\n6dc1cdd6b3565a52688afd4a4eb34f89cd037779b6342a41a445d9c17f54d9e9",
+      "signature": "ed25519=m50ERbfVaG6c5p6q2ERagFj3cndiRzzRCVWjsXWSjwgb2NskvbrroFMJYzVDnsZCr2CcEdRFDlnj6A0MlVhYBg"
+    },
+    {
+      "name": "a home in a folder, with a space and an accent",
+      "connectionId": "9",
+      "home": "https://example.net/my blog/café",
+      "action": "inventory",
+      "timestamp": 1759843999,
+      "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "body": "{\"check\":true}",
+      "homeHeader": "https%3A%2F%2Fexample.net%2Fmy%20blog%2Fcaf%C3%A9",
+      "bodySha256": "0aaef8f05aafd86794882167a13c6b6b058c757514dbf823b2d18bbd55be8cd2",
+      "canonical": "WPL7-CONNECT-V1\n9\nhttps://example.net/my blog/café\ninventory\n1759843999\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n0aaef8f05aafd86794882167a13c6b6b058c757514dbf823b2d18bbd55be8cd2",
+      "signature": "ed25519=kHn0S4Zj3I2tWCLRx5ee_Q2Z6SRIdI-CwI1UTA1Y-txzk2xemEQXcnEA_mG01Bff0oT5JXSzR5yWhbOwpJS0Bw"
+    }
+  ],
+  "homes": [
+    {
+      "header": "https%3A%2F%2Fexample.com",
+      "home": "https://example.com"
+    },
+    {
+      "header": "https:%2F%2Fexample.com",
+      "home": "https://example.com"
+    },
+    {
+      "header": "https%3A%2F%2Fexample.com%2Fa%2Bb",
+      "home": "https://example.com/a+b"
+    },
+    {
+      "header": "https%3A%2F%2Fexample.com%2Fa+b",
+      "home": "https://example.com/a+b"
+    },
+    {
+      "header": "https%3A%2F%2Fexample.net%2Fmy%20blog%2Fcaf%C3%A9",
+      "home": "https://example.net/my blog/café"
+    }
+  ],
+  "timestamps": [
+    {
+      "now": 1759843200,
+      "timestamp": 1759843200,
+      "ok": true
+    },
+    {
+      "now": 1759843200,
+      "timestamp": 1759843500,
+      "ok": true
+    },
+    {
+      "now": 1759843200,
+      "timestamp": 1759843501,
+      "ok": false
+    },
+    {
+      "now": 1759843200,
+      "timestamp": 1759842900,
+      "ok": true
+    },
+    {
+      "now": 1759843200,
+      "timestamp": 1759842899,
+      "ok": false
+    }
+  ],
+  "badAuth": [
+    {
+      "what": "no signature",
+      "values": {
+        "site": "7",
+        "home": "https%3A%2F%2Fexample.com",
+        "ts": "1759843200",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "sig": ""
+      }
+    },
+    {
+      "what": "a signature without ed25519=",
+      "values": {
+        "site": "7",
+        "home": "https%3A%2F%2Fexample.com",
+        "ts": "1759843200",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "sig": "_4sD7IiXBOZtSqO6Ti8W3e9PManGmUp7Oka0D0cQsdeElBzRqnLy1_jkKCCKNPyZBJyVc75vbmr1N1OF96anAw"
+      }
+    },
+    {
+      "what": "an HMAC signature",
+      "values": {
+        "site": "7",
+        "home": "https%3A%2F%2Fexample.com",
+        "ts": "1759843200",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "sig": "v1=abababababababababababababababababababababababababababababababab"
+      }
+    },
+    {
+      "what": "a signature one character short",
+      "values": {
+        "site": "7",
+        "home": "https%3A%2F%2Fexample.com",
+        "ts": "1759843200",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "sig": "ed25519=_4sD7IiXBOZtSqO6Ti8W3e9PManGmUp7Oka0D0cQsdeElBzRqnLy1_jkKCCKNPyZBJyVc75vbmr1N1OF96anA"
+      }
+    },
+    {
+      "what": "a signature with padding",
+      "values": {
+        "site": "7",
+        "home": "https%3A%2F%2Fexample.com",
+        "ts": "1759843200",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "sig": "ed25519=_4sD7IiXBOZtSqO6Ti8W3e9PManGmUp7Oka0D0cQsdeElBzRqnLy1_jkKCCKNPyZBJyVc75vbmr1N1OF96an=="
+      }
+    },
+    {
+      "what": "a signature in standard base64",
+      "values": {
+        "site": "7",
+        "home": "https%3A%2F%2Fexample.com",
+        "ts": "1759843200",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "sig": "ed25519=/4sD7IiXBOZtSqO6Ti8W3e9PManGmUp7Oka0D0cQsdeElBzRqnLy1/jkKCCKNPyZBJyVc75vbmr1N1OF96anA+"
+      }
+    },
+    {
+      "what": "an upper-case nonce",
+      "values": {
+        "site": "7",
+        "home": "https%3A%2F%2Fexample.com",
+        "ts": "1759843200",
+        "nonce": "ABCDEF00112233445566778899AABBCC",
+        "sig": "ed25519=_4sD7IiXBOZtSqO6Ti8W3e9PManGmUp7Oka0D0cQsdeElBzRqnLy1_jkKCCKNPyZBJyVc75vbmr1N1OF96anAw"
+      }
+    },
+    {
+      "what": "a short nonce",
+      "values": {
+        "site": "7",
+        "home": "https%3A%2F%2Fexample.com",
+        "ts": "1759843200",
+        "nonce": "abc",
+        "sig": "ed25519=_4sD7IiXBOZtSqO6Ti8W3e9PManGmUp7Oka0D0cQsdeElBzRqnLy1_jkKCCKNPyZBJyVc75vbmr1N1OF96anAw"
+      }
+    },
+    {
+      "what": "connection id 0",
+      "values": {
+        "site": "0",
+        "home": "https%3A%2F%2Fexample.com",
+        "ts": "1759843200",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "sig": "ed25519=_4sD7IiXBOZtSqO6Ti8W3e9PManGmUp7Oka0D0cQsdeElBzRqnLy1_jkKCCKNPyZBJyVc75vbmr1N1OF96anAw"
+      }
+    },
+    {
+      "what": "a leading zero in the connection id",
+      "values": {
+        "site": "07",
+        "home": "https%3A%2F%2Fexample.com",
+        "ts": "1759843200",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "sig": "ed25519=_4sD7IiXBOZtSqO6Ti8W3e9PManGmUp7Oka0D0cQsdeElBzRqnLy1_jkKCCKNPyZBJyVc75vbmr1N1OF96anAw"
+      }
+    },
+    {
+      "what": "a leading zero in the timestamp",
+      "values": {
+        "site": "7",
+        "home": "https%3A%2F%2Fexample.com",
+        "ts": "01759843200",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "sig": "ed25519=_4sD7IiXBOZtSqO6Ti8W3e9PManGmUp7Oka0D0cQsdeElBzRqnLy1_jkKCCKNPyZBJyVc75vbmr1N1OF96anAw"
+      }
+    },
+    {
+      "what": "a negative timestamp",
+      "values": {
+        "site": "7",
+        "home": "https%3A%2F%2Fexample.com",
+        "ts": "-5",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "sig": "ed25519=_4sD7IiXBOZtSqO6Ti8W3e9PManGmUp7Oka0D0cQsdeElBzRqnLy1_jkKCCKNPyZBJyVc75vbmr1N1OF96anAw"
+      }
+    },
+    {
+      "what": "no home",
+      "values": {
+        "site": "7",
+        "home": "",
+        "ts": "1759843200",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "sig": "ed25519=_4sD7IiXBOZtSqO6Ti8W3e9PManGmUp7Oka0D0cQsdeElBzRqnLy1_jkKCCKNPyZBJyVc75vbmr1N1OF96anAw"
+      }
+    }
+  ],
+  "excludes": {
+    "defaults": [
+      ".wpl7-*",
+      "wp-content/cache/**",
+      "wp-content/upgrade/**",
+      "wp-content/updraft/**",
+      "wp-content/ai1wm-backups/**",
+      "wp-content/backups-dup-lite/**",
+      "wp-content/backup*/**",
+      "*.log",
+      "error_log",
+      ".git/**",
+      "wp-content/**/node_modules/**",
+      "wp-content/wpl7-rollback/**",
+      "wp-content/upgrade-temp-backup/**"
+    ],
+    "cases": [
+      {
+        "path": "wp-config.php",
+        "excluded": null
+      },
+      {
+        "path": "wp-content/plugins/wpl7-connect/wpl7-connect.php",
+        "excluded": null
+      },
+      {
+        "path": "wp-content/plugins/wpl7-migrate/wpl7-migrate.php",
+        "excluded": null
+      },
+      {
+        "path": "wp-content/mu-plugins/wpl7-connect-loader.php",
+        "excluded": null
+      },
+      {
+        "path": "wp-content/wpl7-rollback",
+        "excluded": "wp-content/wpl7-rollback/**"
+      },
+      {
+        "path": "wp-content/wpl7-rollback/4f1c0e9a7b2d6e8f/plugins/akismet/akismet.php",
+        "excluded": "wp-content/wpl7-rollback/**"
+      },
+      {
+        "path": "wp-content/upgrade-temp-backup/plugins/akismet/akismet.php",
+        "excluded": "wp-content/upgrade-temp-backup/**"
+      },
+      {
+        "path": "wp-content/upgrade/akismet.5.8.zip",
+        "excluded": "wp-content/upgrade/**"
+      },
+      {
+        "path": "wp-content/cache/page/index.html",
+        "excluded": "wp-content/cache/**"
+      },
+      {
+        "path": "wp-content/debug.log",
+        "excluded": "*.log"
+      },
+      {
+        "path": ".wpl7-staging",
+        "excluded": ".wpl7-*"
+      },
+      {
+        "path": "wp-content/backups/db.sql",
+        "excluded": "wp-content/backup*/**"
+      },
+      {
+        "path": "wp-content/themes/example/node_modules/x.js",
+        "excluded": "wp-content/**/node_modules/**"
+      },
+      {
+        "path": "wp-content/uploads/2026/10/photo.jpg",
+        "excluded": null
+      },
+      {
+        "path": "index.php",
+        "excluded": null
+      }
+    ]
+  },
+  "globalFlags": [
+    {
+      "args": [
+        "godmode",
+        "chat",
+        "list"
+      ],
+      "out": {
+        "args": [
+          "godmode",
+          "chat",
+          "list"
+        ],
+        "user": null
+      }
+    },
+    {
+      "args": [
+        "godmode",
+        "chat",
+        "send",
+        "--user=admin",
+        "--new",
+        "--message=-"
+      ],
+      "out": {
+        "args": [
+          "godmode",
+          "chat",
+          "send",
+          "--new",
+          "--message=-"
+        ],
+        "user": "admin"
+      }
+    },
+    {
+      "args": [
+        "--user=1",
+        "hello"
+      ],
+      "out": {
+        "args": [
+          "hello"
+        ],
+        "user": "1"
+      }
+    },
+    {
+      "args": [
+        "hello",
+        "--user=a",
+        "--user=b@example.com"
+      ],
+      "out": {
+        "args": [
+          "hello"
+        ],
+        "user": "b@example.com"
+      }
+    },
+    {
+      "args": [
+        "hello",
+        "--quiet",
+        "--debug",
+        "--debug=bootstrap",
+        "--color",
+        "--no-color",
+        "world"
+      ],
+      "out": {
+        "args": [
+          "hello",
+          "world"
+        ],
+        "user": null
+      }
+    },
+    {
+      "args": [
+        "hello",
+        "--message=--user=x",
+        "-",
+        "-1",
+        "--"
+      ],
+      "out": {
+        "args": [
+          "hello",
+          "--message=--user=x",
+          "-",
+          "-1",
+          "--"
+        ],
+        "user": null
+      }
+    },
+    {
+      "args": [
+        "hello",
+        "--username=x",
+        "--users",
+        "--no-user-check"
+      ],
+      "out": {
+        "args": [
+          "hello",
+          "--username=x",
+          "--users",
+          "--no-user-check"
+        ],
+        "user": null
+      }
+    },
+    {
+      "args": [
+        "hello",
+        "--user"
+      ],
+      "error": "--user needs a value."
+    },
+    {
+      "args": [
+        "hello",
+        "--user="
+      ],
+      "error": "--user needs a value."
+    },
+    {
+      "args": [
+        "hello",
+        "--no-user"
+      ],
+      "error": "--user needs a value."
+    },
+    {
+      "args": [
+        "hello",
+        "--path=/var/www"
+      ],
+      "error": "--path is not available through WPL7 Connect."
+    },
+    {
+      "args": [
+        "hello",
+        "--url=https://example.com"
+      ],
+      "error": "--url is not available through WPL7 Connect."
+    },
+    {
+      "args": [
+        "hello",
+        "--ssh=host"
+      ],
+      "error": "--ssh is not available through WPL7 Connect."
+    },
+    {
+      "args": [
+        "hello",
+        "--http=https://example.com"
+      ],
+      "error": "--http is not available through WPL7 Connect."
+    },
+    {
+      "args": [
+        "hello",
+        "--skip-plugins"
+      ],
+      "error": "--skip-plugins is not available through WPL7 Connect."
+    },
+    {
+      "args": [
+        "hello",
+        "--skip-plugins=akismet"
+      ],
+      "error": "--skip-plugins is not available through WPL7 Connect."
+    },
+    {
+      "args": [
+        "hello",
+        "--no-skip-themes"
+      ],
+      "error": "--skip-themes is not available through WPL7 Connect."
+    },
+    {
+      "args": [
+        "hello",
+        "--skip-packages"
+      ],
+      "error": "--skip-packages is not available through WPL7 Connect."
+    },
+    {
+      "args": [
+        "hello",
+        "--require=/tmp/x.php"
+      ],
+      "error": "--require is not available through WPL7 Connect."
+    },
+    {
+      "args": [
+        "hello",
+        "--exec=phpinfo();"
+      ],
+      "error": "--exec is not available through WPL7 Connect."
+    },
+    {
+      "args": [
+        "hello",
+        "--context=admin"
+      ],
+      "error": "--context is not available through WPL7 Connect."
+    },
+    {
+      "args": [
+        "hello",
+        "--prompt"
+      ],
+      "error": "--prompt is not available through WPL7 Connect."
+    },
+    {
+      "args": [
+        "hello",
+        "--quiet",
+        "--path=/x",
+        "--user"
+      ],
+      "error": "--path is not available through WPL7 Connect."
+    }
+  ],
+  "commandNames": {
+    "valid": [
+      "hello",
+      "godmode",
+      "a",
+      "a-b",
+      "x9",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "my-plugin-2"
+    ],
+    "invalid": [
+      "",
+      "Hello",
+      "9x",
+      "-x",
+      "a_b",
+      "a b",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "über",
+      "a/b",
+      "godmode "
+    ]
+  },
+  "loginTokens": {
+    "pattern": "^([0-9a-f]{24})\\.([A-Za-z0-9_-]{43})$",
+    "valid": [
+      "0123456789abcdef01234567.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ffffffffffffffffffffffff.a-_9a-_9a-_9a-_9a-_9a-_9a-_9a-_9a-_9a-_9abc"
+    ],
+    "invalid": [
+      "0123456789ABCDEF01234567.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "00000000000000000000000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "000000000000000000000000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "000000000000000000000000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "000000000000000000000000AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "000000000000000000000000.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    ]
+  },
+  "inventory": {
+    "plugins": {
+      "input": {
+        "plugins": {
+          "akismet/akismet.php": {
+            "Name": "Akismet Anti-spam",
+            "Version": "5.7.2"
+          },
+          "hello.php": {
+            "Name": "Hello Dolly",
+            "Version": "1.7.2"
+          },
+          "old-php/old-php.php": {
+            "Name": "Needs new PHP",
+            "Version": "1.0"
+          },
+          "seo/seo.php": {
+            "Name": "SEO folder",
+            "Version": "2.0"
+          },
+          "seo.php": {
+            "Name": "SEO single file",
+            "Version": ""
+          },
+          "network-thing/network-thing.php": {
+            "Name": "Network thing",
+            "Version": "3.1"
+          },
+          "wpl7-connect/wpl7-connect.php": {
+            "Name": "WPL7 Connect",
+            "Version": "0.4.0"
+          }
+        },
+        "active": [
+          "akismet/akismet.php",
+          "wpl7-connect/wpl7-connect.php"
+        ],
+        "network": [
+          "network-thing/network-thing.php"
+        ],
+        "response": {
+          "akismet/akismet.php": {
+            "new_version": "5.8"
+          },
+          "old-php/old-php.php": {
+            "new_version": "2.0",
+            "requires_php": "99.0"
+          },
+          "seo/seo.php": {
+            "new_version": "2.1",
+            "requires": "99.0"
+          },
+          "wpl7-connect/wpl7-connect.php": {
+            "new_version": "0.4.1"
+          }
+        },
+        "no_update": {
+          "hello.php": {
+            "new_version": "1.7.0"
+          },
+          "network-thing/network-thing.php": {
+            "new_version": "3.1"
+          }
+        },
+        "auto_updates": [
+          "hello.php",
+          "seo.php"
+        ],
+        "mu": {
+          "host-tweaks.php": {
+            "Name": "Host tweaks",
+            "Version": ""
+          },
+          "wpl7-connect-loader.php": {
+            "Name": "WPL7 Connect loader",
+            "Version": "0.4.0"
+          }
+        },
+        "dropins": {
+          "object-cache.php": {
+            "Name": "Redis Object Cache Drop-In",
+            "Version": "2.5.3"
+          }
+        },
+        "php": "8.3.35",
+        "wp": "7.1.2"
+      },
+      "rows": [
+        {
+          "name": "akismet",
+          "title": "Akismet Anti-spam",
+          "status": "active",
+          "version": "5.7.2",
+          "update": "available",
+          "update_version": "5.8",
+          "auto_update": "off",
+          "file": "akismet/akismet.php"
+        },
+        {
+          "name": "hello",
+          "title": "Hello Dolly",
+          "status": "inactive",
+          "version": "1.7.2",
+          "update": "version higher than expected",
+          "update_version": "",
+          "auto_update": "on",
+          "file": "hello.php"
+        },
+        {
+          "name": "old-php",
+          "title": "Needs new PHP",
+          "status": "inactive",
+          "version": "1.0",
+          "update": "unavailable",
+          "update_version": "2.0",
+          "auto_update": "off",
+          "file": "old-php/old-php.php"
+        },
+        {
+          "name": "seo/seo",
+          "title": "SEO folder",
+          "status": "inactive",
+          "version": "2.0",
+          "update": "unavailable",
+          "update_version": "2.1",
+          "auto_update": "off",
+          "file": "seo/seo.php"
+        },
+        {
+          "name": "seo",
+          "title": "SEO single file",
+          "status": "inactive",
+          "version": "",
+          "update": "none",
+          "update_version": "",
+          "auto_update": "on",
+          "file": "seo.php"
+        },
+        {
+          "name": "network-thing",
+          "title": "Network thing",
+          "status": "active-network",
+          "version": "3.1",
+          "update": "none",
+          "update_version": "",
+          "auto_update": "off",
+          "file": "network-thing/network-thing.php"
+        },
+        {
+          "name": "wpl7-connect",
+          "title": "WPL7 Connect",
+          "status": "active",
+          "version": "0.4.0",
+          "update": "available",
+          "update_version": "0.4.1",
+          "auto_update": "off",
+          "file": "wpl7-connect/wpl7-connect.php"
+        },
+        {
+          "name": "host-tweaks",
+          "title": "Host tweaks",
+          "status": "must-use",
+          "version": "",
+          "update": "none",
+          "update_version": "",
+          "auto_update": "off",
+          "file": "host-tweaks.php"
+        },
+        {
+          "name": "wpl7-connect-loader",
+          "title": "WPL7 Connect loader",
+          "status": "must-use",
+          "version": "0.4.0",
+          "update": "none",
+          "update_version": "",
+          "auto_update": "off",
+          "file": "wpl7-connect-loader.php"
+        },
+        {
+          "name": "object-cache.php",
+          "title": "Redis Object Cache Drop-In",
+          "status": "dropin",
+          "version": "2.5.3",
+          "update": "none",
+          "update_version": "",
+          "auto_update": "off",
+          "file": "object-cache.php"
+        }
+      ]
+    },
+    "themes": {
+      "input": {
+        "themes": {
+          "twentytwentyfive": {
+            "Name": "Twenty Twenty-Five",
+            "Version": "1.5"
+          },
+          "child-theme": {
+            "Name": "Child",
+            "Version": "1.0"
+          },
+          "parent-theme": {
+            "Name": "Parent",
+            "Version": "2.0"
+          },
+          "twentytwentythree": {
+            "Name": "Twenty Twenty-Three",
+            "Version": "1.4"
+          }
+        },
+        "stylesheet": "child-theme",
+        "template": "parent-theme",
+        "response": {
+          "parent-theme": {
+            "new_version": "2.1"
+          },
+          "twentytwentythree": {
+            "new_version": "1.6",
+            "requires_php": "99.0"
+          }
+        },
+        "no_update": {
+          "twentytwentyfive": {
+            "new_version": "1.4"
+          }
+        },
+        "auto_updates": [
+          "parent-theme"
+        ],
+        "php": "8.3.35",
+        "wp": "7.1.2"
+      },
+      "rows": [
+        {
+          "name": "twentytwentyfive",
+          "title": "Twenty Twenty-Five",
+          "status": "inactive",
+          "version": "1.5",
+          "update": "version higher than expected",
+          "update_version": "",
+          "auto_update": "off"
+        },
+        {
+          "name": "child-theme",
+          "title": "Child",
+          "status": "active",
+          "version": "1.0",
+          "update": "none",
+          "update_version": "",
+          "auto_update": "off"
+        },
+        {
+          "name": "parent-theme",
+          "title": "Parent",
+          "status": "parent",
+          "version": "2.0",
+          "update": "available",
+          "update_version": "2.1",
+          "auto_update": "on"
+        },
+        {
+          "name": "twentytwentythree",
+          "title": "Twenty Twenty-Three",
+          "status": "inactive",
+          "version": "1.4",
+          "update": "unavailable",
+          "update_version": "1.6",
+          "auto_update": "off"
+        }
+      ]
+    },
+    "core": [
+      {
+        "version": "7.1.2",
+        "offers": [
+          "7.1.2",
+          "7.1.3"
+        ],
+        "update": {
+          "version": "7.1.3",
+          "type": "minor"
+        }
+      },
+      {
+        "version": "7.1.2",
+        "offers": [
+          "7.1.3",
+          "7.2"
+        ],
+        "update": {
+          "version": "7.2",
+          "type": "major"
+        }
+      },
+      {
+        "version": "7.1.2",
+        "offers": [
+          "7.2",
+          "7.1.3"
+        ],
+        "update": {
+          "version": "7.2",
+          "type": "major"
+        }
+      },
+      {
+        "version": "7.1",
+        "offers": [
+          "7.1.1"
+        ],
+        "update": {
+          "version": "7.1.1",
+          "type": "minor"
+        }
+      },
+      {
+        "version": "7.1.2",
+        "offers": [
+          "7.1.2"
+        ],
+        "update": null
+      },
+      {
+        "version": "7.1.2",
+        "offers": [
+          "7.1.1"
+        ],
+        "update": null
+      },
+      {
+        "version": "7.1.2",
+        "offers": [],
+        "update": null
+      },
+      {
+        "version": "6.9.4",
+        "offers": [
+          "7.0"
+        ],
+        "update": {
+          "version": "7.0",
+          "type": "major"
+        }
+      }
+    ]
+  }
+}

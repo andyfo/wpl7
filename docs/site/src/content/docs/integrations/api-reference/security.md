@@ -2,7 +2,7 @@
 title: Site protection and malware scans
 description: "Each site's firewall rules and rate limits, the requests they blocked, and its malware scans: findings, Reinstall original and quarantine. See docs/security.md."
 sidebar:
-  order: 2.07
+  order: 2.08
 sources:
   - panel/shared/apiDocs.ts
 ---

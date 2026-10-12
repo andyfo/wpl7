@@ -502,8 +502,9 @@ export async function finalizeCleanup(ctx: JobContext<unknown>, s: CoreServices,
   // whenever a slug is re-created. Never tear down what a site currently living on the source
   // server owns: a cleanup that outlived its site would otherwise delete the replacement
   // site's container, database and files.
+  // A site hosted elsewhere owns no container, database or folder by its name: only a hosted one counts.
   const owner = s.db.select().from(sites).where(eq(sites.slug, cleanup.siteSlug)).get();
-  if (owner && owner.serverId === cleanup.sourceServerId) {
+  if (owner && owner.kind !== 'external' && owner.serverId === cleanup.sourceServerId) {
     s.db
       .update(moveCleanups)
       .set({ status: 'done', finalizedAt: Date.now() })

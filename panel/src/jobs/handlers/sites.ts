@@ -1,7 +1,7 @@
 // @docs backups/delete, get-started/first-site, integrations/cloudflare, integrations/dns, sites/create, sites/domains, sites/settings
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
-import { backups, moveCleanups, sites, type SiteRow } from '../../db/schema.js';
+import { siteConnections, backups, moveCleanups, sites, type SiteRow } from '../../db/schema.js';
 import { BACKUP_DELETE_LANE } from '../../services/backup.js';
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
@@ -45,6 +45,7 @@ import {
   writeSiteJson,
 } from './shared.js';
 import { requireRunning } from './wp.js';
+import { isExternal } from '../../lib/siteKind.js';
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -354,7 +355,8 @@ export const siteDeletePayload = z.object({
 });
 
 export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
+  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
+  if (isExternal(site)) return removeExternalSite(ctx, s, site);
   const server = s.servers.handleFor(site.serverId);
   updateSiteRow(s.db, site.id, { status: 'deleting' });
   // A site being deleted has no rules file: its routers would only point at a container
@@ -471,6 +473,43 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
     ...(finalBackupId !== null ? { finalBackupId } : {}),
     ...(backupDeleteJobId !== null ? { backupDeleteJobId } : {}),
   });
+}
+
+/**
+ * Remove a site hosted elsewhere from the panel. The site itself keeps running where it is: its
+ * plugin is told to forget the panel (when it answers), the panel forgets its key, and its copy
+ * on the backup server goes. Its backups stay, as a deleted site's do, unless asked otherwise. No
+ * final backup: nothing is lost that the site does not still have.
+ */
+async function removeExternalSite(ctx: JobContext<z.infer<typeof siteDeletePayload>>, s: CoreServices, site: SiteRow): Promise<void> {
+  updateSiteRow(s.db, site.id, { status: 'deleting' });
+  const conn = s.connections.findForSite(site.id);
+  if (conn?.privateKey && conn.status === 'active') {
+    ctx.info('Disconnecting WPL7 Connect on the site…');
+    const client = s.connections.clientFor(conn, { attempts: 2 });
+    try {
+      await client.disconnect();
+      ctx.info('The plugin forgot the panel. It stays installed on the site until someone removes it there.');
+    } catch (err) {
+      ctx.warn(`The site did not answer (${errMsg(err)}); its plugin still holds the panel's public key, which nothing can sign for any more.`);
+    } finally {
+      client.close();
+    }
+  }
+  try {
+    ctx.info("Removing the site's copy from the backup server…");
+    await s.externalBackups.forgetMirror(site);
+  } catch (err) {
+    // Housekeeping removes a copy whose site is gone; it is no reason to keep the site listed.
+    ctx.warn(`Could not remove the copy (${errMsg(err)}); it is cleared away within a week.`);
+  }
+  s.db.transaction(() => {
+    if (conn) s.db.delete(siteConnections).where(eq(siteConnections.id, conn.id)).run();
+    s.db.delete(sites).where(eq(sites.id, site.id)).run();
+  });
+  ctx.info(`"${site.slug}" was removed from the panel. The site keeps running elsewhere.`);
+  const backupDeleteJobId = ctx.payload.deleteBackups ? queueBackupDeletion(ctx, s, site, null) : null;
+  ctx.setResult({ slug: site.slug, removed: true, ...(backupDeleteJobId !== null ? { backupDeleteJobId } : {}) });
 }
 
 /**

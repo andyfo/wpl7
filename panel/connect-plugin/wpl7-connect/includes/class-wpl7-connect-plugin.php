@@ -1,0 +1,625 @@
+<?php
+defined('ABSPATH') || exit;
+
+/**
+ * An error the protocol reports to the panel: an HTTP status, a code from the protocol's list and
+ * the fields that go with it. Sent as { "error": { "code": ..., ...fields } }.
+ */
+class WPL7_Connect_Error extends Exception
+{
+    public $status;
+    public $error_code;
+    public $fields;
+
+    public function __construct($status, $code, $fields = [])
+    {
+        parent::__construct($code);
+        $this->status = (int) $status;
+        $this->error_code = (string) $code;
+        $this->fields = $fields;
+    }
+}
+
+/**
+ * Bootstrap, options, state and the plugin's three tables.
+ *
+ * The state is what the admin page shows (docs/internal/connect-protocol.md, Tables, options and
+ * states): unbound (no panel known), bound (a panel and a token, not enrolled yet), enrolled (the
+ * panel has the site's report), connected (a signed request passed; the token is gone) or
+ * disconnected (the key, the connection id and the token are gone).
+ */
+final class WPL7_Connect_Plugin
+{
+    const PROTOCOL = 1;
+    /** The tables' layout. Moving it makes the plugin create them again where they are older. */
+    const SCHEMA = 1;
+
+    const OPT_PANEL = 'wpl7_connect_panel';
+    const OPT_CONNECTION = 'wpl7_connect_connection';
+    const OPT_TOKEN = 'wpl7_connect_token';
+    /** The panel's Ed25519 public key for this connection, base64url. Never a private key. */
+    const OPT_KEY = 'wpl7_connect_key';
+    const OPT_STATE = 'wpl7_connect_state';
+    /** What the panel answered to the last enroll: its version, and when. */
+    const OPT_ENROLLED = 'wpl7_connect_enrolled';
+    /** When the first signed request passed. */
+    const OPT_SINCE = 'wpl7_connect_since';
+    /** When the last signed request passed, to the minute. */
+    const OPT_LAST = 'wpl7_connect_last';
+    const OPT_SNAPSHOT = 'wpl7_connect_snapshot';
+    /** The panel's offer of a newer WPL7 Connect (section 12). */
+    const OPT_OFFER = 'wpl7_connect_offer';
+    /** An update's state: wpl7_connect_op_<op>. */
+    const OPT_OP_PREFIX = 'wpl7_connect_op_';
+    const OPT_SCHEMA = 'wpl7_connect_schema';
+    const OPT_REDIRECT = 'wpl7_connect_redirect';
+    /** sha256 of the connection.php last read, so a file that could not be deleted is read once. */
+    const OPT_CONSUMED = 'wpl7_connect_consumed';
+
+    const STATE_UNBOUND = 'unbound';
+    const STATE_BOUND = 'bound';
+    const STATE_ENROLLED = 'enrolled';
+    const STATE_CONNECTED = 'connected';
+    const STATE_DISCONNECTED = 'disconnected';
+
+    /** The enrollment token: 32 random bytes, base64url without padding. */
+    const TOKEN_RE = '/^[A-Za-z0-9_-]{43}$/D';
+    /** A connection code entered by hand: `<token>.<key>`, 87 characters. */
+    const CODE_RE = '/^([A-Za-z0-9_-]{43})\.([A-Za-z0-9_-]{43})$/D';
+
+    public static function boot()
+    {
+        add_action('init', [__CLASS__, 'early_init'], 0);
+        add_action('init', [__CLASS__, 'login_init'], 1);
+        add_action('rest_api_init', [__CLASS__, 'rest_api_init']);
+        add_filter('site_transient_update_plugins', [__CLASS__, 'update_offer']);
+        if (is_admin()) {
+            add_action('admin_menu', ['WPL7_Connect_Admin', 'menu']);
+            add_action('admin_init', ['WPL7_Connect_Admin', 'admin_init']);
+            add_action('admin_post_wpl7_connect_connect', ['WPL7_Connect_Admin', 'handle_connect']);
+            add_action('admin_post_wpl7_connect_check', ['WPL7_Connect_Admin', 'handle_check']);
+            add_action('admin_post_wpl7_connect_disconnect', ['WPL7_Connect_Admin', 'handle_disconnect']);
+        }
+    }
+
+    /**
+     * On init at priority 0: after plugins have loaded, before most of them start work, and before
+     * a page cache could hand back a stored page. Only a POST that names an action is the
+     * plugin's; everything else, a GET with the same parameter included, is the site's ordinary
+     * page.
+     */
+    public static function early_init()
+    {
+        if (isset($_GET['wpl7-connect'], $_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+            WPL7_Connect_Server::query_transport();
+        }
+    }
+
+    /*
+     * The two hooks that run outside the plugin's own requests go through here: once the plugin's
+     * files are deleted in the request that loaded it (WP-CLI's `plugin uninstall --deactivate`),
+     * its other classes can no longer load, and the hooks must not take the request down with them.
+     */
+
+    public static function rest_api_init()
+    {
+        if (class_exists('WPL7_Connect_Server')) {
+            WPL7_Connect_Server::register_routes();
+        }
+    }
+
+    /** site_transient_update_plugins: the panel's offer of a newer WPL7 Connect, while it holds. */
+    public static function update_offer($transient)
+    {
+        return class_exists('WPL7_Connect_Selfupdate') ? WPL7_Connect_Selfupdate::filter($transient) : $transient;
+    }
+
+    /** On init at priority 1: a one-time login link (section 6, login). Costs nothing on other requests. */
+    public static function login_init()
+    {
+        if (isset($_GET['wpl7-connect-login'], $_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'GET') {
+            WPL7_Connect_Login::handle();
+        }
+    }
+
+    /** Why the plugin cannot run here, or null. */
+    public static function requirements_problem()
+    {
+        global $wp_version;
+        if (is_multisite()) {
+            return __('WPL7 Connect cannot manage a multisite network.', 'wpl7-connect');
+        }
+        if (self::is_windows()) {
+            return __('WPL7 Connect cannot manage a site on a Windows server.', 'wpl7-connect');
+        }
+        if (version_compare(PHP_VERSION, '7.0', '<')) {
+            /* translators: %s: the PHP version this site runs */
+            return sprintf(__('WPL7 Connect needs PHP 7.0 or later. This site runs PHP %s.', 'wpl7-connect'), PHP_VERSION);
+        }
+        if (version_compare($wp_version, '5.2', '<')) {
+            /* translators: %s: the WordPress version this site runs */
+            return sprintf(__('WPL7 Connect needs WordPress 5.2 or later. This site runs %s.', 'wpl7-connect'), $wp_version);
+        }
+        return null;
+    }
+
+    public static function is_windows()
+    {
+        return strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
+    }
+
+    public static function activate()
+    {
+        $problem = self::requirements_problem();
+        if ($problem !== null) {
+            deactivate_plugins(plugin_basename(WPL7_CONNECT_FILE));
+            wp_die(esc_html($problem), esc_html__('WPL7 Connect', 'wpl7-connect'), ['back_link' => true]);
+        }
+        self::install_tables();
+        if (!self::read_connection_file() && !get_option(self::OPT_STATE)) {
+            update_option(self::OPT_STATE, self::token() !== '' ? self::STATE_BOUND : self::STATE_UNBOUND, false);
+        }
+        // Best effort: without it the plugin works, and only the rescue after a broken update is lost.
+        WPL7_Connect_Loader::ensure();
+        // The admin page enrolls when it opens, so taking the admin there is what makes the site
+        // enroll "on its own" after activation. Not from WP-CLI: nobody would see the page.
+        if (!(defined('WP_CLI') && WP_CLI)) {
+            update_option(self::OPT_REDIRECT, 1, false);
+        }
+    }
+
+    /** Leaves the connection in place: activating the plugin again picks it up. */
+    public static function deactivate()
+    {
+        WPL7_Connect_Loader::remove();
+        delete_option(self::OPT_REDIRECT);
+        delete_transient('wpl7_connect_auto');
+    }
+
+    public static function table($name)
+    {
+        global $wpdb;
+        return $wpdb->prefix . 'wpl7_connect_' . $name;
+    }
+
+    /**
+     * Creates the three tables (docs/internal/connect-protocol.md, Tables, options and states).
+     * The files and nonces tables are WPL7 Migrate's; paths are VARBINARY: a file name is bytes,
+     * not text, and must come back exactly as it was read.
+     */
+    public static function install_tables()
+    {
+        global $wpdb;
+        $collate = $wpdb->get_charset_collate();
+        $files = self::table('files');
+        $nonces = self::table('nonces');
+        $log = self::table('log');
+        $wpdb->query(
+            "CREATE TABLE IF NOT EXISTS `$files` (
+                `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+                `parent` bigint unsigned NOT NULL DEFAULT 0,
+                `seq` int unsigned NOT NULL DEFAULT 0,
+                `type` tinyint unsigned NOT NULL,
+                `path` varbinary(4096) NOT NULL,
+                `real` varbinary(4096) DEFAULT NULL,
+                `size` bigint unsigned NOT NULL DEFAULT 0,
+                `mtime` bigint NOT NULL DEFAULT 0,
+                `mode` smallint unsigned NOT NULL DEFAULT 0,
+                `flags` smallint unsigned NOT NULL DEFAULT 0,
+                `target` varbinary(4096) DEFAULT NULL,
+                `walked` tinyint unsigned NOT NULL DEFAULT 0,
+                `pos` int unsigned NOT NULL DEFAULT 0,
+                PRIMARY KEY (`id`),
+                KEY `walk` (`type`, `walked`, `id`),
+                KEY `parent` (`parent`)
+            ) $collate"
+        );
+        $wpdb->query(
+            "CREATE TABLE IF NOT EXISTS `$nonces` (
+                `nonce` char(32) NOT NULL,
+                `seen_at` int unsigned NOT NULL,
+                PRIMARY KEY (`nonce`),
+                KEY `seen_at` (`seen_at`)
+            ) $collate"
+        );
+        $wpdb->query(
+            "CREATE TABLE IF NOT EXISTS `$log` (
+                `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+                `at` int unsigned NOT NULL,
+                `action` varchar(32) NOT NULL,
+                `summary` varchar(255) NOT NULL DEFAULT '',
+                `ok` tinyint unsigned NOT NULL DEFAULT 1,
+                PRIMARY KEY (`id`)
+            ) $collate"
+        );
+        update_option(self::OPT_SCHEMA, self::SCHEMA, false);
+    }
+
+    /**
+     * Creates the tables again when one is missing, or older than this plugin. For requests that
+     * reach them without the activation hook having run, as after a copy or a restore. Called for
+     * signed requests only, after the signature: nothing unsigned writes to the database.
+     */
+    public static function ensure_tables()
+    {
+        global $wpdb;
+        $found = (array) $wpdb->get_col($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($wpdb->prefix . 'wpl7_connect_') . '%'));
+        if (array_diff([self::table('files'), self::table('nonces'), self::table('log')], $found)
+            || (int) get_option(self::OPT_SCHEMA, 0) !== self::SCHEMA) {
+            self::install_tables();
+        }
+    }
+
+    /**
+     * Reads connection.php, which the panel writes into the zip, into options, and deletes it: the
+     * token should not sit in a file. Reading it again when it could not be deleted would undo a
+     * code entered by hand since, so a file is read only once. A new zip uploaded over the plugin
+     * brings a new file, and its key replaces the old one at once.
+     */
+    public static function read_connection_file()
+    {
+        $file = dirname(WPL7_CONNECT_FILE) . '/connection.php';
+        if (!is_file($file)) {
+            return false;
+        }
+        $hash = (string) @hash_file('sha256', $file);
+        if ($hash === '' || $hash === get_option(self::OPT_CONSUMED)) {
+            return false;
+        }
+        $data = include $file;
+        @unlink($file);
+        update_option(self::OPT_CONSUMED, $hash, false);
+        if (!is_array($data) || !isset($data['panel'], $data['connection'], $data['token'], $data['key'])) {
+            return false;
+        }
+        $panel = self::panel_url($data['panel']);
+        $connection = is_int($data['connection']) ? $data['connection'] : 0;
+        if ($panel === null || $connection < 1 || !is_string($data['token']) || !preg_match(self::TOKEN_RE, $data['token'])
+            || !is_string($data['key']) || self::key_bytes($data['key']) === null) {
+            return false;
+        }
+        self::bind($panel, $data['token'], $data['key'], $connection);
+        return true;
+    }
+
+    /**
+     * Remembers a panel, a token and the panel's key. The connection's id comes with the file, or
+     * from the panel's answer to enroll.
+     */
+    public static function bind($panel, $token, $key, $connection = 0)
+    {
+        update_option(self::OPT_PANEL, $panel, false);
+        update_option(self::OPT_TOKEN, $token, false);
+        update_option(self::OPT_KEY, $key, false);
+        if ($connection > 0) {
+            update_option(self::OPT_CONNECTION, $connection, false);
+        } else {
+            delete_option(self::OPT_CONNECTION);
+        }
+        update_option(self::OPT_STATE, self::STATE_BOUND, false);
+        delete_option(self::OPT_ENROLLED);
+        delete_option(self::OPT_SINCE);
+        delete_option(self::OPT_LAST);
+        delete_option(self::OPT_OFFER);
+        delete_transient('wpl7_connect_auto');
+    }
+
+    /**
+     * Forgets the key, the connection's id and the token: from now on no request is answered. The
+     * panel's address stays, for the form that connects again.
+     */
+    public static function forget()
+    {
+        delete_option(self::OPT_KEY);
+        delete_option(self::OPT_CONNECTION);
+        delete_option(self::OPT_TOKEN);
+        delete_option(self::OPT_ENROLLED);
+        delete_option(self::OPT_SINCE);
+        delete_option(self::OPT_LAST);
+        delete_option(self::OPT_OFFER);
+        update_option(self::OPT_STATE, self::STATE_DISCONNECTED, false);
+        delete_transient('wpl7_connect_auto');
+    }
+
+    /**
+     * A signed request passed every check. The first one moves the plugin to connected and deletes
+     * the enrollment token, which has done its work. The last request's time is kept to the minute,
+     * so a busy panel does not write it on every request.
+     */
+    public static function mark_request()
+    {
+        $now = time();
+        if (self::state() !== self::STATE_CONNECTED) {
+            update_option(self::OPT_STATE, self::STATE_CONNECTED, false);
+            update_option(self::OPT_SINCE, $now, false);
+            delete_option(self::OPT_TOKEN);
+            delete_transient('wpl7_connect_auto');
+        }
+        if ($now - (int) get_option(self::OPT_LAST, 0) >= 60) {
+            update_option(self::OPT_LAST, $now, false);
+        }
+    }
+
+    public static function token()
+    {
+        $token = get_option(self::OPT_TOKEN, '');
+        return is_string($token) ? $token : '';
+    }
+
+    public static function connection_id()
+    {
+        return (int) get_option(self::OPT_CONNECTION, 0);
+    }
+
+    /** The panel's public key as 32 bytes; null when there is none, or it is not one. */
+    public static function key_bytes($key = null)
+    {
+        if ($key === null) {
+            $key = get_option(self::OPT_KEY, '');
+        }
+        return is_string($key) ? WPL7_Connect_Server::base64url_decode($key, 32) : null;
+    }
+
+    public static function panel()
+    {
+        $panel = get_option(self::OPT_PANEL, '');
+        return is_string($panel) ? $panel : '';
+    }
+
+    public static function state()
+    {
+        $state = get_option(self::OPT_STATE, '');
+        $known = [self::STATE_UNBOUND, self::STATE_BOUND, self::STATE_ENROLLED, self::STATE_CONNECTED, self::STATE_DISCONNECTED];
+        if (in_array($state, $known, true)) {
+            return $state;
+        }
+        return self::token() !== '' ? self::STATE_BOUND : self::STATE_UNBOUND;
+    }
+
+    /**
+     * The site's home as the protocol binds it: untrailingslashit(home_url()), asked in the scheme
+     * the home option itself has. home_url() otherwise follows the request (is_ssl()), and a site
+     * whose home is http would then change address between a request over https and one over
+     * http. The must-use loader computes the same.
+     */
+    public static function home()
+    {
+        $scheme = wp_parse_url((string) get_option('home'), PHP_URL_SCHEME);
+        $scheme = is_string($scheme) && in_array(strtolower($scheme), ['http', 'https'], true) ? strtolower($scheme) : null;
+        return untrailingslashit(home_url('', $scheme));
+    }
+
+    /**
+     * Requires every class of the plugin. An update of WPL7 Connect itself replaces these files
+     * while the request runs; a class loaded after that would come from the new version.
+     */
+    public static function load_all()
+    {
+        foreach (glob(dirname(WPL7_CONNECT_FILE) . '/includes/class-wpl7-connect-*.php') ?: [] as $file) {
+            require_once $file;
+        }
+    }
+
+    /**
+     * A panel's address as the plugin keeps it: http or https, a host, an optional port and path,
+     * no credentials, query or fragment, no trailing slash. Null when it is not one.
+     */
+    public static function panel_url($url)
+    {
+        if (!is_string($url) || strlen($url) > 2000) {
+            return null;
+        }
+        $parts = wp_parse_url(trim($url));
+        if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
+            return null;
+        }
+        $scheme = strtolower($parts['scheme']);
+        if (($scheme !== 'https' && $scheme !== 'http') || isset($parts['user']) || isset($parts['pass'])
+            || isset($parts['query']) || isset($parts['fragment'])) {
+            return null;
+        }
+        if (!preg_match('/^[A-Za-z0-9.-]+$|^\[[0-9A-Fa-f:.]+\]$/D', $parts['host'])) {
+            return null;
+        }
+        $out = $scheme . '://' . strtolower($parts['host']);
+        if (isset($parts['port'])) {
+            $out .= ':' . (int) $parts['port'];
+        }
+        if (isset($parts['path'])) {
+            $out .= rtrim($parts['path'], '/');
+        }
+        return $out;
+    }
+
+    /**
+     * Whether a URL is one the panel this plugin enrolled with serves under $path, as a catalog
+     * download or the plugin's own update: the plugin downloads nothing else that the panel names.
+     */
+    public static function panel_link($url, $path, $panel = null)
+    {
+        $panel = $panel === null ? self::panel() : $panel;
+        if (!is_string($panel) || $panel === '' || !is_string($url) || strlen($url) > 2000 || preg_match('/[\x00-\x20\x7f]/', $url)) {
+            return false;
+        }
+        $prefix = $panel . $path;
+        return strlen($url) > strlen($prefix) && strncmp($url, $prefix, strlen($prefix)) === 0;
+    }
+
+    /**
+     * Whether the token may travel to this panel address: always over https, and over plain http
+     * only to this machine or a private network, where nobody on the way can read it. That is an
+     * IP address in a loopback or private range, `localhost`, or a name that resolves to such
+     * addresses only, as `host.docker.internal` does in a panel's own test. Asked again before
+     * every call, since what a name resolves to can change.
+     *
+     * @param callable|null $resolve host => [ip, ...]; the system's resolver when null
+     */
+    public static function panel_allowed($url, $resolve = null)
+    {
+        $parts = is_string($url) ? wp_parse_url($url) : false;
+        if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
+            return false;
+        }
+        $scheme = strtolower($parts['scheme']);
+        if ($scheme === 'https') {
+            return true;
+        }
+        if ($scheme !== 'http') {
+            return false;
+        }
+        $host = strtolower(trim($parts['host'], '[]'));
+        if ($host === 'localhost' || substr($host, -10) === '.localhost') {
+            return true;
+        }
+        if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
+            return self::local_ip($host);
+        }
+        $addresses = $resolve !== null ? call_user_func($resolve, $host) : self::resolve_host($host);
+        if (!$addresses) {
+            return false;
+        }
+        foreach ($addresses as $ip) {
+            if (!self::local_ip($ip)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Loopback (127.0.0.0/8, ::1) or private (10/8, 172.16/12, 192.168/16, fc00::/7), mapped IPv4 included. */
+    public static function local_ip($ip)
+    {
+        $packed = function_exists('inet_pton') ? @inet_pton(trim((string) $ip, '[]')) : false;
+        if ($packed === false) {
+            $long = ip2long((string) $ip);
+            if ($long === false) {
+                return false;
+            }
+            $packed = pack('N', $long);
+        }
+        if (strlen($packed) === 16) {
+            if (substr($packed, 0, 12) !== str_repeat("\0", 10) . "\xff\xff") {
+                return $packed === str_repeat("\0", 15) . "\x01" || (ord($packed[0]) & 0xfe) === 0xfc;
+            }
+            $packed = substr($packed, 12);
+        }
+        if (strlen($packed) !== 4) {
+            return false;
+        }
+        $a = ord($packed[0]);
+        $b = ord($packed[1]);
+        return $a === 127 || $a === 10 || ($a === 172 && $b >= 16 && $b <= 31) || ($a === 192 && $b === 168);
+    }
+
+    /** Every address a name has, IPv4 and IPv6. None when it does not resolve. */
+    private static function resolve_host($host)
+    {
+        $addresses = @gethostbynamel($host);
+        $addresses = is_array($addresses) ? $addresses : [];
+        if (function_exists('dns_get_record') && defined('DNS_AAAA')) {
+            $records = @dns_get_record($host, DNS_AAAA);
+            foreach (is_array($records) ? $records : [] as $record) {
+                if (isset($record['ipv6'])) {
+                    $addresses[] = $record['ipv6'];
+                }
+            }
+        }
+        return $addresses;
+    }
+
+    /** True for valid UTF-8. A file name or a column value that is not goes as bytes. */
+    public static function is_utf8($s)
+    {
+        return preg_match('//u', $s) === 1;
+    }
+
+    /**
+     * $s with every ill-formed sequence replaced by U+FFFD, the way the WHATWG decoder (and so
+     * Node) does it: one replacement per maximal subpart. Only for display; the exact bytes travel
+     * beside it.
+     */
+    public static function utf8_display($s)
+    {
+        if (self::is_utf8($s)) {
+            return $s;
+        }
+        $out = '';
+        $len = strlen($s);
+        $i = 0;
+        while ($i < $len) {
+            $b = ord($s[$i]);
+            if ($b < 0x80) {
+                $out .= $s[$i];
+                $i++;
+                continue;
+            }
+            $need = 0;
+            $lower = 0x80;
+            $upper = 0xBF;
+            if ($b >= 0xC2 && $b <= 0xDF) {
+                $need = 1;
+            } elseif ($b >= 0xE0 && $b <= 0xEF) {
+                $need = 2;
+                if ($b === 0xE0) {
+                    $lower = 0xA0;
+                } elseif ($b === 0xED) {
+                    $upper = 0x9F;
+                }
+            } elseif ($b >= 0xF0 && $b <= 0xF4) {
+                $need = 3;
+                if ($b === 0xF0) {
+                    $lower = 0x90;
+                } elseif ($b === 0xF4) {
+                    $upper = 0x8F;
+                }
+            } else {
+                $out .= "\xEF\xBF\xBD";
+                $i++;
+                continue;
+            }
+            $j = $i + 1;
+            $seen = 0;
+            while ($seen < $need && $j < $len) {
+                $c = ord($s[$j]);
+                if ($c < $lower || $c > $upper) {
+                    break;
+                }
+                $lower = 0x80;
+                $upper = 0xBF;
+                $seen++;
+                $j++;
+            }
+            $out .= $seen === $need ? substr($s, $i, $j - $i) : "\xEF\xBF\xBD";
+            $i = $j;
+        }
+        return $out;
+    }
+
+    /**
+     * Valid UTF-8 of at most $max characters, cut on a character, never inside one. For text that
+     * goes into JSON or a varchar column.
+     */
+    public static function cut($s, $max)
+    {
+        $s = self::utf8_display((string) $s);
+        if (strlen($s) <= $max) {
+            return $s;
+        }
+        return preg_match('/^.{0,' . (int) $max . '}/su', $s, $m) ? $m[0] : '';
+    }
+
+    /** Valid UTF-8 of at most $bytes bytes, cut on a character boundary. For large output. */
+    public static function cut_bytes($s, $bytes)
+    {
+        $s = self::utf8_display((string) $s);
+        if (strlen($s) <= $bytes) {
+            return $s;
+        }
+        $s = substr($s, 0, $bytes);
+        // Drop a character the cut split: at most three bytes of one are left at the end.
+        for ($i = 0; $i < 4 && !self::is_utf8($s); $i++) {
+            $s = substr($s, 0, -1);
+        }
+        return $s;
+    }
+}

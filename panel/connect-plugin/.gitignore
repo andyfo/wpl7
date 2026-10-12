@@ -1,0 +1,3 @@
+# The panel writes connection.php into each zip it hands out; it holds a connection's enrollment
+# token. A copy dropped here by hand to test the plugin must never be committed.
+wpl7-connect/connection.php

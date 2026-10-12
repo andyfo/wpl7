@@ -3,9 +3,9 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { BatchDto, JobDto, WpInventoryRow } from '../../../shared/types';
-import type { WpBulkAction, WpComponentKind, WpInventoryFilter } from '../../../shared/schemas';
+import type { SiteKind, WpBulkAction, WpComponentKind, WpInventoryFilter } from '../../../shared/schemas';
 import { api, ApiError } from '../api/client';
-import { useBatch, useBatches, useDebounced, useMeta, useWpInventory } from '../api/hooks';
+import { useBatch, useBatches, useDebounced, useMeta, useSites, useWpInventory } from '../api/hooks';
 import {
   Button,
   Card,
@@ -14,6 +14,7 @@ import {
   ErrorNote,
   inputClass,
   JobStatusBadge,
+  Segmented,
   Spinner,
   StatTile,
   StatusBadge,
@@ -66,6 +67,7 @@ export function BulkManagement() {
   );
   const [search, setSearch] = useState('');
   const [serverId, setServerId] = useState<number | 'all'>('all');
+  const [siteKind, setSiteKind] = useState<SiteKind | 'all'>('all');
   const [includeStopped, setIncludeStopped] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Map<string, Target>>(new Map());
@@ -83,8 +85,12 @@ export function BulkManagement() {
     filter: filters,
     q: q || undefined,
     serverId: serverId === 'all' ? undefined : serverId,
+    siteKind: siteKind === 'all' ? undefined : siteKind,
     includeStopped,
   });
+  // Sites hosted elsewhere get a filter of their own once there are any.
+  const sites = useSites();
+  const hasExternal = (sites.data ?? []).some((s) => s.kind === 'external');
   const batch = useBatch(batchId);
   const batches = useBatches();
   const multiServer = meta.data?.multiServer ?? false;
@@ -332,10 +338,29 @@ export function BulkManagement() {
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
-            {multiServer && (
+            {hasExternal && (
+              <Segmented
+                small
+                label="Sites"
+                options={[
+                  { id: 'hosted', label: 'Hosted' },
+                  { id: 'external', label: 'External' },
+                  { id: 'all', label: 'All' },
+                ]}
+                value={siteKind}
+                onChange={(v) => {
+                  setSiteKind(v);
+                  // A server holds no site hosted elsewhere: its filter would hide them all.
+                  if (v === 'external') setServerId('all');
+                  setSelected(new Map());
+                }}
+              />
+            )}
+            {multiServer && siteKind !== 'external' && (
               <select
                 className={`${inputClass} w-auto`}
                 value={serverId}
+                title="Sites hosted elsewhere are on no server: choosing one shows hosted sites only."
                 onChange={(e) => {
                   setServerId(e.target.value === 'all' ? 'all' : Number(e.target.value));
                   setSelected(new Map());

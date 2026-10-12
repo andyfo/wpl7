@@ -12,6 +12,7 @@ import type { ScheduleSkip } from '../../shared/types.js';
 import { AppError, badRequest } from '../lib/errors.js';
 import type { CoreServices } from '../services/index.js';
 import { execLane } from './lanes.js';
+import { externalSites, hostedSites } from '../lib/siteKind.js';
 import type { JobWorker } from './worker.js';
 
 /**
@@ -110,6 +111,7 @@ interface Resolved {
  */
 function resolveSites(s: CoreServices, action: ScheduleAction, target: ScheduleTarget): Resolved {
   if (target.kind === 'panel') return { sites: [], skipped: [] };
+  const info = SCHEDULE_ACTION_INFO[action];
   if (target.kind === 'sites') {
     const rows = s.db.select().from(sites).where(inArray(sites.slug, target.slugs)).all();
     const bySlug = new Map(rows.map((r) => [r.slug, r]));
@@ -122,16 +124,27 @@ function resolveSites(s: CoreServices, action: ScheduleAction, target: ScheduleT
     }
     return { sites: found, skipped };
   }
-  const conditions = [eq(sites.status, action === 'site.start' ? 'stopped' : 'running')];
+  const conditions = [eq(sites.status, action === 'site.start' ? 'stopped' : 'running'), hostedSites()];
   if (target.kind === 'server') conditions.push(eq(sites.serverId, target.serverId));
   if (action === 'backup') conditions.push(eq(sites.backupsEnabled, 1));
-  return { sites: s.db.select().from(sites).where(and(...conditions)).all(), skipped: [] };
+  const hosted = s.db.select().from(sites).where(and(...conditions)).all();
+  // `all` takes in the sites hosted elsewhere that are connected, for what runs on them; a server
+  // only hosts its own (an external site's server keeps its backups, not the site).
+  if (target.kind !== 'all' || !info.external) return { sites: hosted, skipped: [] };
+  const external = [externalSites(), eq(sites.status, 'connected')];
+  if (action === 'backup') external.push(eq(sites.backupsEnabled, 1));
+  return { sites: [...hosted, ...s.db.select().from(sites).where(and(...external)).all()], skipped: [] };
 }
 
 /** Why this site cannot take this action now, or null. */
-function ineligible(action: ScheduleAction, site: SiteRow): string | null {
+export function ineligible(action: ScheduleAction, site: Pick<SiteRow, 'status' | 'kind'>): string | null {
   if (site.status === 'provisioning') return 'is still being created';
   if (site.status === 'deleting') return 'is being deleted';
+  if (site.kind === 'external') {
+    const info = SCHEDULE_ACTION_INFO[action] as { external: boolean; externalRefusal?: string };
+    if (!info.external) return `is an external site: it ${info.externalRefusal ?? 'cannot take this'}`;
+    return site.status === 'connected' ? null : `is ${site.status}`;
+  }
   switch (action) {
     case 'backup':
       return null;
@@ -213,6 +226,7 @@ function enqueueFor(
   p: Record<string, unknown>,
   scheduleName: string,
 ): JobRow {
+  // The queue puts a site hosted elsewhere's jobs in the external lanes instead (JobWorker.enqueue).
   const exec = { lane: execLane(site.serverId), siteSlug: site.slug };
   switch (action) {
     case 'backup':

@@ -16,6 +16,7 @@ sources:
   - panel/src/services/mail.ts
   - panel/src/services/mailDns.ts
   - panel/src/services/housekeeping.ts
+  - panel/src/services/connections.ts
   - panel/src/lib/crawlerVerify.ts
   - panel/src/config.ts
   - deploy/docker-compose.yml
@@ -49,6 +50,7 @@ server's address.
 | Cloudflare's API | With a Cloudflare token: checking it, site records, going live through Cloudflare, mail records, wildcard certificates. Each server's Traefik also uses it for the wildcard certificate's DNS check. | The token, zone and record names, and record values such as a server's address | Remove the token |
 | Your DNS resolver | Mail checks, going live, moving a site | The names and addresses being checked | Only when you use them |
 | The old site of an import | While an import pulls it, and once to tell its plugin to stop when you disconnect or delete the import | Signed requests for the list of its files, their contents and its tables' rows | **Disconnect** on the site page, or **Delete import** |
+| A [site hosted elsewhere](/docs/sites/external/) | Its address every minute, its plugin every hour, and for every scan, update, backup, command and login | A request for its home page. Signed requests to WPL7 Connect, with what each one asks for: updates, files and rows for a backup, a command's arguments. | **Disconnect** on the site's **Settings** tab |
 
 **Send feedback** on the About page sends nothing from the panel. A bug report or a feature request
 opens on GitHub in your browser, under your own account. A question or an idea opens the
@@ -60,9 +62,11 @@ on. Nothing is public until you post it.
 
 The panel hands its own mail to your [relay](/docs/reference/glossary/#relay), like your sites do:
 
-- Alerts go to **Send alerts to** in <UiPath href="/docs/panel/settings/">Settings → Mail</UiPath>:
+- Alerts go to **Send alerts to** in <UiPath href="/docs/panel/settings/#alerts">Settings → Monitoring</UiPath>:
   a site's mail suspended, malware found or moved, failing offsite copies, a catalog zip that
-  matches known malware, and a new release. Leave the address empty to only log them.
+  matches known malware, and a new release. With their switches on, also a site down or back up,
+  a new vulnerability, a failed backup, and a site hosted elsewhere whose plugin stops answering or
+  whose certificate expires soon. Leave the address empty to only log them.
 - Account mail goes to an account's recovery address, or to a new one being confirmed, and only
   when someone asks: a password reset link, a confirmation link, and the notice that a password
   changed.
@@ -98,6 +102,10 @@ wordpress.org for updates and downloads from it, and plugins and themes call the
 The inventory scan and the WordPress cron the panel runs both let WordPress check for updates. A
 [recipe](/docs/reference/glossary/#recipe) activates a pro plugin's license through the plugin's own
 code, so the plugin contacts its vendor to activate the key for the site's address.
+
+A site hosted elsewhere calls the panel too. WPL7 Connect sends the panel its report once, when it
+connects. It downloads its own updates, and plugins from the panel's catalog, from links the panel
+signed for it.
 
 In your browser, the panel loads everything from your own panel. When you search the wordpress.org
 directory, your browser loads the plugins' icons from wordpress.org.

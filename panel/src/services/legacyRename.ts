@@ -8,6 +8,7 @@ import {
   removeLegacyEgressNetwork,
   slugFromLegacySiteNetwork,
 } from './siteNetwork.js';
+import { hostedSites } from '../lib/siteKind.js';
 
 /**
  * LEGACY(ceo) - delete in 0.3.0. Finish the rename for sites that predate it.
@@ -39,7 +40,7 @@ export interface LegacyRenameSweep {
 
 export async function sweepLegacyRename(s: CoreServices, worker: JobWorker): Promise<LegacyRenameSweep> {
   const sweep: LegacyRenameSweep = { queued: [], skipped: [], egressRemoved: [] };
-  const rows = s.db.select().from(sites).orderBy(asc(sites.id)).all();
+  const rows = s.db.select().from(sites).where(hostedSites()).orderBy(asc(sites.id)).all();
 
   for (const server of s.servers.listRows()) {
     if (server.status === 'unreachable') continue;

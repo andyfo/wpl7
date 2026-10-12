@@ -8,20 +8,26 @@ import path from 'node:path';
 import { pluginZipChecks, plugins, siteWpComponents, siteWpStatus, vulnFeed } from '../../src/db/schema.js';
 import { zipOf, type TestWorld } from '../../test/helpers.js';
 import { HOUR, MINUTE, ago } from './clock.js';
-import { CATALOG, DEMO_ADVISORY, INVENTORY, LATEST } from './plugins.js';
+import { PANEL_VERSION } from '../../src/lib/version.js';
+import { CATALOG, DEMO_ADVISORY, EXTERNAL_INVENTORY, INVENTORY, LATEST, type DemoComponent } from './plugins.js';
 import { siteIds } from './sites.js';
 import { onDisk } from './paths.js';
 
-/** wpvulnerability.net has no record of this theme: it answers "no such slug". It knows the rest, the premium plugins too. */
-const UNKNOWN_TO_FEED = new Set(['breakdance-zero']);
+/** wpvulnerability.net has no record of these: it answers "no such slug". It knows the rest, the premium plugins too. */
+const UNKNOWN_TO_FEED = new Set(['breakdance-zero', 'wpl7-connect']);
+
+/** WPL7 Connect on a site hosted elsewhere: the panel's own version, so no update waits for it. */
+const CONNECTOR: DemoComponent = { kind: 'plugin', slug: 'wpl7-connect', title: 'WPL7 Connect', status: 'active', version: PANEL_VERSION };
 
 export function seedInventory(world: TestWorld): void {
   const db = world.db;
   const slugs = new Map<string, 'plugin' | 'theme'>();
   db.transaction((tx) => {
-    for (const [slug, inv] of Object.entries(INVENTORY)) {
+    for (const [slug, inv] of Object.entries({ ...INVENTORY, ...EXTERNAL_INVENTORY })) {
       const siteId = siteIds.get(slug)!;
-      const scannedAt = ago((slug === 'oak-and-ivy' ? 7 : 52) * MINUTE);
+      // Granite Gym was last scanned before its plugin stopped answering.
+      const scannedAt = ago((slug === 'oak-and-ivy' ? 7 : slug === 'granite-gym' ? 4 * 60 + 40 : 52) * MINUTE);
+      const components = slug in EXTERNAL_INVENTORY ? [CONNECTOR, ...inv.components] : inv.components;
       tx.insert(siteWpStatus)
         .values({
           siteId,
@@ -31,7 +37,7 @@ export function seedInventory(world: TestWorld): void {
           scannedAt,
         })
         .run();
-      for (const c of inv.components) {
+      for (const c of components) {
         slugs.set(c.slug, c.kind);
         tx.insert(siteWpComponents)
           .values({
@@ -57,7 +63,7 @@ export function seedInventory(world: TestWorld): void {
         .values({ kind, slug, fetchedAt, attemptedAt: fetchedAt, known: UNKNOWN_TO_FEED.has(slug) ? 0 : 1, advisories: JSON.stringify(advisories) })
         .run();
     }
-    for (const core of new Set(Object.values(INVENTORY).map((i) => i.core))) {
+    for (const core of new Set(Object.values({ ...INVENTORY, ...EXTERNAL_INVENTORY }).map((i) => i.core))) {
       tx.insert(vulnFeed).values({ kind: 'core', slug: core, fetchedAt, attemptedAt: fetchedAt, known: 1, advisories: '[]' }).run();
     }
   });

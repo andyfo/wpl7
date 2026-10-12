@@ -51,7 +51,7 @@ const steps =
 
 export const SHOTS: Shot[] = [
   { name: 'overview', what: 'The Dashboard: the fleet at a glance', path: '/', theme: 'both', hero: true },
-  { name: 'sites-list', what: 'Sites → All sites: eleven sites on three servers', path: '/sites', theme: 'both', hero: true },
+  { name: 'sites-list', what: 'Sites → All sites: eleven sites on three servers, and two hosted elsewhere', path: '/sites', theme: 'both', hero: true },
   {
     name: 'site-new',
     what: 'The New site wizard, its first step filled in',
@@ -73,6 +73,9 @@ export const SHOTS: Shot[] = [
     },
   },
   { name: 'site-import', what: 'Importing a site: what the old site reported, on the Confirm step', path: '/sites/import?id=1', theme: 'light' },
+  { name: 'site-connect', what: 'Connecting a site hosted elsewhere: what its plugin reported, on the Confirm step', path: '/sites/connect?id=3', theme: 'light' },
+  { name: 'site-external', what: 'A site hosted elsewhere: its Overview tab', path: '/sites/meadow-vet', theme: 'light' },
+  { name: 'sites-external', what: 'Sites → All sites: the sites hosted elsewhere, one whose plugin does not answer', path: '/sites', theme: 'light', prepare: scrollTo('External') },
   { name: 'site-wordpress', what: 'A site’s WordPress tab: updates and plugins', path: '/sites/northwind-bakery', theme: 'both', prepare: tab('WordPress') },
   { name: 'site-updates', what: 'A site’s WordPress tab: an update waiting and a known vulnerability', path: '/sites/blue-fern', theme: 'light', prepare: tab('WordPress') },
   {

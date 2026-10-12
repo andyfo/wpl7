@@ -71,7 +71,13 @@ Repeating schedules follow the panel's clock, with at least five minutes between
 **All running sites** and **Server** take the sites running at each run, so new sites are included.
 
 A busy, stopped or deleted site is skipped, and the run says why. A schedule never starts a stopped
-site, except with **Start sites**. A run missed while the panel was down is made up once, if
+site, except with **Start sites**.
+
+A connected [site hosted elsewhere](/docs/sites/external/) takes **Back up**, **Scan WordPress
+inventory**, **Update plugins, themes and WordPress**, **WP-CLI command** and **REST API request**,
+and **All running sites** includes it. There, a WP-CLI command runs only if a plugin registered it
+with WPL7 Connect. A REST request goes through the plugin, as the user named in **Username**, and
+needs no application password. A run missed while the panel was down is made up once, if
 the panel is back within half an interval, and an hour at most.
 
 ## From the API
@@ -94,6 +100,7 @@ and `wp/rest` in the [API reference](/docs/integrations/api-reference/).
 
 - At most 100 custom schedules.
 - Each server runs one command at a time. A long command delays the other sites' commands there.
+  Sites hosted elsewhere share two lanes of their own.
 - A started command cannot be canceled. Only its time limit stops it.
 - A `wp godmode` command that waits on a chat is refused.
 - Scheduled backups count toward the backup retention, so frequent runs push out older backups.

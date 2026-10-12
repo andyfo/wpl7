@@ -21,13 +21,28 @@ import type {
   WpCoreStatusDto,
   SiteWpSummary,
 } from '../../shared/types.js';
-import type { SiteStatus } from '../../shared/schemas.js';
+import type { SiteKind, SiteStatus } from '../../shared/schemas.js';
 import { compareVersions } from '../lib/wpVersions.js';
+import { CONNECT_PLUGIN } from '../lib/siteKind.js';
 import type { ServerHandle } from '../servers/registry.js';
 import type { CoreServices } from './index.js';
 import { refKey, worseSeverity, type VulnerabilityFeedService, type VulnRef } from './vulnerabilities.js';
+import { ContainerBackend, type InventoryReading, type SiteBackend } from './siteBackend.js';
 
 export type ScanLog = (level: 'info' | 'warn' | 'error', message: string) => void;
+
+/** One thing the vulnerability feed says about one site's install (findings()). */
+export interface VulnFinding {
+  kind: 'plugin' | 'theme' | 'core';
+  slug: string;
+  title: string;
+  version: string;
+  /** The advisory's id, or 'closed' for a plugin closed on wordpress.org. */
+  advisory: string;
+  advisoryTitle: string;
+  severity: VulnSeverity | null;
+  fixedIn: string | null;
+}
 
 /** One parsed row of `wp plugin list` / `wp theme list`. */
 export interface ParsedComponent {
@@ -68,6 +83,8 @@ function updateStateOf(raw: unknown, updateVersion: string | null): 'none' | 'av
   return 'none';
 }
 
+export { CONNECT_PLUGIN };
+
 /** Turn raw wp-cli rows into snapshot rows, dropping anything without a name. */
 export function parseComponents(kind: 'plugin' | 'theme', rows: Record<string, unknown>[]): ParsedComponent[] {
   const out: ParsedComponent[] = [];
@@ -98,13 +115,25 @@ export function parseComponents(kind: 'plugin' | 'theme', rows: Record<string, u
  * plugins WordPress can deactivate, and wp-cli refuses to delete the active theme or its
  * parent (which is exactly the refusal we want, just stated up front).
  */
-export function actionsFor(component: {
-  kind: 'plugin' | 'theme';
-  status: string;
-  updateState: 'none' | 'available' | 'higher';
-  updateVersion: string | null;
-}): { actionable: WpComponentActions; blockedReason: string | null } {
+export function actionsFor(
+  component: {
+    kind: 'plugin' | 'theme';
+    slug?: string;
+    status: string;
+    updateState: 'none' | 'available' | 'higher';
+    updateVersion: string | null;
+  },
+  site: { external?: boolean } = {},
+): { actionable: WpComponentActions; blockedReason: string | null } {
   const canUpdate = component.updateState === 'available' && !!component.updateVersion;
+  // On a site hosted elsewhere WPL7 Connect is the panel's only way in: switched off or deleted
+  // from here, the site would be out of reach. It still takes its updates.
+  if (site.external && component.kind === 'plugin' && component.slug === CONNECT_PLUGIN) {
+    return {
+      actionable: { activate: false, deactivate: false, update: canUpdate, delete: false },
+      blockedReason: 'WPL7 Connect connects this site to the panel.',
+    };
+  }
   if (component.kind === 'plugin') {
     if (component.status === 'must-use') {
       return {
@@ -169,28 +198,21 @@ export class WpInventoryService {
    */
   async scanSite(
     site: SiteRow,
-    server: ServerHandle,
+    via: ServerHandle | SiteBackend,
     opts: { log?: ScanLog; refreshFeed?: boolean } = {},
   ): Promise<void> {
     const log = opts.log ?? (() => undefined);
     const previous = this.statusRowFor(site.id);
+    // A hosted site's container through WP-CLI, an external one through WPL7 Connect: the
+    // reading differs, storing it does not (services/siteBackend.ts).
+    const backend = 'readInventory' in via ? via : new ContainerBackend(this.s, site, via);
     let partial = false;
     let components: ParsedComponent[] = [];
+    let reading: InventoryReading;
     try {
-      for (const kind of ['plugin', 'theme'] as const) {
-        let rows: Record<string, unknown>[];
-        try {
-          rows = await server.wp.listComponents(site.containerName, kind, { skipExtensions: partial });
-        } catch (err) {
-          // A plugin that fatals under wp-cli takes the whole listing with it. Retrying
-          // without the extensions loaded still yields the inventory; it just cannot see
-          // updates that a premium plugin's own updater would have reported.
-          log('warn', `wp ${kind} list failed (${message(err)}); retrying with plugins and themes not loaded`);
-          rows = await server.wp.listComponents(site.containerName, kind, { skipExtensions: true });
-          partial = true;
-        }
-        components = components.concat(parseComponents(kind, rows));
-      }
+      reading = await backend.readInventory(log);
+      partial = reading.partial;
+      components = [...parseComponents('plugin', reading.plugins), ...parseComponents('theme', reading.themes)];
     } catch (err) {
       // Only the error is written: a container that could not be read for thirty seconds is
       // no reason to forget the version it was running, and the components stay too. The
@@ -200,10 +222,9 @@ export class WpInventoryService {
       throw err;
     }
 
-    // The core read is its own failure domain. `core check-update` boots WordPress like the
-    // listings do, so the plugin that broke them breaks it too - and losing the core version
-    // is no reason to throw away an inventory that was successfully recovered.
-    let core = await this.readCore(site, server, { skipExtensions: partial, log });
+    // The core read is its own failure domain: losing the core version is no reason to throw
+    // away an inventory that was successfully recovered.
+    let core = reading.core;
     if (!core) {
       partial = true;
       core = {
@@ -265,29 +286,9 @@ export class WpInventoryService {
     this.recount([...touched]);
   }
 
-  /**
-   * Core version and the update on offer, or null when WordPress could not be booted at
-   * all. Retries with the extensions unloaded for the same reason the listings do.
-   */
-  private async readCore(
-    site: SiteRow,
-    server: ServerHandle,
-    opts: { skipExtensions: boolean; log: ScanLog },
-  ): Promise<{ version: string | null; updateVersion: string | null; updateType: 'major' | 'minor' | null } | null> {
-    for (const skipExtensions of opts.skipExtensions ? [true] : [false, true]) {
-      try {
-        const version = await server.wp.coreVersion(site.containerName, { skipExtensions });
-        const update = await server.wp.coreCheckUpdate(site.containerName, { skipExtensions });
-        return { version, updateVersion: update?.version ?? null, updateType: update?.updateType ?? null };
-      } catch (err) {
-        if (!skipExtensions) {
-          opts.log('warn', `wp core check-update failed (${message(err)}); retrying with plugins and themes not loaded`);
-          continue;
-        }
-        opts.log('warn', `Could not read the WordPress version of "${site.slug}": ${message(err)}`);
-      }
-    }
-    return null;
+  /** The WordPress version the last scan read, or null. */
+  coreVersionOf(siteId: number): string | null {
+    return this.statusRowFor(siteId)?.coreVersion ?? null;
   }
 
   /** Sites that have any of these components (or core versions) installed. */
@@ -432,6 +433,49 @@ export class WpInventoryService {
     }
   }
 
+  /**
+   * What is vulnerable on each site now: one finding per advisory that matches an installed
+   * version, and one for a plugin wordpress.org closed. What the new-vulnerability alert
+   * (services/alerts.ts) compares with what it already said.
+   */
+  findings(siteIds?: number[]): Map<number, VulnFinding[]> {
+    const statuses = this.db
+      .select()
+      .from(siteWpStatus)
+      .where(siteIds ? inArray(siteWpStatus.siteId, siteIds) : undefined)
+      .all();
+    const out = new Map<number, VulnFinding[]>();
+    if (statuses.length === 0) return out;
+    const ids = statuses.map((s) => s.siteId);
+    const components = this.db.select().from(siteWpComponents).where(inArray(siteWpComponents.siteId, ids)).all();
+    const feedRows = this.feed.loadRows([
+      ...components.map((c) => ({ kind: c.kind as WpComponentKind, slug: c.slug })),
+      ...statuses.filter((s) => s.coreVersion).map((s) => ({ kind: 'core' as const, slug: s.coreVersion! })),
+    ]);
+    const add = (siteId: number, finding: VulnFinding) => {
+      const list = out.get(siteId) ?? [];
+      list.push(finding);
+      out.set(siteId, list);
+    };
+    for (const c of components) {
+      const verdict = this.feed.verdictFrom(feedRows.get(refKey(c.kind, c.slug)), c.version);
+      for (const v of verdict.vulnerabilities) {
+        add(c.siteId, { kind: c.kind as 'plugin' | 'theme', slug: c.slug, title: c.title || c.slug, version: c.version, advisory: v.id, advisoryTitle: v.title, severity: v.severity, fixedIn: v.fixedIn });
+      }
+      if (verdict.closedOnWporg) {
+        add(c.siteId, { kind: c.kind as 'plugin' | 'theme', slug: c.slug, title: c.title || c.slug, version: c.version, advisory: 'closed', advisoryTitle: 'Closed on wordpress.org', severity: null, fixedIn: null });
+      }
+    }
+    for (const status of statuses) {
+      if (!status.coreVersion) continue;
+      const verdict = this.feed.verdictFrom(feedRows.get(refKey('core', status.coreVersion)), status.coreVersion);
+      for (const v of verdict.vulnerabilities) {
+        add(status.siteId, { kind: 'core', slug: 'wordpress', title: 'WordPress', version: status.coreVersion, advisory: v.id, advisoryTitle: v.title, severity: v.severity, fixedIn: v.fixedIn });
+      }
+    }
+    return out;
+  }
+
   /** The summary `GET /sites` carries, for every site in one query pair. */
   summaries(): Map<number, SiteWpSummary> {
     const out = new Map<number, SiteWpSummary>();
@@ -462,7 +506,8 @@ export class WpInventoryService {
       ...(status?.coreVersion ? [{ kind: 'core' as const, slug: status.coreVersion }] : []),
     ]);
 
-    const dtos = components.map((row) => this.toComponentDto(row, feedRows.get(refKey(row.kind, row.slug))));
+    const external = site.kind === 'external';
+    const dtos = components.map((row) => this.toComponentDto(row, feedRows.get(refKey(row.kind, row.slug)), external));
     const plugins = dtos.filter((c) => c.kind === 'plugin');
     const themes = dtos.filter((c) => c.kind === 'theme');
     const coreVerdict = this.feed.verdictFrom(
@@ -497,16 +542,14 @@ export class WpInventoryService {
     };
   }
 
-  private toComponentDto(row: SiteWpComponentRow, feedRow: VulnFeedRow | undefined): WpComponentDto {
+  private toComponentDto(row: SiteWpComponentRow, feedRow: VulnFeedRow | undefined, external = false): WpComponentDto {
     const kind = row.kind as 'plugin' | 'theme';
     const updateState = row.updateState as 'none' | 'available' | 'higher';
     const verdict = this.feed.verdictFrom(feedRow, row.version);
-    const { actionable, blockedReason } = actionsFor({
-      kind,
-      status: row.status,
-      updateState,
-      updateVersion: row.updateVersion,
-    });
+    const { actionable, blockedReason } = actionsFor(
+      { kind, slug: row.slug, status: row.status, updateState, updateVersion: row.updateVersion },
+      { external },
+    );
     // Would the offered release actually clear what matches today? Re-running the same
     // matcher against the update version is the only honest way to answer: an advisory
     // "fixed in 2.0" is not fixed by the 1.1 the directory is offering.
@@ -546,8 +589,12 @@ export class WpInventoryService {
     const serverNames = new Map(this.s.servers.listRows().map((r) => [r.id, r.name]));
     const considered = siteRows.filter((site) => {
       if (site.status === 'deleting' || site.status === 'provisioning') return false;
-      if (!query.includeStopped && site.status !== 'running') return false;
-      if (query.serverId !== undefined && site.serverId !== query.serverId) return false;
+      // A site hosted elsewhere is as live as a running one while its plugin is connected.
+      const live = site.kind === 'external' ? site.status === 'connected' : site.status === 'running';
+      if (!query.includeStopped && !live) return false;
+      if (query.siteKind && site.kind !== query.siteKind) return false;
+      // Its server keeps its backups, not the site: a server filter means sites hosted there.
+      if (query.serverId !== undefined && (site.serverId !== query.serverId || site.kind === 'external')) return false;
       if (query.siteSlug && site.slug !== query.siteSlug) return false;
       return true;
     });
@@ -621,8 +668,9 @@ export class WpInventoryService {
             siteSlug: site.slug,
             siteTitle: site.title,
             siteStatus: site.status as SiteStatus,
+            siteKind: site.kind as SiteKind,
             serverId: site.serverId,
-            serverName: serverNames.get(site.serverId) ?? `#${site.serverId}`,
+            serverName: site.kind === 'external' ? 'External' : (serverNames.get(site.serverId) ?? `#${site.serverId}`),
             scannedAt: status.scannedAt,
             version: status.coreVersion,
             updateVersion: status.coreUpdateVersion,
@@ -652,7 +700,7 @@ export class WpInventoryService {
         const site = siteById.get(component.siteId);
         if (!site) continue;
         if (!matchesText(component.slug, component.title)) continue;
-        const dto = this.toComponentDto(component, feedRows.get(refKey(component.kind, component.slug)));
+        const dto = this.toComponentDto(component, feedRows.get(refKey(component.kind, component.slug)), site.kind === 'external');
         const vulnerable = dto.vulnerabilities.length > 0 || dto.closedOnWporg;
         if (wants.has('updates') && !dto.actionable.update) continue;
         if (wants.has('vulnerable') && !vulnerable) continue;
@@ -675,8 +723,9 @@ export class WpInventoryService {
             siteSlug: site.slug,
             siteTitle: site.title,
             siteStatus: site.status as SiteStatus,
+            siteKind: site.kind as SiteKind,
             serverId: site.serverId,
-            serverName: serverNames.get(site.serverId) ?? `#${site.serverId}`,
+            serverName: site.kind === 'external' ? 'External' : (serverNames.get(site.serverId) ?? `#${site.serverId}`),
             scannedAt: status?.scannedAt ?? null,
             version: dto.version,
             updateVersion: dto.updateVersion,

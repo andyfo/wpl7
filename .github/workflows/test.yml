@@ -35,11 +35,14 @@ jobs:
       - run: npm run build
         working-directory: panel
 
-  # The migration plugin runs on the old site's PHP, which can be as old as 7.0, so it is linted
-  # and checked against the protocol's vectors at both ends of what it supports. The floor and the
-  # action that installs PHP 7.0 are on docs/internal/watchlist.md.
+  # The two WordPress plugins, WPL7 Migrate (imports) and WPL7 Connect (sites hosted elsewhere),
+  # run on the site's own PHP, which can be as old as 7.0, so they are linted and checked against
+  # their protocols' vectors at both ends of what they support. PHP 7.0 has no sodium: there
+  # Connect's Ed25519 checks run on sodium_compat, as WordPress bundles it, installed with Composer
+  # into a scratch folder. The floors and the action that installs PHP 7.0 are on
+  # docs/internal/watchlist.md.
   php:
-    name: Migration plugin, PHP ${{ matrix.php }}
+    name: WordPress plugins, PHP ${{ matrix.php }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -51,13 +54,20 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          tools: none
+          tools: composer
           coverage: none
       - name: Lint every PHP file
-        working-directory: panel/migrate-plugin
-        run: find . -name '*.php' -print0 | xargs -0 -n 1 php -l
-      - name: Check the protocol vectors
+        run: find panel/migrate-plugin panel/connect-plugin -name '*.php' -print0 | xargs -0 -n 1 php -l
+      - name: Check the import protocol's vectors
         run: php panel/migrate-plugin/tests/run.php
+      - name: Install sodium_compat for a PHP without sodium
+        if: matrix.php == '7.0'
+        run: |
+          mkdir -p "$RUNNER_TEMP/sodium"
+          composer require --working-dir="$RUNNER_TEMP/sodium" --no-interaction --no-progress paragonie/sodium_compat
+          echo "WPL7_SODIUM_COMPAT=$RUNNER_TEMP/sodium/vendor/autoload.php" >> "$GITHUB_ENV"
+      - name: Check the connect protocol's vectors
+        run: php panel/connect-plugin/tests/run.php
 
   # What a pull request's run tested, by tree - the merge result it checked out. A squash merge
   # made while main stood still lands exactly this tree on main, and deploy.yml builds that

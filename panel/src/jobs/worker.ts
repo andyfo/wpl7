@@ -24,6 +24,7 @@ const STOP_GRACE_MS = 20_000;
 const MAX_SITE_HOLD_MS = 15 * 60_000;
 
 export { execLane, laneServerId } from './lanes.js';
+import { externalLane } from './lanes.js';
 
 /**
  * Single in-process worker with per-SERVER lanes: at most one running job per server,
@@ -154,13 +155,16 @@ export class JobWorker {
       }
     }
     let serverId = opts?.serverId ?? site?.serverId ?? null;
-    if (serverId === null && site) {
-      serverId =
-        this.db.select({ serverId: sites.serverId }).from(sites).where(eq(sites.id, site.id)).get()?.serverId ?? null;
+    let lane = opts?.lane ?? null;
+    if (site) {
+      const row = this.db.select({ serverId: sites.serverId, kind: sites.kind }).from(sites).where(eq(sites.id, site.id)).get();
+      // A site hosted elsewhere runs on none of the servers: every job of its own shares the
+      // external lanes, whatever lane its type takes on a hosted site - so no call site has to say so.
+      if (row?.kind === 'external') lane = externalLane(site.id);
+      else if (lane === null && serverId === null) serverId = row?.serverId ?? null;
     }
     // A job occupies either the server lanes or a named one, never both: a laned job that
     // also held a server lane would be exactly the blocking the lane exists to avoid.
-    const lane = opts?.lane ?? null;
     if (lane !== null) serverId = null;
     // Who asked (src/jobs/actor.ts): the request, the schedule, or - with neither - the panel.
     const actor = currentActor();

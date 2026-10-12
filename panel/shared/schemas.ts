@@ -51,6 +51,11 @@ export const RESERVED_SLUGS = [
   // /sites/import is the import wizard; `imports` is held back with it for the API's own name.
   'import',
   'imports',
+  // /sites/connect is the wizard that connects a site hosted elsewhere; `connections` is the
+  // API's name for those, and `external` the name of their group.
+  'connect',
+  'connections',
+  'external',
 ] as const;
 
 export const DOMAIN_RE =
@@ -126,8 +131,17 @@ const commaList = <const T extends readonly [string, ...string[]]>(values: T) =>
 // ---------------------------------------------------------------------------
 // Enums
 
-export const siteStatuses = ['provisioning', 'running', 'stopped', 'error', 'deleting'] as const;
+/**
+ * A hosted site is provisioning, running, stopped, in error or deleting. An external one (hosted
+ * elsewhere, reached through WPL7 Connect) is connected, disconnected or deleting: never running,
+ * so a loop over running sites never meets one.
+ */
+export const siteStatuses = ['provisioning', 'running', 'stopped', 'error', 'deleting', 'connected', 'disconnected'] as const;
 export type SiteStatus = (typeof siteStatuses)[number];
+
+/** Where a site runs: on one of the panel's servers, or elsewhere, through WPL7 Connect. */
+export const siteKinds = ['hosted', 'external'] as const;
+export type SiteKind = (typeof siteKinds)[number];
 
 export const jobStatuses = ['queued', 'running', 'succeeded', 'failed', 'canceled'] as const;
 export type JobStatus = (typeof jobStatuses)[number];
@@ -486,6 +500,60 @@ export const importRunBody = z
 export type ImportRunBody = z.infer<typeof importRunBody>;
 
 // ---------------------------------------------------------------------------
+// Connections: sites hosted elsewhere, through WPL7 Connect (docs/internal/connect-protocol.md)
+
+/**
+ * pending: the plugin is not heard from yet · enrolled: it reported the site · active: the
+ * connection belongs to a site · disconnected: the panel let go, or the site did · expired: it
+ * waited too long.
+ */
+export const connectionStatuses = ['pending', 'enrolled', 'active', 'disconnected', 'expired'] as const;
+export type ConnectionStatus = (typeof connectionStatuses)[number];
+
+export const connectionIdParams = z.object({ id: z.coerce.number().int().positive() });
+
+export const connectionCreateBody = z
+  .object({
+    /** Where the admin says the site is. Shown until its plugin enrolls; its own `home` counts after that. */
+    sourceUrl: z.url({ protocol: /^https?$/ }).max(2000).optional(),
+    /** Let the panel reach the site over plain http. Refused otherwise. */
+    allowHttp: z.boolean().default(false),
+  })
+  .strict();
+export type ConnectionCreateBody = z.infer<typeof connectionCreateBody>;
+
+/** What the admin chose on the Confirm step. */
+export const connectionAddBody = z
+  .object({
+    /** Left out, made from the site's address. */
+    slug: slugSchema.optional(),
+    /** Left out, the site's own title. */
+    title: z.string().trim().min(1).max(200).optional(),
+    /** The server that keeps the site's backups. Left out, the default server. */
+    storageServerId: z.number().int().positive().optional(),
+    /** The administrator (user id on the site) updates and logins run as. Left out, the first one. */
+    actAs: z.number().int().positive().optional(),
+    /** Back the site up every night, and take the first backup now. */
+    backups: z.boolean().default(true),
+  })
+  .strict();
+export type ConnectionAddBody = z.infer<typeof connectionAddBody>;
+
+/** An external site's connection settings. */
+export const siteConnectionPatchBody = z
+  .object({
+    actAs: z.number().int().positive().optional(),
+    storageServerId: z.number().int().positive().optional(),
+    /** Bind the connection to the address the site answers with now (after a check). */
+    useNewHome: z.literal(true).optional(),
+  })
+  .strict()
+  .refine((b) => b.actAs !== undefined || b.storageServerId !== undefined || b.useNewHome !== undefined, {
+    message: 'Nothing to change',
+  });
+export type SiteConnectionPatchBody = z.infer<typeof siteConnectionPatchBody>;
+
+// ---------------------------------------------------------------------------
 // Servers
 
 export const serverNameSchema = z
@@ -545,6 +613,9 @@ export const serverDeleteQuery = z.object({
 
 // ---------------------------------------------------------------------------
 // Backups
+
+/** `files` or `database`: one half of a site's backup, for a restore by hand. Left out: the whole backup as one .tar. */
+export const backupDownloadQuery = z.object({ part: z.enum(['files', 'database']).optional() }).strict();
 
 export const backupCreateBody = z.object({
   note: z.string().max(500).optional(),
@@ -1157,6 +1228,8 @@ export const wpInventoryQuery = z
     q: z.string().max(100).optional(),
     serverId: queryNumber(z.coerce.number().int().positive().optional()),
     siteSlug: z.string().max(64).optional(),
+    /** Sites the panel hosts, sites hosted elsewhere, or (left out) both. */
+    siteKind: z.enum(siteKinds).optional(),
     /**
      * Stopped sites are hidden by default: nothing can be installed or updated in a
      * container that is not running, so offering their components invites jobs that spend
@@ -1311,6 +1384,11 @@ export const settingsUpdateBody = z.object({
   /** 0 = never suspend a site's mail automatically. */
   mailSuspendPerSitePerHour: z.number().int().min(0).max(1000000).optional(),
   alertEmail: z.union([z.email(), z.literal('')]).optional(),
+  /** Which alerts go to that address: a site down and back up, a new vulnerability, a failed backup, an external site's plugin or certificate. */
+  alertsSiteDown: z.boolean().optional(),
+  alertsVulnerabilities: z.boolean().optional(),
+  alertsBackups: z.boolean().optional(),
+  alertsConnector: z.boolean().optional(),
   /** 0 = uncapped. Fractional cores allowed. */
   siteCpuLimit: z.number().min(0).max(64).optional(),
   siteMemoryLimitMb: z.number().int().min(128).max(65536).optional(),

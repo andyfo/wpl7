@@ -30,6 +30,7 @@ import { jobToDto } from '../lib/dto.js';
 import type { AccessLevel } from '../../shared/access.js';
 import { currentActor, runAs, type JobActor } from './actor.js';
 import { checkTarget, fireAction, publicParams, withStoredSecrets } from './actions.js';
+import { externalSites } from '../lib/siteKind.js';
 
 /** How long a maintenance flag is left alone before it is treated as possibly stale. */
 const MAINTENANCE_GRACE_MS = 60_000;
@@ -169,7 +170,7 @@ export class Schedulers {
         group: 'jobs',
         name: 'Scheduled backups',
         description:
-          "Backs up every running site that has scheduled backups switched on, then takes a snapshot of the panel's own database.",
+          "Backs up every running site, and every connected site hosted elsewhere, that has scheduled backups switched on, then takes a snapshot of the panel's own database.",
         pausable: true,
         pauseWarning:
           'No site is backed up on schedule until you resume. Manual backups, the safety copy before a restore and the final backup of a deleted site still happen.',
@@ -281,11 +282,26 @@ export class Schedulers {
         key: 'uptime',
         group: 'background',
         name: 'Uptime checks',
-        description: 'Asks every running site for its home page and records whether it answered.',
+        description: 'Asks every running site, and every site hosted elsewhere, for its home page and records whether it answered.',
         pausable: true,
         pauseWarning: 'A site that goes down is not noticed until you resume.',
         cadence: () => ({ everyMs: this.uptimeMs, text: everyText(this.uptimeMs), settingsHref: '/settings#monitoring' }),
         tick: () => s.monitor.tickUptime(),
+      },
+      {
+        key: 'external-check',
+        group: 'background',
+        name: 'External sites check',
+        description:
+          'Asks WPL7 Connect on every site hosted elsewhere whether it answers, and offers it the panel’s version of the plugin. Three hours without an answer sends an alert.',
+        pausable: true,
+        pauseWarning: 'A site hosted elsewhere whose plugin stops answering is not noticed until you resume.',
+        cadence: () => ({ everyMs: 3600_000, text: 'Every hour' }),
+        tick: async () => {
+          const { checked, reachable, failed } = await s.connections.heartbeat();
+          if (checked === 0) return { idle: true };
+          return { message: failed > 0 ? `${reachable} of ${plural(checked, 'site')} answered` : `${plural(checked, 'site')} answered` };
+        },
       },
       {
         key: 'site-stats',
@@ -477,6 +493,8 @@ export class Schedulers {
     const after = (ms: number, fn: () => void) => setTimeout(fn, ms);
     this.timers = [
       every('uptime', this.uptimeMs),
+      // Sites hosted elsewhere: their plugin asked whether it answers, and offered an update.
+      every('external-check', 3600_000),
       every('site-stats', this.statsMs),
       every('server-stats', this.statsMs),
       every('disk-usage', this.duSliceMs),
@@ -665,10 +683,11 @@ export class Schedulers {
     // the pre-restore safety copy, the copy a move takes and the final backup on delete
     // all still run for them (services/backup.ts). "Here" is whatever `backup.cron`
     // says - the operator can make it hourly or weekly, so nothing may call it nightly.
+    // Sites hosted elsewhere take part while connected: their backup is pulled through WPL7 Connect.
     const running = this.s.db
       .select()
       .from(sites)
-      .where(and(eq(sites.status, 'running'), eq(sites.backupsEnabled, 1)))
+      .where(and(or(eq(sites.status, 'running'), and(externalSites(), eq(sites.status, 'connected'))), eq(sites.backupsEnabled, 1)))
       .all();
     const skipped: ScheduleSkip[] = [];
     for (const site of running) {
@@ -871,7 +890,7 @@ export class Schedulers {
       .leftJoin(siteWpStatus, eq(siteWpStatus.siteId, sites.id))
       .where(
         and(
-          eq(sites.status, 'running'),
+          or(eq(sites.status, 'running'), and(externalSites(), eq(sites.status, 'connected'))),
           or(isNull(siteWpStatus.scannedAt), lt(siteWpStatus.scannedAt, cutoff)),
         ),
       )
@@ -901,7 +920,7 @@ export class Schedulers {
       .select({ at: sql<number>`min(coalesce(${siteWpStatus.scannedAt}, 0))` })
       .from(sites)
       .leftJoin(siteWpStatus, eq(siteWpStatus.siteId, sites.id))
-      .where(eq(sites.status, 'running'))
+      .where(or(eq(sites.status, 'running'), and(externalSites(), eq(sites.status, 'connected'))))
       .get();
     if (oldest?.at === null || oldest?.at === undefined) return null;
     const lastPass = this.lastScanPassAt();

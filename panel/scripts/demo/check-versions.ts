@@ -11,8 +11,11 @@
  */
 import { compareVersions, matchRange } from '../../src/lib/wpVersions.js';
 import { normalizeAdvisory } from '../../src/services/vulnerabilities.js';
-import { SITES } from './data.js';
-import { DEMO_ADVISORY, INVENTORY, LATEST, VENDOR_RELEASES, WORDPRESS, WPORG_PLUGINS } from './plugins.js';
+import { EXTERNAL_SITES, SITES } from './data.js';
+import { DEMO_ADVISORY, EXTERNAL_INVENTORY, INVENTORY, LATEST, VENDOR_RELEASES, WORDPRESS, WPORG_PLUGINS } from './plugins.js';
+
+/** Every site's inventory, the ones hosted elsewhere too. WPL7 Connect is the panel's own, on no directory. */
+const ALL = { ...INVENTORY, ...EXTERNAL_INVENTORY };
 
 async function get<T>(url: string): Promise<T> {
   const res = await fetch(url, { headers: { 'user-agent': 'wpl7-demo-check-versions' } });
@@ -26,7 +29,7 @@ const problems: string[] = [];
 const { offers } = await get<{ offers: { current: string }[] }>('https://api.wordpress.org/core/version-check/1.7/');
 if (offers[0]?.current !== WORDPRESS) problems.push(`WordPress: ${offers[0]?.current} is out, the demo has ${WORDPRESS}`);
 const stable = await get<Record<string, string>>('https://api.wordpress.org/core/stable-check/1.0/');
-const cores = new Set(Object.values(INVENTORY).map((site) => site.core));
+const cores = new Set(Object.values(ALL).map((site) => site.core));
 for (const core of cores) {
   if (stable[core] === 'insecure') problems.push(`WordPress ${core}: wordpress.org calls it insecure`);
   const feed = await get<{ data: { vulnerability: unknown[] | null } }>(`https://www.wpvulnerability.net/core/${core}/`);
@@ -35,7 +38,7 @@ for (const core of cores) {
 
 // Every plugin and theme the sites have, by slug.
 const installed = new Map<string, { kind: 'plugin' | 'theme'; versions: Set<string>; sites: string[] }>();
-for (const [slug, site] of Object.entries(INVENTORY)) {
+for (const [slug, site] of Object.entries(ALL)) {
   for (const c of site.components) {
     const entry = installed.get(c.slug) ?? { kind: c.kind, versions: new Set<string>(), sites: [] };
     entry.versions.add(c.version);
@@ -67,8 +70,8 @@ for (const [slug, { kind, versions, sites }] of installed) {
       const tested = WPORG_PLUGINS.find((plugin) => plugin.slug === slug)?.testedUpTo;
       if (kind === 'plugin' && info.tested !== tested) problems.push(`${slug}: tested up to ${info.tested}, the demo says ${tested}`);
       for (const siteSlug of sites) {
-        const php = SITES.find((s) => s.slug === siteSlug)!.php;
-        const core = INVENTORY[siteSlug]!.core;
+        const php = (SITES.find((s) => s.slug === siteSlug) ?? EXTERNAL_SITES.find((s) => s.slug === siteSlug))!.php;
+        const core = ALL[siteSlug]!.core;
         if (info.requires_php && compareVersions(php, info.requires_php) < 0) problems.push(`${slug} ${info.version} needs PHP ${info.requires_php}; ${siteSlug} runs ${php}`);
         if (info.requires && compareVersions(core, info.requires) < 0) problems.push(`${slug} ${info.version} needs WordPress ${info.requires}; ${siteSlug} runs ${core}`);
       }

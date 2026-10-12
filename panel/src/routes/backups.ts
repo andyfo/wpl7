@@ -1,4 +1,5 @@
 // @docs backups/delete, backups/overview, backups/restore
+import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { and, asc, desc, eq, inArray, isNull, ne, not, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -6,6 +7,7 @@ import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { z } from 'zod';
 import { backupCopies, backups, sites } from '../db/schema.js';
 import {
+  backupDownloadQuery,
   backupBulkDeleteBody,
   backupCreateBody,
   backupDeleteQuery,
@@ -17,6 +19,7 @@ import {
   MAX_BULK_BACKUP_DELETE,
   siteSlugParam,
   type BackupType,
+  type SiteKind,
 } from '../../shared/schemas.js';
 import type { BackupIdsDto, BackupListDto } from '../../shared/types.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
@@ -25,6 +28,11 @@ import { BACKUP_DELETE_LANE } from '../services/backup.js';
 import { offsiteLane } from '../services/offsite.js';
 import { requireAccess } from '../plugins/auth.js';
 import type { AppDeps } from './deps.js';
+import { isExternal } from '../lib/siteKind.js';
+import { attachmentDisposition } from '../lib/contentDisposition.js';
+
+/** What restoring a site hosted elsewhere gets: it is restored by hand, from its downloads. */
+const EXTERNAL_RESTORE = 'Restore a site hosted elsewhere by hand: download its files and its database.';
 
 // Addressing an existing site: no reserved-name check, see siteSlugParam.
 const slugParams = z.object({ slug: siteSlugParam });
@@ -105,6 +113,7 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
         ...backupToDto(row, copies.get(row.id) ?? [], deleting.get(row.id)?.id ?? null),
         siteTitle: site?.title ?? null,
         siteDeleted: row.type !== 'panel' && !site,
+        siteKind: site ? (site.kind as SiteKind) : null,
       })),
       total,
       deletedSites: deletedSites.map((d) => ({
@@ -117,7 +126,7 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
   });
 
   r.get('/api/sites/:slug/backups', { schema: { params: slugParams } }, async (req) => {
-    deps.sites.bySlug(req.params.slug); // 404 for unknown sites
+    deps.sites.bySlug(req.params.slug, { kinds: 'any' }); // 404 for unknown sites
     const rows = deps.db
       .select()
       .from(backups)
@@ -134,7 +143,10 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
     '/api/sites/:slug/backups',
     { schema: { params: slugParams, body: backupCreateBody } },
     async (req, reply) => {
-      const site = deps.sites.bySlug(req.params.slug);
+      const site = deps.sites.bySlug(req.params.slug, { kinds: 'any' });
+      if (site.kind === 'external' && site.status !== 'connected') {
+        throw conflict(`"${site.slug}" is disconnected. Reconnect it from its Settings tab first.`);
+      }
       const job = deps.worker.enqueue(
         'backup.create',
         { siteId: site.id, type: 'manual', note: req.body.note },
@@ -150,8 +162,10 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
     async (req, reply) => {
       const backup = deps.db.select().from(backups).where(eq(backups.id, req.params.id)).get();
       if (!backup) throw notFound(`Backup #${req.params.id} not found`);
-      const site = deps.sites.bySlug(backup.siteSlug); // 404s when the site is gone
+      const site = deps.sites.bySlug(backup.siteSlug, { kinds: 'any' }); // 404s when the site is gone
+      if (isExternal(site)) throw conflict(EXTERNAL_RESTORE);
       if (backup.status !== 'complete') throw conflict('Only complete backups can be restored');
+      if ((await deps.backup.readManifest(backup))?.kind === 'external') throw conflict(EXTERNAL_RESTORE);
       deps.backup.assertNotBeingDeleted(backup);
       if (backup.filesPresent === 0) {
         throw conflict(
@@ -214,7 +228,7 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });
 
-  r.get('/api/backups/:id/download', { schema: { params: idParams } }, async (req, reply) => {
+  r.get('/api/backups/:id/download', { schema: { params: idParams, querystring: backupDownloadQuery } }, async (req, reply) => {
     const backup = deps.db.select().from(backups).where(eq(backups.id, req.params.id)).get();
     if (!backup || backup.status !== 'complete') throw notFound('Backup not found');
     // A site's backup holds what its WordPress admin can read anyway - Manage's. A panel
@@ -224,6 +238,22 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
       throw conflict('This backup exists only at a remote destination; fetch it back first');
     }
     const handle = deps.backup.handleForBackup(backup);
+    const part = req.query.part;
+    if (part) {
+      // One half of a site's backup, as a file a person restores by hand: the files for FTP, the
+      // database for phpMyAdmin, which takes a .sql.gz.
+      if (backup.type === 'panel') throw badRequest('A panel snapshot has no files or database part');
+      const file = part === 'files' ? 'files.tar.gz' : 'db.sql.gz';
+      const ts = backup.path.split('/').pop() ?? backup.id.toString();
+      const out = new PassThrough();
+      handle.exec
+        .runToStream('cat', ['--', path.join(backup.path, file)], out, { timeoutMs: 60 * 60_000 })
+        .catch(() => out.destroy());
+      reply
+        .header('content-type', 'application/gzip')
+        .header('content-disposition', attachmentDisposition(`${backup.siteSlug}-${ts}-${part === 'files' ? 'files.tar.gz' : 'database.sql.gz'}`));
+      return reply.send(out);
+    }
     // Archives inside are already gzipped; plain tar wrapper avoids double compression.
     // Streams from whichever server holds the files (local spawn or SSH channel).
     const stream = new PassThrough();

@@ -14,6 +14,8 @@ import type {
   MailStatusName,
   ServerKind,
   ServerStatus,
+  ConnectionStatus,
+  SiteKind,
   SiteStatus,
   WpBulkAction,
   WpComponentKind,
@@ -65,7 +67,62 @@ export interface SiteSummary {
   recentTraffic: { visitors: number; pageViews: number } | null;
   /** WordPress snapshot counters; null until this site has been scanned once. */
   wp: SiteWpSummary | null;
+  /**
+   * `hosted`: in a container on `serverId`. `external`: hosted elsewhere and reached through the
+   * WPL7 Connect plugin; `serverId` is then the server that keeps its backups, and `external`
+   * says how the connection stands.
+   */
+  kind: SiteKind;
+  external: ExternalSiteSummary | null;
   createdAt: number;
+}
+
+/** A site hosted elsewhere, as the site list shows it. */
+export interface ExternalSiteSummary {
+  /** The site's address, as its plugin reported it: the connection is bound to it. */
+  home: string;
+  /** Whether the plugin answered the panel's last request; null before the first. */
+  reachable: boolean | null;
+  lastContactAt: number | null;
+  lastBackupAt: number | null;
+  /** WPL7 Connect's version on the site. */
+  pluginVersion: string | null;
+}
+
+/** Something the panel says about a connected site's set-up. `blocking`: it cannot be added. */
+export interface ConnectWarning {
+  code: string;
+  blocking: boolean;
+  message: string;
+  /** What it is about, when there is one thing: the site's new address for `home_changed`. */
+  value?: string;
+}
+
+/** A site hosted elsewhere in full: its site page reads it. Never carries a key. */
+export interface ExternalSiteDto extends ExternalSiteSummary {
+  connectionId: number;
+  protocol: number | null;
+  /** From the last inventory or report. */
+  wpVersion: string | null;
+  /** Why the last request failed, while it is the latest news. */
+  lastError: string | null;
+  /** The administrator updates and logins run as. */
+  actAs: { id: number; login: string } | null;
+  /** The site's administrators, as its plugin last reported them. */
+  admins: { id: number; login: string }[];
+  storageServerId: number;
+  storageServerName: string;
+  /** The size of the site's copy on the backup server, after the last backup. */
+  mirrorBytes: number | null;
+  certExpiresAt: number | null;
+  warnings: ConnectWarning[];
+  /** The commands plugins registered on WPL7 Connect (`/wp/cli` runs only these). */
+  commands: string[];
+  /** A newer WPL7 Connect the panel offers this site; null when it runs the panel's own. */
+  offer: { version: string } | null;
+  /** The address the site answers with now, when it is not the one the connection is bound to. */
+  homeChanged: string | null;
+  allowHttp: boolean;
 }
 
 /** The denormalised part of a site's WordPress snapshot, cheap enough for a list. */
@@ -117,6 +174,8 @@ export interface SiteDetail extends SiteSummary {
     importedAt: number | null;
     refreshJobId: number | null;
   } | null;
+  /** Set for an external site. */
+  external: ExternalSiteDto | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +284,69 @@ export interface ImportConnectionCodeDto {
   /** The panel's address, as the plugin calls it. */
   panel: string;
   /** The import's token. */
+  code: string;
+}
+
+// ---------------------------------------------------------------------------
+// Connections: sites hosted elsewhere, through WPL7 Connect
+
+/** A connection that is not a site yet: Sites → Connect a site lists them. */
+export interface ConnectionSummaryDto {
+  id: number;
+  status: ConnectionStatus;
+  /** The site's address once its plugin enrolled, else what the admin typed (or null). */
+  source: string | null;
+  /** The site a reconnect is for. */
+  forSite: { slug: string; title: string } | null;
+  /** The site this connection belongs to, once it was added (or reconnected). */
+  site: { slug: string; title: string } | null;
+  createdAt: number;
+  enrolledAt: number | null;
+  expiresAt: number | null;
+}
+
+/** The site as its plugin reported it, for the Confirm step. */
+export interface ConnectSourceDto {
+  home: string;
+  title: string;
+  wpVersion: string;
+  phpVersion: string;
+  tablePrefix: string;
+  locale: string;
+  https: boolean;
+  files: { count: number; bytes: number; partial: boolean };
+  db: { server: string; bytes: number; tables: number };
+  plugins: number;
+  theme: { slug: string; name: string } | null;
+  pluginVersion: string;
+  admins: { id: number; login: string; name: string }[];
+  /** How WordPress writes files there: `direct` takes updates as they are. */
+  fsMethod: string;
+  fileMods: boolean;
+  /** The must-use loader is in place: rollback works when an update breaks the site. */
+  loader: boolean;
+  commands: string[];
+}
+
+/** One connection in full: the Connect and Confirm steps read it. Never carries a key or the token. */
+export interface ConnectionDto extends ConnectionSummaryDto {
+  allowHttp: boolean;
+  /** The plugin can be downloaded (`GET /api/connections/:id/plugin`). */
+  canDownload: boolean;
+  report: ConnectSourceDto | null;
+  warnings: ConnectWarning[];
+  /** Why Add site is refused right now, or null. */
+  blockedReason: string | null;
+  /** The panel's last attempt to reach the plugin. */
+  check: { at: number; reachable: boolean; transport: 'rest' | 'query' | null; error: string | null } | null;
+  /** What the Confirm step's fields start with. */
+  suggestions: { slug: string; title: string; actAs: number | null; storageServerId: number } | null;
+}
+
+/** For the plugin's own form, when it came without its connection file (`GET /api/connections/:id/code`). */
+export interface ConnectionCodeDto {
+  panel: string;
+  /** The enrollment token and the panel's public key, `<token>.<key>`. */
   code: string;
 }
 
@@ -428,6 +550,8 @@ export interface BackupListItemDto extends BackupDto {
   siteTitle: string | null;
   /** No site of this slug exists any more. A panel snapshot is never one. */
   siteDeleted: boolean;
+  /** The site's kind while it exists: an external site's backups are restored by hand. */
+  siteKind: SiteKind | null;
 }
 
 export interface BackupListDto {
@@ -814,6 +938,8 @@ export interface WpInventorySiteRow {
   siteSlug: string;
   siteTitle: string;
   siteStatus: SiteStatus;
+  /** `external`: hosted elsewhere; `serverName` then says "External". */
+  siteKind: SiteKind;
   serverId: number;
   serverName: string;
   scannedAt: number | null;
@@ -890,6 +1016,8 @@ export interface WpBulkOpResult {
   from: string | null;
   to: string | null;
   error: string | null;
+  /** A site hosted elsewhere stopped answering after the run, and WPL7 Connect put this back as it was. */
+  rolledBack?: boolean;
 }
 
 export interface ServerStatsDto {

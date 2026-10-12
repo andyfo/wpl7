@@ -372,7 +372,8 @@ function SitesOnServer({ serverId, serverName }: { serverId: number; serverName:
   const navigate = useNavigate();
   const scheme = meta.data?.tlsMode === 'none' ? 'http' : 'https';
   const byslug = new Map((monitor.data?.sites ?? []).map((s) => [s.slug, s]));
-  const mine = (sites.data ?? []).filter((s) => s.serverId === serverId);
+  // An external site's server only keeps its backups: it does not run there.
+  const mine = (sites.data ?? []).filter((s) => s.serverId === serverId && s.kind !== 'external');
 
   return (
     <Card
