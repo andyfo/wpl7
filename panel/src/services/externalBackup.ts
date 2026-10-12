@@ -6,7 +6,7 @@ import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
 import { backups, sites, type BackupRow, type SiteRow } from '../db/schema.js';
 import type { BackupType } from '../../shared/schemas.js';
-import type { FileBelow } from '../lib/files.js';
+import type { TreeFile } from '../lib/files.js';
 import { safeJoin } from '../lib/slug.js';
 import { externalSites } from '../lib/siteKind.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
@@ -250,13 +250,7 @@ export class ExternalBackupService {
   private async refreshMirror(ctx: JobContext<unknown>, client: PluginClient, ping: PingAnswer, h: ServerHandle, site: SiteRow, wordpress: string): Promise<void> {
     const before = this.listings.read(site.id);
     const since = before?.listedAt != null ? before.listedAt - 300 : undefined;
-    const inCopy = await h.files.filesBelow(wordpress);
-    // The folders the copy has files in. tar cannot put a file over one: where the site has a file
-    // in its place now, the folder goes first, or this backup and every one after it would fail.
-    const foldersInCopy = new Set<string>();
-    for (const file of inCopy.keys()) {
-      for (let slash = file.indexOf('/'); slash !== -1; slash = file.indexOf('/', slash + 1)) foldersInCopy.add(file.slice(0, slash));
-    }
+    const inCopy = await h.files.tree(wordpress);
     const listedNow = new Map<string, 'folder' | 'other'>();
     let unreadableListed = 0;
     // Nothing is left behind: wp-config.php is the site's, and a backup restored by hand needs it.
@@ -275,10 +269,12 @@ export class ExternalBackupService {
           if (flags.includes('unreadable')) unreadableListed++;
           if (e.pb) continue;
           listedNow.set(e.p, e.t === 'd' && !flags.some((f) => NOT_LOOKED_INTO.includes(f)) ? 'folder' : 'other');
-          if (e.t === 'f' && foldersInCopy.has(e.p)) {
+          // tar cannot put a file over a folder that is not empty: where the site has a file in a
+          // folder's place now, the folder goes first, or this backup and every later one fail.
+          if (e.t === 'f' && inCopy.folders.has(e.p)) {
             await h.files.rm(path.join(wordpress, e.p));
-            for (const file of [...inCopy.keys()]) if (file.startsWith(`${e.p}/`)) inCopy.delete(file);
-            for (const folder of [...foldersInCopy]) if (folder === e.p || folder.startsWith(`${e.p}/`)) foldersInCopy.delete(folder);
+            for (const file of [...inCopy.files.keys()]) if (file.startsWith(`${e.p}/`)) inCopy.files.delete(file);
+            for (const folder of [...inCopy.folders]) if (folder === e.p || folder.startsWith(`${e.p}/`)) inCopy.folders.delete(folder);
             ctx.info(`"${e.p}" is a file on the site now, not a folder: removed the folder from the copy.`);
           }
         }
@@ -287,14 +283,14 @@ export class ExternalBackupService {
       // theirs, and are new at their path. Nor is the last good listing: a run that failed since
       // may have removed the file from the copy, or copied in another version. The copy is asked.
       alreadyThere: (e) => {
-        const there = e.t === 'f' && !e.pb ? inCopy.get(e.p) : undefined;
+        const there = e.t === 'f' && !e.pb ? inCopy.files.get(e.p) : undefined;
         return there !== undefined && there.sizeBytes === e.s && there.mtimeS === e.m;
       },
     });
     if ((listing.warnings?.find((w) => w.code === 'unreadable')?.count ?? 0) > unreadableListed) {
       throw new Error("The site's own folder could not be listed in full. Check its permissions on the host.");
     }
-    await this.removeUnlisted(ctx, h, wordpress, inCopy, listedNow);
+    await this.removeUnlisted(ctx, h, wordpress, inCopy.files, listedNow);
     const { links, unreadable, changed } = cursor.skipped;
     if (links > 0) ctx.warn(`${links} symbolic link${links === 1 ? ' was' : 's were'} not copied.`);
     if (unreadable > 0) ctx.warn(`${unreadable} file${unreadable === 1 ? '' : 's'} could not be read on the site and ${unreadable === 1 ? 'is' : 'are'} not in the backup.`);
@@ -314,7 +310,7 @@ export class ExternalBackupService {
     ctx: JobContext<unknown>,
     h: ServerHandle,
     wordpress: string,
-    inCopy: Map<string, FileBelow>,
+    inCopy: Map<string, TreeFile>,
     now: Map<string, 'folder' | 'other'>,
   ): Promise<void> {
     const gone: string[] = [];

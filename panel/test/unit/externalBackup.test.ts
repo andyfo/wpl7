@@ -158,20 +158,30 @@ describe('backups of a site hosted elsewhere', () => {
   });
 
   it('puts the file the site has in place of a folder into the copy, instead of failing on it', async () => {
+    // One folder holds a file, the other only an empty folder: tar puts a file over neither.
     const page = 'wp-content/cache/page';
-    const { w, fake } = await externalWorld({ real: true, fake: { files: { ...shopFiles(), [`${page}/index.html`]: 'cached' } } });
+    const feed = 'wp-content/cache/feed';
+    const { w, fake } = await externalWorld({
+      real: true,
+      fake: { files: { ...shopFiles(), [`${page}/index.html`]: 'cached', [`${feed}/empty`]: 'dir' } },
+    });
     await backupOnce(w);
+    const mirror = w.core.externalBackups.mirrorOf({ slug: 'shop' }).wordpress;
+    expect(fs.existsSync(path.join(mirror, feed, 'empty'))).toBe(true);
     fake.deleteFile(`${page}/index.html`);
+    fake.deleteFile(`${feed}/empty`);
     fake.writeFile(page, 'a file now');
+    fake.writeFile(feed, 'a feed now');
     const { job, log, result } = await backupOnce(w);
     expect(job.status, log.join('\n')).toBe('succeeded');
     expect(log.join('\n')).not.toContain('Kept');
-    const mirror = w.core.externalBackups.mirrorOf({ slug: 'shop' }).wordpress;
     expect(fs.readFileSync(path.join(mirror, page), 'utf8')).toBe('a file now');
+    expect(fs.readFileSync(path.join(mirror, feed), 'utf8')).toBe('a feed now');
     const row = w.db.select().from(backups).where(eq(backups.id, result!.backupId as number)).get()!;
     const packed = tarList(path.join(row.path, 'files.tar.gz'));
-    expect(packed).toContain(`wordpress/${page}`);
+    expect(packed).toEqual(expect.arrayContaining([`wordpress/${page}`, `wordpress/${feed}`]));
     expect(packed).not.toContain(`wordpress/${page}/index.html`);
+    expect(packed).not.toContain(`wordpress/${feed}/empty/`);
   });
 
   it('hands out the files and the database of a backup on their own', async () => {

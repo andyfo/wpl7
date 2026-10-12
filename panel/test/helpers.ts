@@ -797,8 +797,8 @@ export class MappedFiles implements FilesPort {
   readdir(p: string) {
     return this.inner.readdir(this.m(p));
   }
-  filesBelow(p: string) {
-    return this.inner.filesBelow(this.m(p));
+  tree(p: string) {
+    return this.inner.tree(this.m(p));
   }
   stat(p: string) {
     return this.inner.stat(this.m(p));
