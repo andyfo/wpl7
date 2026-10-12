@@ -1,4 +1,4 @@
-// @docs backups/delete, backups/overview
+// @docs backups/delete, backups/delete-old, backups/overview
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -157,6 +157,20 @@ export function Backups() {
   const refresh = (slug?: string) => {
     void qc.invalidateQueries({ queryKey: ['all-backups'] });
     if (slug) void qc.invalidateQueries({ queryKey: ['backups', slug] });
+  };
+  /** One backup.delete job for these ids, from either bulk dialog. */
+  const deleteIds = (ids: number[], keepNewest = false) => {
+    setActionError(null);
+    run.mutate(
+      { path: '/api/backups/bulk-delete', body: keepNewest ? { ids, keepNewest } : { ids } },
+      {
+        onSuccess: () => {
+          clearSelection();
+          // Now, not when the job ends: the rows it has yet to reach say so meanwhile.
+          refresh();
+        },
+      },
+    );
   };
 
   const pager =
@@ -536,19 +550,7 @@ export function Backups() {
           filters={filters}
           deletedSites={deletedSites}
           onClose={() => setBulkOpen(false)}
-          onConfirm={(ids) => {
-            setActionError(null);
-            run.mutate(
-              { path: '/api/backups/bulk-delete', body: { ids } },
-              {
-                onSuccess: () => {
-                  clearSelection();
-                  // Now, not when the job ends: the rows it has yet to reach say so meanwhile.
-                  refresh();
-                },
-              },
-            );
-          }}
+          onConfirm={(ids) => deleteIds(ids)}
         />
       )}
       {deleteTarget && (
@@ -567,19 +569,9 @@ export function Backups() {
             ...siteList.map((s) => ({ slug: s.slug, deleted: false })),
             ...[...deletedSites].sort((a, b) => a.slug.localeCompare(b.slug)).map((d) => ({ slug: d.slug, deleted: true })),
           ]}
+          servers={meta.data?.servers ?? []}
           onClose={() => setPurgeOpen(false)}
-          onConfirm={(ids) => {
-            setActionError(null);
-            run.mutate(
-              { path: '/api/backups/bulk-delete', body: { ids } },
-              {
-                onSuccess: () => {
-                  clearSelection();
-                  refresh();
-                },
-              },
-            );
-          }}
+          onConfirm={deleteIds}
         />
       )}
     </div>

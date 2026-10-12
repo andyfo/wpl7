@@ -1,5 +1,5 @@
 // @docs sites/create, sites/move, sites/overview, sites/settings
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, isNotNull } from 'drizzle-orm';
 import type { SiteCreateBody } from '../../shared/schemas.js';
 import type { SiteDetail, SiteSummary, SiteWpSummary } from '../../shared/types.js';
 import { jobs as jobsTable, moveCleanups, plugins, sites, type JobRow, type ServerRow, type SiteRow } from '../db/schema.js';
@@ -325,6 +325,17 @@ export class SitesService {
       .where(eq(sites.id, site.id))
       .returning()
       .get();
+  }
+
+  /** The sites that keep their backups for a time of their own, by name. */
+  ownBackupKeepDays(): { slug: string; days: number }[] {
+    return this.db
+      .select({ slug: sites.slug, days: sites.backupKeepDays })
+      .from(sites)
+      .where(isNotNull(sites.backupKeepDays))
+      .orderBy(asc(sites.slug))
+      .all()
+      .flatMap((site) => (site.days === null ? [] : [{ slug: site.slug, days: site.days }]));
   }
 
   /**

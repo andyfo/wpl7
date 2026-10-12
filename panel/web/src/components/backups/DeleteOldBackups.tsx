@@ -1,4 +1,4 @@
-// @docs backups/delete
+// @docs backups/delete-old
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { MAX_BACKUP_KEEP_DAYS, MAX_BULK_BACKUP_DELETE, type BackupType } from '../../../../shared/schemas';
@@ -37,13 +37,17 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString
 export function DeleteOldBackupsDialog({
   initial,
   sites,
+  servers,
   onConfirm,
   onClose,
 }: {
   initial: PurgeCriteria;
   /** The sites to choose from: the ones there are, and the deleted ones that still have backups. */
   sites: { slug: string; deleted: boolean }[];
-  onConfirm: (ids: number[]) => void;
+  /** Offered as a choice with more than one. */
+  servers: { id: number; name: string }[];
+  /** `keepNewest` asks the deletion to check again, as it goes, that each site keeps its newest. */
+  onConfirm: (ids: number[], keepNewest: boolean) => void;
   onClose: () => void;
 }) {
   const [criteria, setCriteria] = useState(initial);
@@ -58,8 +62,8 @@ export function DeleteOldBackupsDialog({
   const askable = purgeProblem(asked) === null;
   const preview = useQuery({
     queryKey: ['backup-purge', askedKey],
-    // "N days ago" is counted from when the summary is read; the ids it answers are what goes.
-    queryFn: () => api<BackupIdsDto>(`/api/backups/ids?${new URLSearchParams(purgeParams(asked, Date.now())!)}`),
+    // The ids it answers are what goes, whatever the criteria would match a minute later.
+    queryFn: () => api<BackupIdsDto>(`/api/backups/ids?${new URLSearchParams(purgeParams(asked)!)}`),
     enabled: askable,
     refetchOnWindowFocus: false,
   });
@@ -80,8 +84,6 @@ export function DeleteOldBackupsDialog({
   const chosen = new Set(criteria.sites);
   const choose = (slug: string, on: boolean) =>
     set({ sites: on ? [...criteria.sites, slug] : criteria.sites.filter((s) => s !== slug) });
-
-  const days = (text: string) => (text.trim() === '' ? Number.NaN : Number(text));
 
   return (
     <Modal title="Delete old backups" onClose={onClose}>
@@ -137,7 +139,7 @@ export function DeleteOldBackupsDialog({
                 type="radio"
                 name="purge-age"
                 checked={criteria.olderThanDays !== null}
-                onChange={() => set({ olderThanDays: days(daysText) })}
+                onChange={() => set({ olderThanDays: Number(daysText) })}
               />
               More than
               <input
@@ -149,7 +151,8 @@ export function DeleteOldBackupsDialog({
                 value={daysText}
                 onChange={(e) => {
                   setDaysText(e.target.value);
-                  set({ olderThanDays: days(e.target.value) });
+                  // Left empty it is 0, which purgeProblem refuses.
+                  set({ olderThanDays: Number(e.target.value) });
                 }}
               />
               days ago
@@ -160,6 +163,23 @@ export function DeleteOldBackupsDialog({
             </label>
           </div>
         </fieldset>
+
+        {servers.length > 1 && (
+          <Field label="Server">
+            <select
+              className={inputClass}
+              value={criteria.serverId ?? ''}
+              onChange={(e) => set({ serverId: e.target.value ? Number(e.target.value) : null })}
+            >
+              <option value="">All servers</option>
+              {servers.map((server) => (
+                <option key={server.id} value={server.id}>
+                  {server.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
 
         {criteria.scope !== 'panel' && (
           <Field label="Kind" width="sm">
@@ -218,7 +238,10 @@ export function DeleteOldBackupsDialog({
             variant="danger"
             disabled={!armed}
             onClick={() => {
-              onConfirm(items.map((b) => b.id));
+              onConfirm(
+                items.map((b) => b.id),
+                criteria.keepNewest,
+              );
               onClose();
             }}
           >

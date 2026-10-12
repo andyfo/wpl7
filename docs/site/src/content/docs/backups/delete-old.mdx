@@ -1,0 +1,89 @@
+---
+title: Delete old backups
+description: "Have backups deleted after a number of days, for every site, the panel or one site, and delete old ones now."
+sidebar:
+  order: 6
+since: 0.3.0-beta.3
+sources:
+  - panel/src/services/backup.ts
+  - panel/src/services/housekeeping.ts
+  - panel/src/routes/backups.ts
+  - panel/src/jobs/handlers/backups.ts
+  - panel/web/src/components/backups/DeleteOldBackups.tsx
+  - panel/web/src/components/backups/KeepDays.tsx
+  - panel/web/src/lib/backupFilters.ts
+  - panel/web/src/pages/Backups.tsx
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+Old backups go in two ways: every night, once they are older than a number of days you set, or
+now, in bulk, with **Delete old backups**.
+
+## Delete old backups every night
+
+1. Open **Settings → Backups**.
+2. Set **Delete site backups after (days)** for every site, and **Delete panel backups after
+   (days)** for the panel's own database. 0, the default, keeps them.
+3. Choose **Save settings**.
+
+The nightly [housekeeping](/docs/reference/glossary/#housekeeping) then deletes the backups older
+than that: scheduled ones, the ones taken before an update or a restore, at a server move or on
+import, and the panel's own. These always stay:
+
+- Manual backups, and the final backup of a deleted site.
+- The newest backup of each site, deleted sites included, and of the panel.
+- A backup fetched back in the last week.
+
+**Keep last N scheduled backups per site** still applies. A scheduled backup goes as soon as either
+limit says so. A backup with a complete offsite copy only gives up its files on the server, and
+stays listed as **remote only**.
+
+## Keep one site's backups for a different time
+
+**Delete backups after** on a site's **Backups** tab sets that site's own keep period:
+
+| Choice | Means |
+|---|---|
+| The one marked **(default)** | As **Settings → Backups** says, which it shows |
+| **Never** | Not deleted by age |
+| **Custom** | A number of days for this site. Enter it and choose **Save**. |
+
+**Settings → Backups** lists the sites with their own. Deleting a site removes its setting, so the
+backups it leaves behind follow the panel's.
+
+## Delete old backups now
+
+<Screenshot name="backups-delete-old" alt="The Delete old backups dialog: whose backups, how old, which kind, and what that comes to" />
+
+1. On **Backups → All backups**, choose **Delete old backups**. It starts with what the list is
+   filtered to.
+2. Under **Whose**, choose **All**, **Chosen sites**, **Deleted sites** or **The panel's own
+   database**. **Chosen sites** lists the sites to tick, deleted ones included.
+3. Under **Taken**, enter how many days old a backup has to be, or choose **Any time**.
+4. To narrow it down, choose a **Kind** and, with several servers, a **Server**.
+5. **Keep each site's newest backup** is on. Switch it off to take those too.
+6. Check what the dialog counts, and any site it names as left with no backup. Type `delete`, or
+   the site's name when one site loses every backup it has, and choose **Delete**.
+
+## What happens
+
+One **Delete backups** job deletes exactly the backups counted, oldest first, remote copies
+included, as [Delete backups](/docs/backups/delete/#what-a-bulk-deletion-does) describes. A backup
+taken after the count is not among them. With **Keep each site's newest backup** on, the job checks
+again as it goes: if a site's newest was deleted meanwhile, the next newest stays.
+
+## Limits
+
+- The keep period deletes what is on the servers. Offsite copies follow each destination's own
+  retention, which counts scheduled backups and panel snapshots only.
+- A site's own keep period cannot keep scheduled backups past **Keep last N scheduled backups per
+  site**.
+- One deletion takes at most 5,000 backups. **Delete old backups** asks for fewer when more match.
+
+## Related
+
+- [How backups work](/docs/backups/overview/)
+- [Delete backups](/docs/backups/delete/)
+- [Offsite copies](/docs/backups/offsite/)
+- [Settings](/docs/panel/settings/)

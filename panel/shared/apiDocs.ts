@@ -1722,7 +1722,13 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         summary: 'PHP versions, locales, servers, dev domain, timezone - what the forms are built from',
         level: 'read',
       },
-      { method: 'GET', path: '/api/settings', summary: 'Every panel setting', returns: '{settings}', level: 'read' },
+      {
+        method: 'GET',
+        path: '/api/settings',
+        summary: 'Every panel setting',
+        returns: '{settings, ownBackupKeepDays: [{slug, days}]} - the sites that keep their backups for a time of their own',
+        level: 'read',
+      },
       {
         method: 'PUT',
         path: '/api/settings',

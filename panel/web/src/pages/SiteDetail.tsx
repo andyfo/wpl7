@@ -954,14 +954,15 @@ function BackupsTab({ slug }: { slug: string }) {
                 slug={slug}
                 value={site.data.backupKeepDays}
                 fallback={meta.data?.backupKeepDays ?? 0}
-                onSaved={() => {
-                  void qc.invalidateQueries({ queryKey: ['site', slug] });
+                onSaved={(detail) => {
+                  qc.setQueryData(['site', slug], detail);
                   void qc.invalidateQueries({ queryKey: ['sites'] });
                 }}
                 onError={setActionError}
               />
               <span className="max-w-xl text-xs text-neutral-500">
-                Manual and final backups, and the newest one, always stay.
+                Manual and final backups, and the newest one, always stay. Scheduled ones stop at the newest{' '}
+                {meta.data?.backupRetention ?? 10} either way.
               </span>
             </div>
           )}

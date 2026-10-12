@@ -1,4 +1,4 @@
-// @docs backups/delete, backups/overview, backups/restore
+// @docs backups/delete, backups/delete-old, backups/overview, backups/restore
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -226,6 +226,11 @@ export const backupDeletePayload = z.object({
    * done with the backups by then - without this, every one of them would read as in use.
    */
   parentJobId: z.number().int().positive().optional(),
+  /**
+   * Keep each site's newest complete backup (BackupService.isNewestOfItsSite), as it stands when
+   * the deletion reaches it: the one left out when the ids were read may have been deleted since.
+   */
+  keepNewest: z.boolean().optional(),
 });
 
 /** Reasons a failed deletion's error spells out before it says "and N more". */
@@ -247,12 +252,17 @@ function describeBackup(row: BackupRow): string {
  * it was asked to delete is still there. One that is already gone counts as done.
  */
 export async function backupDelete(ctx: JobContext<z.infer<typeof backupDeletePayload>>, s: CoreServices): Promise<void> {
-  const { backupIds, parentJobId } = ctx.payload;
+  const { backupIds, parentJobId, keepNewest } = ctx.payload;
   const except = parentJobId === undefined ? [ctx.jobId] : [ctx.jobId, parentJobId];
   const log = { info: (m: string) => ctx.info(m), warn: (m: string) => ctx.warn(m), error: (m: string) => ctx.error(m) };
+  // What the deletions queued besides this one take: the newest a site keeps is one none of them has.
+  const otherDeletions = new Set(
+    keepNewest ? [...s.backup.pendingDeletion()].filter(([, job]) => job.id !== ctx.jobId).map(([id]) => id) : [],
+  );
   let deleted = 0;
   let alreadyGone = 0;
   let keptByPolicy = 0;
+  let keptNewest = 0;
   let freedBytes = 0;
   const notDeleted: string[] = [];
   const report = () =>
@@ -263,6 +273,7 @@ export async function backupDelete(ctx: JobContext<z.infer<typeof backupDeletePa
       notDeleted: notDeleted.length,
       freedBytes,
       ...(keptByPolicy > 0 ? { keptByPolicy } : {}),
+      ...(keptNewest > 0 ? { keptNewest } : {}),
     });
 
   ctx.info(`Deleting ${backupIds.length} backup${backupIds.length === 1 ? '' : 's'}…`);
@@ -276,6 +287,12 @@ export async function backupDelete(ctx: JobContext<z.infer<typeof backupDeletePa
       continue;
     }
     const what = describeBackup(row);
+    if (keepNewest && s.backup.isNewestOfItsSite(row, otherDeletions)) {
+      keptNewest++;
+      ctx.info(`Kept ${what}: it is the newest backup ${row.type === 'panel' ? 'of the panel' : `${row.siteSlug} has`}`);
+      report();
+      continue;
+    }
     const blocker = s.backup.deletionBlocker(row, except);
     if (blocker) {
       notDeleted.push(blocker);
@@ -310,6 +327,7 @@ export async function backupDelete(ctx: JobContext<z.infer<typeof backupDeletePa
     );
   }
   if (alreadyGone > 0) ctx.info(`${alreadyGone} had already been deleted.`);
+  if (keptNewest > 0) ctx.info(`${keptNewest} kept as their site's newest backup.`);
   if (notDeleted.length > 0) {
     const more = notDeleted.length > REASONS_IN_ERROR ? `; and ${notDeleted.length - REASONS_IN_ERROR} more, see the log` : '';
     throw new Error(

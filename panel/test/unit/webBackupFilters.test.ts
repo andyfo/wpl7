@@ -140,32 +140,37 @@ describe('bulk delete', () => {
 });
 
 describe('delete old backups', () => {
-  const DAY = 24 * 3600_000;
-  const now = 1_800_000_000_000;
-  const base: PurgeCriteria = { scope: 'all', sites: [], olderThanDays: 30, kind: null, keepNewest: true };
+  const base: PurgeCriteria = { scope: 'all', sites: [], olderThanDays: 30, kind: null, serverId: null, keepNewest: true };
   const filtersOf = (query: string) => parseBackupFilters(new URLSearchParams(query));
 
-  it('starts from whose backups the list is filtered to', () => {
+  it('starts from what the list is filtered to', () => {
     expect(purgeCriteriaFrom(filtersOf(''))).toEqual(base);
     expect(purgeCriteriaFrom(filtersOf('siteSlug=shop&type=pre_update'))).toEqual({ ...base, scope: 'sites', sites: ['shop'], kind: 'pre_update' });
-    expect(purgeCriteriaFrom(filtersOf('deleted=true'))).toEqual({ ...base, scope: 'deleted' });
-    expect(purgeCriteriaFrom(filtersOf('siteSlug=panel&type=panel'))).toEqual({ ...base, scope: 'panel' });
+    expect(purgeCriteriaFrom(filtersOf('deleted=true&serverId=2'))).toEqual({ ...base, scope: 'deleted', serverId: 2 });
+    // The panel's own, named as a site or as a kind.
+    expect(purgeCriteriaFrom(filtersOf('siteSlug=panel'))).toEqual({ ...base, scope: 'panel' });
+    expect(purgeCriteriaFrom(filtersOf('type=panel'))).toEqual({ ...base, scope: 'panel' });
   });
 
-  it('asks the API in words its strict query accepts', () => {
-    const ask = (c: Partial<PurgeCriteria>) => purgeParams({ ...base, ...c }, now);
-    expect(ask({})).toEqual({ until: String(now - 30 * DAY), keepNewest: 'true' });
+  it('asks the API in words its strict query accepts, the age in days for its own clock', () => {
+    const ask = (c: Partial<PurgeCriteria>) => purgeParams({ ...base, ...c });
+    expect(ask({})).toEqual({ olderThanDays: '30', keepNewest: 'true' });
     expect(ask({ scope: 'sites', sites: ['shop', 'blog'], kind: 'scheduled', olderThanDays: null, keepNewest: false })).toEqual({
       siteSlugs: 'blog,shop',
       type: 'scheduled',
     });
-    expect(ask({ scope: 'deleted', olderThanDays: 7 })).toEqual({ deleted: 'true', until: String(now - 7 * DAY), keepNewest: 'true' });
+    expect(ask({ scope: 'deleted', olderThanDays: 7, serverId: 3 })).toEqual({
+      deleted: 'true',
+      serverId: '3',
+      olderThanDays: '7',
+      keepNewest: 'true',
+    });
     // The panel's own have no kind to choose.
-    expect(ask({ scope: 'panel', kind: 'manual' })).toEqual({ siteSlug: 'panel', until: String(now - 30 * DAY), keepNewest: 'true' });
+    expect(ask({ scope: 'panel', kind: 'manual' })).toEqual({ siteSlug: 'panel', olderThanDays: '30', keepNewest: 'true' });
     for (const c of [
       { scope: 'all' as const },
       { scope: 'sites' as const, sites: ['shop'] },
-      { scope: 'deleted' as const, olderThanDays: null },
+      { scope: 'deleted' as const, olderThanDays: null, serverId: 2 },
       { scope: 'panel' as const },
     ]) {
       expect(backupIdsQuery.safeParse(ask(c)).success, JSON.stringify(c)).toBe(true);
@@ -175,9 +180,10 @@ describe('delete old backups', () => {
   it('asks nothing until a site is chosen and the days are a number', () => {
     expect(purgeProblem({ ...base, scope: 'sites' })).toBe('Choose a site.');
     expect(purgeProblem({ ...base, scope: 'sites', sites: Array.from({ length: 201 }, (_, i) => `site-${i}`) })).toMatch(/at most 200/);
+    // A box left empty is 0.
     for (const days of [0, -3, 1.5, Number.NaN, 3651]) {
       expect(purgeProblem({ ...base, olderThanDays: days }), String(days)).toMatch(/number of days/);
-      expect(purgeParams({ ...base, olderThanDays: days }, now)).toBeNull();
+      expect(purgeParams({ ...base, olderThanDays: days })).toBeNull();
     }
     expect(purgeProblem({ ...base, olderThanDays: null })).toBeNull();
   });
@@ -187,5 +193,10 @@ describe('delete old backups', () => {
     expect(purgeSafeguard(['shop'])).toEqual({ warning: 'This leaves shop with no backup.', confirmWord: 'shop' });
     expect(purgeSafeguard(['blog', 'shop'])).toEqual({ warning: 'This leaves blog and shop with no backup.', confirmWord: 'delete' });
     expect(purgeSafeguard(['panel'])).toEqual({ warning: "This leaves the panel's own database with no backup.", confirmWord: 'delete' });
+    // The panel beside one site: still that site's name, as for the site alone.
+    expect(purgeSafeguard(['panel', 'shop'])).toEqual({
+      warning: "This leaves the panel's own database and shop with no backup.",
+      confirmWord: 'shop',
+    });
   });
 });

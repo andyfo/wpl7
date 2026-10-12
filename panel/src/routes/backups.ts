@@ -1,11 +1,11 @@
-// @docs backups/delete, backups/overview, backups/restore
+// @docs backups/delete, backups/delete-old, backups/overview, backups/restore
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { and, asc, desc, eq, inArray, isNull, lt, ne, not, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, ne, not, notInArray, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { z } from 'zod';
-import { backupCopies, backups, sites } from '../db/schema.js';
+import { backupCopies, backupDestinations, backups, sites } from '../db/schema.js';
 import {
   backupDownloadQuery,
   backupBulkDeleteBody,
@@ -49,6 +49,7 @@ function filterConditions(q: {
   type?: readonly BackupType[];
   serverId?: number;
   until?: number;
+  olderThanDays?: number;
 }): SQL[] {
   const conditions: SQL[] = [];
   if (q.siteSlug) conditions.push(eq(backups.siteSlug, q.siteSlug));
@@ -57,6 +58,8 @@ function filterConditions(q: {
   if (q.type && q.type.length > 0) conditions.push(inArray(backups.type, [...q.type]));
   if (q.serverId !== undefined) conditions.push(eq(backups.serverId, q.serverId));
   if (q.until !== undefined) conditions.push(lt(backups.createdAt, q.until));
+  // By the panel's clock, which is the one the backups were dated by - not the browser's.
+  if (q.olderThanDays !== undefined) conditions.push(lt(backups.createdAt, Date.now() - q.olderThanDays * 24 * 3600_000));
   return conditions;
 }
 
@@ -321,7 +324,13 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
   r.get('/api/backups/ids', { schema: { querystring: backupIdsQuery } }, async (req): Promise<BackupIdsDto> => {
     const doomed = deps.backup.pendingDeletion();
     const kept = req.query.keepNewest ? deps.backup.newestCompleteIds(doomed) : new Set<number>();
-    const rows = deps.db
+    const leftOut = [...doomed.keys(), ...kept];
+    const where = and(
+      ...filterConditions(req.query),
+      ne(backups.status, 'creating'),
+      leftOut.length > 0 ? notInArray(backups.id, leftOut) : undefined,
+    );
+    const items = deps.db
       .select({
         id: backups.id,
         siteSlug: backups.siteSlug,
@@ -332,36 +341,57 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
       })
       .from(backups)
       .leftJoin(sites, eq(sites.slug, backups.siteSlug))
-      .where(and(...filterConditions(req.query), ne(backups.status, 'creating')))
+      .where(where)
       .orderBy(desc(backups.createdAt), desc(backups.id))
-      .all()
-      .filter((row) => !doomed.has(row.id) && !kept.has(row.id));
-    const items = rows.slice(0, MAX_BULK_BACKUP_DELETE);
+      .limit(MAX_BULK_BACKUP_DELETE)
+      .all();
+    const total = Number(
+      deps.db
+        .select({ n: sql<number>`count(*)` })
+        .from(backups)
+        .leftJoin(sites, eq(sites.slug, backups.siteSlug))
+        .where(where)
+        .get()?.n ?? 0,
+    );
     const remote = new Map<number, number>();
     let leavesNone: string[] = [];
     if (items.length > 0) {
       const ids = items.map((row) => row.id);
+      // The copies a delete removes: not the ones at a destination that manages its own retention.
       const counts = deps.db
         .select({ backupId: backupCopies.backupId, n: sql<number>`count(*)` })
         .from(backupCopies)
-        .where(and(eq(backupCopies.status, 'complete'), inArray(backupCopies.backupId, ids)))
+        .innerJoin(backupDestinations, eq(backupDestinations.id, backupCopies.destinationId))
+        .where(
+          and(
+            eq(backupCopies.status, 'complete'),
+            ne(backupDestinations.retentionMode, 'external'),
+            inArray(backupCopies.backupId, ids),
+          ),
+        )
         .groupBy(backupCopies.backupId)
         .all();
       for (const c of counts) remote.set(c.backupId, Number(c.n));
 
       // A site whose complete backups are all among these - or on their way out already - has
-      // none left after them.
+      // none left after them. Never one when its newest is kept.
       const taken = new Map<string, number>();
       for (const row of items) if (row.status === 'complete') taken.set(row.siteSlug, (taken.get(row.siteSlug) ?? 0) + 1);
-      if (taken.size > 0) {
-        const left = new Map<string, number>();
-        const complete = deps.db
-          .select({ id: backups.id, slug: backups.siteSlug })
+      if (taken.size > 0 && !req.query.keepNewest) {
+        const left = deps.db
+          .select({ slug: backups.siteSlug, n: sql<number>`count(*)` })
           .from(backups)
-          .where(and(eq(backups.status, 'complete'), inArray(backups.siteSlug, [...taken.keys()])))
+          .where(
+            and(
+              eq(backups.status, 'complete'),
+              inArray(backups.siteSlug, [...taken.keys()]),
+              doomed.size > 0 ? notInArray(backups.id, [...doomed.keys()]) : undefined,
+            ),
+          )
+          .groupBy(backups.siteSlug)
           .all();
-        for (const row of complete) if (!doomed.has(row.id)) left.set(row.slug, (left.get(row.slug) ?? 0) + 1);
-        leavesNone = [...taken].filter(([slug, n]) => (left.get(slug) ?? 0) <= n).map(([slug]) => slug).sort();
+        const leftOf = new Map(left.map((row) => [row.slug, Number(row.n)]));
+        leavesNone = [...taken].filter(([slug, n]) => (leftOf.get(slug) ?? 0) <= n).map(([slug]) => slug).sort();
       }
     }
     return {
@@ -373,7 +403,7 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
         sizeBytes: row.sizeBytes,
         remoteCopies: remote.get(row.id) ?? 0,
       })),
-      total: rows.length,
+      total,
       leavesNone,
     };
   });
@@ -394,7 +424,8 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
       .all();
     if (rows.length === 0) throw notFound('None of these backups exist');
     const slugs = new Set(rows.map((row) => row.siteSlug));
-    const job = deps.worker.enqueue('backup.delete', { backupIds: rows.map((row) => row.id) }, undefined, {
+    const payload = { backupIds: rows.map((row) => row.id), ...(req.body.keepNewest ? { keepNewest: true } : {}) };
+    const job = deps.worker.enqueue('backup.delete', payload, undefined, {
       lane: BACKUP_DELETE_LANE,
       // One site's: the Jobs list shows it, as it does an upload's.
       siteSlug: slugs.size === 1 ? [...slugs][0] : undefined,

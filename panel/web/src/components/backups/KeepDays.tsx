@@ -1,6 +1,7 @@
-// @docs backups/overview
+// @docs backups/delete-old
 import { useEffect, useState } from 'react';
 import { MAX_BACKUP_KEEP_DAYS } from '../../../../shared/schemas';
+import type { SiteDetail } from '../../../../shared/types';
 import { api } from '../../api/client';
 import { Button, compactInputClass, Spinner } from '../ui';
 
@@ -10,7 +11,8 @@ const modeOf = (days: number | null): Mode => (days === null ? 'default' : days 
 
 /**
  * After how many days one site's backups are deleted: as Settings says for every site, never, or a
- * number of its own. The first two save as they are picked; a number waits for Save.
+ * number of its own. The first two save as they are picked; a number waits for Save. What it
+ * shows is what is stored: a save that fails puts the choice back.
  */
 export function KeepDaysSetting({
   slug,
@@ -24,7 +26,8 @@ export function KeepDaysSetting({
   value: number | null;
   /** The default, from Settings: 0 = never. */
   fallback: number;
-  onSaved: () => void;
+  /** With the site as it is now, keep period included. */
+  onSaved: (site: SiteDetail) => void;
   onError: (err: unknown) => void;
 }) {
   const [mode, setMode] = useState<Mode>(modeOf(value));
@@ -39,13 +42,16 @@ export function KeepDaysSetting({
   const save = (days: number | null) => {
     setBusy(true);
     onError(null);
-    void api(`/api/sites/${slug}/backups-keep-days`, { method: 'PUT', body: { days } })
+    void api<SiteDetail>(`/api/sites/${slug}/backups-keep-days`, { method: 'PUT', body: { days } })
       .then(onSaved)
-      .catch(onError)
+      .catch((err: unknown) => {
+        setMode(modeOf(value));
+        onError(err);
+      })
       .finally(() => setBusy(false));
   };
   const days = Number(text);
-  const valid = text.trim() !== '' && Number.isInteger(days) && days >= 1 && days <= MAX_BACKUP_KEEP_DAYS;
+  const valid = Number.isInteger(days) && days >= 1 && days <= MAX_BACKUP_KEEP_DAYS;
   const unsaved = mode === 'days' && days !== value;
 
   return (
@@ -59,8 +65,8 @@ export function KeepDaysSetting({
         onChange={(e) => {
           const next = e.target.value as Mode;
           setMode(next);
-          if (next === 'default' && value !== null) save(null);
-          if (next === 'never' && value !== 0) save(0);
+          if (next === 'default') save(null);
+          if (next === 'never') save(0);
         }}
       >
         <option value="default">{fallback > 0 ? `${fallback} days (default)` : 'Never (default)'}</option>

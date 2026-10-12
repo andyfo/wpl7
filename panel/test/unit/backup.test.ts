@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { backupCopies, backups, sites, type BackupRow, type SiteRow } from '../../src/db/schema.js';
+import { backupCopies, backups, jobs, sites, type BackupRow, type SiteRow } from '../../src/db/schema.js';
 import { hostExec } from '../../src/lib/exec.js';
 import { makeWorld, type TestWorld } from '../helpers.js';
 import { sitePaths } from '../../src/services/siteSpec.js';
@@ -225,6 +225,96 @@ describe('deleting backups by age', () => {
     // The deletion takes the one it names; this run took the oldest, and left the one after it.
     expect(remaining(w)).toEqual(sorted([kept, doomed]));
     expect(remaining(w)).not.toContain(older.id);
+  });
+
+  // The documented way back for a deleted site: create one with its name, then restore. The new
+  // site's first backups must not make the old one's last backup fair game.
+  it('keeps a deleted site’s newest backup when another site takes its name', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const old = await makeSite(w, 'shop');
+    const last = await backup(w, old, 'scheduled', 46);
+    w.db.delete(sites).where(eq(sites.id, old.id)).run();
+    const reborn = await makeSite(w, 'shop');
+    const older = await backup(w, reborn, 'scheduled', 40);
+    await backup(w, reborn, 'scheduled', 1);
+    // Its own keep period is its own backups': not the deleted site's.
+    w.deps.sites.setBackupKeepDays('shop', 0);
+    w.deps.sites.setBackupKeepDays('shop', 35);
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(remaining(w)).toContain(last.id);
+    expect(remaining(w)).not.toContain(older.id);
+  });
+
+  it('removes a failed backup without touching a later one that took the same folder', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const good = await backup(w, site, 'scheduled', 1);
+    // Failed in the same second as `good` was taken: its folder was removed, and `good` took the name.
+    const failed = w.db
+      .insert(backups)
+      .values({ siteId: site.id, siteSlug: site.slug, serverId: 1, type: 'scheduled', status: 'failed', path: good.path, rootPath: good.rootPath, createdAt: Date.now() - 40 * DAY })
+      .returning()
+      .get();
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(remaining(w)).toEqual([good.id]);
+    expect(remaining(w)).not.toContain(failed.id);
+    expect(fs.existsSync(path.join(good.path, 'files.tar.gz'))).toBe(true);
+  });
+
+  it('leaves a backup fetched back lately on its server, for a week', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const fetched = await backup(w, site, 'pre_update', 40);
+    await backup(w, site, 'scheduled', 1);
+    const fetch = (finishedAt: number) =>
+      w.db
+        .insert(jobs)
+        .values({ type: 'backup.fetch', payload: JSON.stringify({ backupId: fetched.id, destinationId: 1 }), status: 'succeeded', createdAt: finishedAt, finishedAt })
+        .run();
+    fetch(Date.now() - 2 * DAY);
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 0, offsiteOnly: 0 });
+    w.db.delete(jobs).run();
+    fetch(Date.now() - 8 * DAY);
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 1, offsiteOnly: 0 });
+  });
+
+  it('waits for a copy still to be retried, and drops one that gave up when only its remote copy stays', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const dest = (name: string) =>
+      w.offsite.create({
+        name,
+        provider: 's3',
+        config: { accessKeyId: 'AKIA', region: 'eu-central-1', bucket: name, prefix: 'panel.example.com' },
+        secrets: { secretAccessKey: 'sekrit' },
+      }).id;
+    const [a, b] = [dest('a'), dest('b')];
+    const row = await backup(w, site, 'scheduled', 40);
+    await backup(w, site, 'scheduled', 1);
+    w.db.insert(backupCopies).values([
+      { backupId: row.id, destinationId: a, status: 'complete', remotePath: 'a/1', createdAt: Date.now() },
+      { backupId: row.id, destinationId: b, status: 'failed', remotePath: 'b/1', nextAttemptAt: Date.now() + 3600_000, createdAt: Date.now() },
+    ]).run();
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 0, offsiteOnly: 0 });
+    // Out of retries: nothing more will be tried, and nothing could be without the files.
+    w.db.update(backupCopies).set({ nextAttemptAt: null }).where(eq(backupCopies.destinationId, b)).run();
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 0, offsiteOnly: 1 });
+    expect(w.db.select().from(backupCopies).all().map((c) => c.destinationId)).toEqual([a]);
+  });
+
+  it('counts the newest N among the backups that are staying', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const kept = await backup(w, site, 'scheduled', 3);
+    const doomed = [await backup(w, site, 'scheduled', 2), await backup(w, site, 'scheduled', 1)];
+    w.worker.enqueue('backup.delete', { backupIds: doomed.map((b) => b.id) }, undefined, { lane: 'backup-delete' });
+    // The two a deletion has are not the newest two: the one left is.
+    expect(await w.core.backup.prune(2)).toEqual({ deleted: 0, offsiteOnly: 0 });
+    expect(remaining(w)).toContain(kept.id);
   });
 
   it('follows a site’s own keep period, and the panel’s setting once the site is deleted', async () => {

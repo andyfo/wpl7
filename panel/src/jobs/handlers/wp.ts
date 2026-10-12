@@ -238,7 +238,8 @@ export async function wpBulkTask(ctx: JobContext<BulkPayload>, s: CoreServices):
     if (ctx.payload.backupFirst) {
       ctx.info('Taking a pre-update backup…');
       // An update schedule's backups are `scheduled` ones: retention bounds them. A nightly
-      // policy taking `pre_update` backups - which nothing ever prunes - fills the disk.
+      // policy taking `pre_update` backups - which only a keep period deletes, and that is off
+      // by default - fills the disk.
       const type = ctx.payload.policy ? 'scheduled' : 'pre_update';
       const row = await backend.backupFirst(ctx, type);
       backupId = row.id;

@@ -1,4 +1,4 @@
-// @docs backups/delete
+// @docs backups/delete, backups/delete-old
 import { backupTypes, MAX_BACKUP_FILTER_SITES, MAX_BACKUP_KEEP_DAYS, type BackupType } from '../../../shared/schemas';
 import type { BackupListDto, BackupListItemDto } from '../../../shared/types';
 
@@ -177,8 +177,6 @@ export function bulkDeleteSafeguard(
 // ---------------------------------------------------------------------------
 // Delete old backups
 
-const DAY_MS = 24 * 3600_000;
-
 /** Whose backups Delete old backups takes. */
 export type PurgeScope = 'all' | 'sites' | 'deleted' | 'panel';
 
@@ -189,17 +187,18 @@ export interface PurgeCriteria {
   /** Taken more than this many days ago; null = whenever. */
   olderThanDays: number | null;
   kind: BackupType | null;
+  /** Only the backups on this server; null = on every one. */
+  serverId: number | null;
   /** Leave each site's newest complete backup out, and the panel's. */
   keepNewest: boolean;
 }
 
-/** Where Delete old backups starts: whose the list is filtered to, older than 30 days. */
+/** Where Delete old backups starts: what the list is filtered to, older than 30 days. */
 export function purgeCriteriaFrom(filters: BackupFilters): PurgeCriteria {
-  const base = { sites: [] as string[], olderThanDays: 30, kind: null, keepNewest: true };
-  if (filters.siteSlug === 'panel') return { ...base, scope: 'panel' };
-  const kind = filters.type === 'panel' ? null : filters.type;
-  if (filters.siteSlug) return { ...base, scope: 'sites', sites: [filters.siteSlug], kind };
-  return { ...base, scope: filters.deleted ? 'deleted' : 'all', kind };
+  const base = { sites: [] as string[], olderThanDays: 30, kind: null, serverId: filters.serverId, keepNewest: true };
+  if (filters.siteSlug === 'panel' || filters.type === 'panel') return { ...base, scope: 'panel' };
+  if (filters.siteSlug) return { ...base, scope: 'sites', sites: [filters.siteSlug], kind: filters.type };
+  return { ...base, scope: filters.deleted ? 'deleted' : 'all', kind: filters.type };
 }
 
 /** Why these criteria cannot be asked about yet, in words; null when they can. */
@@ -216,33 +215,33 @@ export function purgeProblem(c: PurgeCriteria): string | null {
 }
 
 /**
- * The `GET /api/backups/ids` query for these criteria, `now` being when "N days ago" is counted
- * from. Null while purgeProblem has something to say.
+ * The `GET /api/backups/ids` query for these criteria. "N days ago" goes as days, for the panel to
+ * count back from its own clock. Null while purgeProblem has something to say.
  */
-export function purgeParams(c: PurgeCriteria, now: number): Record<string, string> | null {
+export function purgeParams(c: PurgeCriteria): Record<string, string> | null {
   if (purgeProblem(c) !== null) return null;
   const out: Record<string, string> = {};
   if (c.scope === 'sites') out.siteSlugs = [...c.sites].sort().join(',');
   if (c.scope === 'deleted') out.deleted = 'true';
   if (c.scope === 'panel') out.siteSlug = 'panel';
   else if (c.kind) out.type = c.kind;
-  if (c.olderThanDays !== null) out.until = String(now - c.olderThanDays * DAY_MS);
+  if (c.serverId !== null) out.serverId = String(c.serverId);
+  if (c.olderThanDays !== null) out.olderThanDays = String(c.olderThanDays);
   if (c.keepNewest) out.keepNewest = 'true';
   return out;
 }
 
-/** "shop", "shop and blog", "the panel's own database". */
-export function sitesInWords(slugs: string[]): string {
-  return inWords(slugs.map((slug) => (slug === 'panel' ? "the panel's own database" : slug)));
-}
-
 /**
  * What Delete old backups says first, and what has to be typed: the site's name when it takes
- * every backup one site has - as deleting the site itself asks - and `delete` otherwise.
+ * every backup one site has - as deleting the site itself asks - and `delete` otherwise. The
+ * panel's own database has no name to type, and does not make one site two.
  */
 export function purgeSafeguard(leavesNone: string[]): { warning?: string; confirmWord: string } {
   if (leavesNone.length === 0) return { confirmWord: 'delete' };
-  const warning = `This leaves ${sitesInWords(leavesNone)} with no backup.`;
-  const only = leavesNone.length === 1 ? leavesNone[0]! : null;
-  return { warning, confirmWord: only && only !== 'panel' ? only : 'delete' };
+  const names = leavesNone.map((slug) => (slug === 'panel' ? "the panel's own database" : slug));
+  const sites = leavesNone.filter((slug) => slug !== 'panel');
+  return {
+    warning: `This leaves ${inWords(names)} with no backup.`,
+    confirmWord: sites.length === 1 ? sites[0]! : 'delete',
+  };
 }

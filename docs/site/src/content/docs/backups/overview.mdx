@@ -11,10 +11,8 @@ sources:
   - panel/src/jobs/handlers/offsite.ts
   - panel/src/jobs/schedulers.ts
   - panel/src/routes/backups.ts
-  - panel/src/services/housekeeping.ts
   - panel/web/src/pages/Backups.tsx
   - panel/web/src/pages/SiteDetail.tsx
-  - panel/web/src/components/backups/KeepDays.tsx
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
@@ -56,31 +54,12 @@ the site without the panel, as [Manual recovery](/docs/reference/manual-recovery
 
 **Keep last N scheduled backups per site** in **Settings → Backups** sets the
 [retention](/docs/reference/glossary/#retention). The nightly housekeeping removes the older ones.
+A scheduled backup with a complete offsite copy gives up its local files instead, and stays listed
+as **remote only**.
 
-<Since v="0.3.0-beta.3" /> The keep period is off until you set it. **Delete site backups after
-(days)** in **Settings → Backups** sets it for every site, and **Delete panel backups after (days)**
-for the panel's own database. The nightly housekeeping then deletes the backups older than that. A
-scheduled backup goes as soon as either limit says so. The newest backup of each site, and of the
-panel, always stays, so a stopped site keeps its last one.
-
-A backup past either limit that has a complete offsite copy gives up its local files instead, and
-stays listed as **remote only**. Its copy follows the destination's own retention. Manual and final
-backups are yours to delete: **Delete old backups** removes them in bulk, as
-[Delete backups](/docs/backups/delete/#delete-old-backups) shows.
-
-## Keep one site's backups for a different time
-
-<Since v="0.3.0-beta.3" /> **Delete backups after** on a site's **Backups** tab sets that site's own
-keep period:
-
-| Choice | Means |
-|---|---|
-| The one marked **(default)** | As **Settings → Backups** says for every site. It shows the current number of days. |
-| **Never** | The site's backups are not deleted by age. Retention still keeps only its newest scheduled ones. |
-| **Custom** | A number of days for this site alone. Enter it and choose **Save**. |
-
-**Settings → Backups** lists the sites with a keep period of their own. A deleted site's own setting
-goes with it, and its backups follow the panel's.
+<Since v="0.3.0-beta.3" /> The keep period is off until you set it, for every site, for the panel or
+for one site. The nightly housekeeping then deletes the backups older than that, but never a site's
+newest. [Delete old backups](/docs/backups/delete-old/) shows how, and how to delete old ones now.
 
 ## When backups are taken
 
@@ -133,8 +112,6 @@ one transaction. Such a backup is restored by hand, as
   else.
 - Only scheduled backups and panel snapshots are kept to a number. Manual and final backups are
   never deleted by age.
-- The keep period deletes what is on the servers. Offsite copies follow each destination's own
-  retention, which counts scheduled backups and panel snapshots only.
 
 ## Related
 
@@ -142,4 +119,5 @@ one transaction. Such a backup is restored by hand, as
 - [Backup storage](/docs/backups/storage/)
 - [Offsite copies](/docs/backups/offsite/)
 - [Delete backups](/docs/backups/delete/)
+- [Delete old backups](/docs/backups/delete-old/)
 - [Manual recovery without the panel](/docs/reference/manual-recovery/)

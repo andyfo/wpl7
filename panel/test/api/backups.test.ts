@@ -200,6 +200,16 @@ describe('POST /api/backups/bulk-delete', () => {
     expect(job.summary).toBe('2 backups');
   });
 
+  it('passes on keeping each site’s newest, for the job to check as it goes', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    const a = addBackup(w, 'gone', { createdAt: 1000 });
+    const res = await bulkDelete(ctx, { ids: [a.id], keepNewest: true });
+    expect(res.statusCode, res.body).toBe(202);
+    const job = w.db.select().from(jobs).where(eq(jobs.id, (res.json() as { job: JobDto }).job.id)).get()!;
+    expect(JSON.parse(job.payload)).toEqual({ backupIds: [a.id], keepNewest: true });
+  });
+
   it('names no site for backups of several, and answers 404 when none of the ids exist', async () => {
     const ctx = await authedApp();
     const w = ctx.world;
@@ -325,12 +335,55 @@ describe('GET /api/backups/ids', () => {
     expect(idsOf(await ids(ctx, `?siteSlugs=shop&until=${shop3.createdAt}`))).toEqual([shop2.id, shop1.id]);
   });
 
-  it('refuses a site list that is not slugs, or too long', async () => {
+  it('refuses a site list that is not slugs, too long or empty, and an age that is not one', async () => {
     const ctx = await authedApp();
-    for (const query of ['?siteSlugs=Not_A_Slug', '?siteSlugs=a', `?siteSlugs=${Array.from({ length: 201 }, (_, i) => `site-${i}`).join(',')}`, '?until=soon', '?keepNewest=maybe']) {
+    for (const query of [
+      '?siteSlugs=Not_A_Slug',
+      '?siteSlugs=a',
+      `?siteSlugs=${Array.from({ length: 201 }, (_, i) => `site-${i}`).join(',')}`,
+      // Chosen sites that came out as none must not mean every site.
+      '?siteSlugs=',
+      '?siteSlugs=,',
+      '?until=soon',
+      '?olderThanDays=',
+      '?olderThanDays=0',
+      '?olderThanDays=3651',
+      '?keepNewest=maybe',
+    ]) {
       const res = await ctx.app.inject({ method: 'GET', url: `/api/backups/ids${query}`, headers: ctx.headers });
       expect(res.statusCode, query).toBe(400);
     }
+  });
+
+  it('counts an age in days by the panel’s clock, and matches nothing for a time given empty', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    const day = 24 * 3600_000;
+    const old = addBackup(w, 'gone', { createdAt: Date.now() - 40 * day });
+    addBackup(w, 'gone', { createdAt: Date.now() - 10 * day });
+    expect((await ids(ctx, '?olderThanDays=30')).items.map((b) => b.id)).toEqual([old.id]);
+    expect((await ids(ctx, '?until=')).items).toEqual([]);
+  });
+
+  it('counts no remote copy at a destination that manages its own retention: a delete leaves those', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    const now = Date.now();
+    const backup = addBackup(w, 'gone', { createdAt: 1000 });
+    const dest = (name: string, retentionMode: string) =>
+      w.db
+        .insert(backupDestinations)
+        .values({ name, provider: 's3', config: '{}', secrets: '{}', copyTypes: '["scheduled"]', copyFromTs: 0, retentionMode, createdAt: now, updatedAt: now })
+        .returning()
+        .get().id;
+    w.db
+      .insert(backupCopies)
+      .values([
+        { backupId: backup.id, destinationId: dest('panel-pruned', 'panel'), status: 'complete', remotePath: 'p/1', createdAt: now },
+        { backupId: backup.id, destinationId: dest('locked', 'external'), status: 'complete', remotePath: 'l/1', createdAt: now },
+      ])
+      .run();
+    expect((await ids(ctx, '?siteSlug=gone')).items[0]!.remoteCopies).toBe(1);
   });
 
   it('says which sites deleting them leaves with no backup, counting a deletion already under way', async () => {

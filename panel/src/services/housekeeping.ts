@@ -1,4 +1,4 @@
-// @docs backups/overview, security/privacy, servers/resources, sites/move
+// @docs backups/delete-old, security/privacy, servers/resources, sites/move
 import dns from 'node:dns/promises';
 import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 import { batches, jobs, moveCleanups, serverStats, sessions, siteStats } from '../db/schema.js';
@@ -54,7 +54,7 @@ export async function runHousekeeping(
 
   // Then by age: what is older than its keep period, the panel's setting or the site's own.
   const keepDays = { sites: s.settings.get('backupKeepDays') || 0, panel: s.settings.get('panelBackupKeepDays') || 0 };
-  const aged = await s.backup.expire(keepDays);
+  const aged = await s.backup.expire(keepDays, { checkCanceled });
   result.oldBackupsDeleted = aged.deleted;
   if (aged.deleted > 0) log.info(`Backup age: deleted ${aged.deleted} backup(s) older than their keep period`);
   else if (keepDays.sites > 0 || keepDays.panel > 0) log.info('Backup age: nothing older than its keep period');

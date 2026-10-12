@@ -1521,6 +1521,8 @@ export interface MetaDto {
   backupsPaused: boolean;
   /** After how many days sites' backups are deleted, unless a site sets its own; 0 = never. */
   backupKeepDays: number;
+  /** How many scheduled backups each site keeps, whatever their age. */
+  backupRetention: number;
   /** Where each server keeps its backups, so a page can say so without a second call. */
   backupRoots: { serverId: number; serverName: string; root: string; isDefault: boolean; backups: number }[];
   /** True once at least one offsite destination exists; gates the offsite UI. */

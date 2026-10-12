@@ -120,13 +120,16 @@ export const wpPluginNameSchema = z.string().regex(/^[a-zA-Z0-9._-]{1,100}$/, 'n
  * A query value that may name several of `values`, comma-separated: `?status=failed,canceled`.
  * A single value is still a list of one, which keeps `?status=failed` working as it always has.
  */
-const commaList = <const T extends readonly [string, ...string[]]>(values: T) =>
+/** Values separated by commas, each as `item` says, at most `max` of them, duplicates dropped. */
+const commaListOf = <T extends z.ZodType<unknown, string>>(item: T, max: number, rawMax = 2000) =>
   z
     .string()
-    .max(2000)
+    .max(rawMax)
     .optional()
     .transform((raw) => (raw ? [...new Set(raw.split(',').map((v) => v.trim()).filter(Boolean))] : []))
-    .pipe(z.array(z.enum(values)).max(values.length));
+    .pipe(z.array(item).max(max));
+
+const commaList = <const T extends readonly [string, ...string[]]>(values: T) => commaListOf(z.enum(values), values.length);
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -645,13 +648,19 @@ export const backupFetchBody = z.object({
 /** The most sites one `siteSlugs` names. */
 export const MAX_BACKUP_FILTER_SITES = 200;
 
-/** Site slugs, comma-separated: `a,b,c`. `panel` is one too. Left empty, it is not given. */
+/** The longest a backup can be set to be kept for, in days: ten years. */
+export const MAX_BACKUP_KEEP_DAYS = 3650;
+
+/**
+ * Site slugs, comma-separated: `a,b,c`. `panel` is one too. Unlike the other filters, one given
+ * empty is refused rather than read as no filter at all: these filters choose what a bulk delete
+ * takes, and a list of chosen sites that came out empty must not mean every site.
+ */
 const siteSlugList = z
   .string()
-  .max(MAX_BACKUP_FILTER_SITES * 40)
   .optional()
-  .transform((raw) => (raw ? [...new Set(raw.split(',').map((v) => v.trim()).filter(Boolean))] : []))
-  .pipe(z.array(siteSlugParam).max(MAX_BACKUP_FILTER_SITES));
+  .refine((raw) => raw === undefined || raw.split(',').some((v) => v.trim() !== ''), 'siteSlugs names no site')
+  .pipe(commaListOf(siteSlugParam, MAX_BACKUP_FILTER_SITES, MAX_BACKUP_FILTER_SITES * 40));
 
 /** The filters of `GET /api/backups`, shared with `GET /api/backups/ids`. */
 const backupFilterShape = {
@@ -667,8 +676,12 @@ const backupFilterShape = {
   type: commaList(backupTypes),
   /** Backups whose files are on this server - or were, for one that is only offsite now. */
   serverId: queryNumber(z.coerce.number().int().positive().optional()),
-  /** Taken before this time (ms since the epoch). */
-  until: queryNumber(z.coerce.number().int().min(0).optional()),
+  /**
+   * Taken before this time (ms since the epoch), or more than this many days ago by the panel's
+   * clock. Given empty, they match nothing rather than everything, for the reason siteSlugs does.
+   */
+  until: z.coerce.number().int().min(0).optional(),
+  olderThanDays: z.coerce.number().int().min(1).max(MAX_BACKUP_KEEP_DAYS).optional(),
 };
 
 /** GET /api/backups: every backup the panel knows of, newest first. */
@@ -703,6 +716,11 @@ export const backupIdsQuery = z.object({
  */
 export const backupBulkDeleteBody = z.object({
   ids: z.array(z.number().int().positive()).min(1).max(MAX_BULK_BACKUP_DELETE),
+  /**
+   * true = whichever of them is its site's newest complete backup when the deletion reaches it is
+   * kept: the one `keepNewest` left out when the ids were read may have been deleted since.
+   */
+  keepNewest: z.boolean().optional(),
 }).strict();
 export type BackupBulkDeleteBody = z.infer<typeof backupBulkDeleteBody>;
 
@@ -1381,9 +1399,6 @@ export const backupsEnabledBody = z
     enabled: z.boolean(),
   })
   .strict();
-
-/** The longest a backup can be set to be kept for, in days: ten years. */
-export const MAX_BACKUP_KEEP_DAYS = 3650;
 
 export const backupKeepDaysBody = z
   .object({
