@@ -73,6 +73,10 @@ export async function seed(db: Db, config: Config): Promise<SeedResult> {
   seedCloudflareToken(s, config.cloudflareTokenSeed);
   s.seedRaw('backup.cron', d.backupCron);
   s.seedRaw('backup.retention', d.backupRetention);
+  // Never, until the operator says otherwise: an update must not start deleting backups that
+  // were kept until somebody deleted them.
+  s.seedRaw('backup.keepDays', 0);
+  s.seedRaw('backup.panelKeepDays', 0);
   s.seedRaw('monitor.uptimeIntervalSec', 60);
   s.seedRaw('monitor.statsIntervalSec', 60);
   s.seedRaw('monitor.duIntervalMin', 30);

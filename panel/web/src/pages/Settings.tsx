@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import { useMeta } from '../api/hooks';
+import { useMeta, useSites } from '../api/hooks';
 import { Button, Card, ErrorNote, Field, inputClass, Tabs, Toggle } from '../components/ui';
 import { CronField } from '../components/CronField';
 import { LocaleSelect } from '../components/LocaleSelect';
@@ -17,6 +17,8 @@ import type { MetaDto } from '../../../shared/types';
 interface PanelSettings {
   backupCron: string;
   backupRetention: number;
+  backupKeepDays: number;
+  panelBackupKeepDays: number;
   monitorUptimeIntervalSec: number;
   monitorStatsIntervalSec: number;
   monitorDuIntervalMin: number;
@@ -109,6 +111,8 @@ const SETTING_TAB: Record<keyof PanelSettings, TabId> = {
   ftpPassivePortEnd: 'sites',
   backupCron: 'backups',
   backupRetention: 'backups',
+  backupKeepDays: 'backups',
+  panelBackupKeepDays: 'backups',
   wpScanIntervalHours: 'security',
   vulnerabilityFeed: 'security',
   securityTrustedProxies: 'security',
@@ -483,6 +487,21 @@ function BackupsTab({ s, set, meta }: TabProps) {
             onChange={(e) => set('backupRetention', Number(e.target.value))}
           />
         </Field>
+        <div className="grid max-w-2xl gap-4 sm:grid-cols-2">
+          <Field label="Delete site backups after (days)" hint="0 = never. A site can set its own on its Backups tab.">
+            <input className={inputClass} type="number" min={0} max={3650} value={s.backupKeepDays}
+              onChange={(e) => set('backupKeepDays', Number(e.target.value))} />
+          </Field>
+          <Field label="Delete panel backups after (days)" hint="0 = never.">
+            <input className={inputClass} type="number" min={0} max={3650} value={s.panelBackupKeepDays}
+              onChange={(e) => set('panelBackupKeepDays', Number(e.target.value))} />
+          </Field>
+        </div>
+        <p className="measure text-xs text-neutral-500">
+          Manual and final backups, and the newest backup of each site and of the panel, always stay. Remote copies
+          follow their destination&apos;s own retention.
+        </p>
+        <OwnKeepDays />
       </div>
       <div className="measure mt-4 border-t border-neutral-100 pt-3 text-xs text-neutral-500">
         Stored on each server's own disk. Locations and remote copies live under{' '}
@@ -499,6 +518,27 @@ function BackupsTab({ s, set, meta }: TabProps) {
         </ul>
       </div>
     </Card>
+  );
+}
+
+/** The sites that keep their backups for a time of their own, each linked to where it is set. */
+function OwnKeepDays() {
+  const sites = useSites();
+  const own = (sites.data ?? []).filter((site) => site.backupKeepDays !== null).sort((a, b) => a.slug.localeCompare(b.slug));
+  if (own.length === 0) return null;
+  return (
+    <p className="text-xs text-neutral-500">
+      Sites with their own:{' '}
+      {own.map((site, i) => (
+        <span key={site.slug}>
+          {i > 0 && ', '}
+          <Link className="underline" to={`/sites/${site.slug}?tab=backups`}>
+            {site.slug}
+          </Link>{' '}
+          ({site.backupKeepDays === 0 ? 'never' : `${site.backupKeepDays} days`})
+        </span>
+      ))}
+    </p>
   );
 }
 

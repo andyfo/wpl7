@@ -314,6 +314,20 @@ export class SitesService {
   }
 
   /**
+   * After how many days this site's backups are deleted: null follows the panel's setting, 0 keeps
+   * them. Not a job either: the nightly housekeeping reads it when it deletes old backups.
+   */
+  setBackupKeepDays(slug: string, days: number | null): SiteRow {
+    const site = this.bySlug(slug, { kinds: 'any' });
+    return this.db
+      .update(sites)
+      .set({ backupKeepDays: days, updatedAt: Date.now() })
+      .where(eq(sites.id, site.id))
+      .returning()
+      .get();
+  }
+
+  /**
    * Take one site in or out of the offsite copies. Existing copies are kept: switching this
    * off means "stop sending new ones", not "delete what is already in the bucket".
    */
@@ -390,6 +404,7 @@ export class SitesService {
       wp,
       kind: site.kind as SiteSummary['kind'],
       external: this.s.connections.externalSummary(site),
+      backupKeepDays: site.backupKeepDays,
       createdAt: site.createdAt,
     };
   }

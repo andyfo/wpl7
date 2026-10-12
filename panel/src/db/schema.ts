@@ -87,6 +87,11 @@ export const sites = sqliteTable(
     backupsEnabled: integer('backups_enabled').notNull().default(1),
     /** 0 = this site's backups are never copied to an offsite destination. */
     offsiteEnabled: integer('offsite_enabled').notNull().default(1),
+    /**
+     * After how many days the housekeeping deletes this site's backups (BackupService.expire says
+     * which kinds): NULL = the `backup.keepDays` setting, 0 = never.
+     */
+    backupKeepDays: integer('backup_keep_days'),
     diskBytes: integer('disk_bytes'),
     /**
      * 'hosted' | 'external'. An external site is hosted elsewhere and reached through the WPL7

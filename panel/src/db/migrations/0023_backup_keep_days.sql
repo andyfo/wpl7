@@ -1,0 +1,1 @@
+ALTER TABLE `sites` ADD `backup_keep_days` integer;

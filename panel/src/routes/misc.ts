@@ -49,6 +49,8 @@ export function registerMiscRoutes(app: FastifyInstance, deps: AppDeps): void {
       // expression the operator can set to anything, not a fixed nightly run.
       backupCron: deps.settings.get('backupCron'),
       backupsPaused: deps.schedulers.backupsPaused(),
+      // What a site's Backups tab offers as its default keep period.
+      backupKeepDays: deps.settings.get('backupKeepDays') ?? 0,
       // Where each server keeps its backups, so Settings and the site page can say so
       // without every page learning to call the storage endpoint.
       backupRoots: deps.storage.roots(),

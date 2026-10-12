@@ -42,6 +42,7 @@ import {
 } from '../components/backups/BackupParts';
 import { describeCron } from '../../../shared/cron';
 import { JobProgress } from '../components/JobProgress';
+import { KeepDaysSetting } from '../components/backups/KeepDays';
 import { WpAdminLoginButton } from '../components/WpAdminLoginButton';
 import { ExternalOverview } from '../components/external/ExternalOverview';
 import { ExternalSettings } from '../components/external/ExternalSettings';
@@ -883,7 +884,7 @@ function BackupsTab({ slug }: { slug: string }) {
 
   return (
     <div className="space-y-4">
-      <Card title="Scheduled backups">
+      <Card title="Backup settings">
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Toggle
@@ -944,6 +945,23 @@ function BackupsTab({ slug }: { slug: string }) {
                 ) : (
                   <>Off — new backups stay on this server. Existing copies are kept.</>
                 )}
+              </span>
+            </div>
+          )}
+          {site.data && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-3">
+              <KeepDaysSetting
+                slug={slug}
+                value={site.data.backupKeepDays}
+                fallback={meta.data?.backupKeepDays ?? 0}
+                onSaved={() => {
+                  void qc.invalidateQueries({ queryKey: ['site', slug] });
+                  void qc.invalidateQueries({ queryKey: ['sites'] });
+                }}
+                onError={setActionError}
+              />
+              <span className="max-w-xl text-xs text-neutral-500">
+                Manual and final backups, and the newest one, always stay.
               </span>
             </div>
           )}

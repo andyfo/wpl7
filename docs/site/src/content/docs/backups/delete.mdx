@@ -1,6 +1,6 @@
 ---
 title: Delete backups
-description: "Delete one backup, several at once, or all of a site's, and what deleting a site does with its backups."
+description: "Delete one backup, several at once, all of a site's or the old ones, and what deleting a site does with its backups."
 sidebar:
   order: 5
 sources:
@@ -11,8 +11,10 @@ sources:
   - panel/web/src/pages/Backups.tsx
   - panel/web/src/lib/backupFilters.ts
   - panel/web/src/components/backups/BackupParts.tsx
+  - panel/web/src/components/backups/DeleteOldBackups.tsx
 ---
 
+import Screenshot from '~/components/Screenshot.astro';
 import Since from '~/components/Since.astro';
 
 Deleting a backup removes it everywhere: its files on the server and its offsite copies. A deleted
@@ -47,6 +49,38 @@ all** is not offered.
 All backups** filtered to that site. Tick the page, choose **Select all** if the list runs over
 several pages, then **Delete**. Type the site's name to confirm.
 
+<Since v="0.3.0-beta.3" /> **Delete old backups** there starts with the site chosen. Choose **Any
+time** and switch off **Keep each site's newest backup** to take all of them.
+
+## Delete old backups
+
+<Since v="0.3.0-beta.3" /> On **Backups → All backups**, choose **Delete old backups**. It starts with
+whose backups the list is filtered to.
+
+<Screenshot name="backups-delete-old" alt="The Delete old backups dialog: whose backups, how old, which kind, and what that comes to" />
+
+1. Under **Whose**, choose one:
+
+   | Choice | Takes the backups of |
+   |---|---|
+   | **All** | Every site, deleted ones included, and the panel's own database |
+   | **Chosen sites** | The sites you tick in the list below it, deleted ones included |
+   | **Deleted sites** | Every site that has been deleted |
+   | **The panel's own database** | The panel itself |
+
+2. Under **Taken**, enter how many days old a backup has to be, or choose **Any time**.
+3. To take one kind only, choose it under **Kind**.
+4. **Keep each site's newest backup** is on, and leaves out the newest backup of each site and of
+   the panel. Switch it off to take those too.
+5. Check what the dialog counts: the backups, their sites, their size and their remote copies. It
+   also names any site that would be left with no backup.
+6. Type `delete`, or the site's name when one site loses every backup it has, and choose
+   **Delete**.
+
+What you saw is what goes: a backup taken after the count is not among them. To have old backups
+deleted every night instead, set a keep period, as
+[How backups work](/docs/backups/overview/#kinds-and-how-long-each-is-kept) shows.
+
 ## What a bulk deletion does
 
 <Since v="0.3.0-beta.2" /> One **Delete backups** job works through the selection, oldest first,
@@ -58,8 +92,8 @@ job is using is left alone, and the job then ends as failed, naming it.
 
 When you delete a site, **Take a final backup first (kept until you delete it)** is on by default.
 The final backup and the site's other backups stay after the site is gone, under **Deleted sites**
-on **Backups → All backups**. Scheduled ones still follow retention. Deleting the last complete
-backup of a deleted site asks you to type its name.
+on **Backups → All backups**. All but the final and manual ones still follow retention and the
+keep period. Deleting the last complete backup of a deleted site asks you to type its name.
 
 <Since v="0.3.0-beta.2" /> To take the site's backups along, switch on **Delete its existing backups
 too** as well. Once the site is gone, a **Delete backups** job removes them, remote copies
@@ -78,6 +112,7 @@ takes no final backup. Its backups stay, unless **Also delete its backups** is o
   tools.
 - Deleting a backup's local files with **Keep the remote copies** leaves it restorable only after
   **Fetch back**.
+- One deletion takes at most 5,000 backups. **Delete old backups** asks for fewer when more match.
 
 ## Related
 

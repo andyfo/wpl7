@@ -56,6 +56,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     externalCountFor: both('counts the external sites a server keeps the backups of'),
   },
   'services/alerts.ts': { vulnerabilities: both('alerts are for every site') },
+  'services/backup.ts': { expire: both("reads each site's own keep period: the backups of either kind are deleted by age") },
   'services/blocklist.ts': { block: NAMES, toDto: NAMES },
   'services/connections.ts': {
     enroll: both('the site a reconnect is for'),

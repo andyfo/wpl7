@@ -14,6 +14,7 @@ import {
   OffsiteBadges,
   RestoreBackupDialog,
 } from '../components/backups/BackupParts';
+import { DeleteOldBackupsDialog } from '../components/backups/DeleteOldBackups';
 import { JobProgress } from '../components/JobProgress';
 import { Icon } from '../components/Icon';
 import { Button, Card, EmptyState, ErrorNote, Field, inputClass, Spinner, StatusBadge } from '../components/ui';
@@ -26,21 +27,12 @@ import {
   matchingPhrase,
   parseBackupFilters,
   patchBackupParams,
+  purgeCriteriaFrom,
   siteOnly,
+  SITE_BACKUP_KINDS,
   type BackupFilters,
 } from '../lib/backupFilters';
 import { formatBytes, formatDate, timeAgo } from '../lib/format';
-
-/** What a site's backups can be, in the Kind filter. The panel's own is a "whose", under Site. */
-const SITE_KINDS: { id: BackupType; label: string }[] = [
-  { id: 'scheduled', label: 'Scheduled' },
-  { id: 'manual', label: 'Manual' },
-  { id: 'final', label: 'Final, taken on deletion' },
-  { id: 'pre_update', label: 'Before an update' },
-  { id: 'pre_restore', label: 'Before a restore' },
-  { id: 'move', label: 'Server move' },
-  { id: 'import', label: 'Import' },
-];
 
 /** The Site filter's value for "every deleted site"; a slug never starts with @. */
 const DELETED = '@deleted';
@@ -79,6 +71,7 @@ export function Backups() {
   const [snapshot, setSnapshot] = useState<Map<number, BackupIdsDto['items'][number]> | null>(null);
   const [selectingAll, setSelectingAll] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [purgeOpen, setPurgeOpen] = useState(false);
 
   const data = list.data;
   const items = data?.items ?? [];
@@ -190,13 +183,18 @@ export function Backups() {
             Every backup on every server, including the backups of sites that have been deleted.
           </p>
         </div>
-        <Link
-          to="/backups/storage"
-          className="inline-flex items-center gap-1.5 text-sm text-neutral-500 transition-colors hover:text-neutral-900"
-        >
-          Storage
-          <Icon name="arrow" size={14} />
-        </Link>
+        <div className="flex items-center gap-4">
+          <Button small variant="secondary" onClick={() => setPurgeOpen(true)}>
+            Delete old backups
+          </Button>
+          <Link
+            to="/backups/storage"
+            className="inline-flex items-center gap-1.5 text-sm text-neutral-500 transition-colors hover:text-neutral-900"
+          >
+            Storage
+            <Icon name="arrow" size={14} />
+          </Link>
+        </div>
       </div>
 
       <Card>
@@ -238,7 +236,7 @@ export function Backups() {
                 onChange={(e) => patch({ type: (e.target.value || null) as BackupType | null })}
               >
                 <option value="">All kinds</option>
-                {SITE_KINDS.map((k) => (
+                {SITE_BACKUP_KINDS.map((k) => (
                   <option key={k.id} value={k.id}>
                     {k.label}
                   </option>
@@ -325,12 +323,13 @@ export function Backups() {
           <JobProgress job={run.job} logs={run.logs} />
           {selectedDeleted && (
             // Retention is per slug and does not know a site is gone: its scheduled backups are
-            // still thinned to the newest N, here and at each destination. Everything else stays.
+            // still thinned to the newest N, here and at each destination, and every kind but final
+            // and manual goes after the panel's keep period - its own went with the site.
             <p className="rounded-lg bg-neutral-50 px-3 py-2 text-sm text-neutral-600">
-              <b>{selectedDeleted.slug}</b> has been deleted; these backups are what is left of it. The final backup
-              and every other kind stay until you delete them, but scheduled ones still follow the{' '}
+              <b>{selectedDeleted.slug}</b> has been deleted; these backups are what is left of it. Its final and
+              manual backups stay until you delete them. The rest follow the{' '}
               <Link className="underline" to="/settings#backups">
-                retention setting
+                backup settings
               </Link>
               , like any site's. To bring it back, create a site named <code>{selectedDeleted.slug}</code>
               {multiServer && items[0] ? ` on ${serverName(items[0].serverId)}` : ''} and restore one of them from
@@ -559,6 +558,28 @@ export function Backups() {
           onClose={() => setDeleteId(null)}
           onDone={() => refresh(deleteTarget.siteSlug)}
           onError={setActionError}
+        />
+      )}
+      {purgeOpen && (
+        <DeleteOldBackupsDialog
+          initial={purgeCriteriaFrom(filters)}
+          sites={[
+            ...siteList.map((s) => ({ slug: s.slug, deleted: false })),
+            ...[...deletedSites].sort((a, b) => a.slug.localeCompare(b.slug)).map((d) => ({ slug: d.slug, deleted: true })),
+          ]}
+          onClose={() => setPurgeOpen(false)}
+          onConfirm={(ids) => {
+            setActionError(null);
+            run.mutate(
+              { path: '/api/backups/bulk-delete', body: { ids } },
+              {
+                onSuccess: () => {
+                  clearSelection();
+                  refresh();
+                },
+              },
+            );
+          }}
         />
       )}
     </div>

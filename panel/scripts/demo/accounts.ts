@@ -89,4 +89,6 @@ export function seedAccounts(world: TestWorld): void {
   const s = world.core.settings;
   s.set('alertEmail', ADMIN_EMAIL);
   s.set('defaultAdminEmail', ADMIN_EMAIL);
+  s.set('backupKeepDays', 30);
+  s.set('panelBackupKeepDays', 90);
 }

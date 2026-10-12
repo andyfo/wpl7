@@ -4,6 +4,7 @@ import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import {
+  backupKeepDaysBody,
   backupsEnabledBody,
   domainsUpdateBody,
   offsiteEnabledBody,
@@ -135,6 +136,19 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
     { schema: { params: slugParams, body: backupsEnabledBody } },
     async (req, reply) => {
       deps.sites.setBackupsEnabled(req.params.slug, req.body.enabled);
+      return reply.send(await deps.sites.detail(req.params.slug));
+    },
+  );
+
+  /**
+   * After how many days this site's backups are deleted: `null` puts it back on the panel's
+   * setting, 0 keeps them. The nightly housekeeping deletes them (BackupService.expire).
+   */
+  r.put(
+    '/api/sites/:slug/backups-keep-days',
+    { schema: { params: slugParams, body: backupKeepDaysBody } },
+    async (req, reply) => {
+      deps.sites.setBackupKeepDays(req.params.slug, req.body.days);
       return reply.send(await deps.sites.detail(req.params.slug));
     },
   );

@@ -1,7 +1,7 @@
 // @docs backups/delete, backups/overview, backups/restore
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
-import { and, asc, desc, eq, inArray, isNull, ne, not, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, ne, not, sql, type SQL } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { z } from 'zod';
@@ -44,15 +44,19 @@ const ofDeletedSite = and(ne(backups.type, 'panel'), isNull(sites.id))!;
 /** The list's filters as SQL, needing the same join; `GET /api/backups/ids` takes the same ones. */
 function filterConditions(q: {
   siteSlug?: string;
+  siteSlugs?: readonly string[];
   deleted?: boolean;
   type?: readonly BackupType[];
   serverId?: number;
+  until?: number;
 }): SQL[] {
   const conditions: SQL[] = [];
   if (q.siteSlug) conditions.push(eq(backups.siteSlug, q.siteSlug));
+  if (q.siteSlugs && q.siteSlugs.length > 0) conditions.push(inArray(backups.siteSlug, [...q.siteSlugs]));
   if (q.deleted !== undefined) conditions.push(q.deleted ? ofDeletedSite : not(ofDeletedSite));
   if (q.type && q.type.length > 0) conditions.push(inArray(backups.type, [...q.type]));
   if (q.serverId !== undefined) conditions.push(eq(backups.serverId, q.serverId));
+  if (q.until !== undefined) conditions.push(lt(backups.createdAt, q.until));
   return conditions;
 }
 
@@ -308,31 +312,57 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
   });
 
   /**
-   * What "Select all" ticks: every backup the list's filters match, on every page, as ids - minus
-   * the ones nothing could delete right now (still being written, or a deletion already has
-   * them). The bulk delete is then sent these ids and takes exactly them, however the filters
-   * would read a minute later: a site deleted meanwhile does not add its backups to "deleted".
+   * What "Select all" ticks, and what Delete old backups deletes: every backup the list's filters
+   * match, on every page, as ids - minus the ones nothing could delete right now (still being
+   * written, or a deletion already has them), and with `keepNewest` each site's newest. The bulk
+   * delete is then sent these ids and takes exactly them, however the filters would read a minute
+   * later: a site deleted meanwhile does not add its backups to "deleted".
    */
   r.get('/api/backups/ids', { schema: { querystring: backupIdsQuery } }, async (req): Promise<BackupIdsDto> => {
     const doomed = deps.backup.pendingDeletion();
+    const kept = req.query.keepNewest ? deps.backup.newestCompleteIds(doomed) : new Set<number>();
     const rows = deps.db
-      .select({ id: backups.id, siteSlug: backups.siteSlug, type: backups.type, status: backups.status, siteId: sites.id })
+      .select({
+        id: backups.id,
+        siteSlug: backups.siteSlug,
+        type: backups.type,
+        status: backups.status,
+        sizeBytes: backups.sizeBytes,
+        siteId: sites.id,
+      })
       .from(backups)
       .leftJoin(sites, eq(sites.slug, backups.siteSlug))
       .where(and(...filterConditions(req.query), ne(backups.status, 'creating')))
       .orderBy(desc(backups.createdAt), desc(backups.id))
       .all()
-      .filter((row) => !doomed.has(row.id));
+      .filter((row) => !doomed.has(row.id) && !kept.has(row.id));
     const items = rows.slice(0, MAX_BULK_BACKUP_DELETE);
     const remote = new Map<number, number>();
+    let leavesNone: string[] = [];
     if (items.length > 0) {
+      const ids = items.map((row) => row.id);
       const counts = deps.db
         .select({ backupId: backupCopies.backupId, n: sql<number>`count(*)` })
         .from(backupCopies)
-        .where(and(eq(backupCopies.status, 'complete'), inArray(backupCopies.backupId, items.map((row) => row.id))))
+        .where(and(eq(backupCopies.status, 'complete'), inArray(backupCopies.backupId, ids)))
         .groupBy(backupCopies.backupId)
         .all();
       for (const c of counts) remote.set(c.backupId, Number(c.n));
+
+      // A site whose complete backups are all among these - or on their way out already - has
+      // none left after them.
+      const taken = new Map<string, number>();
+      for (const row of items) if (row.status === 'complete') taken.set(row.siteSlug, (taken.get(row.siteSlug) ?? 0) + 1);
+      if (taken.size > 0) {
+        const left = new Map<string, number>();
+        const complete = deps.db
+          .select({ id: backups.id, slug: backups.siteSlug })
+          .from(backups)
+          .where(and(eq(backups.status, 'complete'), inArray(backups.siteSlug, [...taken.keys()])))
+          .all();
+        for (const row of complete) if (!doomed.has(row.id)) left.set(row.slug, (left.get(row.slug) ?? 0) + 1);
+        leavesNone = [...taken].filter(([slug, n]) => (left.get(slug) ?? 0) <= n).map(([slug]) => slug).sort();
+      }
     }
     return {
       items: items.map((row) => ({
@@ -340,9 +370,11 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
         siteSlug: row.siteSlug,
         siteDeleted: row.type !== 'panel' && row.siteId === null,
         status: row.status as 'complete' | 'failed',
+        sizeBytes: row.sizeBytes,
         remoteCopies: remote.get(row.id) ?? 0,
       })),
       total: rows.length,
+      leavesNone,
     };
   });
 

@@ -198,6 +198,16 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       },
       {
         method: 'PUT',
+        path: '/api/sites/:slug/backups-keep-days',
+        summary: 'Set after how many days this site\'s backups are deleted, or put it back on the panel\'s setting',
+        input: '{days: number | null} (null = Settings, 0 = never)',
+        returns: 'SiteDetail (sync)',
+        danger: true,
+        level: 'full',
+        levelReason: 'A shorter keep period deletes backups, a safety net',
+      },
+      {
+        method: 'PUT',
         path: '/api/sites/:slug/mail-suspension',
         summary: 'Stop or resume the relay accepting this site\'s mail',
         input: '{suspended, reason?}',
@@ -1030,7 +1040,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         method: 'GET',
         path: '/api/backups',
         summary: "Every backup on every server, newest first - deleted sites' and the panel's own included",
-        input: '?siteSlug=&deleted=true|false&type=&serverId=&limit=&offset=',
+        input: '?siteSlug=&siteSlugs=a,b&deleted=true|false&type=&serverId=&until=<ms>&limit=&offset=',
         returns: '{items: Backup[] (+ siteTitle, siteDeleted, siteKind), total, deletedSites}',
         level: 'read',
       },
@@ -1091,8 +1101,9 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         method: 'GET',
         path: '/api/backups/ids',
         summary: 'The ids of every backup some filters match that a bulk delete could take, across all pages',
-        input: '?siteSlug=&deleted=true|false&type=&serverId= (as GET /api/backups)',
-        returns: '{items: [{id, siteSlug, siteDeleted, status, remoteCopies}], total} - newest first, at most 5000',
+        input: "The filters of GET /api/backups, plus ?keepNewest=true to leave out each site's newest complete backup",
+        returns:
+          '{items: [{id, siteSlug, siteDeleted, status, sizeBytes, remoteCopies}], total, leavesNone: [slug]} - newest first, at most 5000',
         level: 'read',
       },
       {
@@ -2227,9 +2238,9 @@ export const API_DOC_RECIPES: ApiDocRecipe[] = [
       { comment: 'Everything this site has, with the offsite copy state of each.', method: 'GET', path: '/api/sites/customer-shop/backups' },
       { comment: 'Copy now instead of waiting for the reconciler.', method: 'POST', path: '/api/backups/1/offsite', body: {} },
       {
-        comment: 'Every backup this site took before an update, as ids.',
+        comment: 'Its backups taken before a time (ms), as ids - all but its newest one.',
         method: 'GET',
-        path: '/api/backups/ids?siteSlug=customer-shop&type=pre_update',
+        path: '/api/backups/ids?siteSlug=customer-shop&until=1790000000000&keepNewest=true',
       },
       {
         comment: 'Delete exactly those, offsite copies included, in one job.',
