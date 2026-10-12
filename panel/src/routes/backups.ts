@@ -322,9 +322,9 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
    * later: a site deleted meanwhile does not add its backups to "deleted".
    */
   r.get('/api/backups/ids', { schema: { querystring: backupIdsQuery } }, async (req): Promise<BackupIdsDto> => {
-    const doomed = deps.backup.pendingDeletion();
-    const kept = req.query.keepNewest ? deps.backup.newestCompleteIds(doomed) : new Set<number>();
-    const leftOut = [...doomed.keys(), ...kept];
+    const away = deps.backup.goingAway();
+    const kept = req.query.keepNewest ? deps.backup.newestCompleteIds(away) : new Set<number>();
+    const leftOut = [...away, ...kept];
     const where = and(
       ...filterConditions(req.query),
       ne(backups.status, 'creating'),
@@ -385,7 +385,7 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
             and(
               eq(backups.status, 'complete'),
               inArray(backups.siteSlug, [...taken.keys()]),
-              doomed.size > 0 ? notInArray(backups.id, [...doomed.keys()]) : undefined,
+              away.size > 0 ? notInArray(backups.id, [...away]) : undefined,
             ),
           )
           .groupBy(backups.siteSlug)

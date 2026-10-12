@@ -255,10 +255,6 @@ export async function backupDelete(ctx: JobContext<z.infer<typeof backupDeletePa
   const { backupIds, parentJobId, keepNewest } = ctx.payload;
   const except = parentJobId === undefined ? [ctx.jobId] : [ctx.jobId, parentJobId];
   const log = { info: (m: string) => ctx.info(m), warn: (m: string) => ctx.warn(m), error: (m: string) => ctx.error(m) };
-  // What the deletions queued besides this one take: the newest a site keeps is one none of them has.
-  const otherDeletions = new Set(
-    keepNewest ? [...s.backup.pendingDeletion()].filter(([, job]) => job.id !== ctx.jobId).map(([id]) => id) : [],
-  );
   let deleted = 0;
   let alreadyGone = 0;
   let keptByPolicy = 0;
@@ -287,7 +283,9 @@ export async function backupDelete(ctx: JobContext<z.infer<typeof backupDeletePa
       continue;
     }
     const what = describeBackup(row);
-    if (keepNewest && s.backup.isNewestOfItsSite(row, otherDeletions)) {
+    // The newest a site keeps is one nothing else is taking either - as things stand at this
+    // backup: deleting the ones before it took a while, and other deletions may have come since.
+    if (keepNewest && s.backup.isNewestOfItsSite(row, s.backup.goingAway(ctx.jobId))) {
       keptNewest++;
       ctx.info(`Kept ${what}: it is the newest backup ${row.type === 'panel' ? 'of the panel' : `${row.siteSlug} has`}`);
       report();

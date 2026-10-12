@@ -166,6 +166,30 @@ describe('backup.delete', () => {
     expect(remainingIds(w)).toEqual([]);
   });
 
+  it('asked to keep each site’s newest, counts a deletion queued while it runs', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await createSite(w);
+    const [a, b, c] = await backupsOf(w, site, ['scheduled', 'scheduled', 'manual']);
+    // While it removes the first, somebody queues a deletion of the newest.
+    const files = w.servers.handleFor(a!.serverId).files;
+    const rm = files.rm.bind(files);
+    let later: number | null = null;
+    files.rm = async (target: string) => {
+      if (target === a!.path && later === null) later = queueDeletion(w, [c!.id]).id;
+      return rm(target);
+    };
+
+    const job = w.worker.enqueue('backup.delete', { backupIds: [a!.id, b!.id], keepNewest: true }, undefined, {
+      lane: BACKUP_DELETE_LANE,
+    });
+    const done = await runJob(w, job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(JSON.parse(done.result!)).toMatchObject({ deleted: 1, keptNewest: 1 });
+    expect(remainingIds(w)).toContain(b!.id);
+    expect(remainingIds(w)).not.toContain(a!.id);
+    expect(later).not.toBeNull();
+  });
+
   it('keeps a backup whose remote copy cannot be removed, rather than forgetting the object', async () => {
     const w = await makeWorld({ exec: hostExec });
     const site = await createSite(w);

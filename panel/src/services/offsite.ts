@@ -727,13 +727,17 @@ export class OffsiteService {
    * is the caller's to check first (BackupService.deletionBlocker).
    */
   async deleteEverywhere(row: BackupRow, ctx: CopyLog = silentLog): Promise<{ purgeFailed: number; keptByPolicy: number }> {
-    const { failed, keptByPolicy } = await this.purgeCopies(this.copiesOf(row.id), ctx);
-    if (failed > 0) return { purgeFailed: failed, keptByPolicy };
-    // Read again: purging can take minutes, and it is the row as it is now that says where the
-    // files are. One gone meanwhile is deleted already.
-    const current = this.db.select().from(backups).where(eq(backups.id, row.id)).get();
-    if (current) await this.backup.deleteBackup(current);
-    return { purgeFailed: 0, keptByPolicy };
+    // Counted as going away from the first purge on: retention must not take the backup a site
+    // is about to be left with meanwhile.
+    return this.backup.whileRemoving(row.id, async () => {
+      const { failed, keptByPolicy } = await this.purgeCopies(this.copiesOf(row.id), ctx);
+      if (failed > 0) return { purgeFailed: failed, keptByPolicy };
+      // Read again: purging can take minutes, and it is the row as it is now that says where the
+      // files are. One gone meanwhile is deleted already.
+      const current = this.db.select().from(backups).where(eq(backups.id, row.id)).get();
+      if (current) await this.backup.deleteBackup(current);
+      return { purgeFailed: 0, keptByPolicy };
+    });
   }
 
   /**
