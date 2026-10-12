@@ -14,7 +14,7 @@ import type { BatchDto } from '../../shared/types.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import type { JobWorker } from '../jobs/worker.js';
 import type { CoreServices } from './index.js';
-import { actionsFor, type WpInventoryService } from './wpInventory.js';
+import { actionsFor, CONNECT_PLUGIN, type WpInventoryService } from './wpInventory.js';
 
 /**
  * A `wp.scanAll` over the whole fleet - not one over the sites a custom schedule names
@@ -238,12 +238,19 @@ export class WpBulkService {
     if (!op.slug) return `"${site.slug}": a ${op.kind} operation needs a slug`;
     const component = componentsFor(site.id).get(`${op.kind}:${op.slug}`);
     if (!component) return `"${site.slug}": ${op.kind} "${op.slug}" is not installed (rescan the site)`;
-    const { actionable, blockedReason } = actionsFor({
-      kind: op.kind,
-      status: component.status,
-      updateState: component.updateState as 'none' | 'available' | 'higher',
-      updateVersion: component.updateVersion,
-    });
+    // WPL7 Connect's own update comes from the panel, which hands the site the package first:
+    // the last scan may not have seen it yet.
+    if (site.kind === 'external' && op.kind === 'plugin' && op.slug === CONNECT_PLUGIN && op.action === 'update') return null;
+    const { actionable, blockedReason } = actionsFor(
+      {
+        kind: op.kind,
+        slug: op.slug,
+        status: component.status,
+        updateState: component.updateState as 'none' | 'available' | 'higher',
+        updateVersion: component.updateVersion,
+      },
+      { external: site.kind === 'external' },
+    );
     if (actionable[op.action]) return null;
     if (op.action === 'update') return `"${site.slug}": ${op.slug} has no update available`;
     return `"${site.slug}": ${op.slug} cannot be ${op.action}d${blockedReason ? ` - ${blockedReason}` : ''}`;

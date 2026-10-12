@@ -55,6 +55,10 @@ or updates it. As that job ends, the panel checks the site, and gives a containe
 started up to ten seconds to answer. CPU is a percentage of one core, averaged since the
 previous sample. **Load** is the Linux load average, not CPU use.
 
+A [site hosted elsewhere](/docs/sites/external/) is asked from the panel, at its own address, as a
+visitor would ask. Its certificate must be valid, and its expiry date is kept for the alert a week
+before it.
+
 ## Open a server's page
 
 Choose a server's name. The buttons at the top act on the whole machine: **Terminal**, **Test
@@ -86,8 +90,8 @@ starts, for example after an update. **Container stats (seconds)** sets the serv
 
 ## Limits
 
-- The panel sends no email when a site or a server goes down. You see it in the lists and on the
-  dashboard only.
+- The panel emails when a site goes down, with **Site down, and back up** on in
+  [Settings](/docs/panel/settings/#alerts). It sends no email when a server goes down.
 - The uptime check runs from the server itself, through its Traefik. It does not test DNS, or
   the route a visitor takes from outside.
 - The disk figures cover the filesystem that holds `/srv`. A backup location on another disk

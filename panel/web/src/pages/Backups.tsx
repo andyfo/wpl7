@@ -450,7 +450,7 @@ export function Backups() {
                     <td className="py-2 text-right">
                       <BackupActions
                         backup={b}
-                        canRestore={!b.siteDeleted && b.type !== 'panel'}
+                        canRestore={!b.siteDeleted && b.type !== 'panel' && b.siteKind !== 'external'}
                         onRestore={() => setRestoreFor(b)}
                         onFetch={() => setFetchFor(b)}
                         onDelete={() => setDeleteId(b.id)}

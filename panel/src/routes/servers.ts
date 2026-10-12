@@ -231,6 +231,10 @@ export function registerServerRoutes(app: FastifyInstance, deps: AppDeps): void 
     if (row.id === 1) throw conflict('The local server cannot be removed');
     const sitesCount = deps.servers.sitesCountFor(row.id);
     if (sitesCount > 0) throw conflict(`Server hosts ${sitesCount} site(s); move or delete them first`);
+    const externalCount = deps.servers.externalCountFor(row.id);
+    if (externalCount > 0) {
+      throw conflict(`Server keeps the backups of ${externalCount} site(s) hosted elsewhere; keep them on another server first`);
+    }
     // A parked source copy from a move still lives on this machine; deleting the server
     // strands the container, database and files with nothing left that knows how to
     // remove them (and the daily auto-finalize would keep queueing jobs for a server

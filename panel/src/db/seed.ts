@@ -93,6 +93,10 @@ export async function seed(db: Db, config: Config): Promise<SeedResult> {
   s.seedRaw('mail.alertPerSitePerHour', 200);
   s.seedRaw('mail.suspendPerSitePerHour', 1000);
   s.seedRaw('alerts.email', '');
+  s.seedRaw('alerts.siteDown', true);
+  s.seedRaw('alerts.vulnerabilities', true);
+  s.seedRaw('alerts.backups', true);
+  s.seedRaw('alerts.connector', true);
   s.seedRaw('site.cpuLimit', 2);
   s.seedRaw('site.memoryLimitMb', 512);
   s.seedRaw('site.pidsLimit', 512);

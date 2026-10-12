@@ -2,7 +2,7 @@
 title: DNS
 description: The Cloudflare token the panel writes records with, and which every server's Traefik gets a wildcard certificate with. No answer ever contains it.
 sidebar:
-  order: 2.11
+  order: 2.12
 sources:
   - panel/shared/apiDocs.ts
 ---

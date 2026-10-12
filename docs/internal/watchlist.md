@@ -18,7 +18,7 @@ for a reason; remove one once there is nothing left to watch.
 | Entry | Priority | Last checked | Status |
 |---|---|---|---|
 | [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-10-07 11:05 UTC | Open upstream; worked around |
-| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-10-02 05:12 UTC | Pinned 0.21.12 is the latest |
+| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-10-09 06:50 UTC | 0.21.15 is the latest; same definitions as the pinned 0.21.12 |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-10-02 05:12 UTC | Both overrides apply to 0.21.12; signatures named |
 | [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-07 11:05 UTC | 2.7.6 is the latest; patch still needed |
 | [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
@@ -38,6 +38,12 @@ for a reason; remove one once there is nothing left to watch.
 | [setup-php: PHP 7.0 in CI](#setup-php-php-70-in-ci) | Low | 2026-10-07 15:07 UTC | `v2` is the newest major, 2.37.2 the latest release; 7.0 and 8.5 supported |
 | [The migration plugin's floor: WordPress 5.0 and PHP 7.0](#the-migration-plugins-floor-wordpress-50-and-php-70) | Medium | 2026-10-07 15:07 UTC | PHP 7.0 on 0.58% of sites, WordPress before 5.0 on 2.6%; CI installs 7.0 |
 | [The WordPress image's entrypoint, as an import relies on it](#the-wordpress-images-entrypoint-as-an-import-relies-on-it) | Medium | 2026-10-07 14:53 UTC | Seeds only an empty folder; writes wp-config.php only when absent |
+| [WPL7 Connect's floor: WordPress 5.2 and PHP 7.0](#wpl7-connects-floor-wordpress-52-and-php-70) | Medium | 2026-10-09 15:55 UTC | PHP 7.0 on 0.58% of sites, WordPress before 5.2 on 3.1%; the Docker test passes on 5.2 with PHP 7.1 |
+| [WordPress's upgrader, as WPL7 Connect drives it](#wordpresss-upgrader-as-wpl7-connect-drives-it) | Medium | 2026-10-09 15:55 UTC | 7.1.3 is the latest; trunk's one change since is to skins, which WPL7 Connect leaves to WordPress |
+| [WordPress 7.2: sudo mode and Application Passwords](#wordpress-72-sudo-mode-and-application-passwords) | Medium | 2026-10-09 15:55 UTC | On the roadmap only; Beta 1 is due 2026-10-20 |
+| [WP Godmode's `godmode` command on WPL7 Connect](#wp-godmodes-godmode-command-on-wpl7-connect) | Medium | 2026-10-09 15:55 UTC | Not released: Godmode calls on an external site answer 409 |
+| [WordPress's answer to a fatal error](#wordpresss-answer-to-a-fatal-error) | Low | 2026-10-09 15:55 UTC | 500, as relied on |
+| [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -66,8 +72,12 @@ for a reason; remove one once there is nothing left to watch.
 ## AMWScan: the pinned image and its signatures
 
 - **Priority:** High
-- **Last checked:** 2026-10-02 05:12 UTC. We pin 0.21.12, whose definitions are 2026.09.08.1;
-  v0.21.12 (2026-09-26) is still the latest release.
+- **Last checked:** 2026-10-09 06:50 UTC. We pin 0.21.12, whose definitions are 2026.09.08.1.
+  The latest release is v0.21.15 (2026-10-03, after 0.21.13 and 0.21.14 the day before). Its
+  definitions are the same 2026.09.08.1: only the manifest's `createdAt` differs. Its engine
+  changes are prompts without a terminal, which `--report-only` and `--silent` never reach, and
+  trusted administrators for `--scan-wordpress-db`, which WPL7 does not use. The pin stays:
+  moving it would check every catalog zip again for the same signatures.
 - **The problem:** the scanner image is pinned by digest (`SCANNER_IMAGE` in
   `panel/src/services/scanEngines.ts`) and runs with `--disable-definitions-update`. Its
   signatures are the ones bundled in that image, and they age until the pin moves. Upstream
@@ -501,4 +511,113 @@ for a reason; remove one once there is nothing left to watch.
 - **When it changes:** if the image starts seeding a folder that has WordPress in it, the import must
   write its files after the first start instead of before. If it stops writing `wp-config.php`, the
   finish job has to write one itself. Then run the import's Docker test (`panel/test/e2e/import/`).
+
+## WPL7 Connect's floor: WordPress 5.2 and PHP 7.0
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-09 15:55 UTC. By wordpress.org's statistics, PHP 7.0 runs 0.58% of
+  WordPress sites and 7.1 0.35%. WordPress before 5.2 runs 3.1% (5.0 0.20%, 5.1 0.33%, older 2.6%).
+  The Docker test (`panel/test/e2e/connect/`) passes on WordPress 5.2 with PHP 7.1, which has no
+  sodium, and on the latest WordPress. The `php` job checks the vectors on PHP 7.0 and 8.5.
+- **The problem:** WPL7 Connect runs on a site the panel does not host, which can be old. Its
+  header and `readme.txt` say `Requires at least: 5.2` and `Requires PHP: 7.0`, activation refuses
+  anything older, and the code keeps to what PHP 7.0 and WordPress 5.2 have: 5.2 is the first
+  WordPress with its fatal-error handler and with sodium_compat, which the plugin verifies the
+  panel's signatures with where PHP has no sodium. A floor set too high locks sites out; one set
+  too low costs care in every change.
+- **Check:** `curl -s https://api.wordpress.org/stats/php/1.0/` and
+  `curl -s https://api.wordpress.org/stats/wordpress/1.0/` for PHP 7.0 and 7.1 and for WordPress
+  before 5.2. Whether the `php` job's 7.0 leg still runs (the setup-php entry above).
+- **When it changes:**
+  - **PHP 7.0 and 7.1 together under about 0.5% of sites, or 7.0 gone from CI:** propose raising
+    the floor to the user: `Requires PHP` in `wpl7-connect.php` and `readme.txt`, the checks in
+    `wpl7-connect.php` and `WPL7_Connect_Plugin::requirements_problem()`, the matrix in `test.yml`,
+    the Docker test's oldest case, and docs/internal/connect-protocol.md.
+  - **WordPress before 5.2 under about 1%:** the same for `Requires at least`.
+  - **A new PHP release:** make it the matrix's upper end, and run the Docker test with that PHP.
+
+## WordPress's upgrader, as WPL7 Connect drives it
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-09 15:55 UTC. WordPress 7.1.3 is the latest release. On trunk,
+  `class-wp-upgrader.php` last changed on 2026-06-19 (a comment) and `class-core-upgrader.php` on
+  2026-02-13 (docs). `class-plugin-upgrader.php` and `class-theme-upgrader.php` changed on
+  2026-09-21 to stop passing a `WP_Error` to a skin's `before()`: WPL7 Connect uses WordPress's own
+  `WP_Ajax_Upgrader_Skin`, so nothing of it changes.
+- **The problem:** WPL7 Connect updates plugins, themes and WordPress through WordPress's own
+  upgrader (`Plugin_Upgrader::bulk_upgrade`, `Theme_Upgrader::bulk_upgrade`, `Core_Upgrader::upgrade`)
+  and reads its results to say whether an item was updated. Before an update it copies the plugin
+  or theme to `wp-content/wpl7-rollback/<op>/`, and puts that copy back when the site stops
+  answering. WordPress's own temporary backup folder (`wp-content/upgrade-temp-backup`, 6.3 on) is
+  left out of backups. A change to the upgrader's results, to where it moves files, or to its own
+  rollback could make an update look failed or a rollback put back the wrong files.
+- **Check:** `gh api 'repos/WordPress/wordpress-develop/commits?path=<file>&since=<last check>'`
+  for `src/wp-admin/includes/class-wp-upgrader.php`, `class-plugin-upgrader.php`,
+  `class-theme-upgrader.php`, `class-core-upgrader.php` and `src/wp-admin/includes/update-core.php`,
+  and the field guide of every major release since the last check.
+- **When it changes:** read the change against `class-wpl7-connect-updates.php`, then run the
+  Docker test (`WPL7_CONNECT_E2E=1 npx vitest run test/e2e/connect` in `panel`) on the release's
+  image. A change in what the upgrader returns goes into `upgrade_error()` and the vectors.
+
+## WordPress 7.2: sudo mode and Application Passwords
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-09 15:55 UTC. The roadmap for 7.2 (make.wordpress.org/core, 2026-09-18)
+  says initial work is starting on a possible "sudo mode", which would gate highly privileged
+  administrative actions behind a re-authentication prompt even when logged in, and lists security
+  hardening and UX refinements for Application Passwords. It says items may not make the release.
+  Beta 1 is due 2026-10-20, the release 2026-12-08.
+- **The problem:** the panel signs administrators in without their password: **Log in to
+  WordPress** on hosted sites, and WPL7 Connect's login links on external ones. A sudo prompt would
+  ask that administrator for a password they may not know. The panel's REST requests
+  (`POST /api/sites/:site/wp/rest`, scheduled `wp.rest` jobs) authenticate on hosted sites with
+  Application Passwords, which the hardening may change.
+- **Check:** the 7.2 beta announcements and dev notes on make.wordpress.org/core for sudo mode and
+  Application Passwords. Once Beta 1 is out, run a login link and a REST request on a hosted site
+  with the beta, and the Docker test (`panel/test/e2e/connect/`) on the beta's image.
+- **When it changes:** if sudo mode ships, find out whether a login made without a password can
+  pass it (a filter, or the session's own) and tell the user before 7.2 is out. If Application
+  Passwords change, check the panel's REST bridge and the docs that describe it.
+
+## WP Godmode's `godmode` command on WPL7 Connect
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-09 15:55 UTC. Not released yet. Until it is, the panel's Godmode calls
+  on an external site (`/api/sites/:site/godmode/*`) answer 409, as on a site without WP Godmode.
+- **The problem:** on a hosted site the panel drives WP Godmode through WP-CLI's `wp godmode`. An
+  external site has no WP-CLI the panel can reach: there, WP Godmode has to register `godmode` with
+  WPL7 Connect (the `wpl7_connect_commands` filter, docs/internal/connect-protocol.md section 8),
+  answering the same words with the same JSON. The panel splits a long wait into steps of 25
+  seconds, which the command must take as `--timeout`.
+- **Check:** WP Godmode's release notes for WPL7 Connect. On a site that has such a release,
+  `GET /api/sites/<site>/wp/cli/help` lists `godmode`.
+- **When it changes:** run the MCP's send, wait, answer and read loop on an external site. Then
+  update docs/site's MCP and external sites pages, and remove this entry.
+
+## WordPress's answer to a fatal error
+
+- **Priority:** Low
+- **Last checked:** 2026-10-09 15:55 UTC. `class-wp-fatal-error-handler.php` on trunk still sends its
+  error page with `'response' => 500`; it last changed on 2026-09-05 (docs).
+- **The problem:** after an update, the panel asks an external site's home page, and WPL7 Connect
+  behind it, whether they still answer; a plugin that breaks the site is put back when they do not.
+  That rests on WordPress answering a fatal error with a 5xx status (5.2 on). A broken site answering
+  200 would pass the check, and keep the broken plugin.
+- **Check:** `gh api repos/WordPress/wordpress-develop/contents/src/wp-includes/class-wp-fatal-error-handler.php --jq .content | base64 -d | grep -n "'response'"`.
+- **When it changes:** the check in `ConnectorBackend.healthy()` (`panel/src/services/siteBackend.ts`)
+  has to read the answer's body too (the handler's page), then run the Docker test.
+
+## sodium_compat for PHP 7.0 in CI
+
+- **Priority:** Low
+- **Last checked:** 2026-10-09 15:55 UTC. paragonie/sodium_compat 1.24.2 (2026-08-18) is the newest
+  1.x and requires PHP `^5.2.4|…|^7|^8`; 2.5.2 needs PHP 8.1, so Composer on PHP 7.0 takes 1.x.
+- **The problem:** PHP 7.0 has no sodium. WordPress bundles sodium_compat from 5.2 on, but the `php`
+  job runs the plugin's checks without WordPress: on its 7.0 leg it installs sodium_compat with
+  Composer (`composer require paragonie/sodium_compat`, unpinned) and points `WPL7_SODIUM_COMPAT`
+  at it. If 1.x stops installing on PHP 7.0, the 7.0 leg fails.
+- **Check:** `gh api repos/paragonie/sodium_compat/releases --jq '.[0:4][] | "\(.tag_name) \(.published_at)"'`,
+  and the `require` of the newest 1.x tag's `composer.json`.
+- **When it changes:** pin the last 1.x that installs (`paragonie/sodium_compat:^1.24`), or copy the
+  sodium_compat WordPress 5.2 bundles into the test folder.
 

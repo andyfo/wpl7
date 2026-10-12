@@ -155,6 +155,13 @@
       "when": 1791382260437,
       "tag": "0021_site_imports",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1791557371818,
+      "tag": "0022_external_sites",
+      "breakpoints": true
     }
   ]
 }

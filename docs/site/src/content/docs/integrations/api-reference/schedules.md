@@ -2,7 +2,7 @@
 title: Schedules
 description: What runs on its own - the built-in tasks and your custom schedules - with pause, resume and run now. :id also takes a built-in key such as wp-scan.
 sidebar:
-  order: 2.17
+  order: 2.18
 sources:
   - panel/shared/apiDocs.ts
 ---

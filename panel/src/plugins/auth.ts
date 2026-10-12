@@ -63,6 +63,11 @@ const PUBLIC_ROUTES = new Set([
   // (routes/imports.ts), in a header of its own.
   '/api/migrate/connect',
   '/api/migrate/status',
+  // WPL7 Connect on a site hosted elsewhere: its one call carries the connection's enrollment
+  // token (routes/connections.ts); the two downloads are links the panel signed itself.
+  '/api/connect/enroll',
+  '/api/connect/package',
+  '/api/connect/catalog/:pluginId',
 ]);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 

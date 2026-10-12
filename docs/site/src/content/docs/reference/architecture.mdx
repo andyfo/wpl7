@@ -96,6 +96,7 @@ at the same path, so every path the panel hands to Docker is valid on the host.
 | `/srv/sites/<slug>/site.json` | A description of the site, for recovery by hand |
 | `/srv/backups/<slug>/<timestamp>/` | Backups, unless the server's backup location was moved |
 | `/srv/backups/panel/<timestamp>/` | Nightly copies of the panel's database, on the panel's server |
+| `/srv/external/<slug>/wordpress/` | The copy of a [site hosted elsewhere](/docs/sites/external/) that its next backup builds on, on the server that keeps its backups |
 | `/srv/plugins/` | Uploaded plugin zips, mounted read-only into every site |
 | `/srv/mysql/` | MariaDB's data |
 | `/srv/mail/` | The relay's sender maps and logins, and the DKIM keys and settings |
@@ -107,6 +108,7 @@ at the same path, so every path the panel hands to Docker is valid on the host.
 | `/srv/panel/panel.db` | The panel's state, in SQLite, mode 600 |
 | `/srv/panel/ssh/id_ed25519` | The panel's SSH key, on the panel's server |
 | `/srv/panel/geoip/` | The internet registries' country tables, refreshed weekly |
+| `/srv/panel/external/listings/` | What the last backup of each site hosted elsewhere found, file by file |
 | `/srv/panel/update/` | The state and log of the last update |
 
 ## Site containers
@@ -187,6 +189,7 @@ server, and the panel restarts Traefik when the token changes.
 | `scan:<server>` | Malware scans, and checks of plugin catalog zips |
 | `housekeeping` | The nightly housekeeping job |
 | `backup-delete` | Deleting backups in bulk |
+| `external-0`, `external-1` | Every job of a [site hosted elsewhere](/docs/sites/external/), two such sites at a time |
 
 ## Limits
 

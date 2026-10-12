@@ -107,7 +107,16 @@ export const INVENTORY: Record<string, DemoSite> = {
   'tidewater-realty': site([...common, p('safe-svg', 'Safe SVG'), t('twentytwentyfour', 'Twenty Twenty-Four', { version: '1.5' })], '6.9.9'),
 };
 
-/** The one advisory in the demo, against the fictional gallery plugin on Blue Fern Florist. */
+/**
+ * The sites hosted elsewhere (external.ts): Meadow Vet Clinic runs the gallery plugin with the
+ * advisory too. WPL7 Connect itself is not here: it is the panel's own (inventory.ts adds it).
+ */
+export const EXTERNAL_INVENTORY: Record<string, DemoSite> = {
+  'meadow-vet': site([...common, p('simple-gallery-grid', 'Simple Gallery Grid', { version: '2.1.3' }), p('tablepress', 'TablePress', { version: '3.3.4' }), t('twentytwentyfive', 'Twenty Twenty-Five')]),
+  'granite-gym': site([p('wordpress-seo', 'Yoast SEO'), p('mailchimp-for-wp', 'MC4WP: Mailchimp for WordPress'), t('twentytwentyfive', 'Twenty Twenty-Five')]),
+};
+
+/** The one advisory in the demo, against the fictional gallery plugin on Blue Fern Florist and Meadow Vet Clinic. */
 export const DEMO_ADVISORY = {
   slug: 'simple-gallery-grid',
   advisory: {

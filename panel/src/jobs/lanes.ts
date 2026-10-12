@@ -21,3 +21,14 @@ export function laneServerId(lane: string | null): number | null {
  * own work - a pull can take hours, and every other site on the machine must not wait for it.
  */
 export const importLane = (serverId: number) => `import:${serverId}`;
+
+/** The lanes jobs of sites hosted elsewhere share: two at a time, whatever servers they keep backups on. */
+export const EXTERNAL_LANES = 2;
+
+/**
+ * The named lane a job of a site hosted elsewhere runs in. A backup pull can take hours, and it
+ * holds no server's Docker or MariaDB: in a lane of their own, two such jobs at most run at
+ * once, and the worker's other slots stay free for everything else. No colon: it belongs to no
+ * server (laneServerId).
+ */
+export const externalLane = (siteId: number) => `external-${siteId % EXTERNAL_LANES}`;

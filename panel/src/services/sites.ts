@@ -10,6 +10,7 @@ import type { CoreServices } from './index.js';
 import type { JobWorker } from '../jobs/worker.js';
 import { siteScheme } from './labels.js';
 import { assertDomainsFree } from './domainGuard.js';
+import { assertKind, hostedSites, isExternal, type SiteKinds } from '../lib/siteKind.js';
 
 /** The server a new site goes on: the one asked for, else the default in Settings - and it has to be up. */
 export function resolveTargetServer(s: Pick<CoreServices, 'settings' | 'servers'>, requestedId?: number): ServerRow {
@@ -36,10 +37,15 @@ export class SitesService {
     return this.s.db;
   }
 
-  bySlug(slug: string): SiteRow {
+  /**
+   * The site by its slug. An external site (hosted elsewhere, through WPL7 Connect) is refused
+   * with a 409 unless the caller asks for either kind: only the routes that work for both pass
+   * `{ kinds: 'any' }`, so a new route that forgets is safe rather than handed an empty container.
+   */
+  bySlug(slug: string, opts: { kinds?: SiteKinds } = {}): SiteRow {
     const site = this.db.select().from(sites).where(eq(sites.slug, slug)).get();
     if (!site) throw notFound(`Site "${slug}" not found`);
-    return site;
+    return assertKind(site, opts.kinds);
   }
 
   private assertDomainsFree(domains: string[], excludeSiteId?: number, allowDevHostname?: string | null): void {
@@ -155,7 +161,12 @@ export class SitesService {
   }
 
   delete(slug: string, finalBackup: boolean, deleteBackups = false): JobRow {
-    const site = this.bySlug(slug);
+    const site = this.bySlug(slug, { kinds: 'any' });
+    if (isExternal(site)) {
+      // Remove from panel: the site keeps running where it is, so there is no final backup to take.
+      if (site.status === 'deleting') throw conflict(`"${site.slug}" is being removed already.`);
+      return this.worker.enqueue('site.delete', { siteId: site.id, finalBackup: false, deleteBackups }, { id: site.id, slug, serverId: site.serverId });
+    }
     // An import that is making the site, or failed part-way, owns what there is of it: its
     // staging folder and its record. Deleting the import clears both.
     if (this.s.imports.activeForSite(site.id)) {
@@ -216,7 +227,7 @@ export class SitesService {
 
   /** Reconcile every site, newest last so a fleet-wide pass is predictable in the job list. */
   reconcileAll(): JobRow[] {
-    const rows = this.s.db.select().from(sites).orderBy(asc(sites.id)).all();
+    const rows = this.s.db.select().from(sites).where(hostedSites()).orderBy(asc(sites.id)).all();
     const jobs: JobRow[] = [];
     for (const site of rows) {
       if (site.status === 'provisioning' || site.status === 'deleting') continue;
@@ -238,7 +249,7 @@ export class SitesService {
    * it is returned in its place.
    */
   applyLimits(): JobRow[] {
-    const serverIds = this.db.selectDistinct({ serverId: sites.serverId }).from(sites).all();
+    const serverIds = this.db.selectDistinct({ serverId: sites.serverId }).from(sites).where(hostedSites()).all();
     return serverIds.map(({ serverId }) => {
       const waiting = this.db
         .select()
@@ -293,7 +304,7 @@ export class SitesService {
    * changes, only whether the cron enqueues this site - so it applies the moment it returns.
    */
   setBackupsEnabled(slug: string, enabled: boolean): SiteRow {
-    const site = this.bySlug(slug);
+    const site = this.bySlug(slug, { kinds: 'any' });
     return this.db
       .update(sites)
       .set({ backupsEnabled: enabled ? 1 : 0, updatedAt: Date.now() })
@@ -307,7 +318,7 @@ export class SitesService {
    * off means "stop sending new ones", not "delete what is already in the bucket".
    */
   setOffsiteEnabled(slug: string, enabled: boolean): SiteRow {
-    const site = this.bySlug(slug);
+    const site = this.bySlug(slug, { kinds: 'any' });
     return this.db
       .update(sites)
       .set({ offsiteEnabled: enabled ? 1 : 0, updatedAt: Date.now() })
@@ -377,6 +388,8 @@ export class SitesService {
       diskBytes: site.diskBytes,
       recentTraffic: traffic,
       wp,
+      kind: site.kind as SiteSummary['kind'],
+      external: this.s.connections.externalSummary(site),
       createdAt: site.createdAt,
     };
   }
@@ -390,8 +403,9 @@ export class SitesService {
   }
 
   async detail(slug: string): Promise<SiteDetail> {
-    const site = this.bySlug(slug);
+    const site = this.bySlug(slug, { kinds: 'any' });
     const summary = this.toSummary(site);
+    if (isExternal(site)) return this.externalDetail(site, summary);
     let containerState: SiteDetail['containerState'];
     try {
       containerState = await this.s.servers.handleFor(site.serverId).docker.containerState(site.containerName);
@@ -435,6 +449,28 @@ export class SitesService {
           }
         : null,
       importSource: this.s.imports.sourceForSite(site.id),
+      external: null,
+    };
+  }
+
+  /** An external site's page: no container to ask about, and its connection instead. */
+  private externalDetail(site: SiteRow, summary: SiteSummary): SiteDetail {
+    return {
+      ...summary,
+      locale: site.locale,
+      adminUser: site.wpAdminUser,
+      adminEmail: site.wpAdminEmail,
+      dbName: '',
+      tablePrefix: site.tablePrefix,
+      containerState: 'missing',
+      url: summary.external?.home ?? `https://${summary.primaryDomain}`,
+      keepDevAlias: false,
+      backupsEnabled: site.backupsEnabled === 1,
+      offsiteEnabled: site.offsiteEnabled === 1,
+      mailSuspended: null,
+      pendingMoveCleanup: null,
+      importSource: null,
+      external: this.s.connections.externalDto(site, { wpVersion: this.s.wpInventory.coreVersionOf(site.id) }),
     };
   }
 }

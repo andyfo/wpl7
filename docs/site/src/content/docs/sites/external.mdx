@@ -1,0 +1,112 @@
+---
+title: Sites hosted elsewhere
+description: Add a WordPress site that runs on another host, to watch, update and back it up from the panel.
+sidebar:
+  order: 4
+since: 0.3.0-beta.3
+sources:
+  - panel/web/src/pages/ConnectSite.tsx
+  - panel/web/src/components/connect/*.tsx
+  - panel/web/src/components/external/*.tsx
+  - panel/web/src/lib/connections.ts
+  - panel/src/routes/connections.ts
+  - panel/src/services/connections.ts
+  - panel/src/services/connectClient.ts
+  - panel/src/services/connectInspect.ts
+  - panel/src/services/pluginClient.ts
+  - panel/src/services/siteBackend.ts
+  - panel/src/services/externalBackup.ts
+  - panel/src/services/alerts.ts
+  - panel/src/lib/siteKind.ts
+  - panel/src/lib/httpProbe.ts
+  - panel/connect-plugin/wpl7-connect/**/*.php
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A site hosted elsewhere stays on its own host and joins the panel through the WPL7 Connect plugin.
+The panel then watches it, updates it, backs it up and signs you in to it, as it does for the
+sites it hosts.
+
+<Screenshot name="site-connect" alt="The Confirm step of Connect a site: what the site reported, a warning, and the panel reaching the site" />
+
+## Before you start
+
+- An administrator login on the site, to install a plugin.
+- WordPress 5.2 or later, on PHP 7.0 or later. Not a multisite network.
+- HTTPS on the site. A site without it can still connect, with the switch below.
+- The panel reachable from the site at its own address, `PANEL_DOMAIN`.
+
+## Connect a site
+
+1. Open **Sites** and choose **Connect site**.
+2. Turn on **The site has no HTTPS** only if it has none. Choose **Download plugin**.
+3. On the site, install the zip under **Plugins → Add New → Upload Plugin**, and activate it.
+4. Back in the panel, wait for the site to connect. The page moves on to **Confirm** by itself.
+5. Read what the site reported and the warnings. The panel checks that it reaches the site.
+6. Set **Name in the panel** and **Act as**, and with several servers **Keep backups on**. Choose
+   **Add site**.
+
+The plugin's zip holds the connection's own key. Install it on the one site you connect. If the
+plugin asks for a panel address and a connection code, open **The plugin asks for a connection
+code** under the steps and copy both.
+
+## What you can do
+
+The site gets a page of its own, with four tabs:
+
+<Screenshot name="site-external" alt="A site hosted elsewhere: its Overview tab with its status, its facts and its response time" />
+
+| Tab | What it holds |
+|---|---|
+| **Overview** | Its status, **Log in to WordPress**, **Back up now**, its facts and its response time. |
+| **WordPress** | Updates, plugins, themes, and the commands plugins registered. See [Manage WordPress](/docs/sites/wordpress/). |
+| **Backups** | Its backups, to download. See [Restore and download](/docs/backups/restore/). |
+| **Settings** | **Acting as**, **Backups kept on**, **Reconnect**, **Disconnect** and **Remove from panel**. |
+
+The site is in the scheduled backups, scans and updates, in [Bulk management](/docs/sites/bulk/)
+and in the [MCP server](/docs/integrations/mcp/). The panel requests its address every minute and
+asks the plugin every hour. [Alerts](/docs/panel/settings/#alerts) say when the site goes down,
+when the plugin stops answering, and a week before its certificate expires.
+
+## What happens
+
+The panel signs every request to the plugin with a key only the panel holds. The plugin keeps the
+public half and refuses any request it did not sign. Requests go to `/wp-json/wpl7-connect/v1/`,
+or to `?wpl7-connect=` when the REST API is blocked.
+
+An update runs through WordPress's own updater. The plugin first keeps a copy of each plugin and
+theme it updates. If the site or the plugin stops answering afterwards, the plugin puts the copies
+back. A small must-use plugin makes that work even when the update breaks WordPress.
+
+A backup copies the site's files and database to the server that keeps its backups, and packs
+them as every backup is packed. Each backup after the first copies only what changed.
+`wp-config.php` is in it.
+
+## Disconnect or remove
+
+- **Disconnect** stops the panel managing the site. The plugin forgets the panel, and the backups
+  stay. **Reconnect** gives a new download of the plugin, to connect again.
+- **Remove from panel** removes the site from the panel, and disconnects the plugin. The site keeps
+  running on its host. **Also delete its backups** deletes them too.
+
+## Limits
+
+- Multisite networks and sites on Windows cannot be connected.
+- A backup is restored by hand. See [Restore and download](/docs/backups/restore/#restore-a-site-hosted-elsewhere).
+- A backup is not a copy of one instant: the site keeps changing while it is copied.
+- Only commands that a plugin registered with WPL7 Connect run. WP-CLI's own commands do not.
+- WP Godmode does not register its command yet, so its chats cannot be reached on these sites.
+- A rollback needs a writable `wp-content/mu-plugins`. WordPress core updates are not rolled back.
+- A host where WordPress cannot write its own files needs its FTP details in `wp-config.php` for
+  updates.
+- Files, FTP logins, visitor statistics, malware scans, mail and site protection are for sites the
+  panel hosts.
+
+## Related
+
+- [The Sites list](/docs/sites/overview/)
+- [Import a site](/docs/sites/import/)
+- [Updates and known vulnerabilities](/docs/plugins/updates/)
+- [Restore and download](/docs/backups/restore/)
+- [What leaves your server](/docs/security/privacy/)

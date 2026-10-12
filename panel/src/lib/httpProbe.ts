@@ -1,6 +1,9 @@
-// @docs servers/overview, sites/overview
+// @docs servers/overview, sites/overview, sites/external
 import http from 'node:http';
 import https from 'node:https';
+import type { LookupFunction } from 'node:net';
+import type { TLSSocket } from 'node:tls';
+import { assertAllowedSource, type LookupFn } from './outboundGuard.js';
 
 export interface ProbeAttempt {
   ok: boolean;
@@ -78,4 +81,75 @@ export async function httpProbe(
     if (Date.now() >= deadline) return false;
     await new Promise((r) => setTimeout(r, opts.intervalMs ?? 2000));
   }
+}
+
+/** What a probe of a site hosted elsewhere found. `certExpiresAt`: when its TLS certificate expires. */
+export interface ExternalProbeResult {
+  ok: boolean;
+  status: number | null;
+  ms: number;
+  certExpiresAt: number | null;
+  /** Why nothing answered: refused, timed out, a certificate that is not valid. */
+  error?: string;
+}
+
+export type ExternalProbe = (url: string) => Promise<ExternalProbeResult>;
+
+/**
+ * A site hosted elsewhere, asked directly: a GET of its home page, from the panel. Unlike the
+ * probe above it goes through the outbound guard - the address is the site's, which its plugin
+ * reported - pinned to the address the guard checked, with the certificate verified against
+ * the name: a visitor's browser would refuse a bad one too. A redirect is an answer (the home
+ * page of a site behind a login, or one that moved), and is never followed. The certificate's
+ * expiry comes back with the answer, for the alert a week before it.
+ */
+export function probeExternal(url: string, opts: { lookup?: LookupFn; timeoutMs?: number } = {}): Promise<ExternalProbeResult> {
+  const started = Date.now();
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  return assertAllowedSource(url, { allowHttp: true, lookup: opts.lookup }).then(
+    (target) =>
+      new Promise<ExternalProbeResult>((resolve) => {
+        const secure = target.url.protocol === 'https:';
+        const lookup: LookupFunction = (_hostname, options, callback) => {
+          if ((options as { all?: boolean }).all) {
+            (callback as (e: null, a: { address: string; family: number }[]) => void)(null, [{ address: target.address, family: target.family }]);
+          } else callback(null, target.address, target.family);
+        };
+        let settled = false;
+        const done = (result: Omit<ExternalProbeResult, 'ms'>) => {
+          if (settled) return;
+          settled = true;
+          resolve({ ...result, ms: Date.now() - started });
+        };
+        const req = (secure ? https : http).request(
+          {
+            method: 'GET',
+            hostname: target.url.hostname.replace(/^\[|\]$/g, ''),
+            port: target.url.port || (secure ? 443 : 80),
+            path: `${target.url.pathname}${target.url.search}`,
+            headers: { 'user-agent': 'wpl7-probe/1', accept: 'text/html' },
+            lookup,
+            agent: false,
+            timeout: timeoutMs,
+            ...(secure ? { servername: target.url.hostname, rejectUnauthorized: true } : {}),
+          },
+          (res) => {
+            let certExpiresAt: number | null = null;
+            const socket = res.socket as TLSSocket;
+            if (secure && typeof socket.getPeerCertificate === 'function') {
+              const validTo = socket.getPeerCertificate()?.valid_to;
+              const at = validTo ? Date.parse(validTo) : NaN;
+              certExpiresAt = Number.isFinite(at) ? at : null;
+            }
+            res.resume();
+            const status = res.statusCode ?? null;
+            done({ ok: status !== null && isUp(status), status, certExpiresAt });
+          },
+        );
+        req.on('timeout', () => req.destroy(new Error(`No answer within ${Math.round(timeoutMs / 1000)} s`)));
+        req.on('error', (err) => done({ ok: false, status: null, certExpiresAt: null, error: err.message }));
+        req.end();
+      }),
+    (err: unknown) => ({ ok: false, status: null, ms: Date.now() - started, certExpiresAt: null, error: err instanceof Error ? err.message : String(err) }),
+  );
 }

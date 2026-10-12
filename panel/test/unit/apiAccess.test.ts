@@ -42,6 +42,9 @@ const EXCEPTIONS: Record<string, string> = {
   'GET /api/imports/:id': 'manage',
   'GET /api/imports/:id/plugin': 'manage',
   'GET /api/imports/:id/code': 'manage',
+  // A connection's plugin zip and code carry the token its site enrolls with.
+  'GET /api/connections/:id/plugin': 'manage',
+  'GET /api/connections/:id/code': 'manage',
   // The panel's own, but only a nudge: now, what the panel does by itself anyway.
   'POST /api/backup-destinations/:id/test': 'manage',
   'POST /api/servers/:id/test': 'manage',
@@ -59,6 +62,7 @@ const DESTRUCTIVE = [
   'DELETE /api/api-keys/activity',
   'DELETE /api/backup-destinations/:id',
   'DELETE /api/backups/:id',
+  'DELETE /api/connections/:id',
   'DELETE /api/dns/token',
   'DELETE /api/imports/:id',
   'DELETE /api/mail/dkim/:domain',
@@ -99,6 +103,7 @@ const DESTRUCTIVE = [
   'POST /api/servers',
   'POST /api/servers/:id/backups/relocate',
   'POST /api/servers/:id/update',
+  'POST /api/sites/:slug/connection/disconnect',
   'POST /api/sites/:slug/files/compress',
   'POST /api/sites/:slug/files/delete',
   'POST /api/sites/:slug/files/extract',
@@ -176,6 +181,12 @@ const NOT_THROUGH_MCP = [
   // The migration plugin's own calls, which its import's token lets in.
   'POST /api/migrate/connect',
   'GET /api/migrate/status',
+  // A connection's plugin and code carry its enrollment token; the rest is WPL7 Connect's own.
+  'GET /api/connections/:id/plugin',
+  'GET /api/connections/:id/code',
+  'POST /api/connect/enroll',
+  'GET /api/connect/package',
+  'GET /api/connect/catalog/:pluginId',
   // The Cloudflare token: a credential, and checking one sends it to Cloudflare.
   'POST /api/dns/check',
   'PUT /api/dns/token',
@@ -201,6 +212,7 @@ describe('access levels in the API catalog', () => {
     expect(Object.fromEntries(API_DOC_GROUPS.map((g) => [g.id, g.changes]))).toEqual({
       sites: 'manage',
       imports: 'manage',
+      connections: 'manage',
       wp: 'manage',
       files: 'manage',
       ftp: 'manage',

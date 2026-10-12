@@ -116,4 +116,20 @@ describe('site health', () => {
     ];
     expect(every.every((h) => !h.action || paths.has(h.action.path))).toBe(true);
   });
+
+  it('reads a site hosted elsewhere by its own address and its plugin, with nothing to repair from here', () => {
+    const external = (reachable: boolean | null) => ({ reachable });
+    // No container to read: the detail page's 'missing' must not turn it into "No container".
+    expect(siteHealth({ status: 'connected', up: true, containerState: 'missing', external: external(true) })).toMatchObject({ label: 'Online', tone: 'ok' });
+    expect(siteHealth({ status: 'connected', up: null, external: external(null) }).label).toBe('Checking');
+    const down = siteHealth({ status: 'connected', up: false, httpStatus: 503, external: external(true) });
+    expect(down).toMatchObject({ label: 'Offline', tone: 'bad' });
+    expect(down.detail).toContain('503');
+    expect(down.action).toBeUndefined();
+    const plugin = siteHealth({ status: 'connected', up: true, external: external(false) });
+    expect(plugin).toMatchObject({ label: 'Plugin unreachable', tone: 'bad' });
+    expect(plugin.fix).toContain('/wp-json/wpl7-connect/');
+    expect(siteHealth({ status: 'disconnected', up: null, external: external(null) })).toMatchObject({ label: 'Disconnected', tone: 'idle' });
+    expect(siteHealth({ status: 'deleting', up: true, external: external(true) }).tone).toBe('busy');
+  });
 });

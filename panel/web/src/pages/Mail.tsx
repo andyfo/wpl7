@@ -405,7 +405,8 @@ function TrafficTab() {
           <Field label="Site">
             <select className={inputClass} value={siteSlug} onChange={(e) => { setSiteSlug(e.target.value); setPage(0); }}>
               <option value="">any</option>
-              {(sites.data ?? []).map((s) => (
+              {/* Only a site hosted here sends through the relay. */}
+              {(sites.data ?? []).filter((s) => s.kind !== 'external').map((s) => (
                 <option key={s.slug} value={s.slug}>
                   {s.slug}
                 </option>

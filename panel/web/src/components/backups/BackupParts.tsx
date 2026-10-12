@@ -1,5 +1,5 @@
 // @docs backups/delete, backups/offsite, backups/restore
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import type { BackupCopyDto, BackupDto } from '../../../../shared/types';
 import { api } from '../../api/client';
@@ -76,9 +76,13 @@ export function BackupActions({
     <div className="flex flex-col items-end gap-1 sm:flex-row sm:justify-end sm:gap-1.5">
       {complete && backup.filesPresent && (
         <>
-          <a href={`/api/backups/${backup.id}/download`}>
-            <Button small variant="ghost">Download</Button>
-          </a>
+          {backup.type === 'panel' ? (
+            <a href={`/api/backups/${backup.id}/download`}>
+              <Button small variant="ghost">Download</Button>
+            </a>
+          ) : (
+            <DownloadMenu backupId={backup.id} />
+          )}
           {canRestore && (
             <Button small variant="secondary" onClick={onRestore}>
               Restore
@@ -100,6 +104,59 @@ export function BackupActions({
       >
         Delete
       </Button>
+    </div>
+  );
+}
+
+/**
+ * A site backup's downloads: the whole of it as the panel keeps it, or one half to restore by
+ * hand - the files for FTP, the database for phpMyAdmin.
+ */
+function DownloadMenu({ backupId }: { backupId: number }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+  const href = `/api/backups/${backupId}/download`;
+  const items = [
+    { label: 'Everything', sub: '.tar', href },
+    { label: 'Files', sub: '.tar.gz', href: `${href}?part=files` },
+    { label: 'Database', sub: '.sql.gz', href: `${href}?part=database` },
+  ];
+  return (
+    <div ref={ref} className="relative inline-block text-left">
+      <Button small variant="ghost" onClick={() => setOpen((v) => !v)}>
+        <span className="whitespace-nowrap">Download ▾</span>
+      </Button>
+      {open && (
+        <div role="menu" className="absolute right-0 z-30 mt-1 min-w-40 overflow-hidden rounded-lg border border-neutral-200 bg-surface py-1 shadow-lg">
+          {items.map((item) => (
+            <a
+              key={item.label}
+              role="menuitem"
+              href={item.href}
+              onClick={() => setOpen(false)}
+              className="flex items-baseline justify-between gap-4 px-3 py-1.5 text-sm text-neutral-700 hover:bg-neutral-100"
+            >
+              {item.label}
+              <span className="text-xs text-neutral-400">{item.sub}</span>
+            </a>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

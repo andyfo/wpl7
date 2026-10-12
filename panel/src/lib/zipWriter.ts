@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import zlib from 'node:zlib';
 
 /**
@@ -89,4 +91,30 @@ export function zipOf(entries: ZipEntry[]): Buffer {
   end.writeUInt32LE(offset, 16);
   end.writeUInt16LE(0, 20);
   return Buffer.concat([...files, directory, end]);
+}
+
+/**
+ * A WordPress plugin's folder as the zip a site installs: `<folder>/` and everything under `root`,
+ * with `version` written over the placeholder `0.0.0-dev` in its `.php` and `.txt` files, and the
+ * `extra` files added. A `connection.php` lying in the folder from testing is never taken: only
+ * the one in `extra` goes out.
+ */
+export function pluginFolderZip(root: string, folder: string, version: string, extra: ZipEntry[] = []): Buffer {
+  const entries: ZipEntry[] = [{ name: `${folder}/` }];
+  const walk = (dir: string, rel: string) => {
+    for (const item of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const relPath = `${rel}${item.name}`;
+      if (relPath === 'connection.php') continue;
+      if (item.isDirectory()) {
+        entries.push({ name: `${folder}/${relPath}/` });
+        walk(path.join(dir, item.name), `${relPath}/`);
+      } else if (item.isFile()) {
+        let data = fs.readFileSync(path.join(dir, item.name));
+        if (/\.(php|txt)$/.test(item.name)) data = Buffer.from(data.toString('utf8').replaceAll('0.0.0-dev', version), 'utf8');
+        entries.push({ name: `${folder}/${relPath}`, data });
+      }
+    }
+  };
+  walk(root, '');
+  return zipOf([...entries, ...extra.map((e) => ({ ...e, name: `${folder}/${e.name}` }))]);
 }

@@ -8,6 +8,8 @@ import type {
   BackupListDto,
   BatchDto,
   CatalogStateDto,
+  ConnectionDto,
+  ConnectionSummaryDto,
   FtpServerStatusDto,
   ImportDto,
   ImportSummaryDto,
@@ -46,7 +48,7 @@ import type {
   WpInventoryDto,
   WporgPluginDto,
 } from '../../../shared/types';
-import type { WpComponentKind, WpInventoryFilter } from '../../../shared/schemas';
+import type { SiteKind, WpComponentKind, WpInventoryFilter } from '../../../shared/schemas';
 import { backupListParams, type BackupFilters } from '../lib/backupFilters';
 import { siteFtpSettling } from '../lib/ftpStatus';
 import { jobListParams, type JobListQuery } from '../lib/jobFilters';
@@ -128,6 +130,30 @@ export const useImport = (id: number | null) =>
       const status = q.state.data?.status;
       if (!status || !LIVE_IMPORTS.has(status)) return false;
       return status === 'connected' ? 5000 : 2000;
+    },
+  });
+
+/** Connections that wait for a site's plugin, or for the Confirm step. */
+const LIVE_CONNECTIONS = new Set(['pending', 'enrolled']);
+
+export const useConnections = () =>
+  useQuery({
+    queryKey: ['connections'],
+    queryFn: () => api<{ items: ConnectionSummaryDto[] }>('/api/connections').then((r) => r.items),
+    refetchInterval: (q) => (q.state.data?.some((c) => c.status === 'pending') ? 5000 : false),
+  });
+
+/** One connection: polled fast while it waits for the site's plugin, slower on Confirm. */
+export const useConnection = (id: number | null) =>
+  useQuery({
+    queryKey: ['connection', id],
+    queryFn: () => api<ConnectionDto>(`/api/connections/${id}`),
+    enabled: id !== null,
+    retry: false,
+    refetchInterval: (q) => {
+      const status = q.state.data?.status;
+      if (!status || !LIVE_CONNECTIONS.has(status)) return false;
+      return status === 'pending' ? 2000 : 10_000;
     },
   });
 
@@ -320,6 +346,7 @@ export interface WpInventoryFilters {
   q?: string;
   serverId?: number;
   siteSlug?: string;
+  siteKind?: SiteKind;
   includeStopped?: boolean;
 }
 
@@ -333,6 +360,7 @@ export const useWpInventory = (filters: WpInventoryFilters) =>
       if (filters.q) params.set('q', filters.q);
       if (filters.serverId !== undefined) params.set('serverId', String(filters.serverId));
       if (filters.siteSlug) params.set('siteSlug', filters.siteSlug);
+      if (filters.siteKind) params.set('siteKind', filters.siteKind);
       if (filters.includeStopped) params.set('includeStopped', 'true');
       return api<WpInventoryDto>(`/api/wp/inventory?${params}`);
     },

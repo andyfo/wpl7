@@ -21,6 +21,7 @@ import { registerAuthRoutes } from './routes/auth.js';
 import { registerUserRoutes } from './routes/users.js';
 import { registerSiteRoutes } from './routes/sites.js';
 import { registerImportRoutes } from './routes/imports.js';
+import { registerConnectionRoutes } from './routes/connections.js';
 import { registerBackupRoutes } from './routes/backups.js';
 import { registerBackupDestinationRoutes } from './routes/backupDestinations.js';
 import { registerWpRoutes } from './routes/wp.js';
@@ -109,6 +110,7 @@ export async function buildServer(
   registerUserRoutes(app, deps);
   registerSiteRoutes(app, deps);
   registerImportRoutes(app, deps);
+  registerConnectionRoutes(app, deps);
   registerBackupRoutes(app, deps);
   registerBackupDestinationRoutes(app, deps);
   registerWpRoutes(app, deps);
