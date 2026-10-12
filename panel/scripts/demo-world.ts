@@ -36,5 +36,18 @@ const app = await buildServer(world.deps, { webDist });
 app.server.prependListener('request', (req) => {
   req.headers['x-forwarded-proto'] ??= 'https';
 });
+// The demo's clock stands still (demo/clock.ts), so the session cookie it sets expires a week
+// after the demo's "now": a date the real calendar passes, after which a browser throws the
+// cookie away as it arrives, and nobody can sign in. Without an expiry it is a cookie for as long
+// as the browser runs, which is all a run of the shooter needs. The session itself is the panel's
+// as ever: the store checks it against the demo's clock.
+app.addHook('onSend', async (_req, reply, payload) => {
+  const cookies = reply.getHeader('set-cookie');
+  if (cookies === undefined) return payload;
+  const list = (Array.isArray(cookies) ? cookies : [cookies]).map(String);
+  reply.removeHeader('set-cookie');
+  reply.header('set-cookie', list.map((cookie) => cookie.replace(/;\s*(?:Expires|Max-Age)=[^;]*/gi, '')));
+  return payload;
+});
 await app.listen({ port: Number(values.port), host: values.host });
 console.log(`demo ready on http://${values.host}:${values.port}${webDist ? '' : ' (API only: pass --web-dist for the panel)'}`);
