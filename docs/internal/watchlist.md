@@ -18,7 +18,7 @@ for a reason; remove one once there is nothing left to watch.
 | Entry | Priority | Last checked | Status |
 |---|---|---|---|
 | [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-10-07 11:05 UTC | Open upstream; worked around |
-| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-10-09 06:50 UTC | 0.21.15 is the latest; same definitions as the pinned 0.21.12 |
+| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-10-12 05:42 UTC | 0.21.15 is the latest; same definitions as the pinned 0.21.12 |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-10-02 05:12 UTC | Both overrides apply to 0.21.12; signatures named |
 | [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-07 11:05 UTC | 2.7.6 is the latest; patch still needed |
 | [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
@@ -72,7 +72,7 @@ for a reason; remove one once there is nothing left to watch.
 ## AMWScan: the pinned image and its signatures
 
 - **Priority:** High
-- **Last checked:** 2026-10-09 06:50 UTC. We pin 0.21.12, whose definitions are 2026.09.08.1.
+- **Last checked:** 2026-10-12 05:42 UTC. We pin 0.21.12, whose definitions are 2026.09.08.1.
   The latest release is v0.21.15 (2026-10-03, after 0.21.13 and 0.21.14 the day before). Its
   definitions are the same 2026.09.08.1: only the manifest's `createdAt` differs. Its engine
   changes are prompts without a terminal, which `--report-only` and `--silent` never reach, and
