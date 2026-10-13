@@ -541,15 +541,16 @@ export class BackupService {
    */
   async prune(retention: number): Promise<{ deleted: number; offsiteOnly: number }> {
     const out = { deleted: 0, offsiteOnly: 0 };
-    // Ones a deletion job names are its to remove: pruning them as well would race it.
-    const doomed = this.pendingDeletion();
-    const fetched = this.recentlyFetched(Date.now());
     const slugs = this.db
       .selectDistinct({ slug: backups.siteSlug })
       .from(backups)
+      .orderBy(asc(backups.siteSlug))
       .all()
       .map((r) => r.slug);
     for (const slug of slugs) {
+      // Read for each site as it is reached: a deletion queued while the sites before it were
+      // pruned counts too. The ones it names are its to remove, and not among the newest N.
+      const away = this.goingAway();
       const rows = this.db
         .select()
         .from(backups)
@@ -564,9 +565,9 @@ export class BackupService {
         .all()
         // Counted among the ones staying: a backup a deletion job has is not one of the newest N,
         // or the job would leave the site with fewer than N.
-        .filter((row) => !doomed.has(row.id));
+        .filter((row) => !away.has(row.id));
       for (const row of rows.slice(retention)) {
-        const done = await this.retire(row, fetched);
+        const done = await this.retire(row);
         if (done) out[done]++;
       }
     }
@@ -606,7 +607,6 @@ export class BackupService {
     const shortest = Math.min(...[keep.sites, keep.panel, ...own.values()].filter((days) => days > 0));
     if (!Number.isFinite(shortest)) return out; // nothing is ever deleted by age
 
-    const fetched = this.recentlyFetched(now);
     // Offsite-only ones are left out: there is nothing of them here, and the destination's
     // retention is what removes them there.
     const rows = this.db
@@ -626,7 +626,7 @@ export class BackupService {
       opts.checkCanceled?.();
       const days = daysFor(row);
       if (days <= 0 || row.createdAt >= now - days * DAY_MS) continue;
-      const done = await this.retire(row, fetched);
+      const done = await this.retire(row);
       if (done) out[done]++;
     }
     return out;
@@ -688,34 +688,33 @@ export class BackupService {
   }
 
   /**
-   * Backups brought back with Fetch back within FETCHED_STAYS_MS. Somebody fetched each on purpose,
-   * to restore or download it, and retention would otherwise take its files again the next night.
+   * Whether this backup was brought back with Fetch back within FETCHED_STAYS_MS. Somebody fetched
+   * it on purpose, to restore or download it, and retention would otherwise take its files again
+   * the next night - or, with the fetch done halfway through a run, within the minute.
    */
-  private recentlyFetched(now: number): Set<number> {
-    const out = new Set<number>();
+  private fetchedLately(backupId: number): boolean {
     const fetches = this.db
       .select({ payload: jobs.payload })
       .from(jobs)
-      .where(and(eq(jobs.type, 'backup.fetch'), eq(jobs.status, 'succeeded'), gte(jobs.finishedAt, now - FETCHED_STAYS_MS)))
+      .where(and(eq(jobs.type, 'backup.fetch'), eq(jobs.status, 'succeeded'), gte(jobs.finishedAt, Date.now() - FETCHED_STAYS_MS)))
       .all();
-    for (const job of fetches) {
+    return fetches.some((job) => {
       try {
-        const id = (JSON.parse(job.payload) as { backupId?: unknown }).backupId;
-        if (typeof id === 'number') out.add(id);
+        return (JSON.parse(job.payload) as { backupId?: unknown }).backupId === backupId;
       } catch {
-        // Not a payload this version wrote: nothing to hold back.
+        return false; // not a payload this version wrote: nothing to hold back
       }
-    }
-    return out;
+    });
   }
 
   /**
    * Retention's part in one backup past it: deleted, or - with a complete offsite copy - its local
    * files removed, the row staying as offsite-only. Null when it is left for the next run.
    */
-  private async retire(listed: BackupRow, fetched: ReadonlySet<number>): Promise<'deleted' | 'offsiteOnly' | null> {
-    // Read as each backup is reached, not once for the run: taking the ones before it took a
-    // while, and a backup deleted meanwhile - or one on its way out - changes which is the newest.
+  private async retire(listed: BackupRow): Promise<'deleted' | 'offsiteOnly' | null> {
+    // Everything here is read as each backup is reached, not once for the run: taking the ones
+    // before it took a while, and a backup deleted, fetched back or on its way out meanwhile
+    // changes what may be taken.
     const row = this.db.select().from(backups).where(eq(backups.id, listed.id)).get();
     if (!row) return null; // deleted meanwhile
     const away = this.goingAway();
@@ -725,7 +724,7 @@ export class BackupService {
     const copies = this.copiesOf(row.id);
     const copied = copies.some((c) => c.status === 'complete');
     if (row.filesPresent === 0 && copied) return null; // offsite-only already
-    if (fetched.has(row.id)) return null;
+    if (row.filesPresent === 1 && this.fetchedLately(row.id)) return null;
     if (this.activeJobFor(row)) return null; // a restore/move/backup of this site is in flight; next run
     if (this.relocationJobFor(row)) return null; // its files may be on their way to a new location
     // An upload that has not happened yet - or a failed one still to be retried - would lose its

@@ -347,6 +347,54 @@ describe('deleting backups by age', () => {
     expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 1, offsiteOnly: 0 });
   });
 
+  // The reviewer's reproduction: Fetch back finishes while retention is busy with an earlier backup.
+  it('leaves a backup fetched back during the run on its server', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const dest = w.offsite.create({
+      name: 'bucket',
+      provider: 's3',
+      config: { accessKeyId: 'AKIA', region: 'eu-central-1', bucket: 'b', prefix: 'panel.example.com' },
+      secrets: { secretAccessKey: 'sekrit' },
+    });
+    const fetching = await backup(w, site, 'scheduled', 30);
+    const pruned = await backup(w, site, 'scheduled', 20);
+    await backup(w, site, 'scheduled', 10);
+    // Remote only for now, with its copy in the bucket.
+    w.db.update(backups).set({ filesPresent: 0 }).where(eq(backups.id, fetching.id)).run();
+    w.db.insert(backupCopies).values({ backupId: fetching.id, destinationId: dest.id, status: 'complete', remotePath: 'b/1', createdAt: Date.now() }).run();
+    whileRemovingFilesOf(w, pruned, () => {
+      w.db.update(backups).set({ filesPresent: 1 }).where(eq(backups.id, fetching.id)).run();
+      w.db
+        .insert(jobs)
+        .values({ type: 'backup.fetch', payload: JSON.stringify({ backupId: fetching.id, destinationId: dest.id }), status: 'succeeded', createdAt: Date.now(), finishedAt: Date.now() })
+        .run();
+    });
+
+    expect(await w.core.backup.prune(1)).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(w.db.select().from(backups).where(eq(backups.id, fetching.id)).get()!.filesPresent).toBe(1);
+    expect(fs.existsSync(fetching.path)).toBe(true);
+  });
+
+  it('counts the newest N of each site among the ones staying when it gets to that site', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const alpha = await makeSite(w, 'alpha');
+    const beta = await makeSite(w, 'beta');
+    const first = await backup(w, alpha, 'scheduled', 12);
+    for (const days of [11, 10, 9]) await backup(w, alpha, 'scheduled', days);
+    const betas = [];
+    for (const days of [7, 6, 5, 4, 3]) betas.push(await backup(w, beta, 'scheduled', days));
+    // While alpha's oldest is pruned, a deletion of beta's newest two is queued.
+    whileRemovingFilesOf(w, first, () => {
+      w.worker.enqueue('backup.delete', { backupIds: [betas[3]!.id, betas[4]!.id] }, undefined, { lane: 'backup-delete' });
+    });
+
+    // Beta's newest three that stay are the three before them: none of its backups goes now.
+    expect(await w.core.backup.prune(3)).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(remaining(w)).not.toContain(first.id);
+    expect(remaining(w)).toEqual(expect.arrayContaining(betas.map((b) => b.id)));
+  });
+
   it('waits for a copy still to be retried, and drops one that gave up when only its remote copy stays', async () => {
     const w = await makeWorld({ exec: hostExec });
     const site = await makeSite(w);
