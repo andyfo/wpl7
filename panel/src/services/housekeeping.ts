@@ -53,7 +53,15 @@ export async function runHousekeeping(
   checkCanceled();
 
   // Then by age: what is older than its keep period, the panel's setting or the site's own.
-  const keepDays = { sites: s.settings.get('backupKeepDays') || 0, panel: s.settings.get('panelBackupKeepDays') || 0 };
+  // Getters: a keep period changed while the run is going counts from the next backup on.
+  const keepDays = {
+    get sites() {
+      return s.settings.get('backupKeepDays') || 0;
+    },
+    get panel() {
+      return s.settings.get('panelBackupKeepDays') || 0;
+    },
+  };
   const aged = await s.backup.expire(keepDays, { checkCanceled });
   result.oldBackupsDeleted = aged.deleted;
   if (aged.deleted > 0) log.info(`Backup age: deleted ${aged.deleted} backup(s) older than their keep period`);

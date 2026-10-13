@@ -590,22 +590,28 @@ export class BackupService {
    * its files here, and its copies follow their destination's own retention.
    */
   async expire(
-    keep: { sites: number; panel: number },
+    keep: { readonly sites: number; readonly panel: number },
     opts: { now?: number; checkCanceled?: () => void } = {},
   ): Promise<{ deleted: number; offsiteOnly: number }> {
     const now = opts.now ?? Date.now();
     const out = { deleted: 0, offsiteOnly: 0 };
-    const own = new Map<number, number>();
-    const sitesWithOwn = this.db
-      .select({ id: sites.id, days: sites.backupKeepDays })
+    const own = this.db
+      .select({ days: sites.backupKeepDays })
       .from(sites)
       .where(isNotNull(sites.backupKeepDays))
-      .all();
-    for (const site of sitesWithOwn) if (site.days !== null) own.set(site.id, site.days);
-    const daysFor = (row: BackupRow) =>
-      row.type === 'panel' ? keep.panel : row.siteId !== null ? (own.get(row.siteId) ?? keep.sites) : keep.sites;
-    const shortest = Math.min(...[keep.sites, keep.panel, ...own.values()].filter((days) => days > 0));
+      .all()
+      .flatMap((site) => (site.days === null ? [] : [site.days]));
+    const shortest = Math.min(...[keep.sites, keep.panel, ...own].filter((days) => days > 0));
     if (!Number.isFinite(shortest)) return out; // nothing is ever deleted by age
+    // Read as each backup is reached, like everything retire() asks: a keep period changed while
+    // the run is going - a site set to Never, say - counts from the next backup on. `keep` may
+    // be getters for that reason.
+    const daysFor = (row: BackupRow): number => {
+      if (row.type === 'panel') return keep.panel;
+      if (row.siteId === null) return keep.sites;
+      const site = this.db.select({ days: sites.backupKeepDays }).from(sites).where(eq(sites.id, row.siteId)).get();
+      return site?.days ?? keep.sites;
+    };
 
     // Offsite-only ones are left out: there is nothing of them here, and the destination's
     // retention is what removes them there.

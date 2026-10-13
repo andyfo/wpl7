@@ -376,6 +376,38 @@ describe('deleting backups by age', () => {
     expect(fs.existsSync(fetching.path)).toBe(true);
   });
 
+  it('follows a keep period changed while the run is going', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const a = await backup(w, site, 'scheduled', 50);
+    const b = await backup(w, site, 'scheduled', 40);
+    await backup(w, site, 'scheduled', 1);
+    // The site set to Never while its oldest is being removed.
+    whileRemovingFilesOf(w, a, () => {
+      w.deps.sites.setBackupKeepDays(site.slug, 0);
+    });
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(remaining(w)).toContain(b.id);
+
+    // The same for the panel's setting, read as getters.
+    const other = await makeSite(w, 'other');
+    const c = await backup(w, other, 'scheduled', 50);
+    const d = await backup(w, other, 'scheduled', 40);
+    await backup(w, other, 'scheduled', 1);
+    let days = 30;
+    whileRemovingFilesOf(w, c, () => {
+      days = 0;
+    });
+    const keep = {
+      get sites() {
+        return days;
+      },
+      panel: 0,
+    };
+    expect(await w.core.backup.expire(keep)).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(remaining(w)).toContain(d.id);
+  });
+
   it('counts the newest N of each site among the ones staying when it gets to that site', async () => {
     const w = await makeWorld({ exec: hostExec });
     const alpha = await makeSite(w, 'alpha');
