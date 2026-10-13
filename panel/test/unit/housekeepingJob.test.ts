@@ -29,7 +29,7 @@ describe('nightly housekeeping as a job', () => {
 
     const done = await runJob(w, job.id);
     expect(done.status).toBe('succeeded');
-    expect(JSON.parse(done.result!)).toMatchObject({ jobsPruned: 1, backupsPruned: 0 });
+    expect(JSON.parse(done.result!)).toMatchObject({ jobsPruned: 1, backupsPruned: 0, oldBackupsDeleted: 0 });
     expect(w.db.select().from(jobs).where(eq(jobs.id, old.id)).get()).toBeUndefined();
 
     const log = w.db.select().from(jobLogs).where(eq(jobLogs.jobId, job.id)).orderBy(asc(jobLogs.id)).all().map((l) => l.message);

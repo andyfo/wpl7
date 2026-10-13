@@ -16,6 +16,7 @@ sources:
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
+import Since from '~/components/Since.astro';
 
 A backup is a full copy of one site, its files and its database, kept on the server that hosts the
 site. The panel takes backups on a schedule, before risky changes, and whenever you ask. Each
@@ -42,19 +43,23 @@ the site without the panel, as [Manual recovery](/docs/reference/manual-recovery
 
 | Kind | Shown as | Taken | Kept |
 |---|---|---|---|
-| **Scheduled** | `scheduled` | By the backup schedule, and by backup or update schedules of your own | The newest 10 per site |
+| **Scheduled** | `scheduled` | By the backup schedule, and by backup or update schedules of your own | The newest 10 per site, within the keep period |
 | **Manual** | `manual` | **Back up now** on the site's **Backups** tab | Until you delete it |
 | **Final, taken on deletion** | `final` | When you delete a site, unless you switch it off | Until you delete it |
-| **Before an update** | `pre_update` | When an update runs with **Back up first** | Until you delete it |
-| **Before a restore** | `pre_restore` | Before every restore | Until you delete it |
-| **Server move** | `move` | At both ends of a move to another server | Until you delete it |
-| **Panel database** | `panel` | After each scheduled run, of the panel's own database | The newest 10 |
+| **Before an update** | `pre_update` | When an update runs with **Back up first** | Until the keep period ends, or you delete it |
+| **Before a restore** | `pre_restore` | Before every restore | Until the keep period ends, or you delete it |
+| **Server move** | `move` | At both ends of a move to another server | Until the keep period ends, or you delete it |
+| **Import** | `import` | Once an [imported site](/docs/sites/import/) is up | Until the keep period ends, or you delete it |
+| **Panel database** | `panel` | After each scheduled run, of the panel's own database | The newest 10, within the panel's keep period |
 
 **Keep last N scheduled backups per site** in **Settings → Backups** sets the
 [retention](/docs/reference/glossary/#retention). The nightly housekeeping removes the older ones.
 A scheduled backup with a complete offsite copy gives up its local files instead, and stays listed
-as **remote only**. The other kinds are yours to prune: every bulk update with **Back up first**
-adds one backup per site.
+as **remote only**.
+
+<Since v="0.3.0-beta.3" /> The keep period is off until you set it, for every site, for the panel or
+for one site. The nightly housekeeping then deletes the backups older than that, but never a site's
+newest. [Delete old backups](/docs/backups/delete-old/) shows how, and how to delete old ones now.
 
 ## When backups are taken
 
@@ -74,9 +79,10 @@ and the backup fails without it.
 **Kind** and, with several servers, **Server**. A site's own **Backups** tab lists that site's.
 
 The backups of a deleted site stay. **Deleted sites** above the list names those sites, and their
-rows say **deleted**. Their final backup and every other kind are kept until you delete them, while
-scheduled ones still follow retention. To bring such a site back, create a site with the same name
-on the server its backup is on. Then restore the backup from the new site's **Backups** tab.
+rows say **deleted**. Their final and manual backups stay until you delete them. The other kinds
+follow retention and the keep period in **Settings → Backups**, as every site's do. To bring such a
+site back, create a site with the same name on the server its backup is on. Then restore the backup
+from the new site's **Backups** tab.
 
 ## Backups on several servers
 
@@ -104,7 +110,8 @@ one transaction. Such a backup is restored by hand, as
   another name.
 - The panel's SSH key is not in the panel's own backup. Keep a copy of `/srv/panel/ssh` somewhere
   else.
-- Only scheduled backups and panel snapshots are pruned. Everything else stays until you delete it.
+- Only scheduled backups and panel snapshots are kept to a number. Manual and final backups are
+  never deleted by age.
 
 ## Related
 
@@ -112,4 +119,5 @@ one transaction. Such a backup is restored by hand, as
 - [Backup storage](/docs/backups/storage/)
 - [Offsite copies](/docs/backups/offsite/)
 - [Delete backups](/docs/backups/delete/)
+- [Delete old backups](/docs/backups/delete-old/)
 - [Manual recovery without the panel](/docs/reference/manual-recovery/)

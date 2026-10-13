@@ -56,6 +56,10 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     externalCountFor: both('counts the external sites a server keeps the backups of'),
   },
   'services/alerts.ts': { vulnerabilities: both('alerts are for every site') },
+  'services/backup.ts': {
+    expire: both("reads each site's own keep period: the backups of either kind are deleted by age"),
+    daysFor: both("one site's own keep period, as expire reaches its backups"),
+  },
   'services/blocklist.ts': { block: NAMES, toDto: NAMES },
   'services/connections.ts': {
     enroll: both('the site a reconnect is for'),
@@ -107,6 +111,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     reconcileAll: hosted('hostedSites()'),
     applyLimits: hosted('hostedSites()'),
     list: both('the site list shows both kinds'),
+    ownBackupKeepDays: NAMES,
   },
   'services/traffic.ts': { apply: both("slugs from Traefik's log, which only hosted sites are in") },
   'services/wildcardSites.ts': { sweepWildcardSites: hosted('hostedSites()') },

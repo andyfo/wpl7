@@ -74,6 +74,11 @@ export interface SiteSummary {
    */
   kind: SiteKind;
   external: ExternalSiteSummary | null;
+  /**
+   * After how many days this site's backups are deleted, when it says so itself: 0 = never. null =
+   * as `backupKeepDays` in the settings says for every site.
+   */
+  backupKeepDays: number | null;
   createdAt: number;
 }
 
@@ -578,10 +583,16 @@ export interface BackupIdsDto {
     siteSlug: string;
     siteDeleted: boolean;
     status: 'complete' | 'failed';
+    sizeBytes: number | null;
     /** Completed copies at remote destinations, which a delete removes too. */
     remoteCopies: number;
   }[];
   total: number;
+  /**
+   * The sites - `panel` among them - that deleting `items` leaves without a complete backup:
+   * every one they have is among them.
+   */
+  leavesNone: string[];
 }
 
 /** One backup at one offsite destination. */
@@ -1508,6 +1519,10 @@ export interface MetaDto {
   backupCron: string;
   /** The scheduled backup run is paused on the Schedules page: `backupCron` is not running. */
   backupsPaused: boolean;
+  /** After how many days sites' backups are deleted, unless a site sets its own; 0 = never. */
+  backupKeepDays: number;
+  /** How many scheduled backups each site keeps, whatever their age. */
+  backupRetention: number;
   /** Where each server keeps its backups, so a page can say so without a second call. */
   backupRoots: { serverId: number; serverName: string; root: string; isDefault: boolean; backups: number }[];
   /** True once at least one offsite destination exists; gates the offsite UI. */

@@ -1,12 +1,14 @@
 /**
  * Backups: ten nights of scheduled backups for every site that has been around that long, a
- * manual one, the safety copies a bulk update took, and a deleted site whose backups remain.
+ * manual one, the safety copies a bulk update took, a deleted site whose backups remain, and a
+ * site that keeps its backups longer than the rest.
  * One offsite destination, "Archive bucket" (S3-compatible, encrypted), holding a copy of each
  * scheduled backup, with last night's copies from sin1 still waiting. Disk space is fixed, so the
  * Storage page does not show whatever machine the demo runs on.
  */
 import path from 'node:path';
-import { backupCopies, backupDestinations, backups } from '../../src/db/schema.js';
+import { eq } from 'drizzle-orm';
+import { backupCopies, backupDestinations, backups, sites } from '../../src/db/schema.js';
 import { tsStamp } from '../../src/services/backup.js';
 import type { TestWorld } from '../../test/helpers.js';
 import { DAY, HOUR, MINUTE, ago, DEMO_NOW } from './clock.js';
@@ -73,6 +75,8 @@ export function seedBackups(world: TestWorld): void {
 
   rows.sort((a, b) => a.createdAt - b.createdAt);
   const inserted = world.db.transaction((tx) => rows.map((row) => tx.insert(backups).values(row).returning().get()));
+  // The law firm keeps its backups for a year, longer than the 30 days every other site does.
+  world.db.update(sites).set({ backupKeepDays: 365 }).where(eq(sites.slug, 'lumen-law')).run();
 
   // The offsite destination, and a copy of every backup it takes since it was added.
   const destination = world.db

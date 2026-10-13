@@ -49,6 +49,10 @@ export function registerMiscRoutes(app: FastifyInstance, deps: AppDeps): void {
       // expression the operator can set to anything, not a fixed nightly run.
       backupCron: deps.settings.get('backupCron'),
       backupsPaused: deps.schedulers.backupsPaused(),
+      // What a site's Backups tab offers as its default keep period, and the count that bounds
+      // its scheduled backups either way.
+      backupKeepDays: deps.settings.get('backupKeepDays') ?? 0,
+      backupRetention: deps.settings.get('backupRetention') || 10,
       // Where each server keeps its backups, so Settings and the site page can say so
       // without every page learning to call the storage endpoint.
       backupRoots: deps.storage.roots(),
@@ -109,7 +113,11 @@ export function registerMiscRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   // ----------------------------------------------------------------- settings
 
-  r.get('/api/settings', async () => ({ settings: deps.settings.getAll() }));
+  r.get('/api/settings', async () => ({
+    settings: deps.settings.getAll(),
+    // Beside the default they differ from, so Settings can name them.
+    ownBackupKeepDays: deps.sites.ownBackupKeepDays(),
+  }));
 
   r.put('/api/settings', { schema: { body: settingsUpdateBody } }, async (req) => {
     if (req.body.backupCron !== undefined) {

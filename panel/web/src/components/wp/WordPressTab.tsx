@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { WpComponentDto } from '../../../../shared/types';
 import { fixVulnerableOps, updateAllOps, type WpUpdateOp } from '../../../../shared/wpOps';
 import { api, ApiError } from '../../api/client';
-import { useRunJob, useSite, useWpMaintenance, useWpStatus } from '../../api/hooks';
+import { useMeta, useRunJob, useSite, useWpMaintenance, useWpStatus } from '../../api/hooks';
 import {
   Button,
   Card,
@@ -23,7 +23,7 @@ import { WporgPluginSearch } from '../WporgPluginSearch';
 import { timeAgo } from '../../lib/format';
 import { tokenizeCli } from '../../lib/cliArgs';
 import { ComponentTable } from './ComponentTable';
-import { BulkRunOptions, type BulkRunOptionsValue } from './BulkRunOptions';
+import { BulkRunOptions, keptFor, type BulkRunOptionsValue } from './BulkRunOptions';
 import { FeedFooter } from './FeedFooter';
 import { CoverageNote, SeverityBadge } from './severity';
 import { VulnerabilityList } from './VulnerabilityList';
@@ -47,6 +47,9 @@ export function WordPressTab({ slug }: { slug: string }) {
   const external = site.data?.kind === 'external';
   const running = external ? site.data?.status === 'connected' : site.data?.containerState === 'running';
   const isLive = site.data?.isLive ?? false;
+  const meta = useMeta();
+  // How long the backup taken before an update stays: the site's keep period, or the panel's.
+  const kept = keptFor([site.data?.backupKeepDays ?? null], meta.data?.backupKeepDays ?? 0);
   const status = useWpStatus(slug);
   // Every WordPress job ends by re-reading the snapshot, so the status query is what has
   // to be invalidated when one finishes - not a plugin list that no longer exists.
@@ -536,9 +539,7 @@ export function WordPressTab({ slug }: { slug: string }) {
             value={runOptions}
             onChange={setRunOptions}
             backupHint={
-              isLive
-                ? 'On by default for a live site. Kept until you delete it.'
-                : 'Database and files, kept until you delete it.'
+              isLive ? `On by default for a live site. ${capitalized(kept)}.` : `Database and files, ${kept}.`
             }
           />
         </ConfirmDialog>
@@ -569,3 +570,5 @@ export function WordPressTab({ slug }: { slug: string }) {
     </div>
   );
 }
+
+const capitalized = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);

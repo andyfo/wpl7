@@ -76,8 +76,8 @@ you saved, open **I already have a passphrase for this bucket** and paste both h
 ## Keep copies for longer
 
 **Keep last N scheduled per site** is each destination's own retention: 30 by default, and 0 keeps
-all. On the server, a scheduled backup past local retention that has a complete copy only gives up
-its files, and stays listed as **remote only**. With **Retention is managed by the provider** on,
+all. On the server, a backup past local retention or its keep period that has a complete copy only
+gives up its files, and stays listed as **remote only**. With **Retention is managed by the provider** on,
 the panel deletes nothing there. Pair it with lifecycle rules, Object Lock or a key that cannot
 delete.
 
@@ -85,7 +85,7 @@ delete.
 
 **Fetch back** on a **remote only** backup downloads it onto the site's current server and checks
 its checksums. **Restore** and **Download** then work as usual, also for a backup taken before the
-site moved.
+site moved. Retention leaves a fetched backup's files on the server for a week.
 
 ## When a copy fails
 

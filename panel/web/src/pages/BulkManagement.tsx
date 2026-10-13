@@ -30,7 +30,7 @@ import {
   visibleTargets,
   type Target,
 } from './bulkSelection';
-import { BulkRunOptions, type BulkRunOptionsValue } from '../components/wp/BulkRunOptions';
+import { BulkRunOptions, keptFor, type BulkRunOptionsValue } from '../components/wp/BulkRunOptions';
 import { FeedFooter } from '../components/wp/FeedFooter';
 import { CoverageNote, SeverityBadge } from '../components/wp/severity';
 import { VulnerabilityList } from '../components/wp/VulnerabilityList';
@@ -652,7 +652,17 @@ export function BulkManagement() {
           onClose={() => setPendingAction(null)}
           onConfirm={() => void runBatch(pendingAction)}
         >
-          <BulkRunOptions value={runOptions} onChange={setRunOptions} />
+          <BulkRunOptions
+            value={runOptions}
+            onChange={setRunOptions}
+            // How long the backups taken first stay: each selected site's keep period.
+            backupHint={`Database and files, ${keptFor(
+              [...new Set([...selected.values()].map((t) => t.siteSlug))].map(
+                (slug) => (sites.data ?? []).find((site) => site.slug === slug)?.backupKeepDays ?? null,
+              ),
+              meta.data?.backupKeepDays ?? 0,
+            )}.`}
+          />
         </ConfirmDialog>
       )}
     </div>

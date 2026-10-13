@@ -149,6 +149,17 @@ export const SHOTS: Shot[] = [
   { name: 'recipes', what: 'Plugins → Recipes: ACF PRO and Breakdance', path: '/plugins/recipes', theme: 'light' },
   { name: 'backups-all', what: 'Backups → All backups, a deleted site’s included', path: '/backups', theme: 'both', hero: true },
   { name: 'backups-storage', what: 'Backups → Storage: where backups are kept, and an offsite destination', path: '/backups/storage', theme: 'light' },
+  {
+    name: 'backups-delete-old',
+    what: 'Backups → All backups: Delete old backups, with what it comes to',
+    path: '/backups',
+    theme: 'light',
+    prepare: steps(
+      button('Delete old backups'),
+      async (page) => page.getByRole('dialog').getByRole('spinbutton', { name: 'Days' }).fill('7'),
+      async (page) => page.getByRole('dialog').getByText(/^\d+ backups? of /).waitFor(),
+    ),
+  },
   { name: 'mail-overview', what: 'Mail: the relay of each server', path: '/mail', theme: 'both' },
   { name: 'mail-setup', what: 'Mail → Setup guide', path: '/mail', theme: 'light', prepare: tab('Setup guide') },
   { name: 'mail-traffic', what: 'Mail → Traffic', path: '/mail', theme: 'light', prepare: tab('Traffic') },

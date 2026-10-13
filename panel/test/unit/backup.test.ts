@@ -2,10 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { backups, sites, type SiteRow } from '../../src/db/schema.js';
+import { backupCopies, backups, jobs, sites, type BackupRow, type SiteRow } from '../../src/db/schema.js';
 import { hostExec } from '../../src/lib/exec.js';
 import { makeWorld, type TestWorld } from '../helpers.js';
 import { sitePaths } from '../../src/services/siteSpec.js';
+import { runHousekeeping } from '../../src/services/housekeeping.js';
 
 async function makeSite(w: TestWorld, slug = 'demo'): Promise<SiteRow> {
   const row = w.db
@@ -149,5 +150,380 @@ describe('backup directory allocation', () => {
     expect(fs.existsSync(a.path)).toBe(false);
     expect(fs.existsSync(path.join(b.path, 'files.tar.gz'))).toBe(true);
     expect(w.db.select().from(backups).all().map((r) => r.id)).toEqual([b.id]);
+  });
+});
+
+describe('deleting backups by age', () => {
+  const DAY = 24 * 3600_000;
+
+  /** The backup, made `days` old. */
+  function aged(w: TestWorld, row: BackupRow, days: number): BackupRow {
+    return w.db.update(backups).set({ createdAt: Date.now() - days * DAY }).where(eq(backups.id, row.id)).returning().get();
+  }
+
+  async function backup(w: TestWorld, site: SiteRow, type: BackupRow['type'], days: number): Promise<BackupRow> {
+    return aged(w, await w.core.backup.create(site, type, {}), days);
+  }
+
+  const remaining = (w: TestWorld) => w.db.select().from(backups).all().map((b) => b.id).sort((a, b) => a - b);
+  const sorted = (rows: BackupRow[]) => rows.map((b) => b.id).sort((a, b) => a - b);
+
+  it('deletes what is past its keep period, and never a manual or a final backup', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const expiring = [
+      await backup(w, site, 'scheduled', 40),
+      await backup(w, site, 'pre_update', 40),
+      await backup(w, site, 'pre_restore', 40),
+      await backup(w, site, 'move', 40),
+      await backup(w, site, 'import', 40),
+    ];
+    const kept = [
+      await backup(w, site, 'manual', 400),
+      await backup(w, site, 'final', 400),
+      await backup(w, site, 'pre_update', 29),
+      await backup(w, site, 'scheduled', 1),
+    ];
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 5, offsiteOnly: 0 });
+    expect(remaining(w)).toEqual(sorted(kept));
+    for (const row of expiring) expect(fs.existsSync(row.path), row.type).toBe(false);
+  });
+
+  it('keeps the newest backup of each site and of the panel, however old', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    // Stopped long ago: it takes no new backups, and must not lose its last one.
+    const site = await makeSite(w);
+    const older = await backup(w, site, 'scheduled', 90);
+    const last = await backup(w, site, 'scheduled', 60);
+    const panel = (days: number) =>
+      w.db
+        .insert(backups)
+        .values({ siteSlug: 'panel', serverId: 1, type: 'panel', status: 'complete', path: path.join(w.config.paths.backups, 'panel', `p${days}`), rootPath: w.config.paths.backups, createdAt: Date.now() - days * DAY })
+        .returning()
+        .get();
+    const panelOlder = panel(50);
+    const panelLast = panel(40);
+    // A failed one holds nothing, and is no backup to keep.
+    w.db.update(backups).set({ status: 'failed' }).where(eq(backups.id, older.id)).run();
+
+    expect(await w.core.backup.expire({ sites: 0, panel: 0 })).toEqual({ deleted: 0, offsiteOnly: 0 });
+    expect(await w.core.backup.expire({ sites: 30, panel: 30 })).toEqual({ deleted: 2, offsiteOnly: 0 });
+    expect(remaining(w)).toEqual(sorted([last, panelLast]));
+    expect(remaining(w)).not.toContain(panelOlder.id);
+  });
+
+  it('keeps the newest backup that is staying, when a deletion already has the newest', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const older = await backup(w, site, 'scheduled', 50);
+    const kept = await backup(w, site, 'scheduled', 40);
+    const doomed = await backup(w, site, 'scheduled', 35);
+    w.worker.enqueue('backup.delete', { backupIds: [doomed.id] }, undefined, { lane: 'backup-delete' });
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 1, offsiteOnly: 0 });
+    // The deletion takes the one it names; this run took the oldest, and left the one after it.
+    expect(remaining(w)).toEqual(sorted([kept, doomed]));
+    expect(remaining(w)).not.toContain(older.id);
+  });
+
+  // The documented way back for a deleted site: create one with its name, then restore. The new
+  // site's first backups must not make the old one's last backup fair game.
+  it('keeps a deleted site’s newest backup when another site takes its name', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const old = await makeSite(w, 'shop');
+    const last = await backup(w, old, 'scheduled', 46);
+    w.db.delete(sites).where(eq(sites.id, old.id)).run();
+    const reborn = await makeSite(w, 'shop');
+    const older = await backup(w, reborn, 'scheduled', 40);
+    await backup(w, reborn, 'scheduled', 1);
+    // Its own keep period is its own backups': not the deleted site's.
+    w.deps.sites.setBackupKeepDays('shop', 0);
+    w.deps.sites.setBackupKeepDays('shop', 35);
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(remaining(w)).toContain(last.id);
+    expect(remaining(w)).not.toContain(older.id);
+  });
+
+  /** Calls `during` when the files of `backup` are being removed, then removes them. */
+  function whileRemovingFilesOf(w: TestWorld, backup: BackupRow, during: () => Promise<unknown> | void) {
+    const files = w.servers.handleFor(backup.serverId).files;
+    const rm = files.rm.bind(files);
+    files.rm = async (target: string) => {
+      if (target === backup.path) await during();
+      return rm(target);
+    };
+  }
+
+  // Each backup is checked as it is reached: the newest can go while the run takes the older ones.
+  it('keeps the backup a site is left with when its newest is deleted during the run', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const a = await backup(w, site, 'scheduled', 60);
+    const b = await backup(w, site, 'scheduled', 50);
+    const c = await backup(w, site, 'scheduled', 40);
+    whileRemovingFilesOf(w, a, () => w.core.backup.deleteBackup(c));
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(remaining(w)).toEqual([b.id]);
+  });
+
+  it('counts a backup being deleted elsewhere right now as gone already', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const a = await backup(w, site, 'scheduled', 60);
+    const b = await backup(w, site, 'scheduled', 50);
+    const c = await backup(w, site, 'scheduled', 40);
+    // A Delete of the newest, still purging its remote copies: its row is there until it is done.
+    let finish = () => undefined as void;
+    const elsewhere = new Promise<void>((resolve) => (finish = resolve));
+    whileRemovingFilesOf(w, a, () => {
+      void w.core.backup.whileRemoving(c.id, () => elsewhere);
+    });
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(remaining(w)).toEqual([b.id, c.id]);
+    finish();
+  });
+
+  it('removes a failed backup without touching a later one that took the same folder', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const good = await backup(w, site, 'scheduled', 1);
+    // Failed in the same second as `good` was taken: its folder was removed, and `good` took the name.
+    const failed = w.db
+      .insert(backups)
+      .values({ siteId: site.id, siteSlug: site.slug, serverId: 1, type: 'scheduled', status: 'failed', path: good.path, rootPath: good.rootPath, createdAt: Date.now() - 40 * DAY })
+      .returning()
+      .get();
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(remaining(w)).toEqual([good.id]);
+    expect(remaining(w)).not.toContain(failed.id);
+    expect(fs.existsSync(path.join(good.path, 'files.tar.gz'))).toBe(true);
+  });
+
+  it('leaves no folder behind that only a failed backup or one without its files names', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const good = await backup(w, site, 'scheduled', 40);
+    await backup(w, site, 'scheduled', 1);
+    const failed = w.db
+      .insert(backups)
+      .values({ siteId: site.id, siteSlug: site.slug, serverId: 1, type: 'scheduled', status: 'failed', path: good.path, rootPath: good.rootPath, createdAt: Date.now() - 35 * DAY })
+      .returning()
+      .get();
+    const dest = w.offsite.create({
+      name: 'bucket',
+      provider: 's3',
+      config: { accessKeyId: 'AKIA', region: 'eu-central-1', bucket: 'b', prefix: 'panel.example.com' },
+      secrets: { secretAccessKey: 'sekrit' },
+    });
+    w.db.insert(backupCopies).values({ backupId: good.id, destinationId: dest.id, status: 'complete', remotePath: 'b/1', createdAt: Date.now() }).run();
+
+    // The complete one goes remote-only: the failed one beside it holds none of the files.
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 1, offsiteOnly: 1 });
+    expect(fs.existsSync(good.path)).toBe(false);
+    expect(remaining(w)).not.toContain(failed.id);
+    expect(w.db.select().from(backups).where(eq(backups.id, good.id)).get()!.filesPresent).toBe(0);
+  });
+
+  it('leaves a backup fetched back lately on its server, for a week', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const fetched = await backup(w, site, 'pre_update', 40);
+    await backup(w, site, 'scheduled', 1);
+    const fetch = (finishedAt: number) =>
+      w.db
+        .insert(jobs)
+        .values({ type: 'backup.fetch', payload: JSON.stringify({ backupId: fetched.id, destinationId: 1 }), status: 'succeeded', createdAt: finishedAt, finishedAt })
+        .run();
+    fetch(Date.now() - 2 * DAY);
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 0, offsiteOnly: 0 });
+    w.db.delete(jobs).run();
+    fetch(Date.now() - 8 * DAY);
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 1, offsiteOnly: 0 });
+  });
+
+  // The reviewer's reproduction: Fetch back finishes while retention is busy with an earlier backup.
+  it('leaves a backup fetched back during the run on its server', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const dest = w.offsite.create({
+      name: 'bucket',
+      provider: 's3',
+      config: { accessKeyId: 'AKIA', region: 'eu-central-1', bucket: 'b', prefix: 'panel.example.com' },
+      secrets: { secretAccessKey: 'sekrit' },
+    });
+    const fetching = await backup(w, site, 'scheduled', 30);
+    const pruned = await backup(w, site, 'scheduled', 20);
+    await backup(w, site, 'scheduled', 10);
+    // Remote only for now, with its copy in the bucket.
+    w.db.update(backups).set({ filesPresent: 0 }).where(eq(backups.id, fetching.id)).run();
+    w.db.insert(backupCopies).values({ backupId: fetching.id, destinationId: dest.id, status: 'complete', remotePath: 'b/1', createdAt: Date.now() }).run();
+    whileRemovingFilesOf(w, pruned, () => {
+      w.db.update(backups).set({ filesPresent: 1 }).where(eq(backups.id, fetching.id)).run();
+      w.db
+        .insert(jobs)
+        .values({ type: 'backup.fetch', payload: JSON.stringify({ backupId: fetching.id, destinationId: dest.id }), status: 'succeeded', createdAt: Date.now(), finishedAt: Date.now() })
+        .run();
+    });
+
+    expect(await w.core.backup.prune(1)).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(w.db.select().from(backups).where(eq(backups.id, fetching.id)).get()!.filesPresent).toBe(1);
+    expect(fs.existsSync(fetching.path)).toBe(true);
+  });
+
+  it('follows a keep period changed while the run is going', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const a = await backup(w, site, 'scheduled', 50);
+    const b = await backup(w, site, 'scheduled', 40);
+    await backup(w, site, 'scheduled', 1);
+    // The site set to Never while its oldest is being removed.
+    whileRemovingFilesOf(w, a, () => {
+      w.deps.sites.setBackupKeepDays(site.slug, 0);
+    });
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(remaining(w)).toContain(b.id);
+
+    // The same for the panel's setting, read as getters.
+    const other = await makeSite(w, 'other');
+    const c = await backup(w, other, 'scheduled', 50);
+    const d = await backup(w, other, 'scheduled', 40);
+    await backup(w, other, 'scheduled', 1);
+    let days = 30;
+    whileRemovingFilesOf(w, c, () => {
+      days = 0;
+    });
+    const keep = {
+      get sites() {
+        return days;
+      },
+      panel: 0,
+    };
+    expect(await w.core.backup.expire(keep)).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(remaining(w)).toContain(d.id);
+  });
+
+  it('counts the newest N of each site among the ones staying when it gets to that site', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const alpha = await makeSite(w, 'alpha');
+    const beta = await makeSite(w, 'beta');
+    const first = await backup(w, alpha, 'scheduled', 12);
+    for (const days of [11, 10, 9]) await backup(w, alpha, 'scheduled', days);
+    const betas = [];
+    for (const days of [7, 6, 5, 4, 3]) betas.push(await backup(w, beta, 'scheduled', days));
+    // While alpha's oldest is pruned, a deletion of beta's newest two is queued.
+    whileRemovingFilesOf(w, first, () => {
+      w.worker.enqueue('backup.delete', { backupIds: [betas[3]!.id, betas[4]!.id] }, undefined, { lane: 'backup-delete' });
+    });
+
+    // Beta's newest three that stay are the three before them: none of its backups goes now.
+    expect(await w.core.backup.prune(3)).toEqual({ deleted: 1, offsiteOnly: 0 });
+    expect(remaining(w)).not.toContain(first.id);
+    expect(remaining(w)).toEqual(expect.arrayContaining(betas.map((b) => b.id)));
+  });
+
+  it('waits for a copy still to be retried, and drops one that gave up when only its remote copy stays', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const dest = (name: string) =>
+      w.offsite.create({
+        name,
+        provider: 's3',
+        config: { accessKeyId: 'AKIA', region: 'eu-central-1', bucket: name, prefix: 'panel.example.com' },
+        secrets: { secretAccessKey: 'sekrit' },
+      }).id;
+    const [a, b] = [dest('a'), dest('b')];
+    const row = await backup(w, site, 'scheduled', 40);
+    await backup(w, site, 'scheduled', 1);
+    w.db.insert(backupCopies).values([
+      { backupId: row.id, destinationId: a, status: 'complete', remotePath: 'a/1', createdAt: Date.now() },
+      { backupId: row.id, destinationId: b, status: 'failed', remotePath: 'b/1', nextAttemptAt: Date.now() + 3600_000, createdAt: Date.now() },
+    ]).run();
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 0, offsiteOnly: 0 });
+    // Out of retries: nothing more will be tried, and nothing could be without the files.
+    w.db.update(backupCopies).set({ nextAttemptAt: null }).where(eq(backupCopies.destinationId, b)).run();
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 0, offsiteOnly: 1 });
+    expect(w.db.select().from(backupCopies).all().map((c) => c.destinationId)).toEqual([a]);
+  });
+
+  it('counts the newest N among the backups that are staying', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const kept = await backup(w, site, 'scheduled', 3);
+    const doomed = [await backup(w, site, 'scheduled', 2), await backup(w, site, 'scheduled', 1)];
+    w.worker.enqueue('backup.delete', { backupIds: doomed.map((b) => b.id) }, undefined, { lane: 'backup-delete' });
+    // The two a deletion has are not the newest two: the one left is.
+    expect(await w.core.backup.prune(2)).toEqual({ deleted: 0, offsiteOnly: 0 });
+    expect(remaining(w)).toContain(kept.id);
+  });
+
+  it('follows a site’s own keep period, and the panel’s setting once the site is deleted', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const longer = await makeSite(w, 'longer');
+    const never = await makeSite(w, 'never');
+    const gone = await makeSite(w, 'gone');
+    w.deps.sites.setBackupKeepDays('longer', 60);
+    w.deps.sites.setBackupKeepDays('never', 0);
+
+    const longerOld = await backup(w, longer, 'scheduled', 70);
+    const longerKept = [await backup(w, longer, 'scheduled', 45), await backup(w, longer, 'scheduled', 1)];
+    const neverKept = [await backup(w, never, 'pre_update', 400), await backup(w, never, 'scheduled', 1)];
+    const goneOld = await backup(w, gone, 'scheduled', 45);
+    const goneFinal = await backup(w, gone, 'final', 40);
+    // Its own setting goes with the site: what is left follows the panel's.
+    w.deps.sites.setBackupKeepDays('gone', 0);
+    w.db.delete(sites).where(eq(sites.id, gone.id)).run();
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 2, offsiteOnly: 0 });
+    expect(remaining(w)).toEqual(sorted([...longerKept, ...neverKept, goneFinal]));
+    expect(remaining(w)).not.toContain(longerOld.id);
+    expect(remaining(w)).not.toContain(goneOld.id);
+  });
+
+  it('takes only the local files of one copied offsite, and waits for an upload still to come', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const dest = w.offsite.create({
+      name: 'bucket',
+      provider: 's3',
+      config: { accessKeyId: 'AKIA', region: 'eu-central-1', bucket: 'b', prefix: 'panel.example.com' },
+      secrets: { secretAccessKey: 'sekrit' },
+    });
+    const copied = await backup(w, site, 'scheduled', 40);
+    const uploading = await backup(w, site, 'scheduled', 40);
+    await backup(w, site, 'scheduled', 1);
+    const copy = (row: BackupRow, status: 'complete' | 'pending') =>
+      w.db.insert(backupCopies).values({ backupId: row.id, destinationId: dest.id, status, remotePath: `b/${row.id}`, createdAt: Date.now() }).run();
+    copy(copied, 'complete');
+    copy(uploading, 'pending');
+
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 0, offsiteOnly: 1 });
+    const row = (id: number) => w.db.select().from(backups).where(eq(backups.id, id)).get()!;
+    expect(row(copied.id).filesPresent).toBe(0);
+    expect(fs.existsSync(copied.path)).toBe(false);
+    expect(row(uploading.id).filesPresent).toBe(1);
+    // Offsite-only already: nothing more for it to do here.
+    expect(await w.core.backup.expire({ sites: 30, panel: 0 })).toEqual({ deleted: 0, offsiteOnly: 0 });
+  });
+
+  it('runs in the nightly housekeeping, on the settings', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const old = await backup(w, site, 'pre_update', 20);
+    await backup(w, site, 'scheduled', 1);
+    const lines: string[] = [];
+    const log = { info: (m: string) => lines.push(m), warn: (m: string) => lines.push(m) };
+
+    expect((await runHousekeeping(w.core, log)).oldBackupsDeleted).toBe(0);
+    w.deps.settings.update({ backupKeepDays: 14 });
+    expect((await runHousekeeping(w.core, log)).oldBackupsDeleted).toBe(1);
+    expect(remaining(w)).not.toContain(old.id);
+    expect(lines).toContain('Backup age: deleted 1 backup(s) older than their keep period');
   });
 });

@@ -142,6 +142,54 @@ describe('backup.delete', () => {
     expect(JSON.parse(done.result!)).toMatchObject({ requested: 3, deleted: 1, notDeleted: 2 });
   });
 
+  // Delete old backups with "Keep each site's newest backup": the newest was left out when the ids
+  // were read, and may have been deleted since. The job keeps whichever is the newest by then.
+  it('asked to keep each site’s newest, keeps the one that is newest when it gets there', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await createSite(w);
+    const [oldest, older, newest] = await backupsOf(w, site, ['scheduled', 'scheduled', 'manual']);
+    // Read with keepNewest: the newest is not among them. Then somebody deletes it on its own.
+    await w.core.backup.deleteBackup(newest!);
+
+    const job = w.worker.enqueue('backup.delete', { backupIds: [oldest!.id, older!.id], keepNewest: true }, undefined, {
+      lane: BACKUP_DELETE_LANE,
+    });
+    const done = await runJob(w, job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(remainingIds(w)).toEqual([older!.id]);
+    expect(JSON.parse(done.result!)).toMatchObject({ requested: 2, deleted: 1, keptNewest: 1 });
+    expect(logOf(w, done.id)).toContain(`it is the newest backup ${site.slug} has`);
+
+    // Without it, the ids are what goes.
+    const all = await runJob(w, queueDeletion(w, [older!.id]).id);
+    expect(all.status).toBe('succeeded');
+    expect(remainingIds(w)).toEqual([]);
+  });
+
+  it('asked to keep each site’s newest, counts a deletion queued while it runs', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await createSite(w);
+    const [a, b, c] = await backupsOf(w, site, ['scheduled', 'scheduled', 'manual']);
+    // While it removes the first, somebody queues a deletion of the newest.
+    const files = w.servers.handleFor(a!.serverId).files;
+    const rm = files.rm.bind(files);
+    let later: number | null = null;
+    files.rm = async (target: string) => {
+      if (target === a!.path && later === null) later = queueDeletion(w, [c!.id]).id;
+      return rm(target);
+    };
+
+    const job = w.worker.enqueue('backup.delete', { backupIds: [a!.id, b!.id], keepNewest: true }, undefined, {
+      lane: BACKUP_DELETE_LANE,
+    });
+    const done = await runJob(w, job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(JSON.parse(done.result!)).toMatchObject({ deleted: 1, keptNewest: 1 });
+    expect(remainingIds(w)).toContain(b!.id);
+    expect(remainingIds(w)).not.toContain(a!.id);
+    expect(later).not.toBeNull();
+  });
+
   it('keeps a backup whose remote copy cannot be removed, rather than forgetting the object', async () => {
     const w = await makeWorld({ exec: hostExec });
     const site = await createSite(w);

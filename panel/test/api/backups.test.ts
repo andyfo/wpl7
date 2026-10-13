@@ -200,6 +200,16 @@ describe('POST /api/backups/bulk-delete', () => {
     expect(job.summary).toBe('2 backups');
   });
 
+  it('passes on keeping each site’s newest, for the job to check as it goes', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    const a = addBackup(w, 'gone', { createdAt: 1000 });
+    const res = await bulkDelete(ctx, { ids: [a.id], keepNewest: true });
+    expect(res.statusCode, res.body).toBe(202);
+    const job = w.db.select().from(jobs).where(eq(jobs.id, (res.json() as { job: JobDto }).job.id)).get()!;
+    expect(JSON.parse(job.payload)).toEqual({ backupIds: [a.id], keepNewest: true });
+  });
+
   it('names no site for backups of several, and answers 404 when none of the ids exist', async () => {
     const ctx = await authedApp();
     const w = ctx.world;
@@ -272,11 +282,128 @@ describe('GET /api/backups/ids', () => {
     expect((await list(ctx, '?siteSlug=shop')).items).toHaveLength(50);
     expect(all.total).toBe(60);
     expect(all.items.map((b) => b.id)).toEqual(made.map((b) => b.id).reverse());
-    expect(all.items[0]).toEqual({ id: made[59]!.id, siteSlug: 'shop', siteDeleted: false, status: 'complete', remoteCopies: 0 });
-    expect(await ids(ctx, '?deleted=true')).toEqual({
-      items: [{ id: gone.id, siteSlug: 'gone', siteDeleted: true, status: 'complete', remoteCopies: 0 }],
-      total: 1,
+    expect(all.items[0]).toEqual({
+      id: made[59]!.id,
+      siteSlug: 'shop',
+      siteDeleted: false,
+      status: 'complete',
+      sizeBytes: 1000,
+      remoteCopies: 0,
     });
+    expect(await ids(ctx, '?deleted=true')).toEqual({
+      items: [{ id: gone.id, siteSlug: 'gone', siteDeleted: true, status: 'complete', sizeBytes: 1000, remoteCopies: 0 }],
+      total: 1,
+      leavesNone: ['gone'],
+    });
+  });
+
+  // Delete old backups: several sites at once, only what was taken before a time, and the
+  // newest of each left out when asked.
+  it('takes several sites and an age, and leaves out each one’s newest when asked', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    const shop = addSite(w, 'shop');
+    const blog = addSite(w, 'blog');
+    const shop1 = addBackup(w, 'shop', { siteId: shop, createdAt: 1000 });
+    const shop2 = addBackup(w, 'shop', { siteId: shop, type: 'manual', createdAt: 2000 });
+    const shop3 = addBackup(w, 'shop', { siteId: shop, createdAt: 3000 });
+    const blog1 = addBackup(w, 'blog', { siteId: blog, createdAt: 1500 });
+    const blog2 = addBackup(w, 'blog', { siteId: blog, createdAt: 2500 });
+    const gone = addBackup(w, 'gone', { type: 'final', createdAt: 500 });
+    const panel1 = addBackup(w, 'panel', { type: 'panel', createdAt: 700 });
+    const panel2 = addBackup(w, 'panel', { type: 'panel', createdAt: 800 });
+    const idsOf = (res: BackupIdsDto) => res.items.map((b) => b.id);
+
+    const old = await ids(ctx, '?siteSlugs=shop,gone&until=2500');
+    expect(idsOf(old)).toEqual([shop2.id, shop1.id, gone.id]);
+    // shop keeps the one from 3000; gone has nothing else.
+    expect(old.leavesNone).toEqual(['gone']);
+
+    const keeping = await ids(ctx, '?siteSlugs=shop,gone&until=2500&keepNewest=true');
+    expect(idsOf(keeping)).toEqual([shop2.id, shop1.id]);
+    expect(keeping.leavesNone).toEqual([]);
+
+    // Everything, every site's newest and the panel's left out.
+    expect(idsOf(await ids(ctx, '?keepNewest=true'))).toEqual([shop2.id, blog1.id, shop1.id, panel1.id]);
+    const panel = await ids(ctx, '?siteSlug=panel');
+    expect(idsOf(panel)).toEqual([panel2.id, panel1.id]);
+    expect(panel.leavesNone).toEqual(['panel']);
+
+    // The list takes the same filters.
+    expect((await list(ctx, '?siteSlugs=blog,shop&until=2500')).items.map((b) => b.id)).toEqual([shop2.id, blog1.id, shop1.id]);
+    expect(idsOf(await ids(ctx, '?siteSlugs=blog'))).toEqual([blog2.id, blog1.id]);
+    expect(idsOf(await ids(ctx, `?siteSlugs=shop&until=${shop3.createdAt}`))).toEqual([shop2.id, shop1.id]);
+  });
+
+  it('refuses a site list that is not slugs, too long or empty, and an age that is not one', async () => {
+    const ctx = await authedApp();
+    for (const query of [
+      '?siteSlugs=Not_A_Slug',
+      '?siteSlugs=a',
+      `?siteSlugs=${Array.from({ length: 201 }, (_, i) => `site-${i}`).join(',')}`,
+      // Chosen sites that came out as none must not mean every site.
+      '?siteSlugs=',
+      '?siteSlugs=,',
+      '?until=soon',
+      '?olderThanDays=',
+      '?olderThanDays=0',
+      '?olderThanDays=3651',
+      '?keepNewest=maybe',
+    ]) {
+      const res = await ctx.app.inject({ method: 'GET', url: `/api/backups/ids${query}`, headers: ctx.headers });
+      expect(res.statusCode, query).toBe(400);
+    }
+  });
+
+  it('counts an age in days by the panel’s clock, and matches nothing for a time given empty', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    const day = 24 * 3600_000;
+    const old = addBackup(w, 'gone', { createdAt: Date.now() - 40 * day });
+    addBackup(w, 'gone', { createdAt: Date.now() - 10 * day });
+    expect((await ids(ctx, '?olderThanDays=30')).items.map((b) => b.id)).toEqual([old.id]);
+    expect((await ids(ctx, '?until=')).items).toEqual([]);
+  });
+
+  it('counts no remote copy at a destination that manages its own retention: a delete leaves those', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    const now = Date.now();
+    const backup = addBackup(w, 'gone', { createdAt: 1000 });
+    const dest = (name: string, retentionMode: string) =>
+      w.db
+        .insert(backupDestinations)
+        .values({ name, provider: 's3', config: '{}', secrets: '{}', copyTypes: '["scheduled"]', copyFromTs: 0, retentionMode, createdAt: now, updatedAt: now })
+        .returning()
+        .get().id;
+    w.db
+      .insert(backupCopies)
+      .values([
+        { backupId: backup.id, destinationId: dest('panel-pruned', 'panel'), status: 'complete', remotePath: 'p/1', createdAt: now },
+        { backupId: backup.id, destinationId: dest('locked', 'external'), status: 'complete', remotePath: 'l/1', createdAt: now },
+      ])
+      .run();
+    expect((await ids(ctx, '?siteSlug=gone')).items[0]!.remoteCopies).toBe(1);
+  });
+
+  it('says which sites deleting them leaves with no backup, counting a deletion already under way', async () => {
+    const ctx = await authedApp();
+    const w = ctx.world;
+    const blog = addSite(w, 'blog');
+    const older = addBackup(w, 'blog', { siteId: blog, createdAt: 1000 });
+    const failed = addBackup(w, 'blog', { siteId: blog, createdAt: 1500, status: 'failed', sizeBytes: null });
+    const newer = addBackup(w, 'blog', { siteId: blog, createdAt: 2000 });
+    expect((await ids(ctx, '?siteSlug=blog&until=1600')).leavesNone).toEqual([]);
+
+    // Its newest is on its way out already: the old one is all it has left.
+    await bulkDelete(ctx, { ids: [newer.id] });
+    const res = await ids(ctx, '?siteSlug=blog&until=1600');
+    expect(res.items.map((b) => b.id)).toEqual([failed.id, older.id]);
+    expect(res.leavesNone).toEqual(['blog']);
+    // And it is the newest that stays, when the newest is kept.
+    const keeping = await ids(ctx, '?siteSlug=blog&keepNewest=true');
+    expect(keeping.items.map((b) => b.id)).toEqual([failed.id]);
+    expect(keeping.leavesNone).toEqual([]);
   });
 
   it('leaves out what nothing could delete now, and counts the remote copies', async () => {
@@ -324,5 +451,54 @@ describe('GET /api/backups/ids', () => {
     const res = await bulkDelete(ctx, { ids: selected });
     expect(queued(w, res.json().job).ids).toEqual(selected);
     expect(queued(w, res.json().job).ids).not.toContain(shopsOld.id);
+  });
+});
+
+describe('PUT /api/sites/:slug/backups-keep-days', () => {
+  const put = (ctx: Awaited<ReturnType<typeof authedApp>>, slug: string, payload: unknown) =>
+    ctx.app.inject({ method: 'PUT', url: `/api/sites/${slug}/backups-keep-days`, headers: ctx.headers, payload });
+
+  it('sets a site’s own keep period, never, or the panel’s again', async () => {
+    const ctx = await authedApp();
+    addSite(ctx.world, 'shop');
+    expect((await ctx.world.deps.sites.detail('shop')).backupKeepDays).toBeNull();
+
+    for (const days of [45, 0, null]) {
+      const res = await put(ctx, 'shop', { days });
+      expect(res.statusCode, res.body).toBe(200);
+      // The fresh site detail, like the other per-site backup switches answer.
+      expect(res.json().backupKeepDays).toBe(days);
+    }
+    await put(ctx, 'shop', { days: 90 });
+    const listed = await ctx.app.inject({ method: 'GET', url: '/api/sites', headers: ctx.headers });
+    const items = (listed.json() as { items: { slug: string; backupKeepDays: number | null }[] }).items;
+    expect(items.find((s) => s.slug === 'shop')?.backupKeepDays).toBe(90);
+  });
+
+  it('refuses what is not a number of days, and a site that does not exist', async () => {
+    const ctx = await authedApp();
+    addSite(ctx.world, 'shop');
+    for (const payload of [{}, { days: -1 }, { days: 3651 }, { days: 1.5 }, { days: '30' }]) {
+      expect((await put(ctx, 'shop', payload)).statusCode, JSON.stringify(payload)).toBe(400);
+    }
+    expect((await put(ctx, 'nope', { days: 30 })).statusCode).toBe(404);
+  });
+});
+
+describe('PUT /api/settings: how long backups are kept', () => {
+  it('takes days for sites and for the panel, 0 for never', async () => {
+    const ctx = await authedApp();
+    const settings = async (payload: unknown) =>
+      ctx.app.inject({ method: 'PUT', url: '/api/settings', headers: ctx.headers, payload });
+    // Off until somebody sets it: an update must not start deleting backups.
+    const before = await ctx.app.inject({ method: 'GET', url: '/api/settings', headers: ctx.headers });
+    expect(before.json().settings).toMatchObject({ backupKeepDays: 0, panelBackupKeepDays: 0 });
+
+    const res = await settings({ backupKeepDays: 30, panelBackupKeepDays: 14 });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().settings).toMatchObject({ backupKeepDays: 30, panelBackupKeepDays: 14 });
+    for (const payload of [{ backupKeepDays: -1 }, { panelBackupKeepDays: 3651 }, { backupKeepDays: 2.5 }]) {
+      expect((await settings(payload)).statusCode, JSON.stringify(payload)).toBe(400);
+    }
   });
 });

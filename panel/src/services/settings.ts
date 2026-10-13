@@ -14,6 +14,13 @@ import type {
 export interface PanelSettings {
   backupCron: string;
   backupRetention: number;
+  /**
+   * Sites' backups are deleted after this many days, the kinds BackupService.expire names; a site
+   * can say otherwise (`sites.backup_keep_days`). 0 = never.
+   */
+  backupKeepDays: number;
+  /** The same for the panel's own database backups. 0 = never. */
+  panelBackupKeepDays: number;
   monitorUptimeIntervalSec: number;
   monitorStatsIntervalSec: number;
   monitorDuIntervalMin: number;
@@ -151,6 +158,8 @@ export interface PanelSettings {
 const KEY_MAP: Record<keyof PanelSettings, string> = {
   backupCron: 'backup.cron',
   backupRetention: 'backup.retention',
+  backupKeepDays: 'backup.keepDays',
+  panelBackupKeepDays: 'backup.panelKeepDays',
   monitorUptimeIntervalSec: 'monitor.uptimeIntervalSec',
   monitorStatsIntervalSec: 'monitor.statsIntervalSec',
   monitorDuIntervalMin: 'monitor.duIntervalMin',

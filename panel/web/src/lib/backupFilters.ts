@@ -1,5 +1,5 @@
-// @docs backups/delete
-import { backupTypes, type BackupType } from '../../../shared/schemas';
+// @docs backups/delete, backups/delete-old
+import { backupTypes, MAX_BACKUP_FILTER_SITES, MAX_BACKUP_KEEP_DAYS, type BackupType } from '../../../shared/schemas';
 import type { BackupListDto, BackupListItemDto } from '../../../shared/types';
 
 /**
@@ -9,6 +9,17 @@ import type { BackupListDto, BackupListItemDto } from '../../../shared/types';
  */
 
 export const BACKUPS_PAGE_SIZE = 50;
+
+/** What a site's backups can be, as the Kind pickers name them. The panel's own is a "whose", not a kind. */
+export const SITE_BACKUP_KINDS: { id: BackupType; label: string }[] = [
+  { id: 'scheduled', label: 'Scheduled' },
+  { id: 'manual', label: 'Manual' },
+  { id: 'final', label: 'Final, taken on deletion' },
+  { id: 'pre_update', label: 'Before an update' },
+  { id: 'pre_restore', label: 'Before a restore' },
+  { id: 'move', label: 'Server move' },
+  { id: 'import', label: 'Import' },
+];
 
 export interface BackupFilters {
   /** One site's backups - a deleted site's too. `panel` is the panel's own snapshots. */
@@ -161,4 +172,76 @@ export function bulkDeleteSafeguard(
     return { warning: `${wholeSite} is left with no backups at all until its next one is taken.`, confirmWord: wholeSite };
   }
   return { confirmWord: 'delete' };
+}
+
+// ---------------------------------------------------------------------------
+// Delete old backups
+
+/** Whose backups Delete old backups takes. */
+export type PurgeScope = 'all' | 'sites' | 'deleted' | 'panel';
+
+export interface PurgeCriteria {
+  scope: PurgeScope;
+  /** The sites `sites` names, deleted ones included. */
+  sites: string[];
+  /** Taken more than this many days ago; null = whenever. */
+  olderThanDays: number | null;
+  kind: BackupType | null;
+  /** Only the backups on this server; null = on every one. */
+  serverId: number | null;
+  /** Leave each site's newest complete backup out, and the panel's. */
+  keepNewest: boolean;
+}
+
+/** Where Delete old backups starts: what the list is filtered to, older than 30 days. */
+export function purgeCriteriaFrom(filters: BackupFilters): PurgeCriteria {
+  const base = { sites: [] as string[], olderThanDays: 30, kind: null, serverId: filters.serverId, keepNewest: true };
+  if (filters.siteSlug === 'panel' || filters.type === 'panel') return { ...base, scope: 'panel' };
+  if (filters.siteSlug) return { ...base, scope: 'sites', sites: [filters.siteSlug], kind: filters.type };
+  return { ...base, scope: filters.deleted ? 'deleted' : 'all', kind: filters.type };
+}
+
+/** Why these criteria cannot be asked about yet, in words; null when they can. */
+export function purgeProblem(c: PurgeCriteria): string | null {
+  if (c.scope === 'sites' && c.sites.length === 0) return 'Choose a site.';
+  if (c.scope === 'sites' && c.sites.length > MAX_BACKUP_FILTER_SITES) {
+    return `Choose at most ${MAX_BACKUP_FILTER_SITES} sites, or All.`;
+  }
+  const days = c.olderThanDays;
+  if (days !== null && (!Number.isInteger(days) || days < 1 || days > MAX_BACKUP_KEEP_DAYS)) {
+    return `Enter a number of days from 1 to ${MAX_BACKUP_KEEP_DAYS.toLocaleString()}.`;
+  }
+  return null;
+}
+
+/**
+ * The `GET /api/backups/ids` query for these criteria. "N days ago" goes as days, for the panel to
+ * count back from its own clock. Null while purgeProblem has something to say.
+ */
+export function purgeParams(c: PurgeCriteria): Record<string, string> | null {
+  if (purgeProblem(c) !== null) return null;
+  const out: Record<string, string> = {};
+  if (c.scope === 'sites') out.siteSlugs = [...c.sites].sort().join(',');
+  if (c.scope === 'deleted') out.deleted = 'true';
+  if (c.scope === 'panel') out.siteSlug = 'panel';
+  else if (c.kind) out.type = c.kind;
+  if (c.serverId !== null) out.serverId = String(c.serverId);
+  if (c.olderThanDays !== null) out.olderThanDays = String(c.olderThanDays);
+  if (c.keepNewest) out.keepNewest = 'true';
+  return out;
+}
+
+/**
+ * What Delete old backups says first, and what has to be typed: the site's name when it takes
+ * every backup one site has - as deleting the site itself asks - and `delete` otherwise. The
+ * panel's own database has no name to type, and does not make one site two.
+ */
+export function purgeSafeguard(leavesNone: string[]): { warning?: string; confirmWord: string } {
+  if (leavesNone.length === 0) return { confirmWord: 'delete' };
+  const names = leavesNone.map((slug) => (slug === 'panel' ? "the panel's own database" : slug));
+  const sites = leavesNone.filter((slug) => slug !== 'panel');
+  return {
+    warning: `This leaves ${inWords(names)} with no backup.`,
+    confirmWord: sites.length === 1 ? sites[0]! : 'delete',
+  };
 }

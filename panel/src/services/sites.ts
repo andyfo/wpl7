@@ -1,5 +1,5 @@
 // @docs sites/create, sites/move, sites/overview, sites/settings
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, isNotNull } from 'drizzle-orm';
 import type { SiteCreateBody } from '../../shared/schemas.js';
 import type { SiteDetail, SiteSummary, SiteWpSummary } from '../../shared/types.js';
 import { jobs as jobsTable, moveCleanups, plugins, sites, type JobRow, type ServerRow, type SiteRow } from '../db/schema.js';
@@ -314,6 +314,31 @@ export class SitesService {
   }
 
   /**
+   * After how many days this site's backups are deleted: null follows the panel's setting, 0 keeps
+   * them. Not a job either: the nightly housekeeping reads it when it deletes old backups.
+   */
+  setBackupKeepDays(slug: string, days: number | null): SiteRow {
+    const site = this.bySlug(slug, { kinds: 'any' });
+    return this.db
+      .update(sites)
+      .set({ backupKeepDays: days, updatedAt: Date.now() })
+      .where(eq(sites.id, site.id))
+      .returning()
+      .get();
+  }
+
+  /** The sites that keep their backups for a time of their own, by name. */
+  ownBackupKeepDays(): { slug: string; days: number }[] {
+    return this.db
+      .select({ slug: sites.slug, days: sites.backupKeepDays })
+      .from(sites)
+      .where(isNotNull(sites.backupKeepDays))
+      .orderBy(asc(sites.slug))
+      .all()
+      .flatMap((site) => (site.days === null ? [] : [{ slug: site.slug, days: site.days }]));
+  }
+
+  /**
    * Take one site in or out of the offsite copies. Existing copies are kept: switching this
    * off means "stop sending new ones", not "delete what is already in the bucket".
    */
@@ -390,6 +415,7 @@ export class SitesService {
       wp,
       kind: site.kind as SiteSummary['kind'],
       external: this.s.connections.externalSummary(site),
+      backupKeepDays: site.backupKeepDays,
       createdAt: site.createdAt,
     };
   }

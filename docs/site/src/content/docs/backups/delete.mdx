@@ -47,6 +47,9 @@ all** is not offered.
 All backups** filtered to that site. Tick the page, choose **Select all** if the list runs over
 several pages, then **Delete**. Type the site's name to confirm.
 
+<Since v="0.3.0-beta.3" /> To delete backups by age, or every backup of several sites at once, use
+[Delete old backups](/docs/backups/delete-old/).
+
 ## What a bulk deletion does
 
 <Since v="0.3.0-beta.2" /> One **Delete backups** job works through the selection, oldest first,
@@ -58,8 +61,8 @@ job is using is left alone, and the job then ends as failed, naming it.
 
 When you delete a site, **Take a final backup first (kept until you delete it)** is on by default.
 The final backup and the site's other backups stay after the site is gone, under **Deleted sites**
-on **Backups → All backups**. Scheduled ones still follow retention. Deleting the last complete
-backup of a deleted site asks you to type its name.
+on **Backups → All backups**. All but the final and manual ones still follow retention and the
+keep period. Deleting the last complete backup of a deleted site asks you to type its name.
 
 <Since v="0.3.0-beta.2" /> To take the site's backups along, switch on **Delete its existing backups
 too** as well. Once the site is gone, a **Delete backups** job removes them, remote copies
@@ -82,6 +85,7 @@ takes no final backup. Its backups stay, unless **Also delete its backups** is o
 ## Related
 
 - [How backups work](/docs/backups/overview/)
+- [Delete old backups](/docs/backups/delete-old/)
 - [Offsite copies](/docs/backups/offsite/)
 - [Site settings](/docs/sites/settings/)
 - [Jobs](/docs/automations/jobs/)

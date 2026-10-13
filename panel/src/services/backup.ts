@@ -1,11 +1,12 @@
-// @docs backups/delete, backups/overview, backups/restore, help/troubleshooting, reference/manual-recovery, servers/resources
+// @docs backups/delete, backups/delete-old, backups/overview, backups/restore, help/troubleshooting, reference/manual-recovery, servers/resources
 import path from 'node:path';
-import { and, desc, eq, inArray, notInArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, notInArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import {
   backupCopies,
   backups,
   jobs,
+  sites,
   type BackupCopyRow,
   type BackupRow,
   type JobRow,
@@ -24,11 +25,23 @@ export type LogFn = (level: 'info' | 'warn' | 'error', message: string) => void;
 const noopLog: LogFn = () => undefined;
 
 /**
- * Backup kinds the retention setting applies to. Everything else - manual, final,
- * pre_restore, move - is kept until somebody deletes it, because each of those exists
- * because a person or an operation asked for it.
+ * Backup kinds the retention setting - the newest N - applies to. Everything else is kept
+ * until it is past its keep period (EXPIRING_BACKUP_TYPES) or somebody deletes it.
  */
 export const PRUNED_BACKUP_TYPES = ['scheduled', 'panel'] as const;
+
+/**
+ * Backup kinds deleted once they are older than their keep period: `backupKeepDays` for a
+ * site's, unless the site sets its own, and `panelBackupKeepDays` for the panel's. Manual and
+ * final backups are not among them: a person asked for each of those, and keeps it until they
+ * delete it.
+ */
+export const EXPIRING_BACKUP_TYPES = ['scheduled', 'pre_update', 'pre_restore', 'move', 'import', 'panel'] as const;
+
+const DAY_MS = 24 * 3600_000;
+
+/** How long a backup brought back with Fetch back keeps its files, whatever retention says. */
+const FETCHED_STAYS_MS = 7 * DAY_MS;
 
 /** Job types that read or write a site's backup files while they run. */
 const BACKUP_USING_JOB_TYPES = ['backup.create', 'backup.restore', 'site.move', 'site.delete', 'site.importFinish', 'site.importRefresh'] as const;
@@ -406,6 +419,36 @@ export class BackupService {
   }
 
   /**
+   * Backups being deleted right now, by id, with how many deletions of each are under way: a
+   * Delete answered in its request, a deletion job's current one, retention's. Their rows are
+   * still there meanwhile - for minutes, while remote copies are purged - so the database alone
+   * would still count each as one a site has.
+   */
+  private readonly removing = new Map<number, number>();
+
+  /** Runs `fn` with the backup counted as going away (goingAway) until it is done. */
+  async whileRemoving<T>(id: number, fn: () => Promise<T>): Promise<T> {
+    this.removing.set(id, (this.removing.get(id) ?? 0) + 1);
+    try {
+      return await fn();
+    } finally {
+      const left = (this.removing.get(id) ?? 1) - 1;
+      if (left > 0) this.removing.set(id, left);
+      else this.removing.delete(id);
+    }
+  }
+
+  /**
+   * Every backup on its way out, by id: being deleted right now, or named by a queued or running
+   * `backup.delete` - but for the one `exceptJob` names, the job asking.
+   */
+  goingAway(exceptJob?: number): Set<number> {
+    const out = new Set(this.removing.keys());
+    for (const [id, job] of this.pendingDeletion()) if (job.id !== exceptJob) out.add(id);
+    return out;
+  }
+
+  /**
    * The running `server.relocateBackups` that may be moving this backup's files right now. It
    * copies a backup, points the row at the copy, then removes the original - one at a time, and
    * nothing marks which one it is on. Deleting any of that server's local backups meanwhile
@@ -488,8 +531,8 @@ export class BackupService {
   }
 
   /**
-   * Apply retention to scheduled backups. Manual/final/pre_restore/move are kept until
-   * deleted explicitly.
+   * Apply retention to scheduled backups: the newest N of each site stay. The other kinds are
+   * left to `expire` and to whoever deletes them.
    *
    * Local retention never destroys the last copy of anything: a backup that already exists
    * at an offsite destination gives up its local files and stays listed as offsite-only,
@@ -497,16 +540,17 @@ export class BackupService {
    * rather than a way to lose last month.
    */
   async prune(retention: number): Promise<{ deleted: number; offsiteOnly: number }> {
-    let deleted = 0;
-    let offsiteOnly = 0;
-    // Ones a deletion job names are its to remove: pruning them as well would race it.
-    const doomed = this.pendingDeletion();
+    const out = { deleted: 0, offsiteOnly: 0 };
     const slugs = this.db
       .selectDistinct({ slug: backups.siteSlug })
       .from(backups)
+      .orderBy(asc(backups.siteSlug))
       .all()
       .map((r) => r.slug);
     for (const slug of slugs) {
+      // Read for each site as it is reached: a deletion queued while the sites before it were
+      // pruned counts too. The ones it names are its to remove, and not among the newest N.
+      const away = this.goingAway();
       const rows = this.db
         .select()
         .from(backups)
@@ -518,31 +562,196 @@ export class BackupService {
           ),
         )
         .orderBy(desc(backups.createdAt))
-        .all();
+        .all()
+        // Counted among the ones staying: a backup a deletion job has is not one of the newest N,
+        // or the job would leave the site with fewer than N.
+        .filter((row) => !away.has(row.id));
       for (const row of rows.slice(retention)) {
-        if (doomed.has(row.id)) continue;
-        if (this.activeJobFor(row)) continue; // a restore/move/backup of this site is in flight; next run
-        if (this.relocationJobFor(row)) continue; // its files may be on their way to a new location
-        const copies = this.copiesOf(row.id);
-        // An upload that has not happened yet would lose its source. Skipping costs one
-        // night of retention; not skipping costs the offsite copy entirely.
-        if (copies.some((c) => c.status === 'pending' || c.status === 'uploading')) continue;
-        try {
-          if (copies.some((c) => c.status === 'complete')) {
-            if (row.filesPresent === 1) {
-              await this.removeLocalFiles(row);
-              offsiteOnly++;
-            }
-          } else {
-            await this.deleteBackup(row);
-            deleted++;
-          }
-        } catch {
-          // Owning server unreachable - keep the row so the files aren't orphaned silently.
-        }
+        const done = await this.retire(row);
+        if (done) out[done]++;
       }
     }
-    return { deleted, offsiteOnly };
+    return out;
+  }
+
+  /**
+   * Delete the backups that are older than their keep period, in days: `keep.sites` for a site's,
+   * unless the site sets its own, and `keep.panel` for the panel's. 0 keeps them. Only the kinds
+   * EXPIRING_BACKUP_TYPES names, failed ones included, which hold nothing.
+   *
+   * A site's own keep period is its own backups', by site id: the ones a deleted site left behind
+   * follow `keep.sites`, also once another site has taken its name.
+   *
+   * The newest complete backup of each site - deleted ones included - and of the panel stays
+   * whatever its age (retire). A site that is stopped, or whose backups keep failing, takes no new
+   * ones, and would otherwise lose its last a few weeks later with nobody having asked for that.
+   *
+   * Like `prune`, this is local retention: a backup with a complete offsite copy only gives up
+   * its files here, and its copies follow their destination's own retention.
+   */
+  async expire(
+    keep: { readonly sites: number; readonly panel: number },
+    opts: { now?: number; checkCanceled?: () => void } = {},
+  ): Promise<{ deleted: number; offsiteOnly: number }> {
+    const now = opts.now ?? Date.now();
+    const out = { deleted: 0, offsiteOnly: 0 };
+    const own = this.db
+      .select({ days: sites.backupKeepDays })
+      .from(sites)
+      .where(isNotNull(sites.backupKeepDays))
+      .all()
+      .flatMap((site) => (site.days === null ? [] : [site.days]));
+    const shortest = Math.min(...[keep.sites, keep.panel, ...own].filter((days) => days > 0));
+    if (!Number.isFinite(shortest)) return out; // nothing is ever deleted by age
+    // Read as each backup is reached, like everything retire() asks: a keep period changed while
+    // the run is going - a site set to Never, say - counts from the next backup on. `keep` may
+    // be getters for that reason.
+    const daysFor = (row: BackupRow): number => {
+      if (row.type === 'panel') return keep.panel;
+      if (row.siteId === null) return keep.sites;
+      const site = this.db.select({ days: sites.backupKeepDays }).from(sites).where(eq(sites.id, row.siteId)).get();
+      return site?.days ?? keep.sites;
+    };
+
+    // Offsite-only ones are left out: there is nothing of them here, and the destination's
+    // retention is what removes them there.
+    const rows = this.db
+      .select()
+      .from(backups)
+      .where(
+        and(
+          inArray(backups.type, [...EXPIRING_BACKUP_TYPES]),
+          inArray(backups.status, ['complete', 'failed']),
+          eq(backups.filesPresent, 1),
+          lt(backups.createdAt, now - shortest * DAY_MS),
+        ),
+      )
+      .orderBy(asc(backups.createdAt), asc(backups.id))
+      .all();
+    for (const row of rows) {
+      opts.checkCanceled?.();
+      const days = daysFor(row);
+      if (days <= 0 || row.createdAt >= now - days * DAY_MS) continue;
+      const done = await this.retire(row);
+      if (done) out[done]++;
+    }
+    return out;
+  }
+
+  /**
+   * The newest complete backup of each site and of the panel, by id: what retention never takes,
+   * and what "keep the newest" leaves out of a bulk delete.
+   *
+   * A site here is a slug and the site the backups were taken of. A site deleted and another
+   * created under its name are two: the old backups lost their site id with the old site, and
+   * the newest of them - quite likely what the new site was created to restore - is the deleted
+   * site's newest. Not one on its way out already (`goingAway`): the newest that is staying is.
+   */
+  newestCompleteIds(goingAway: ReadonlySet<number> = new Set()): Set<number> {
+    const leaveOut = [...goingAway];
+    const ranked = this.db
+      .select({
+        id: backups.id,
+        rank: sql<number>`row_number() over (partition by ${backups.siteSlug}, coalesce(${backups.siteId}, 0) order by ${backups.createdAt} desc, ${backups.id} desc)`.as(
+          'rank',
+        ),
+      })
+      .from(backups)
+      .where(and(eq(backups.status, 'complete'), leaveOut.length > 0 ? notInArray(backups.id, leaveOut) : undefined))
+      .as('ranked');
+    return new Set(
+      this.db
+        .select({ id: ranked.id })
+        .from(ranked)
+        .where(eq(ranked.rank, 1))
+        .all()
+        .map((row) => row.id),
+    );
+  }
+
+  /**
+   * Whether `row` is the newest complete backup of its site, as newestCompleteIds groups them,
+   * leaving out the ones `leaveOut` names. A bulk delete asked to keep each site's newest asks this
+   * as it reaches each backup: the newest may have been deleted since it was counted.
+   */
+  isNewestOfItsSite(row: BackupRow, leaveOut: ReadonlySet<number>): boolean {
+    if (row.status !== 'complete') return false;
+    const newest = this.db
+      .select({ id: backups.id })
+      .from(backups)
+      .where(
+        and(
+          eq(backups.siteSlug, row.siteSlug),
+          row.siteId === null ? isNull(backups.siteId) : eq(backups.siteId, row.siteId),
+          eq(backups.status, 'complete'),
+          leaveOut.size > 0 ? notInArray(backups.id, [...leaveOut]) : undefined,
+        ),
+      )
+      .orderBy(desc(backups.createdAt), desc(backups.id))
+      .limit(1)
+      .get();
+    return newest?.id === row.id;
+  }
+
+  /**
+   * Whether this backup was brought back with Fetch back within FETCHED_STAYS_MS. Somebody fetched
+   * it on purpose, to restore or download it, and retention would otherwise take its files again
+   * the next night - or, with the fetch done halfway through a run, within the minute.
+   */
+  private fetchedLately(backupId: number): boolean {
+    const fetches = this.db
+      .select({ payload: jobs.payload })
+      .from(jobs)
+      .where(and(eq(jobs.type, 'backup.fetch'), eq(jobs.status, 'succeeded'), gte(jobs.finishedAt, Date.now() - FETCHED_STAYS_MS)))
+      .all();
+    return fetches.some((job) => {
+      try {
+        return (JSON.parse(job.payload) as { backupId?: unknown }).backupId === backupId;
+      } catch {
+        return false; // not a payload this version wrote: nothing to hold back
+      }
+    });
+  }
+
+  /**
+   * Retention's part in one backup past it: deleted, or - with a complete offsite copy - its local
+   * files removed, the row staying as offsite-only. Null when it is left for the next run.
+   */
+  private async retire(listed: BackupRow): Promise<'deleted' | 'offsiteOnly' | null> {
+    // Everything here is read as each backup is reached, not once for the run: taking the ones
+    // before it took a while, and a backup deleted, fetched back or on its way out meanwhile
+    // changes what may be taken.
+    const row = this.db.select().from(backups).where(eq(backups.id, listed.id)).get();
+    if (!row) return null; // deleted meanwhile
+    const away = this.goingAway();
+    if (away.has(row.id)) return null; // its deletion is under way, or queued: it is that one's
+    // The newest backup its site has left stays, whatever went meanwhile.
+    if (this.isNewestOfItsSite(row, away)) return null;
+    const copies = this.copiesOf(row.id);
+    const copied = copies.some((c) => c.status === 'complete');
+    if (row.filesPresent === 0 && copied) return null; // offsite-only already
+    if (row.filesPresent === 1 && this.fetchedLately(row.id)) return null;
+    if (this.activeJobFor(row)) return null; // a restore/move/backup of this site is in flight; next run
+    if (this.relocationJobFor(row)) return null; // its files may be on their way to a new location
+    // An upload that has not happened yet - or a failed one still to be retried - would lose its
+    // source. Skipping costs a night of retention; not skipping costs the offsite copy entirely.
+    const uploading = (c: BackupCopyRow) =>
+      c.status === 'pending' || c.status === 'uploading' || (c.status === 'failed' && c.nextAttemptAt !== null);
+    if (copies.some(uploading)) return null;
+    try {
+      if (copied) {
+        await this.removeLocalFiles(row);
+        // Copies that gave up have nothing left to upload from now, and would be alerted about for
+        // good: dropped, as Delete with "Keep the remote copies" drops them.
+        for (const c of copies) if (c.status === 'failed') this.db.delete(backupCopies).where(eq(backupCopies.id, c.id)).run();
+        return 'offsiteOnly';
+      }
+      await this.whileRemoving(row.id, () => this.deleteBackup(row));
+      return 'deleted';
+    } catch {
+      // Owning server unreachable - keep the row so the files aren't orphaned silently.
+      return null;
+    }
   }
 
   /**
@@ -571,11 +780,29 @@ export class BackupService {
     return expected;
   }
 
-  /** rm -rf the backup's files, keeping the row (it may still exist offsite). */
+  /**
+   * rm -rf the backup's files, keeping the row (it may still exist offsite). Not while another
+   * backup keeps its own files in the same folder: a backup that failed had its folder removed
+   * there and then, and one taken in the same second can have claimed the same name since - the
+   * files in it are that one's. A failed backup, or one whose files are gone, holds nothing
+   * there: a folder left to one of those would be left for good.
+   */
   async removeLocalFiles(row: BackupRow): Promise<void> {
     if (row.filesPresent === 0) return;
-    const h = this.handleForBackup(row);
-    await h.files.rm(this.backupDir(row));
+    const owner = this.db
+      .select({ id: backups.id })
+      .from(backups)
+      .where(
+        and(
+          eq(backups.serverId, row.serverId),
+          eq(backups.path, row.path),
+          ne(backups.id, row.id),
+          eq(backups.filesPresent, 1),
+          inArray(backups.status, ['complete', 'creating']),
+        ),
+      )
+      .get();
+    if (!owner) await this.handleForBackup(row).files.rm(this.backupDir(row));
     this.db.update(backups).set({ filesPresent: 0, sizeBytes: row.sizeBytes }).where(eq(backups.id, row.id)).run();
   }
 

@@ -1,4 +1,4 @@
-// @docs security/privacy, servers/resources, sites/move
+// @docs backups/delete-old, security/privacy, servers/resources, sites/move
 import dns from 'node:dns/promises';
 import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 import { batches, jobs, moveCleanups, serverStats, sessions, siteStats } from '../db/schema.js';
@@ -47,6 +47,28 @@ export async function runHousekeeping(
   if (offsiteOnly > 0) {
     log.info(
       `Backup retention: ${offsiteOnly} backup(s) past local retention kept as offsite-only ` +
+        `(their files were removed, the offsite copies remain)`,
+    );
+  }
+  checkCanceled();
+
+  // Then by age: what is older than its keep period, the panel's setting or the site's own.
+  // Getters: a keep period changed while the run is going counts from the next backup on.
+  const keepDays = {
+    get sites() {
+      return s.settings.get('backupKeepDays') || 0;
+    },
+    get panel() {
+      return s.settings.get('panelBackupKeepDays') || 0;
+    },
+  };
+  const aged = await s.backup.expire(keepDays, { checkCanceled });
+  result.oldBackupsDeleted = aged.deleted;
+  if (aged.deleted > 0) log.info(`Backup age: deleted ${aged.deleted} backup(s) older than their keep period`);
+  else if (keepDays.sites > 0 || keepDays.panel > 0) log.info('Backup age: nothing older than its keep period');
+  if (aged.offsiteOnly > 0) {
+    log.info(
+      `Backup age: ${aged.offsiteOnly} backup(s) past their keep period kept as offsite-only ` +
         `(their files were removed, the offsite copies remain)`,
     );
   }

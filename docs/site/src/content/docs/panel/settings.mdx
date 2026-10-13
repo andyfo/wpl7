@@ -47,6 +47,12 @@ at once, without a restart, except lifting the CPU cap, which restarts each site
 **Keep last N scheduled backups per site** sets how many stay, 10 by default. The card lists each
 server's backup location, which [Backup storage](/docs/backups/storage/) changes.
 
+<Since v="0.3.0-beta.3" /> **Delete site backups after (days)** and **Delete panel backups after
+(days)** have the nightly [housekeeping](/docs/reference/glossary/#housekeeping) delete older
+backups. Both are 0 by default, which deletes nothing. A site can set its own on its **Backups**
+tab, and the card lists the sites that do. [Delete old backups](/docs/backups/delete-old/) says
+which backups this takes.
+
 ## Security
 
 **WordPress updates & security** sets how often every site's plugins, themes and WordPress are read

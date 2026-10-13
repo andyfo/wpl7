@@ -120,13 +120,16 @@ export const wpPluginNameSchema = z.string().regex(/^[a-zA-Z0-9._-]{1,100}$/, 'n
  * A query value that may name several of `values`, comma-separated: `?status=failed,canceled`.
  * A single value is still a list of one, which keeps `?status=failed` working as it always has.
  */
-const commaList = <const T extends readonly [string, ...string[]]>(values: T) =>
+/** Values separated by commas, each as `item` says, at most `max` of them, duplicates dropped. */
+const commaListOf = <T extends z.ZodType<unknown, string>>(item: T, max: number, rawMax = 2000) =>
   z
     .string()
-    .max(2000)
+    .max(rawMax)
     .optional()
     .transform((raw) => (raw ? [...new Set(raw.split(',').map((v) => v.trim()).filter(Boolean))] : []))
-    .pipe(z.array(z.enum(values)).max(values.length));
+    .pipe(z.array(item).max(max));
+
+const commaList = <const T extends readonly [string, ...string[]]>(values: T) => commaListOf(z.enum(values), values.length);
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -213,7 +216,7 @@ export type JobOrigin = (typeof jobOrigins)[number];
 export const jobCategories = ['sites', 'backups', 'wordpress', 'files', 'security', 'servers', 'system'] as const;
 export type JobCategory = (typeof jobCategories)[number];
 
-/** `import`: the first backup of an imported site, taken once it is up; kept like a manual one. */
+/** `import`: the first backup of an imported site, taken once it is up. */
 export const backupTypes = ['manual', 'scheduled', 'pre_restore', 'pre_update', 'final', 'move', 'panel', 'import'] as const;
 export type BackupType = (typeof backupTypes)[number];
 
@@ -642,10 +645,29 @@ export const backupFetchBody = z.object({
   destinationId: z.number().int().positive(),
 }).strict();
 
+/** The most sites one `siteSlugs` names. */
+export const MAX_BACKUP_FILTER_SITES = 200;
+
+/** The longest a backup can be set to be kept for, in days: ten years. */
+export const MAX_BACKUP_KEEP_DAYS = 3650;
+
+/**
+ * Site slugs, comma-separated: `a,b,c`. `panel` is one too. Unlike the other filters, one given
+ * empty is refused rather than read as no filter at all: these filters choose what a bulk delete
+ * takes, and a list of chosen sites that came out empty must not mean every site.
+ */
+const siteSlugList = z
+  .string()
+  .optional()
+  .refine((raw) => raw === undefined || raw.split(',').some((v) => v.trim() !== ''), 'siteSlugs names no site')
+  .pipe(commaListOf(siteSlugParam, MAX_BACKUP_FILTER_SITES, MAX_BACKUP_FILTER_SITES * 40));
+
 /** The filters of `GET /api/backups`, shared with `GET /api/backups/ids`. */
 const backupFilterShape = {
   /** One site's backups - a deleted site's too. `panel` is the panel's own snapshots. */
   siteSlug: z.string().max(64).optional(),
+  /** Several sites' backups, as `siteSlug` takes one: deleted sites and `panel` included. */
+  siteSlugs: siteSlugList,
   /**
    * true = only the backups of sites that no longer exist; false = everything else (the sites
    * there are, and the panel's own snapshots).
@@ -654,6 +676,12 @@ const backupFilterShape = {
   type: commaList(backupTypes),
   /** Backups whose files are on this server - or were, for one that is only offsite now. */
   serverId: queryNumber(z.coerce.number().int().positive().optional()),
+  /**
+   * Taken before this time (ms since the epoch), or more than this many days ago by the panel's
+   * clock. Given empty, they match nothing rather than everything, for the reason siteSlugs does.
+   */
+  until: z.coerce.number().int().min(0).optional(),
+  olderThanDays: z.coerce.number().int().min(1).max(MAX_BACKUP_KEEP_DAYS).optional(),
 };
 
 /** GET /api/backups: every backup the panel knows of, newest first. */
@@ -668,9 +696,17 @@ export const MAX_BULK_BACKUP_DELETE = 5000;
 
 /**
  * GET /api/backups/ids: the backups those filters match that a bulk delete could take, in one
- * answer - what "Select all" ticks across every page of the list.
+ * answer - what "Select all" ticks across every page of the list, and what Delete old backups
+ * deletes.
  */
-export const backupIdsQuery = z.object(backupFilterShape).strict();
+export const backupIdsQuery = z.object({
+  ...backupFilterShape,
+  /**
+   * true = leave out the newest complete backup of each site, and of the panel, whatever the
+   * filters say: deleting what is left never leaves one with none.
+   */
+  keepNewest: z.stringbool().default(false),
+}).strict();
 
 /**
  * POST /api/backups/bulk-delete: exactly these backups. Always named one by one, never by a
@@ -680,6 +716,11 @@ export const backupIdsQuery = z.object(backupFilterShape).strict();
  */
 export const backupBulkDeleteBody = z.object({
   ids: z.array(z.number().int().positive()).min(1).max(MAX_BULK_BACKUP_DELETE),
+  /**
+   * true = whichever of them is its site's newest complete backup when the deletion reaches it is
+   * kept: the one `keepNewest` left out when the ids were read may have been deleted since.
+   */
+  keepNewest: z.boolean().optional(),
 }).strict();
 export type BackupBulkDeleteBody = z.infer<typeof backupBulkDeleteBody>;
 
@@ -1359,6 +1400,16 @@ export const backupsEnabledBody = z
   })
   .strict();
 
+export const backupKeepDaysBody = z
+  .object({
+    /**
+     * After how many days this site's backups are deleted (services/backup.ts says which kinds).
+     * null = as Settings -> Backups says for every site; 0 = never.
+     */
+    days: z.number().int().min(0).max(MAX_BACKUP_KEEP_DAYS).nullable(),
+  })
+  .strict();
+
 export const mailSuspensionBody = z
   .object({
     suspended: z.boolean(),
@@ -1369,6 +1420,10 @@ export const mailSuspensionBody = z
 export const settingsUpdateBody = z.object({
   backupCron: z.string().min(9).max(100).optional(),
   backupRetention: z.number().int().min(1).max(365).optional(),
+  /** Sites' backups are deleted after this many days; a site can say otherwise. 0 = never. */
+  backupKeepDays: z.number().int().min(0).max(MAX_BACKUP_KEEP_DAYS).optional(),
+  /** The same for the panel's own database backups. 0 = never. */
+  panelBackupKeepDays: z.number().int().min(0).max(MAX_BACKUP_KEEP_DAYS).optional(),
   monitorUptimeIntervalSec: z.number().int().min(15).max(3600).optional(),
   monitorStatsIntervalSec: z.number().int().min(15).max(3600).optional(),
   monitorDuIntervalMin: z.number().int().min(5).max(1440).optional(),
@@ -1581,6 +1636,7 @@ export type GoLiveBody = z.infer<typeof goLiveBody>;
 export type SettingsUpdateBody = z.infer<typeof settingsUpdateBody>;
 export type MailSuspensionBody = z.infer<typeof mailSuspensionBody>;
 export type BackupsEnabledBody = z.infer<typeof backupsEnabledBody>;
+export type BackupKeepDaysBody = z.infer<typeof backupKeepDaysBody>;
 export type WpPluginInstallBody = z.infer<typeof wpPluginInstallBody>;
 export type SiteMoveBody = z.infer<typeof siteMoveBody>;
 export type ServerCreateBody = z.infer<typeof serverCreateBody>;
