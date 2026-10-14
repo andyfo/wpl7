@@ -41,7 +41,7 @@ export function JobConsoleChip({ headerRef }: { headerRef: RefObject<HTMLElement
   const summary = chipSummary(
     state.session.jobs.map((id) => {
       const s = snapshots.get(id);
-      return outcomeOf(s?.job.status ?? null, s?.lost);
+      return outcomeOf(s?.job?.status ?? null, s?.lost);
     }),
   );
   const { label, title } = chipText(summary);

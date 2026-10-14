@@ -333,7 +333,7 @@ function ConsoleButton({
 
 /** How the job stands, at a glance; said in words for screen readers. */
 function StatusIcon({ snapshot }: { snapshot: JobSnapshot | undefined }) {
-  const status = !snapshot ? null : snapshot.lost ? 'failed' : snapshot.job.status;
+  const status = !snapshot ? null : snapshot.lost ? 'failed' : (snapshot.job?.status ?? null);
   const words = <span className="sr-only">{status ?? 'loading'}</span>;
   if (status === null || status === 'queued' || status === 'running') {
     return (
@@ -364,7 +364,9 @@ function StatusIcon({ snapshot }: { snapshot: JobSnapshot | undefined }) {
 /** The bar's second line: the newest log line, or what stands in for it. */
 function NewestLine({ snapshot, logs }: { snapshot: JobSnapshot | undefined; logs: JobLogLine[] }) {
   if (!snapshot) return <span className="text-neutral-500">Loading…</span>;
-  if (snapshot.lost) return <span className="text-red-700">{snapshot.error?.message ?? 'This job can no longer be read.'}</span>;
+  if (snapshot.lost || !snapshot.job) {
+    return <span className="text-red-700">{snapshot.error?.message ?? 'This job can no longer be read.'}</span>;
+  }
   const { job } = snapshot;
   if (job.status === 'failed' && job.error) return <span className="text-red-700">{job.error}</span>;
   const last = logs[logs.length - 1];
@@ -397,9 +399,9 @@ function JobPill({
   active: boolean;
   onSelect: () => void;
 }) {
-  const status = !snapshot ? 'queued' : snapshot.lost ? 'failed' : snapshot.job.status;
-  const name = snapshot ? jobLabel(snapshot.job.type) : `Job #${id}`;
-  const site = snapshot?.job.siteSlug;
+  const status = !snapshot ? 'queued' : snapshot.lost ? 'failed' : (snapshot.job?.status ?? 'queued');
+  const name = snapshot?.job ? jobLabel(snapshot.job.type) : `Job #${id}`;
+  const site = snapshot?.job?.siteSlug;
   return (
     <button
       type="button"

@@ -51,12 +51,12 @@ export function forgetJobConsole(): void {
   }
 }
 
-const sameJob = (a: JobDto, b: JobDto) => JSON.stringify(a) === JSON.stringify(b);
+const sameJob = (a: JobDto | null, b: JobDto | null) => a === b || (!!a && !!b && JSON.stringify(a) === JSON.stringify(b));
 
 /** What a screen reader hears when a followed job ends. */
-function endedText(s: JobSnapshot): string {
-  const what = `${jobLabel(s.job.type)}${s.job.siteSlug ? `, ${s.job.siteSlug}` : ''}`;
-  return `${what}: ${s.lost ? 'can no longer be read' : s.job.status}`;
+function endedText(id: number, s: JobSnapshot): string {
+  const what = s.job ? `${jobLabel(s.job.type)}${s.job.siteSlug ? `, ${s.job.siteSlug}` : ''}` : `Job #${id}`;
+  return `${what}: ${s.lost || !s.job ? 'can no longer be read' : s.job.status}`;
 }
 
 /**
@@ -94,14 +94,18 @@ export function JobConsoleProvider({ children }: { children: ReactNode }) {
     setState((s) => ({ ...s, prefs: { ...s.prefs, position } }));
   }, []);
 
-  /** A read of a job: a new state of it, or a failure (only one saying it is gone for good counts). */
+  /**
+   * A read of a job: a new state of it, or a failure - only one saying it is gone for good counts.
+   * A job gone before this tab ever read it (restored after a reload) still gets its snapshot, as
+   * lost, or the console would wait on it for ever and could never be closed.
+   */
   const record = useCallback((id: number, job: JobDto | null | undefined, error: unknown) => {
     setSnapshots((prev) => {
       const old = prev.get(id);
-      const now = job ?? old?.job;
-      if (!now) return prev;
+      const now = job ?? old?.job ?? null;
       const lost = old?.lost === true || jobUnreadable(error);
-      const ended = isTerminal(now.status) || lost;
+      if (!now && !lost) return prev;
+      const ended = lost || isTerminal(now?.status);
       if (old && old.ended === ended && old.lost === lost && sameJob(old.job, now)) return prev;
       return new Map(prev).set(id, {
         job: now,
@@ -178,7 +182,7 @@ export function JobConsoleProvider({ children }: { children: ReactNode }) {
         markRefreshed(id);
         continue;
       }
-      if (prior && !prior.ended) setAnnouncement((a) => ({ n: (a?.n ?? 0) + 1, text: endedText(s) }));
+      if (prior && !prior.ended) setAnnouncement((a) => ({ n: (a?.n ?? 0) + 1, text: endedText(id, s) }));
       const keys: QueryKey[] = [['sites'], ['jobs'], ...(refreshKeys.current.get(id) ?? [])];
       void Promise.all(keys.map((queryKey) => qc.invalidateQueries({ queryKey }))).finally(() => markRefreshed(id));
     }

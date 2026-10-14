@@ -12,7 +12,8 @@ import type { ConsoleEvent, ConsoleState, StoredPlace } from '../../lib/jobConso
 
 /** A followed job as last read. */
 export interface JobSnapshot {
-  job: JobDto;
+  /** null only for a job that could not be read once: gone before this tab read it (a reload). */
+  job: JobDto | null;
   /** Over: finished, or no longer readable. */
   ended: boolean;
   /** It can no longer be read (deleted, or never was); `error` says why. */
