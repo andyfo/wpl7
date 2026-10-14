@@ -159,10 +159,10 @@ export function Backups() {
     if (slug) void qc.invalidateQueries({ queryKey: ['backups', slug] });
   };
   /** One backup.delete job for these ids, from either bulk dialog. */
-  const deleteIds = (ids: number[], keepNewest = false) => {
+  const deleteIds = (ids: number[], keepNewest = false, action = 'delete') => {
     setActionError(null);
     run.mutate(
-      { path: '/api/backups/bulk-delete', body: keepNewest ? { ids, keepNewest } : { ids } },
+      { path: '/api/backups/bulk-delete', body: keepNewest ? { ids, keepNewest } : { ids }, action },
       {
         onSuccess: () => {
           clearSelection();
@@ -198,7 +198,7 @@ export function Backups() {
           </p>
         </div>
         <div className="flex items-center gap-4">
-          <Button small variant="secondary" onClick={() => setPurgeOpen(true)}>
+          <Button small variant="secondary" busy={run.busy('purge')} onClick={() => setPurgeOpen(true)}>
             Delete old backups
           </Button>
           <Link
@@ -464,6 +464,7 @@ export function Backups() {
                       <BackupActions
                         backup={b}
                         canRestore={!b.siteDeleted && b.type !== 'panel' && b.siteKind !== 'external'}
+                        busy={(action) => run.busy(`${action}:${b.id}`)}
                         onRestore={() => setRestoreFor(b)}
                         onFetch={() => setFetchFor(b)}
                         onDelete={() => setDeleteId(b.id)}
@@ -502,7 +503,13 @@ export function Backups() {
               Clear
             </Button>
             <span className="ml-auto">
-              <Button small variant="danger" onClick={() => setBulkOpen(true)}>
+              <Button
+                small
+                variant="danger"
+                // Only while the request is out: once it is answered the selection, and this bar, are gone.
+                busy={run.isPending && run.variables?.action === 'delete'}
+                onClick={() => setBulkOpen(true)}
+              >
                 Delete {bulkCount.toLocaleString()}
               </Button>
             </span>
@@ -515,7 +522,7 @@ export function Backups() {
           site={restoreFor.siteTitle ?? restoreFor.siteSlug}
           onConfirm={() => {
             setActionError(null);
-            run.mutate({ path: `/api/backups/${restoreFor.id}/restore`, body: {} });
+            run.mutate({ path: `/api/backups/${restoreFor.id}/restore`, body: {}, action: `restore:${restoreFor.id}` });
           }}
           onClose={() => setRestoreFor(null)}
         />
@@ -533,7 +540,7 @@ export function Backups() {
           onClose={() => setFetchFor(null)}
           onConfirm={(destinationId) => {
             setActionError(null);
-            run.mutate({ path: `/api/backups/${fetchFor.id}/fetch`, body: { destinationId } });
+            run.mutate({ path: `/api/backups/${fetchFor.id}/fetch`, body: { destinationId }, action: `fetch:${fetchFor.id}` });
             setFetchFor(null);
           }}
         />
@@ -571,7 +578,7 @@ export function Backups() {
           ]}
           servers={meta.data?.servers ?? []}
           onClose={() => setPurgeOpen(false)}
-          onConfirm={deleteIds}
+          onConfirm={(ids, keepNewest) => deleteIds(ids, keepNewest, 'purge')}
         />
       )}
     </div>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   ApiActivityDto,
   ApiKeyDto,
@@ -52,7 +52,7 @@ import type { SiteKind, WpComponentKind, WpInventoryFilter } from '../../../shar
 import { backupListParams, type BackupFilters } from '../lib/backupFilters';
 import { siteFtpSettling } from '../lib/ftpStatus';
 import { jobListParams, type JobListQuery } from '../lib/jobFilters';
-import { api } from './client';
+import { api, ApiError } from './client';
 import { listFolder } from './files';
 
 const TERMINAL = new Set(['succeeded', 'failed', 'canceled']);
@@ -626,6 +626,17 @@ export interface JobDetailRes {
 /** The API returns at most this many log lines per request (see routes/jobs.ts). */
 const LOG_PAGE_SIZE = 500;
 
+/**
+ * A failed read of a job that asking again will not change: the job is gone (pruned, deleted)
+ * or never was. A network error, a 5xx while the panel restarts, a timeout, a rate limit or an
+ * expired session (signed in again in another tab) can all pass.
+ */
+const jobUnreadable = (err: unknown) =>
+  err instanceof ApiError && err.status >= 400 && err.status < 500 && ![401, 408, 429].includes(err.status);
+
+/** When to read a job again after a read failed: not at all once it is gone for good. */
+const afterFailedRead = (err: unknown) => (jobUnreadable(err) ? false : 5000);
+
 /** Poll a job until terminal, accumulating log lines via the seq cursor. */
 export function useJob(jobId: number | null) {
   const [logs, setLogs] = useState<JobLogLine[]>([]);
@@ -661,11 +672,13 @@ export function useJob(jobId: number | null) {
       return res;
     },
     // Keep polling while the job runs; stop when it cannot be read at all (deleted/pruned
-    // job, bad id), which would otherwise poll a 404 forever. On a terminal job, keep
-    // draining as long as the last page came back full - stopping at the first terminal
-    // response truncated any job with more than one page of logs at exactly 500 lines.
+    // job, bad id), which would otherwise poll a 404 forever. A read that failed for now is
+    // tried again: stopping at the first one froze the log, and the button waiting on the job.
+    // On a terminal job, keep draining as long as the last page came back full - stopping at
+    // the first terminal response truncated any job with more than one page of logs at
+    // exactly 500 lines.
     refetchInterval: (q) => {
-      if (q.state.status === 'error') return false;
+      if (q.state.status === 'error') return afterFailedRead(q.state.error);
       if (!isTerminal(q.state.data?.job.status)) return 1200;
       return (q.state.data?.logs.length ?? 0) >= LOG_PAGE_SIZE ? 200 : false;
     },
@@ -682,26 +695,100 @@ export function useJob(jobId: number | null) {
   };
 }
 
-/** Fire a mutation that returns 202 {job} and track the job id. */
+/**
+ * Fire a mutation that returns 202 {job} and track the job id.
+ *
+ * The log shown is the newest job's. A request sent with an `action` is followed on its own as
+ * well, so `busy(action)` holds the button that sent it for as long as its job lasts, whatever
+ * is started after it - the way WordPress's own Update buttons queue up. A job counts until the
+ * page shows what it did: until it is over and the queries it changed have been read again.
+ * Without that wait, an Update button came back for a moment before its row said the plugin
+ * was up to date. `active` is the same for everything sent through here, for a section with a
+ * single button.
+ */
 export function useRunJob(invalidateKeys: unknown[][] = []) {
   const qc = useQueryClient();
   const [jobId, setJobId] = useState<number | null>(null);
-  const { job, logs } = useJob(jobId);
+  const { job, logs, error: jobError } = useJob(jobId);
+  /** The newest job is gone for good: it counts as over, and the reason is shown. */
+  const lost = jobUnreadable(jobError);
+  /** The job each action started; null while its request is out. */
+  const [started, setStarted] = useState<ReadonlyMap<string, number | null>>(new Map());
+  /** Jobs that are over, once the page has read what they changed. */
+  const [finished, setFinished] = useState<ReadonlySet<number>>(new Set());
+  const finishing = useRef(new Set<number>());
+
+  const finish = (id: number) => {
+    if (finishing.current.has(id)) return;
+    finishing.current.add(id);
+    void Promise.all([['sites'], ['jobs'], ...invalidateKeys].map((key) => qc.invalidateQueries({ queryKey: key }))).finally(
+      () => setFinished((prev) => new Set(prev).add(id)),
+    );
+  };
 
   useEffect(() => {
-    if (isTerminal(job?.status)) {
-      for (const key of [['sites'], ['jobs'], ...invalidateKeys]) void qc.invalidateQueries({ queryKey: key });
-    }
+    if (jobId !== null && (isTerminal(job?.status) || lost)) finish(jobId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [job?.status]);
+  }, [job?.status, lost]);
+
+  // Jobs started before the newest one are only asked how they are doing.
+  const earlier = [...started.values()].filter((id): id is number => id !== null && id !== jobId && !finished.has(id));
+  const earlierStatus = useQueries({
+    queries: earlier.map((id) => ({
+      queryKey: ['job-status', id],
+      // Log lines are numbered across every job, so this asks for none of them.
+      queryFn: () => api<JobDetailRes>(`/api/jobs/${id}?logAfter=${Number.MAX_SAFE_INTEGER}`).then((res) => res.job.status),
+      retry: false,
+      refetchInterval: (q: { state: { status: string; data?: string; error: unknown } }) =>
+        q.state.status === 'error' ? afterFailedRead(q.state.error) : isTerminal(q.state.data) ? false : 2000,
+    })),
+  });
+  useEffect(() => {
+    // Over, or gone for good. A read that failed for now is asked again: the job may well
+    // still be running, and its end has to refresh the page.
+    earlier.forEach((id, i) => {
+      const status = earlierStatus[i];
+      if (status && (isTerminal(status.data) || jobUnreadable(status.error))) finish(id);
+    });
+  });
 
   const mutation = useMutation({
-    mutationFn: async (req: { path: string; method?: string; body?: unknown }) => {
-      const res = await api<{ job: JobDto }>(req.path, { method: req.method ?? 'POST', body: req.body });
-      setJobId(res.job.id);
-      return res.job;
+    mutationFn: async (req: { path: string; method?: string; body?: unknown; action?: string }) => {
+      const { action } = req;
+      /** The action's job, null while the request is out; undefined forgets the action. */
+      const mark = (id: number | null | undefined) => {
+        if (action === undefined) return;
+        setStarted((prev) => {
+          const next = new Map(prev);
+          if (id === undefined) next.delete(action);
+          else next.set(action, id);
+          return next;
+        });
+      };
+      mark(null);
+      try {
+        const res = await api<{ job: JobDto }>(req.path, { method: req.method ?? 'POST', body: req.body });
+        // Ids only grow: an earlier click whose answer comes in late does not take the log back.
+        setJobId((current) => (current !== null && current > res.job.id ? current : res.job.id));
+        mark(res.job.id);
+        return res.job;
+      } catch (err) {
+        mark(undefined);
+        throw err;
+      }
     },
   });
 
-  return { ...mutation, jobId, job, logs, reset: () => setJobId(null) };
+  const unfinished = (id: number | null) => id === null || !finished.has(id);
+  return {
+    ...mutation,
+    // Shown where a refused request is: why the log stopped.
+    error: mutation.error ?? (lost ? jobError : null),
+    jobId,
+    job,
+    logs,
+    reset: () => setJobId(null),
+    active: mutation.isPending || (jobId !== null && !finished.has(jobId)) || [...started.values()].some(unfinished),
+    busy: (action: string) => started.has(action) && unfinished(started.get(action) ?? null),
+  };
 }

@@ -1,7 +1,7 @@
 // @docs plugins/recipes
 import { Link } from 'react-router';
 import type { SiteLicenseDto } from '../../../../shared/types';
-import { isTerminal, useRunJob, useSiteRecipes } from '../../api/hooks';
+import { useRunJob, useSiteRecipes } from '../../api/hooks';
 import { Button, Card, StatusBadge } from '../ui';
 import { JobProgress } from '../JobProgress';
 import { timeAgo } from '../../lib/format';
@@ -15,19 +15,23 @@ export function SiteRecipesCard({ slug }: { slug: string }) {
   const run = useRunJob([['wp-recipes', slug], ['wp-status', slug]]);
   const items = recipes.data ?? [];
   if (items.length === 0) return null;
-  const busy = run.isPending || (run.job !== null && !isTerminal(run.job.status));
+  const busy = run.active;
   const apply = (hook: 'afterInstall' | 'verify', recipeId?: string) =>
-    run.mutate({ path: `/api/sites/${slug}/wp/recipes/apply`, body: { hook, ...(recipeId ? { recipeId } : {}) } });
+    run.mutate({
+      path: `/api/sites/${slug}/wp/recipes/apply`,
+      body: { hook, ...(recipeId ? { recipeId } : {}) },
+      action: recipeId ? `${hook}:${recipeId}` : hook,
+    });
 
   return (
     <Card
       title="Recipes"
       action={
         <div className="flex gap-2">
-          <Button small variant="secondary" disabled={busy} onClick={() => apply('verify')}>
+          <Button small variant="secondary" disabled={busy} busy={run.busy('verify')} onClick={() => apply('verify')}>
             Check
           </Button>
-          <Button small disabled={busy} onClick={() => apply('afterInstall')}>
+          <Button small disabled={busy} busy={run.busy('afterInstall')} onClick={() => apply('afterInstall')}>
             Activate all
           </Button>
         </div>
@@ -60,7 +64,13 @@ export function SiteRecipesCard({ slug }: { slug: string }) {
               <td className="py-2 pr-3 text-right text-xs text-neutral-500">{l.checkedAt ? timeAgo(l.checkedAt) : '–'}</td>
               <td className="py-2 text-right">
                 {l.ready ? (
-                  <Button small variant="ghost" disabled={busy || !l.installed} onClick={() => apply('afterInstall', l.recipeId)}>
+                  <Button
+                    small
+                    variant="ghost"
+                    disabled={busy || !l.installed}
+                    busy={run.busy(`afterInstall:${l.recipeId}`)}
+                    onClick={() => apply('afterInstall', l.recipeId)}
+                  >
                     Activate
                   </Button>
                 ) : (

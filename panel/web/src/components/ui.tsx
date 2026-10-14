@@ -33,6 +33,7 @@ export function Button({
   type = 'button',
   variant = 'primary',
   disabled,
+  busy = false,
   small,
   title,
 }: {
@@ -41,6 +42,12 @@ export function Button({
   type?: 'button' | 'submit';
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
   disabled?: boolean;
+  /**
+   * What this button started is still running: a spinner stands in for the label, at the
+   * label's width, and clicks do nothing. Not `disabled`, so the button keeps its colour and
+   * keyboard focus stays on it.
+   */
+  busy?: boolean;
   small?: boolean;
   /** Also what a disabled button says about why it is disabled. */
   title?: string;
@@ -55,12 +62,25 @@ export function Button({
   return (
     <button
       type={type}
-      onClick={onClick}
-      disabled={disabled}
+      // preventDefault: a busy submit button must not send its form a second time.
+      onClick={busy ? (e) => e.preventDefault() : onClick}
+      disabled={disabled && !busy}
+      aria-disabled={busy || undefined}
+      aria-busy={busy || undefined}
       title={title}
-      className={`${base} ${styles} inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors disabled:cursor-not-allowed`}
+      className={`${base} ${styles} inline-flex items-center justify-center gap-2 rounded-lg font-medium transition-colors disabled:cursor-not-allowed ${busy ? 'relative cursor-progress' : ''}`}
     >
-      {children}
+      {busy ? (
+        <>
+          {/* Transparent rather than gone: it holds the width, and screen readers still read it. */}
+          <span className="inline-flex items-center gap-2 opacity-0">{children}</span>
+          <span className="absolute inset-0 flex items-center justify-center">
+            <span className="h-4 w-4 animate-spin rounded-full border-2 border-current/25 border-t-current" />
+          </span>
+        </>
+      ) : (
+        children
+      )}
     </button>
   );
 }

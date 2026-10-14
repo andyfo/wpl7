@@ -91,7 +91,8 @@ export function ExternalOverview({ slug }: { slug: string }) {
             small
             variant="secondary"
             disabled={!connected || run.isPending}
-            onClick={() => run.mutate({ path: `/api/sites/${slug}/backups`, body: {} })}
+            busy={run.busy('backup')}
+            onClick={() => run.mutate({ path: `/api/sites/${slug}/backups`, body: {}, action: 'backup' })}
           >
             Back up now
           </Button>
@@ -102,10 +103,12 @@ export function ExternalOverview({ slug }: { slug: string }) {
             <Button
               small
               disabled={run.isPending}
+              busy={run.busy('update-connect')}
               onClick={() =>
                 run.mutate({
                   path: `/api/sites/${slug}/wp/bulk`,
                   body: { ops: [{ kind: 'plugin', slug: 'wpl7-connect', action: 'update' }], backupFirst: false, healthCheck: true },
+                  action: 'update-connect',
                 })
               }
             >

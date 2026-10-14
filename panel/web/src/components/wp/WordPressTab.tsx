@@ -1,7 +1,7 @@
 // @docs plugins/overview, plugins/updates, sites/wordpress
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { WpComponentDto } from '../../../../shared/types';
+import type { WpComponentDto, WporgPluginDto } from '../../../../shared/types';
 import { fixVulnerableOps, updateAllOps, type WpUpdateOp } from '../../../../shared/wpOps';
 import { api, ApiError } from '../../api/client';
 import { useMeta, useRunJob, useSite, useWpMaintenance, useWpStatus } from '../../api/hooks';
@@ -22,7 +22,7 @@ import { SiteRecipesCard } from './SiteRecipesCard';
 import { WporgPluginSearch } from '../WporgPluginSearch';
 import { timeAgo } from '../../lib/format';
 import { tokenizeCli } from '../../lib/cliArgs';
-import { ComponentTable } from './ComponentTable';
+import { ComponentTable, type ComponentAction } from './ComponentTable';
 import { BulkRunOptions, keptFor, type BulkRunOptionsValue } from './BulkRunOptions';
 import { FeedFooter } from './FeedFooter';
 import { CoverageNote, SeverityBadge } from './severity';
@@ -73,8 +73,10 @@ export function WordPressTab({ slug }: { slug: string }) {
   // Live sites get a backup by default and dev copies do not: on a dev site the whole point
   // is to find out whether the update breaks anything.
   const [runOptions, setRunOptions] = useState<BulkRunOptionsValue>({ backupFirst: isLive, healthCheck: true });
-  const [pending, setPending] = useState<{ title: string; message: string; ops: WpUpdateOp[] } | null>(null);
+  const [pending, setPending] = useState<{ title: string; message: string; ops: WpUpdateOp[]; action: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<WpComponentDto | null>(null);
+  /** The plugin last picked in the search, for the box to name while it installs. */
+  const [picked, setPicked] = useState<WporgPluginDto | null>(null);
 
   const sync = async (action: string, fn: () => Promise<void>) => {
     setBusy(action);
@@ -108,11 +110,14 @@ export function WordPressTab({ slug }: { slug: string }) {
       await qc.invalidateQueries({ queryKey: ['sites'] });
     });
 
-  const runOps = (ops: WpUpdateOp[]) =>
+  const runOps = (ops: WpUpdateOp[], action: string) =>
     run.mutate({
       path: `/api/sites/${slug}/wp/bulk`,
       body: { ops, backupFirst: runOptions.backupFirst, healthCheck: runOptions.healthCheck },
+      action,
     });
+  const rowBusy = (item: WpComponentDto, action: ComponentAction) => run.busy(rowAction(item, action));
+  const installing = run.busy('install') ? picked : null;
 
   const data = status.data;
   const neverScanned = !!data && data.scannedAt === null;
@@ -204,11 +209,13 @@ export function WordPressTab({ slug }: { slug: string }) {
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <Button
                 disabled={!running || allOps.length === 0}
+                busy={run.busy('update-all')}
                 onClick={() =>
                   setPending({
                     title: 'Update everything on this site',
                     message: `${allOps.length} update${allOps.length === 1 ? '' : 's'} will run in one job, in order, ${external ? 'through WPL7 Connect' : "inside this site's container"}.`,
                     ops: allOps,
+                    action: 'update-all',
                   })
                 }
               >
@@ -218,11 +225,13 @@ export function WordPressTab({ slug }: { slug: string }) {
                 <Button
                   variant="secondary"
                   disabled={!running}
+                  busy={run.busy('update-core')}
                   onClick={() =>
                     setPending({
                       title: `Update WordPress to ${data.core.updateVersion}`,
                       message: 'Core files are updated and the database upgrade runs straight afterwards.',
                       ops: [{ kind: 'core', action: 'update' }],
+                      action: 'update-core',
                     })
                   }
                 >
@@ -253,11 +262,13 @@ export function WordPressTab({ slug }: { slug: string }) {
               <Button
                 small
                 disabled={!running}
+                busy={run.busy('fix-vulnerable')}
                 onClick={() =>
                   setPending({
                     title: 'Update everything with a known fix',
                     message: `${fixOps.length} component${fixOps.length === 1 ? '' : 's'} with a known vulnerability will be updated to a release that fixes it.`,
                     ops: fixOps,
+                    action: 'fix-vulnerable',
                   })
                 }
               >
@@ -303,8 +314,9 @@ export function WordPressTab({ slug }: { slug: string }) {
                         small
                         variant="secondary"
                         disabled={!running}
+                        busy={rowBusy(item, 'update')}
                         onClick={() =>
-                          runOps([{ kind: item.kind, slug: item.slug, action: 'update' }])
+                          runOps([{ kind: item.kind, slug: item.slug, action: 'update' }], rowAction(item, 'update'))
                         }
                       >
                         Update to {item.updateVersion}
@@ -315,8 +327,12 @@ export function WordPressTab({ slug }: { slug: string }) {
                         small
                         variant="ghost"
                         disabled={!running}
+                        busy={rowBusy(item, 'deactivate')}
                         onClick={() =>
-                          run.mutate({ path: `/api/sites/${slug}/wp/plugins/${item.slug}/deactivate` })
+                          run.mutate({
+                            path: `/api/sites/${slug}/wp/plugins/${item.slug}/deactivate`,
+                            action: rowAction(item, 'deactivate'),
+                          })
                         }
                       >
                         Deactivate
@@ -346,24 +362,35 @@ export function WordPressTab({ slug }: { slug: string }) {
       <Card title={`Plugins${data ? ` (${data.plugins.length})` : ''}`}>
         <div className="mb-3">
           <WporgPluginSearch
-            placeholder="Search wordpress.org to install a plugin…"
+            placeholder={
+              installing ? `Installing ${installing.name}…` : 'Search wordpress.org to install a plugin…'
+            }
             addedSlugs={(data?.plugins ?? []).map((p) => p.slug)}
             addedLabel="installed"
-            onSelect={(p) =>
+            // One install from the box at a time: it names the plugin while it goes in.
+            busy={installing !== null}
+            onSelect={(p) => {
+              setPicked(p);
               run.mutate({
                 path: `/api/sites/${slug}/wp/plugins`,
                 body: { source: { kind: 'wporg', slug: p.slug } },
-              })
-            }
+                action: 'install',
+              });
+            }}
           />
         </div>
         <ComponentTable
           items={data?.plugins ?? []}
-          busy={!running}
+          disabled={!running}
+          busy={rowBusy}
           empty={neverScanned ? 'Not scanned yet.' : 'No plugins installed.'}
-          onUpdate={(item) => runOps([{ kind: 'plugin', slug: item.slug, action: 'update' }])}
-          onActivate={(item) => run.mutate({ path: `/api/sites/${slug}/wp/plugins/${item.slug}/activate` })}
-          onDeactivate={(item) => run.mutate({ path: `/api/sites/${slug}/wp/plugins/${item.slug}/deactivate` })}
+          onUpdate={(item) => runOps([{ kind: 'plugin', slug: item.slug, action: 'update' }], rowAction(item, 'update'))}
+          onActivate={(item) =>
+            run.mutate({ path: `/api/sites/${slug}/wp/plugins/${item.slug}/activate`, action: rowAction(item, 'activate') })
+          }
+          onDeactivate={(item) =>
+            run.mutate({ path: `/api/sites/${slug}/wp/plugins/${item.slug}/deactivate`, action: rowAction(item, 'deactivate') })
+          }
           onDelete={(item) => setConfirmDelete(item)}
         />
       </Card>
@@ -372,10 +399,13 @@ export function WordPressTab({ slug }: { slug: string }) {
       <Card title={`Themes${data ? ` (${data.themes.length})` : ''}`}>
         <ComponentTable
           items={data?.themes ?? []}
-          busy={!running}
+          disabled={!running}
+          busy={rowBusy}
           empty={neverScanned ? 'Not scanned yet.' : 'No themes installed.'}
-          onUpdate={(item) => runOps([{ kind: 'theme', slug: item.slug, action: 'update' }])}
-          onActivate={(item) => run.mutate({ path: `/api/sites/${slug}/wp/themes/${item.slug}/activate` })}
+          onUpdate={(item) => runOps([{ kind: 'theme', slug: item.slug, action: 'update' }], rowAction(item, 'update'))}
+          onActivate={(item) =>
+            run.mutate({ path: `/api/sites/${slug}/wp/themes/${item.slug}/activate`, action: rowAction(item, 'activate') })
+          }
           onDeactivate={() => undefined}
           onDelete={(item) => setConfirmDelete(item)}
         />
@@ -533,7 +563,7 @@ export function WordPressTab({ slug }: { slug: string }) {
           message={pending.message}
           confirmLabel="Run it"
           onClose={() => setPending(null)}
-          onConfirm={() => runOps(pending.ops)}
+          onConfirm={() => runOps(pending.ops, pending.action)}
         >
           <BulkRunOptions
             value={runOptions}
@@ -563,6 +593,7 @@ export function WordPressTab({ slug }: { slug: string }) {
             run.mutate({
               path: `/api/sites/${slug}/wp/${confirmDelete.kind === 'plugin' ? 'plugins' : 'themes'}/${confirmDelete.slug}`,
               method: 'DELETE',
+              action: rowAction(confirmDelete, 'delete'),
             })
           }
         />
@@ -572,3 +603,6 @@ export function WordPressTab({ slug }: { slug: string }) {
 }
 
 const capitalized = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
+/** One plugin's or theme's action, the same from its row and from the Security card. */
+const rowAction = (item: WpComponentDto, action: ComponentAction) => `${action}:${item.kind}:${item.slug}`;

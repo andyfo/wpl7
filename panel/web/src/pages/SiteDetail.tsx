@@ -155,6 +155,11 @@ function OverviewTab({ slug }: { slug: string }) {
   const cleanup = s.pendingMoveCleanup;
   const mailSuspended = s.mailSuspended;
   const health = siteHealth(s);
+  /** A button that runs `POST /api/sites/:slug/<action>`, spinning while its job runs. */
+  const containerAction = (action: 'start' | 'stop' | 'restart' | 'reconcile') => ({
+    busy: run.busy(action),
+    onClick: () => run.mutate({ path: `/api/sites/${slug}/${action}`, action }),
+  });
 
   return (
     <div className="space-y-4">
@@ -168,7 +173,8 @@ function OverviewTab({ slug }: { slug: string }) {
               <Button
                 small
                 disabled={run.isPending}
-                onClick={() => run.mutate({ path: `/api/sites/${slug}/${health.action!.path}` })}
+                busy={run.busy('health')}
+                onClick={() => run.mutate({ path: `/api/sites/${slug}/${health.action!.path}`, action: 'health' })}
               >
                 {health.action.label}
               </Button>
@@ -220,7 +226,11 @@ function OverviewTab({ slug }: { slug: string }) {
             )}
           </p>
           <div className="mt-2 flex items-center gap-3">
-            <Button small onClick={() => finalize.mutate({ path: `/api/sites/${slug}/move/finalize` })} disabled={finalize.isPending}>
+            <Button
+              small
+              busy={finalize.active}
+              onClick={() => finalize.mutate({ path: `/api/sites/${slug}/move/finalize` })}
+            >
               Finalize now
             </Button>
             <span className="text-xs">since {timeAgo(cleanup.since)}</span>
@@ -234,12 +244,12 @@ function OverviewTab({ slug }: { slug: string }) {
       {s.importSource?.connected && s.importSource.status === 'done' && <ImportedBanner slug={slug} source={s.importSource} />}
       <Card>
         <div className="flex flex-wrap items-center gap-2">
-          <Button small variant="secondary" onClick={() => run.mutate({ path: `/api/sites/${slug}/start` })}>Start</Button>
-          <Button small variant="secondary" onClick={() => run.mutate({ path: `/api/sites/${slug}/stop` })}>Stop</Button>
-          <Button small variant="secondary" onClick={() => run.mutate({ path: `/api/sites/${slug}/restart` })}>Restart</Button>
+          <Button small variant="secondary" {...containerAction('start')}>Start</Button>
+          <Button small variant="secondary" {...containerAction('stop')}>Stop</Button>
+          <Button small variant="secondary" {...containerAction('restart')}>Restart</Button>
           {/* Rebuilds the container from the current spec. Next to Restart because that is
               where you look for it, and because it is the heavier version of the same idea. */}
-          <Button small variant="secondary" onClick={() => run.mutate({ path: `/api/sites/${slug}/reconcile` })}>
+          <Button small variant="secondary" {...containerAction('reconcile')}>
             Recreate container
           </Button>
           <WpAdminLoginButton slug={slug} running={s.containerState === 'running'} />
@@ -385,7 +395,8 @@ function MoveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
               <div className="flex justify-end gap-2">
                 <Button variant="secondary" onClick={onClose}>Cancel</Button>
                 <Button
-                  disabled={!target || run.isPending}
+                  disabled={!target}
+                  busy={run.active}
                   onClick={() =>
                     target &&
                     run.mutate({
@@ -426,7 +437,7 @@ function ImportedBanner({ slug, source }: { slug: string; source: NonNullable<Si
   const refresh = useRunJob([['site', slug], ['backups', slug]]);
   // One started in another tab, or before this page was opened.
   const elsewhere = source.refreshJobId !== null && source.refreshJobId !== refresh.jobId;
-  const refreshing = refresh.isPending || (refresh.job !== null && !isTerminal(refresh.job.status)) || elsewhere;
+  const refreshing = refresh.active || elsewhere;
   const host = (() => {
     try {
       return source.url ? new URL(source.url).hostname : 'the old site';
@@ -448,7 +459,7 @@ function ImportedBanner({ slug, source }: { slug: string; source: NonNullable<Si
       <p className="mt-1">The migration plugin on the old site is still connected.</p>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <span title={refreshing ? 'A refresh is running.' : undefined}>
-          <Button small variant="secondary" disabled={refreshing} onClick={() => setConfirmRefresh(true)}>
+          <Button small variant="secondary" busy={refreshing} onClick={() => setConfirmRefresh(true)}>
             Refresh from source
           </Button>
         </span>
@@ -548,7 +559,8 @@ function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={onClose}>Cancel</Button>
             <Button
-              disabled={domains.length === 0 || run.isPending}
+              disabled={domains.length === 0}
+              busy={run.active}
               onClick={() =>
                 run.mutate({
                   path: `/api/sites/${slug}/go-live`,
@@ -982,7 +994,11 @@ function BackupsTab({ slug }: { slug: string }) {
                 Bulk delete
               </Link>
             )}
-            <Button small onClick={() => run.mutate({ path: `/api/sites/${slug}/backups`, body: {} })}>
+            <Button
+              small
+              busy={run.busy('backup')}
+              onClick={() => run.mutate({ path: `/api/sites/${slug}/backups`, body: {}, action: 'backup' })}
+            >
               Back up now
             </Button>
           </span>
@@ -1056,6 +1072,7 @@ function BackupsTab({ slug }: { slug: string }) {
                     <BackupActions
                       backup={b}
                       canRestore={site.data?.kind !== 'external'}
+                      busy={(action) => run.busy(`${action}:${b.id}`)}
                       onRestore={() => setRestoreId(b.id)}
                       onFetch={() => setFetchFor(b)}
                       onDelete={() => setDeleteId(b.id)}
@@ -1070,7 +1087,7 @@ function BackupsTab({ slug }: { slug: string }) {
 
       {restoreId !== null && (
         <RestoreBackupDialog
-          onConfirm={() => run.mutate({ path: `/api/backups/${restoreId}/restore`, body: {} })}
+          onConfirm={() => run.mutate({ path: `/api/backups/${restoreId}/restore`, body: {}, action: `restore:${restoreId}` })}
           onClose={() => setRestoreId(null)}
         />
       )}
@@ -1088,7 +1105,7 @@ function BackupsTab({ slug }: { slug: string }) {
           onClose={() => setFetchFor(null)}
           onConfirm={(destinationId) => {
             setActionError(null);
-            run.mutate({ path: `/api/backups/${fetchFor.id}/fetch`, body: { destinationId } });
+            run.mutate({ path: `/api/backups/${fetchFor.id}/fetch`, body: { destinationId }, action: `fetch:${fetchFor.id}` });
             setFetchFor(null);
           }}
         />
@@ -1132,7 +1149,10 @@ function SettingsTab({ slug }: { slug: string }) {
           </Field>
           <Button
             disabled={effPhp === s.phpVersion || run.isPending}
-            onClick={() => run.mutate({ path: `/api/sites/${slug}/php`, method: 'PUT', body: { phpVersion: effPhp } })}
+            busy={run.busy('php')}
+            onClick={() =>
+              run.mutate({ path: `/api/sites/${slug}/php`, method: 'PUT', body: { phpVersion: effPhp }, action: 'php' })
+            }
           >
             Switch
           </Button>
@@ -1149,11 +1169,13 @@ function SettingsTab({ slug }: { slug: string }) {
         <div className="mt-3 flex items-center gap-3">
           <Button
             disabled={run.isPending || effDomains.trim().length === 0}
+            busy={run.busy('domains')}
             onClick={() =>
               run.mutate({
                 path: `/api/sites/${slug}/domains`,
                 method: 'PUT',
                 body: { domains: effDomains.split(/[\s,]+/).map((d) => d.trim()).filter(Boolean) },
+                action: 'domains',
               })
             }
           >
@@ -1176,7 +1198,7 @@ function SettingsTab({ slug }: { slug: string }) {
             Deleting removes the container, database and files{finalBackup ? ' (after a final backup)' : ''}
             {deleteBackups ? (finalBackup ? ', and every other backup' : ', and every backup') : ''}.
           </div>
-          <Button variant="danger" onClick={() => setDeleteOpen(true)}>
+          <Button variant="danger" busy={run.busy('delete')} onClick={() => setDeleteOpen(true)}>
             Delete site
           </Button>
         </div>
@@ -1196,6 +1218,7 @@ function SettingsTab({ slug }: { slug: string }) {
             run.mutate({
               path: `/api/sites/${slug}?finalBackup=${finalBackup}&deleteBackups=${deleteBackups}`,
               method: 'DELETE',
+              action: 'delete',
             })
           }
           onClose={() => setDeleteOpen(false)}

@@ -38,6 +38,8 @@ export function WporgPluginSearch({
   /** Keep the results up after a pick, for surfaces where several plugins get added in a row. */
   keepOpenOnSelect = false,
   autoFocus = false,
+  /** What was picked is still going in: the box shows a spinner and takes nothing new meanwhile. */
+  busy = false,
 }: {
   onSelect: (plugin: WporgPluginDto) => void;
   placeholder?: string;
@@ -46,6 +48,7 @@ export function WporgPluginSearch({
   busySlug?: string | null;
   keepOpenOnSelect?: boolean;
   autoFocus?: boolean;
+  busy?: boolean;
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -70,7 +73,7 @@ export function WporgPluginSearch({
   useEffect(() => setCursor(0), [query]);
 
   const choose = (plugin: WporgPluginDto) => {
-    if (added.has(plugin.slug) || busySlug !== null) return;
+    if (added.has(plugin.slug) || busySlug !== null || busy) return;
     onSelect(plugin);
     if (keepOpenOnSelect) return;
     setQuery('');
@@ -96,18 +99,20 @@ export function WporgPluginSearch({
   };
 
   const tooShort = query.trim().length > 0 && query.trim().length < 2;
-  const showDropdown = open && query.trim().length >= 2;
+  const showDropdown = open && !busy && query.trim().length >= 2;
 
   return (
     <div className="relative" ref={boxRef}>
-      <div className="relative">
+      {/* As wide as the box, so the spinner sits inside it rather than at the far edge of the card. */}
+      <div className="relative max-w-xl">
         <input
-          className={`${inputClass} max-w-xl`}
+          className={`${inputClass} disabled:cursor-progress`}
           role="combobox"
           aria-expanded={showDropdown}
           aria-controls={listId}
           aria-autocomplete="list"
           autoFocus={autoFocus}
+          disabled={busy}
           placeholder={placeholder}
           value={query}
           onChange={(e) => {
@@ -117,7 +122,7 @@ export function WporgPluginSearch({
           onFocus={() => setOpen(true)}
           onKeyDown={onKeyDown}
         />
-        {search.isFetching && (
+        {(busy || search.isFetching) && (
           <span className="absolute right-3 top-1/2 -translate-y-1/2">
             <Spinner />
           </span>
