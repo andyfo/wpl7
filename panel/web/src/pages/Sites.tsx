@@ -53,9 +53,7 @@ export function Sites() {
           {view.choice && <Segmented label="Layout" options={LAYOUTS} value={layout} onChange={chooseLayout} />}
           {multiServer && (
             <select
-              // inputClass's w-full outranks a width added here, and in a row that wraps it would
-              // take a row of its own. A maximum width does not compete with it.
-              className={`${inputClass} max-w-fit`}
+              className={`${inputClass} w-auto`}
               value={serverFilter}
               onChange={(e) => setServerFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))}
             >

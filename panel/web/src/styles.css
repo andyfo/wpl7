@@ -593,6 +593,15 @@
 .skip-link:focus {
   transform: translateY(0);
 }
+/*
+ * inputClass in ui.tsx. In the components layer, which the utilities come after: as utilities,
+ * its w-full and py-2 came later in the CSS than w-auto, w-56 or py-1 and overrode them.
+ */
+@layer components {
+  .field-input {
+    @apply w-full rounded-lg border border-neutral-300 bg-surface px-3 py-2 text-sm text-neutral-900 focus:border-neutral-500 focus:outline-none;
+  }
+}
 .panel-card {
   border: 1px solid var(--n200);
   background: var(--surface);
