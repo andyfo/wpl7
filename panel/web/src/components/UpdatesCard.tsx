@@ -3,10 +3,11 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useSystemVersion } from '../api/hooks';
-import type { UpdateHistoryDto, UpdateStatusDto } from '../../../shared/types';
+import type { JobDto, UpdateHistoryDto, UpdateStatusDto } from '../../../shared/types';
 import { Button, Card, ConfirmDialog, ErrorNote } from './ui';
 import { formatDate } from '../lib/format';
 import { UpdateProgress } from './UpdateProgress';
+import { useFollowJob } from './jobConsole/context';
 
 /**
  * Three states, not two.
@@ -18,6 +19,7 @@ import { UpdateProgress } from './UpdateProgress';
  */
 export function UpdatesCard() {
   const qc = useQueryClient();
+  const follow = useFollowJob();
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<unknown>(null);
   const [confirming, setConfirming] = useState(false);
@@ -47,7 +49,8 @@ export function UpdatesCard() {
   const rerunTasks = async () => {
     setStartError(null);
     try {
-      await api('/api/system/update/post-update', { method: 'POST' });
+      const res = await api<{ job: JobDto }>('/api/system/update/post-update', { method: 'POST' });
+      follow(res.job, { refresh: [['update-status']] });
       await qc.invalidateQueries({ queryKey: ['update-status'] });
       await qc.invalidateQueries({ queryKey: ['jobs'] });
     } catch (err) {

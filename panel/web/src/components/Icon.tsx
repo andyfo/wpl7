@@ -28,6 +28,10 @@ const paths = {
   disk: 'M5 4h14l3 12v4H2v-4L5 4Z M2 16h20 M16 18h.01 M19 18h.01',
   menu: 'M4 6h16 M4 12h16 M4 18h16',
   close: 'm6 6 12 12 M6 18 18 6',
+  /** A drag handle: six dots. */
+  grip: 'M9 6h.01 M9 12h.01 M9 18h.01 M15 6h.01 M15 12h.01 M15 18h.01',
+  /** Off to the top right corner, where a minimized job console goes. */
+  minimize: 'M7 17 17 7 M8 7h9v9',
   check: 'm5 12 4 4 10-10',
   chevron: 'm6 9 6 6 6-6',
   info: 'M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z M12 11v5 M12 7.6h.01',
@@ -65,7 +69,7 @@ const paths = {
 export type IconName = keyof typeof paths;
 
 /** Icons that are nothing but stroke, where the set's thinner line would shrink them. */
-const STROKE: Partial<Record<IconName, number>> = { more: 2 };
+const STROKE: Partial<Record<IconName, number>> = { more: 2, grip: 3 };
 
 export function Icon({ name, size = 18, style }: { name: IconName; size?: number; style?: CSSProperties }) {
   return (

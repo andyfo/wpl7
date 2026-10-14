@@ -191,6 +191,28 @@ export const SHOTS: Shot[] = [
       await page.goto(`/jobs/${id}`, { waitUntil: 'networkidle' });
     },
   },
+  {
+    name: 'job-console',
+    what: 'The job console over a site’s page, following a running backup with its log open',
+    path: '/sites/ridge-outfitters',
+    theme: 'light',
+    // The backup the demo has running on this site, shown as a job started in this tab. The tab's
+    // own storage: nothing carries over to the other shots, which open pages of their own.
+    prepare: async (page) => {
+      const id = await page.evaluate(async () => {
+        const res = await fetch('/api/jobs?limit=100&status=running', { headers: { 'x-csrf': '1' } });
+        const body = (await res.json()) as { items: { id: number; type: string; siteSlug: string | null }[] };
+        return body.items.find((j) => j.type === 'backup.create' && j.siteSlug === 'ridge-outfitters')?.id;
+      });
+      if (!id) throw new Error('The demo has no running backup.create job on ridge-outfitters');
+      await page.evaluate(
+        (job) => sessionStorage.setItem('wpl7-job-console-jobs', JSON.stringify({ jobs: [job], selected: job, view: 'log' })),
+        id,
+      );
+      await page.reload({ waitUntil: 'networkidle' });
+      await page.getByRole('region', { name: 'Job console' }).locator('[data-seq]').first().waitFor();
+    },
+  },
   { name: 'schedules', what: 'Automations → Schedules', path: '/jobs/schedules', theme: 'light' },
   {
     name: 'schedule-new',

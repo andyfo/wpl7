@@ -7,6 +7,8 @@ sources:
   - panel/web/src/pages/Jobs.tsx
   - panel/web/src/pages/JobDetail.tsx
   - panel/web/src/components/JobProgress.tsx
+  - panel/web/src/components/jobConsole/*
+  - panel/web/src/lib/jobConsole.ts
   - panel/web/src/components/JobTriggeredBy.tsx
   - panel/web/src/lib/jobFilters.ts
   - panel/src/jobs/worker.ts
@@ -73,6 +75,27 @@ A job's page shows its **Details**, **What this job does** and, once it ends, it
 
 <Screenshot name="job-detail" alt="A job's page with its details, result and log" />
 
+## Watch the jobs you start
+
+<Since v="0.3.0-beta.4" /> A job you start opens the job console in the bottom right corner of the
+window. It names the job and shows how it stands and its newest log line. It stays while you move
+to other pages, and a reload keeps it.
+
+<Screenshot name="job-console" alt="The job console beside a site's page, showing a running backup and its log" />
+
+- **Show log** unfolds the log, and **Hide log** folds it away. **Open job** opens the job's page.
+- Drag the handle on its left to move it. Your browser remembers the place. Double-click the handle
+  to put it back.
+- **Minimize** sends it to the header, next to the version. It stays there through the jobs you
+  start next, and shows whether they are running or one failed. Choose it there to read the log
+  again.
+- Once every job in it has ended and its log is hidden, it shows how they ended for three seconds.
+  Then it goes to the header by itself, and the next job you start brings it back.
+- **Close** appears once nothing in it runs, and clears it.
+
+Several jobs share the console. It keeps the five newest, and a row of buttons switches between
+them.
+
 ## Cancel a job
 
 Choose **Cancel job**. A queued job is canceled at once. A running job stops at its next safe step,
@@ -100,6 +123,11 @@ period under the list, at **Finished jobs are kept for**.
 ## Limits
 
 - A long job delays the other jobs on its server.
+- The job console shows the jobs started in that browser tab. Jobs started by schedules, the API,
+  AI apps, other admins or other tabs are under **Automations → All jobs**.
+- A bulk run shows its progress on **Sites → Bulk management**. A **Run now** that starts several
+  jobs lists them under its schedule.
+- The job console's place belongs to the browser, not to your account.
 - The panel runs at most eight jobs at the same time, across all servers.
 - A job stopped partway, by a cancel or a timeout, can leave its work half done. Its log shows how
   far it got.

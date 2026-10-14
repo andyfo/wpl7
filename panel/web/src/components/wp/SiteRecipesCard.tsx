@@ -2,8 +2,7 @@
 import { Link } from 'react-router';
 import type { SiteLicenseDto } from '../../../../shared/types';
 import { useRunJob, useSiteRecipes } from '../../api/hooks';
-import { Button, Card, StatusBadge } from '../ui';
-import { JobProgress } from '../JobProgress';
+import { Button, Card, ErrorNote, StatusBadge } from '../ui';
 import { timeAgo } from '../../lib/format';
 
 const badgeText = (status: SiteLicenseDto['status']): string =>
@@ -87,9 +86,9 @@ export function SiteRecipesCard({ slug }: { slug: string }) {
           ))}
         </tbody>
       </table>
-      {run.job && (
+      {run.error && (
         <div className="mt-3">
-          <JobProgress job={run.job} logs={run.logs} />
+          <ErrorNote error={run.error} />
         </div>
       )}
     </Card>

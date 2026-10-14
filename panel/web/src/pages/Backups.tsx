@@ -15,7 +15,6 @@ import {
   RestoreBackupDialog,
 } from '../components/backups/BackupParts';
 import { DeleteOldBackupsDialog } from '../components/backups/DeleteOldBackups';
-import { JobProgress } from '../components/JobProgress';
 import { Icon } from '../components/Icon';
 import { Button, Card, EmptyState, ErrorNote, Field, inputClass, Spinner, StatusBadge } from '../components/ui';
 import {
@@ -334,7 +333,6 @@ export function Backups() {
           <ErrorNote error={list.error} />
           <ErrorNote error={run.error} />
           <ErrorNote error={actionError} />
-          <JobProgress job={run.job} logs={run.logs} />
           {selectedDeleted && (
             // Retention is per slug and does not know a site is gone: its scheduled backups are
             // still thinned to the newest N, here and at each destination, and every kind but final

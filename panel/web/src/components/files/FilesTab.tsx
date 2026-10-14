@@ -10,7 +10,6 @@ import { useRunJob, useSiteFiles } from '../../api/hooks';
 import { imageTypeFor, isKnownBinary, isZip } from '../../lib/fileKinds';
 import { Button, ConfirmDialog, EmptyState, ErrorNote, inputClass, Spinner } from '../ui';
 import { Icon } from '../Icon';
-import { JobProgress } from '../JobProgress';
 import { isFolderLike, type MenuItem } from './common';
 import { FileTable } from './FileTable';
 import { ChmodDialog, CompressDialog, ExtractDialog, MoveDialog, NewEntryDialog } from './FileDialogs';
@@ -275,7 +274,6 @@ export function FilesTab({ slug }: { slug: string }) {
                 </Button>
               </div>
             </EmptyState>
-            <JobProgress job={startJob.job} logs={startJob.logs} />
             <ErrorNote error={startJob.error} />
           </div>
         </div>
@@ -332,7 +330,6 @@ export function FilesTab({ slug }: { slug: string }) {
             />
           )}
           <UploadPanel uploads={uploads} />
-          <JobProgress job={archiveJob.job} logs={archiveJob.logs} />
           {notice && <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">{notice}</div>}
           <ErrorNote error={actionError} />
           {listing.data && !listing.data.writable && (

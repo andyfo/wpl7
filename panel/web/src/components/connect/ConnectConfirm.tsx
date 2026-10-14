@@ -6,6 +6,7 @@ import { describeCron } from '../../../../shared/cron';
 import type { ConnectionDto, JobDto, SiteSummary } from '../../../../shared/types';
 import { api } from '../../api/client';
 import { useMeta } from '../../api/hooks';
+import { useFollowJob } from '../jobConsole/context';
 import { formatBytes, localeName } from '../../lib/format';
 import { Button, Card, ConfirmDialog, ErrorNote, Field, Spinner, Toggle, inputClass } from '../ui';
 
@@ -21,6 +22,7 @@ export function ConnectConfirm({ conn, onAdded }: { conn: ConnectionDto; onAdded
   const meta = useMeta();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const follow = useFollowJob();
   const report = conn.report!;
   const s = conn.suggestions!;
   const [slug, setSlug] = useState(s.slug);
@@ -55,8 +57,8 @@ export function ConnectConfirm({ conn, onAdded }: { conn: ConnectionDto; onAdded
   const servers = meta.data?.servers ?? [];
   const multiServer = meta.data?.multiServer ?? false;
   const add = useMutation({
-    mutationFn: () =>
-      api<{ site: SiteSummary; jobs: JobDto[] }>(`/api/connections/${conn.id}/add`, {
+    mutationFn: async () => {
+      const res = await api<{ site: SiteSummary; jobs: JobDto[] }>(`/api/connections/${conn.id}/add`, {
         method: 'POST',
         body: {
           slug,
@@ -64,7 +66,11 @@ export function ConnectConfirm({ conn, onAdded }: { conn: ConnectionDto; onAdded
           ...(multiServer ? { storageServerId: serverId } : {}),
           backups,
         },
-      }),
+      });
+      // Its first scan, and its first backup when one was asked for.
+      for (const job of res.jobs) follow(job, { refresh: [['site', res.site.slug], ['backups', res.site.slug]] });
+      return res;
+    },
     onSuccess: (res) => {
       onAdded(res.jobs.find((j) => j.type === 'backup.create')?.id ?? null);
       refresh();

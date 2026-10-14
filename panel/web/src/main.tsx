@@ -4,6 +4,7 @@ import { createBrowserRouter, RouterProvider, type RouteObject } from 'react-rou
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import './styles.css';
 import { Layout } from './components/Layout';
+import { JobConsoleProvider } from './components/jobConsole/JobConsoleProvider';
 import { Login } from './pages/Login';
 import { ResetPassword } from './pages/ResetPassword';
 import { ConfirmEmail } from './pages/ConfirmEmail';
@@ -107,7 +108,12 @@ const router = createBrowserRouter([
       { path: '/oauth/authorize', element: <OAuthAuthorize /> },
       {
         path: '/',
-        element: <Layout />,
+        // The job console's state, and the reader of the jobs it follows, for every page under it.
+        element: (
+          <JobConsoleProvider>
+            <Layout />
+          </JobConsoleProvider>
+        ),
         // A page that throws is replaced by PageError, and the sidebar stays.
         children: [{ errorElement: <PageError />, children: pages }],
       },

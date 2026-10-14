@@ -6,7 +6,6 @@ import { api } from '../../api/client';
 import { useMeta, useRunJob, useSite, useSiteHistory } from '../../api/hooks';
 import { formatDate, timeAgo } from '../../lib/format';
 import { siteHealth } from '../../lib/siteHealth';
-import { JobProgress } from '../JobProgress';
 import { Sparkline } from '../Sparkline';
 import { Button, Card, ConfirmDialog, ErrorNote, Spinner } from '../ui';
 import { WpAdminLoginButton } from '../WpAdminLoginButton';
@@ -142,10 +141,11 @@ export function ExternalOverview({ slug }: { slug: string }) {
             />
           </ConfirmDialog>
         )}
-        <div className="mt-3">
-          <ErrorNote error={run.error} />
-          <JobProgress job={run.job} logs={run.logs} />
-        </div>
+        {run.error && (
+          <div className="mt-3">
+            <ErrorNote error={run.error} />
+          </div>
+        )}
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">

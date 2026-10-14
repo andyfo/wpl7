@@ -1,12 +1,10 @@
 // @docs automations/jobs
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link } from 'react-router';
 import type { JobDto, JobLogLine } from '../../../shared/types';
-import { jobLabel } from '../../../shared/jobTypes';
 import { isTerminal } from '../api/hooks';
 import { formatClock, formatDate } from '../lib/format';
 import { filterLog, levelCounts, logToText, type LogLevelFilter } from '../lib/jobLog';
-import { Button, inputClass, JobStatusBadge, Segmented, Spinner } from './ui';
+import { Button, inputClass, Segmented, Spinner } from './ui';
 
 /** Lines the full log renders at once; "Show earlier" adds this many more. */
 const LOG_WINDOW = 2000;
@@ -105,9 +103,9 @@ const LogLine = memo(function LogLine({ line, needle, highlight }: { line: JobLo
 });
 
 /**
- * A job's log. `inline` is the small box under an action that queued a job (about ten
- * places use it); `full` is the job page's: a level filter, search, Copy and Download, and
- * room for a long log without rendering all of it at once.
+ * A job's log. `inline` is the job console's small box (components/jobConsole); `full` is the
+ * job page's: a level filter, search, Copy and Download, and room for a long log without
+ * rendering all of it at once.
  */
 export function JobLogViewer({
   logs,
@@ -132,16 +130,34 @@ export function JobLogViewer({
 function InlineLog({ logs }: { logs: JobLogLine[] }) {
   const follow = useFollowTail(logs.length, logs.length, '');
   if (logs.length === 0) return null;
+  // In the console's column, the log is what gives way on a short window - to four lines or so.
   return (
-    <div
-      ref={follow.ref}
-      onScroll={follow.onScroll}
-      className="max-h-64 overflow-y-auto rounded-lg bg-neutral-950 p-3 font-mono text-xs leading-relaxed"
-    >
-      {logs.map((l) => (
-        <LogLine key={l.seq} line={l} needle="" highlight={false} />
-      ))}
+    <div className="relative flex min-h-16 flex-col">
+      <div
+        ref={follow.ref}
+        onScroll={follow.onScroll}
+        className="max-h-[min(20rem,50vh)] min-h-0 overflow-y-auto rounded-lg bg-neutral-950 p-3 font-mono text-xs leading-relaxed"
+      >
+        {logs.map((l) => (
+          <LogLine key={l.seq} line={l} needle="" highlight={false} />
+        ))}
+      </div>
+      <NewLinesPill unseen={follow.unseen} onClick={follow.toEnd} />
     </div>
+  );
+}
+
+/** Lines that came in below a reader who scrolled up, and the way back down to them. */
+function NewLinesPill({ unseen, onClick }: { unseen: number; onClick: () => void }) {
+  if (unseen <= 0) return null;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="button-primary absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full px-3 py-1 text-xs font-medium shadow-lg"
+    >
+      {unseen} new {unseen === 1 ? 'line' : 'lines'} ↓
+    </button>
   );
 }
 
@@ -346,36 +362,8 @@ function FullLog({
             <div className="mt-1 text-[#a1a1aa]">Loading the rest of the log…</div>
           )}
         </div>
-        {follow.unseen > 0 && (
-          <button
-            type="button"
-            onClick={follow.toEnd}
-            className="button-primary absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full px-3 py-1 text-xs font-medium shadow-lg"
-          >
-            {follow.unseen} new {follow.unseen === 1 ? 'line' : 'lines'} ↓
-          </button>
-        )}
+        <NewLinesPill unseen={follow.unseen} onClick={follow.toEnd} />
       </div>
-    </div>
-  );
-}
-
-/** Inline progress block for a 202-job: what it is, how it is doing, its live log. */
-export function JobProgress({ job, logs }: { job: JobDto | null; logs: JobLogLine[] }) {
-  if (!job) return null;
-  return (
-    <div className="space-y-2 rounded-lg border border-neutral-200 bg-neutral-50 p-3">
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        {!isTerminal(job.status) && <Spinner />}
-        <span className="font-medium">{jobLabel(job.type)}</span>
-        <JobStatusBadge status={job.status} stopping={job.cancelRequested} />
-        <Link to={`/jobs/${job.id}`} className="ml-auto text-xs text-neutral-500 hover:text-neutral-800 hover:underline">
-          Open job →
-        </Link>
-      </div>
-      {job.summary && <div className="text-xs text-neutral-500">{job.summary}</div>}
-      {job.error && <div className="text-xs text-red-700">{job.error}</div>}
-      <JobLogViewer logs={logs} />
     </div>
   );
 }

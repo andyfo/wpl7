@@ -35,6 +35,7 @@ import { backupBeforeUpdatesOf } from '../../../shared/updateBackups';
 import { FeedFooter } from '../components/wp/FeedFooter';
 import { CoverageNote, SeverityBadge } from '../components/wp/severity';
 import { VulnerabilityList } from '../components/wp/VulnerabilityList';
+import { useFollowJob } from '../components/jobConsole/context';
 import { timeAgo } from '../lib/format';
 
 const KINDS: { id: WpComponentKind; label: string }[] = [
@@ -62,6 +63,7 @@ export function BulkManagement() {
   const [params, setParams] = useSearchParams();
   const meta = useMeta();
   const qc = useQueryClient();
+  const follow = useFollowJob();
   const [kind, setKind] = useState<WpComponentKind>((params.get('kind') as WpComponentKind) ?? 'plugin');
   const [filters, setFilters] = useState<WpInventoryFilter[]>(
     (params.get('filter')?.split(',').filter(Boolean) as WpInventoryFilter[]) ?? [],
@@ -213,7 +215,8 @@ export function BulkManagement() {
     setScanning(true);
     setError(null);
     try {
-      await api('/api/wp/scan', { method: 'POST' });
+      const res = await api<{ job: JobDto }>('/api/wp/scan', { method: 'POST' });
+      follow(res.job, { refresh: [['wp-inventory']] });
       await qc.invalidateQueries({ queryKey: ['wp-inventory'] });
     } catch (err) {
       setError(err);
