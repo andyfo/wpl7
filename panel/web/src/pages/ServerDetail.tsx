@@ -33,7 +33,6 @@ import {
   Toggle,
   UpDot,
 } from '../components/ui';
-import { JobProgress } from '../components/JobProgress';
 import { ResourceCharts } from '../components/ResourceCharts';
 import { StorageModal } from '../components/StorageModal';
 import { serverFtpSummary } from '../lib/ftpStatus';
@@ -178,7 +177,6 @@ export function ServerDetail() {
         </div>
         <div className="mt-3 space-y-3">
           <ErrorNote error={actionError ?? update.error} />
-          <JobProgress job={update.job} logs={update.logs} />
           {checks && (
             <div className="rounded-lg bg-neutral-50 p-3">
               <ChecksList checks={checks} />

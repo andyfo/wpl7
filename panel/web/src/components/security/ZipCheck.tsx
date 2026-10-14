@@ -1,8 +1,9 @@
 // @docs plugins/catalog, security/malware-scans, security/site-protection
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import type { PluginDto, PluginZipCheckDto, PluginZipFindingDto } from '../../../../shared/types';
+import type { JobDto, PluginDto, PluginZipCheckDto, PluginZipFindingDto } from '../../../../shared/types';
 import { api } from '../../api/client';
+import { useFollowJob } from '../jobConsole/context';
 import { timeAgo } from '../../lib/format';
 import { Button, ErrorNote, Modal, Spinner } from '../ui';
 
@@ -100,14 +101,18 @@ export function ZipCheckDialog({ plugin, onClose }: { plugin: PluginDto; onClose
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const follow = useFollowJob();
+  const changed = [['plugin-catalog'], ['plugin-zip-check', plugin.id]];
   const refresh = async () => {
-    await Promise.all([qc.invalidateQueries({ queryKey: ['plugin-catalog'] }), qc.invalidateQueries({ queryKey: ['plugin-zip-check', plugin.id] })]);
+    await Promise.all(changed.map((queryKey) => qc.invalidateQueries({ queryKey })));
   };
   const act = async (path: string) => {
     setBusy(true);
     setError(null);
     try {
-      await api(path, { method: 'POST' });
+      // A check runs as a job (the one already waiting, when there is one); a review is done at once.
+      const res = await api<{ job?: JobDto }>(path, { method: 'POST' });
+      if (res.job) follow(res.job, { refresh: changed });
       await refresh();
     } catch (err) {
       setError(err);

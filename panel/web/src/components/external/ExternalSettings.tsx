@@ -6,7 +6,6 @@ import type { ConnectionDto, SiteDetail } from '../../../../shared/types';
 import { api } from '../../api/client';
 import { useMeta, useRunJob, useSite } from '../../api/hooks';
 import { connectionPath } from '../../lib/connections';
-import { JobProgress } from '../JobProgress';
 import { Button, Card, ConfirmDialog, ErrorNote, Field, Spinner, Toggle, inputClass } from '../ui';
 
 /** A site hosted elsewhere: who the panel acts as, where its backups are kept, and its connection. */
@@ -127,10 +126,7 @@ export function ExternalSettings({ slug }: { slug: string }) {
         </div>
       </Card>
 
-      <div>
-        <ErrorNote error={run.error} />
-        <JobProgress job={run.job} logs={run.logs} />
-      </div>
+      <ErrorNote error={run.error} />
 
       <Card title="Danger zone">
         <div className="flex items-center justify-between gap-4">

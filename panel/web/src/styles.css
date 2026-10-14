@@ -575,6 +575,131 @@
   color: var(--n400);
   transition: color 0.15s;
 }
+/*
+ * The job console (components/jobConsole): over the page, the sidebar and its fly-outs, and the
+ * phone drawer's backdrop (30); under the phone drawer (40) and dialogs (50), so it never covers
+ * a dialog - one that starts a job closes once the job is queued. One width whether the log
+ * shows or not, so its buttons never move sideways under the pointer.
+ */
+.job-console {
+  position: fixed;
+  z-index: 35;
+  width: min(28rem, calc(100% - 32px));
+  border: 1px solid var(--n200);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow:
+    0 12px 32px #18181b1f,
+    0 2px 6px #18181b0d;
+  animation: job-console-in 0.16s ease-out;
+}
+:root[data-theme='dark'] .job-console {
+  border-color: var(--n300);
+  box-shadow:
+    0 12px 32px #00000066,
+    0 2px 6px #00000033;
+}
+@keyframes job-console-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.job-console-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  color: var(--n400);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.job-console-handle:hover {
+  background: var(--n100);
+  color: var(--n700);
+}
+.job-console-handle:active {
+  cursor: grabbing;
+}
+.job-console-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  color: var(--n500);
+}
+.job-console-button:hover {
+  background: var(--n100);
+  color: var(--n900);
+}
+.job-console-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  animation: job-console-spin 0.8s linear infinite;
+}
+@keyframes job-console-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* The minimized console, before the version in the header. */
+.job-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin-right: 4px;
+  padding: 0 10px;
+  border: 1px solid var(--n200);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--n700);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  animation: job-console-in 0.16s ease-out;
+  transition:
+    border-color 0.15s,
+    color 0.15s;
+}
+.job-chip:hover {
+  border-color: var(--n300);
+  color: var(--n900);
+}
+.job-chip-done svg {
+  color: var(--color-emerald-700);
+}
+.job-chip-failed {
+  border-color: var(--color-red-300);
+  color: var(--color-red-700);
+}
+.job-chip-failed:hover {
+  color: var(--color-red-800);
+}
+/* While the header is scrolled out of view. */
+.job-chip-pinned {
+  position: fixed;
+  z-index: 35;
+  top: 12px;
+  right: 16px;
+  margin: 0;
+  box-shadow: 0 4px 14px #18181b1f;
+}
+:root[data-theme='dark'] .job-chip-pinned {
+  box-shadow: 0 4px 14px #00000059;
+}
 .main-content {
   padding: 38px 40px 50px;
 }
@@ -1055,6 +1180,13 @@
   .version-tag {
     font-size: 11px;
     gap: 5px;
+  }
+  /* Its words stay in its name and its tooltip. */
+  .job-chip-label {
+    display: none;
+  }
+  .job-chip {
+    padding: 0 7px;
   }
   .dashboard-table {
     min-width: 560px;

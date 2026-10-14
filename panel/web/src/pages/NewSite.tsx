@@ -3,8 +3,19 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { RecipeDto, WporgPluginDto } from '../../../shared/types';
 import { useMeta, usePluginCatalog, useRecipes, useRunJob, isTerminal } from '../api/hooks';
-import { Button, Card, CopyField, ErrorNote, ExternalLinkIcon, Field, OutLink, Toggle, inputClass } from '../components/ui';
-import { JobProgress } from '../components/JobProgress';
+import {
+  Button,
+  Card,
+  CopyField,
+  ErrorNote,
+  ExternalLinkIcon,
+  Field,
+  JobStatusBadge,
+  OutLink,
+  Spinner,
+  Toggle,
+  inputClass,
+} from '../components/ui';
 import { WporgPluginSearch } from '../components/WporgPluginSearch';
 import { LocaleSelect } from '../components/LocaleSelect';
 import { localeName } from '../lib/format';
@@ -109,6 +120,8 @@ export function NewSite() {
 
   const oneTimePassword = (run.job?.result as { adminPassword?: string } | null)?.adminPassword;
   const done = isTerminal(run.job?.status);
+  /** The job can no longer be read; `run.error` says why. */
+  const lost = run.jobId !== null && run.error !== null;
 
   if (run.jobId !== null) {
     return (
@@ -116,7 +129,13 @@ export function NewSite() {
         <h1 className="page-title">Creating “{title}”</h1>
         <Card>
           <div className="space-y-4">
-            <JobProgress job={run.job} logs={run.logs} />
+            {/* How it is going. Its log is in the job console. */}
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              {!done && !lost && <Spinner />}
+              {run.job && <JobStatusBadge status={run.job.status} stopping={run.job.cancelRequested} />}
+              {run.job?.status === 'failed' && run.job.error && <span className="text-red-700">{run.job.error}</span>}
+            </div>
+            <ErrorNote error={lost ? run.error : null} />
             {done && run.job?.status === 'succeeded' && (
               <div className="space-y-3">
                 <p className="text-sm text-emerald-700">
@@ -144,7 +163,7 @@ export function NewSite() {
                 </Link>
               </div>
             )}
-            {done && run.job?.status !== 'succeeded' && (
+            {((done && run.job?.status !== 'succeeded') || lost) && (
               <Button variant="secondary" onClick={() => run.reset()}>
                 Back to the form
               </Button>

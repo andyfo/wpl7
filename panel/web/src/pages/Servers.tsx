@@ -2,8 +2,8 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { ServerCheck, ServerDto } from '../../../shared/types';
-import { isTerminal, useMeta, useMonitor, useRunJob, useServers, useSshPublicKey } from '../api/hooks';
+import type { JobDto, ServerCheck, ServerDto } from '../../../shared/types';
+import { useMeta, useMonitor, useRunJob, useServers, useSshPublicKey } from '../api/hooks';
 import { api } from '../api/client';
 import {
   Button,
@@ -21,8 +21,8 @@ import {
   Tabs,
   UpDot,
 } from '../components/ui';
-import { JobProgress } from '../components/JobProgress';
 import { StorageModal } from '../components/StorageModal';
+import { useFollowJob } from '../components/jobConsole/context';
 import { formatBytes, timeAgo } from '../lib/format';
 
 export function Servers() {
@@ -202,7 +202,7 @@ function AddServerModal({ onClose }: { onClose: () => void }) {
   const [registerResult, setRegisterResult] = useState<{ checks: ServerCheck[]; failed: boolean } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const done = isTerminal(run.job?.status);
+  const follow = useFollowJob();
 
   const fleetDevDomain = meta.data?.devDomain ?? '';
   const effectiveDevDomain = devDomain || fleetDevDomain;
@@ -219,12 +219,15 @@ function AddServerModal({ onClose }: { onClose: () => void }) {
       ...(mode === 'provision' ? { acmeEmail } : {}),
     };
     if (mode === 'provision') {
-      run.mutate({ path: '/api/servers', body });
+      // Closes once provisioning is queued: the job console follows it from there.
+      run.mutate({ path: '/api/servers', body }, { onSuccess: onClose });
       return;
     }
     setSubmitting(true);
     try {
-      const res = await api<{ checks: ServerCheck[] }>('/api/servers', { method: 'POST', body });
+      const res = await api<{ checks: ServerCheck[]; job: JobDto }>('/api/servers', { method: 'POST', body });
+      // Its plugin zips, copied over in the background.
+      follow(res.job, { refresh: [['servers'], ['meta']] });
       setRegisterResult({ checks: res.checks, failed: false });
       void qc.invalidateQueries({ queryKey: ['servers'] });
       void qc.invalidateQueries({ queryKey: ['meta'] });
@@ -239,16 +242,7 @@ function AddServerModal({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal title="Add server" onClose={onClose}>
-      {run.jobId !== null ? (
-        <div className="space-y-3">
-          <JobProgress job={run.job} logs={run.logs} />
-          {done && (
-            <div className="flex justify-end">
-              <Button onClick={onClose}>{run.job?.status === 'succeeded' ? 'Done' : 'Close'}</Button>
-            </div>
-          )}
-        </div>
-      ) : registerResult ? (
+      {registerResult ? (
         <div className="space-y-4">
           <ChecksList checks={registerResult.checks} />
           {registerResult.failed ? (

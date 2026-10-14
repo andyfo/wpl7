@@ -19,7 +19,6 @@ import {
   StatTile,
   Toggle,
 } from '../ui';
-import { JobProgress } from '../JobProgress';
 import { SiteRecipesCard } from './SiteRecipesCard';
 import { WporgPluginSearch } from '../WporgPluginSearch';
 import { timeAgo } from '../../lib/format';
@@ -279,10 +278,11 @@ export function WordPressTab({ slug }: { slug: string }) {
           </p>
         )}
         <ActionError error={errorOf('scan')} />
-        <div className="mt-3">
-          <ErrorNote error={run.error} />
-          <JobProgress job={run.job} logs={run.logs} />
-        </div>
+        {run.error && (
+          <div className="mt-3">
+            <ErrorNote error={run.error} />
+          </div>
+        )}
       </Card>
 
       {/* -------------------------------------------------------- security */}

@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  isTerminal,
   useBackups,
   useMeta,
   useRunJob,
@@ -42,7 +41,6 @@ import {
   RestoreBackupDialog,
 } from '../components/backups/BackupParts';
 import { describeCron } from '../../../shared/cron';
-import { JobProgress } from '../components/JobProgress';
 import { KeepDaysSetting } from '../components/backups/KeepDays';
 import { BackupBeforeUpdatesSetting } from '../components/backups/BackupBeforeUpdates';
 import { WpAdminLoginButton } from '../components/WpAdminLoginButton';
@@ -238,10 +236,11 @@ function OverviewTab({ slug }: { slug: string }) {
             </Button>
             <span className="text-xs">since {timeAgo(cleanup.since)}</span>
           </div>
-          <div className="mt-2">
-            <ErrorNote error={finalize.error} />
-            <JobProgress job={finalize.job} logs={finalize.logs} />
-          </div>
+          {finalize.error && (
+            <div className="mt-2">
+              <ErrorNote error={finalize.error} />
+            </div>
+          )}
         </div>
       )}
       {s.importSource?.connected && s.importSource.status === 'done' && <ImportedBanner slug={slug} source={s.importSource} />}
@@ -267,10 +266,11 @@ function OverviewTab({ slug }: { slug: string }) {
             </Button>
           )}
         </div>
-        <div className="mt-3">
-          <ErrorNote error={run.error} />
-          <JobProgress job={run.job} logs={run.logs} />
-        </div>
+        {run.error && (
+          <div className="mt-3">
+            <ErrorNote error={run.error} />
+          </div>
+        )}
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -322,7 +322,6 @@ function MoveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
   const run = useRunJob([['site', slug], ['servers']]);
   const [targetId, setTargetId] = useState<number | null>(null);
   const [quiesce, setQuiesce] = useState<'maintenance' | 'none'>('maintenance');
-  const done = isTerminal(run.job?.status);
   const s = site.data;
   if (!s) return null;
 
@@ -332,98 +331,91 @@ function MoveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
   const dnsManaged = meta.data?.dnsManaged ?? false;
 
   return (
+    // Closes once the move is queued: the job console follows it from there.
     <Modal title="Move to another server" onClose={onClose}>
-      {run.jobId === null ? (
-        <div className="space-y-4 text-sm">
-          {candidates.length === 0 ? (
-            <p className="text-neutral-600">No other healthy server available.</p>
-          ) : (
-            <>
-              <Field label="Target server">
-                <select
-                  className={inputClass}
-                  value={target?.id ?? ''}
-                  onChange={(e) => setTargetId(Number(e.target.value))}
-                >
-                  {candidates.map((srv) => (
-                    <option key={srv.id} value={srv.id}>
-                      {srv.name} ({srv.publicIp || srv.sshHost})
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              <div className="rounded-lg bg-neutral-50 p-3 text-xs text-neutral-600">
-                Files and database are copied over, the site starts on the new server, then traffic switches:
-                {s.devHostname && (
-                  <div className="mt-1">
-                    • <code>{s.devHostname}</code>{' '}
-                    {dnsManaged ? 'flips automatically via the DNS API.' : 'needs its DNS record updated manually.'}
+      <div className="space-y-4 text-sm">
+        {candidates.length === 0 ? (
+          <p className="text-neutral-600">No other healthy server available.</p>
+        ) : (
+          <>
+            <Field label="Target server">
+              <select
+                className={inputClass}
+                value={target?.id ?? ''}
+                onChange={(e) => setTargetId(Number(e.target.value))}
+              >
+                {candidates.map((srv) => (
+                  <option key={srv.id} value={srv.id}>
+                    {srv.name} ({srv.publicIp || srv.sshHost})
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <div className="rounded-lg bg-neutral-50 p-3 text-xs text-neutral-600">
+              Files and database are copied over, the site starts on the new server, then traffic switches:
+              {s.devHostname && (
+                <div className="mt-1">
+                  • <code>{s.devHostname}</code>{' '}
+                  {dnsManaged ? 'flips automatically via the DNS API.' : 'needs its DNS record updated manually.'}
+                </div>
+              )}
+              {customHosts.length > 0 && (
+                <div className="mt-1">
+                  • The old server forwards visitors until your DNS change propagates.
+                </div>
+              )}
+            </div>
+            {customHosts.length > 0 && target && (
+              <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+                <div className="mb-1 font-medium">Update these A records to the new server:</div>
+                {customHosts.map((h) => (
+                  <div key={h}>
+                    <code>{h}</code> → <code>{target.publicIp || '(target IP)'}</code>
                   </div>
-                )}
-                {customHosts.length > 0 && (
-                  <div className="mt-1">
-                    • The old server forwards visitors until your DNS change propagates.
-                  </div>
-                )}
+                ))}
+                {target.publicIp && <div className="mt-2"><CopyField value={target.publicIp} tone="plain" /></div>}
+                <div className="mt-1">
+                  Tip: lower the records&apos; TTL to 300 beforehand.
+                  {meta.data?.mailMode === 'direct' && ' Also add the new IP to the domains’ SPF records (docs/dns.md).'}
+                </div>
               </div>
-              {customHosts.length > 0 && target && (
-                <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
-                  <div className="mb-1 font-medium">Update these A records to the new server:</div>
-                  {customHosts.map((h) => (
-                    <div key={h}>
-                      <code>{h}</code> → <code>{target.publicIp || '(target IP)'}</code>
-                    </div>
-                  ))}
-                  {target.publicIp && <div className="mt-2"><CopyField value={target.publicIp} tone="plain" /></div>}
-                  <div className="mt-1">
-                    Tip: lower the records&apos; TTL to 300 beforehand.
-                    {meta.data?.mailMode === 'direct' && ' Also add the new IP to the domains’ SPF records (docs/dns.md).'}
-                  </div>
-                </div>
-              )}
-              {s.isLive && (
-                <div className="space-y-1.5">
-                  <div className="font-medium">While copying:</div>
-                  <label className="flex items-center gap-2">
-                    <input type="radio" checked={quiesce === 'maintenance'} onChange={() => setQuiesce('maintenance')} />
-                    Freeze the site (maintenance page) — nothing gets lost
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <input type="radio" checked={quiesce === 'none'} onChange={() => setQuiesce('none')} />
-                    Keep serving — changes made during the copy are lost
-                  </label>
-                </div>
-              )}
-              <ErrorNote error={run.error} />
-              <div className="flex justify-end gap-2">
-                <Button variant="secondary" onClick={onClose}>Cancel</Button>
-                <Button
-                  disabled={!target}
-                  busy={run.active}
-                  onClick={() =>
-                    target &&
-                    run.mutate({
+            )}
+            {s.isLive && (
+              <div className="space-y-1.5">
+                <div className="font-medium">While copying:</div>
+                <label className="flex items-center gap-2">
+                  <input type="radio" checked={quiesce === 'maintenance'} onChange={() => setQuiesce('maintenance')} />
+                  Freeze the site (maintenance page) — nothing gets lost
+                </label>
+                <label className="flex items-center gap-2">
+                  <input type="radio" checked={quiesce === 'none'} onChange={() => setQuiesce('none')} />
+                  Keep serving — changes made during the copy are lost
+                </label>
+              </div>
+            )}
+            <ErrorNote error={run.error} />
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={onClose}>Cancel</Button>
+              <Button
+                disabled={!target}
+                busy={run.active}
+                onClick={() =>
+                  target &&
+                  run.mutate(
+                    {
                       path: `/api/sites/${slug}/move`,
                       body: { targetServerId: target.id, ...(s.isLive ? { quiesce } : {}) },
-                    })
-                  }
-                >
-                  Move site
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <JobProgress job={run.job} logs={run.logs} />
-          {done && (
-            <div className="flex justify-end">
-              <Button onClick={onClose}>{run.job?.status === 'succeeded' ? 'Done' : 'Close'}</Button>
+                    },
+                    { onSuccess: onClose },
+                  )
+                }
+              >
+                Move site
+              </Button>
             </div>
-          )}
-        </div>
-      )}
+          </>
+        )}
+      </div>
     </Modal>
   );
 }
@@ -482,7 +474,6 @@ function ImportedBanner({ slug, source }: { slug: string; source: NonNullable<Si
           </p>
         )}
         <ErrorNote error={error ?? refresh.error} />
-        <JobProgress job={refresh.job} logs={refresh.logs} />
       </div>
       {confirmRefresh && (
         <ConfirmDialog
@@ -515,76 +506,68 @@ function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
   const [manageDns, setManageDns] = useState(false);
   const [allowSearchEngines, setAllowSearchEngines] = useState(true);
   const domains = domainsText.split(/[\s,]+/).map((d) => d.trim().toLowerCase()).filter(Boolean);
-  const done = isTerminal(run.job?.status);
 
   return (
+    // Closes once going live is queued: the job console follows it from there.
     <Modal title="Go live" onClose={onClose}>
-      {run.jobId === null ? (
-        <div className="space-y-4 text-sm">
-          <p className="text-neutral-600">
-            The site keeps serving while the certificate is issued, then the canonical URL flips. Zero downtime.
-          </p>
-          <Field label="Production domains (first = primary)" hint="e.g. customer.com www.customer.com">
-            <input className={inputClass} value={domainsText} onChange={(e) => setDomainsText(e.target.value)} autoFocus />
-          </Field>
-          <Toggle checked={keepDevAlias} onChange={setKeepDevAlias} label="Keep the dev hostname as a 301 redirect" />
+      <div className="space-y-4 text-sm">
+        <p className="text-neutral-600">
+          The site keeps serving while the certificate is issued, then the canonical URL flips. Zero downtime.
+        </p>
+        <Field label="Production domains (first = primary)" hint="e.g. customer.com www.customer.com">
+          <input className={inputClass} value={domainsText} onChange={(e) => setDomainsText(e.target.value)} autoFocus />
+        </Field>
+        <Toggle checked={keepDevAlias} onChange={setKeepDevAlias} label="Keep the dev hostname as a 301 redirect" />
+        <Toggle
+          checked={allowSearchEngines}
+          onChange={setAllowSearchEngines}
+          label={
+            <span>
+              Allow search engines
+              <span className="block text-xs text-neutral-500">Unticks Discourage search engines in WordPress.</span>
+            </span>
+          }
+        />
+        {meta.data?.dnsManaged && (
           <Toggle
-            checked={allowSearchEngines}
-            onChange={setAllowSearchEngines}
+            checked={manageDns}
+            onChange={setManageDns}
             label={
               <span>
-                Allow search engines
-                <span className="block text-xs text-neutral-500">Unticks Discourage search engines in WordPress.</span>
+                Point them at this server through Cloudflare
+                <span className="block text-xs text-neutral-500">
+                  Creates or replaces their <code>A</code> records, where the token in Settings → DNS reaches the zone.
+                </span>
               </span>
             }
           />
-          {meta.data?.dnsManaged && (
-            <Toggle
-              checked={manageDns}
-              onChange={setManageDns}
-              label={
-                <span>
-                  Point them at this server through Cloudflare
-                  <span className="block text-xs text-neutral-500">
-                    Creates or replaces their <code>A</code> records, where the token in Settings → DNS reaches the zone.
-                  </span>
-                </span>
-              }
-            />
-          )}
-          <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
-            {manageDns
-              ? 'A domain whose zone the token does not reach still needs its A record pointed at this server by hand.'
-              : <>Before continuing, point DNS at this server: an <code>A</code> record for the apex and for <code>www</code>.</>}
-            {meta.data?.mailMode === 'smarthost' && ' For email deliverability also add your SMTP provider’s SPF/DKIM records.'}
-          </div>
-          <ErrorNote error={run.error} />
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={onClose}>Cancel</Button>
-            <Button
-              disabled={domains.length === 0}
-              busy={run.active}
-              onClick={() =>
-                run.mutate({
+        )}
+        <div className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
+          {manageDns
+            ? 'A domain whose zone the token does not reach still needs its A record pointed at this server by hand.'
+            : <>Before continuing, point DNS at this server: an <code>A</code> record for the apex and for <code>www</code>.</>}
+          {meta.data?.mailMode === 'smarthost' && ' For email deliverability also add your SMTP provider’s SPF/DKIM records.'}
+        </div>
+        <ErrorNote error={run.error} />
+        <div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button
+            disabled={domains.length === 0}
+            busy={run.active}
+            onClick={() =>
+              run.mutate(
+                {
                   path: `/api/sites/${slug}/go-live`,
                   body: { domains, keepDevAlias, allowSearchEngines, ...(manageDns ? { manageDns: true } : {}) },
-                })
-              }
-            >
-              Go live
-            </Button>
-          </div>
+                },
+                { onSuccess: onClose },
+              )
+            }
+          >
+            Go live
+          </Button>
         </div>
-      ) : (
-        <div className="space-y-3">
-          <JobProgress job={run.job} logs={run.logs} />
-          {done && (
-            <div className="flex justify-end">
-              <Button onClick={onClose}>{run.job?.status === 'succeeded' ? 'Done' : 'Close'}</Button>
-            </div>
-          )}
-        </div>
-      )}
+      </div>
     </Modal>
   );
 }
@@ -1024,11 +1007,12 @@ function BackupsTab({ slug }: { slug: string }) {
           </span>
         }
       >
-        <div className="mb-3">
-          <ErrorNote error={run.error} />
-          <ErrorNote error={actionError} />
-          <JobProgress job={run.job} logs={run.logs} />
-        </div>
+        {!!(run.error || actionError) && (
+          <div className="mb-3">
+            <ErrorNote error={run.error} />
+            <ErrorNote error={actionError} />
+          </div>
+        )}
         {site.data?.external && (
           <p className="mb-3 text-xs text-neutral-500">
             {meta.data?.multiServer ? `Kept on ${site.data.external.storageServerName}. ` : ''}
@@ -1207,10 +1191,7 @@ function SettingsTab({ slug }: { slug: string }) {
         </div>
       </Card>
 
-      <div>
-        <ErrorNote error={run.error} />
-        <JobProgress job={run.job} logs={run.logs} />
-      </div>
+      <ErrorNote error={run.error} />
 
       <Card title="Danger zone">
         <div className="flex items-center justify-between">

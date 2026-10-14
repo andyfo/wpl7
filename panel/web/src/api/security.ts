@@ -19,6 +19,7 @@ import type {
 } from '../../../shared/types';
 import type { CustomRule, FindingStatus, ScanOnFinding, SecurityLevel, SecurityOverrides } from '../../../shared/security';
 import { api } from './client';
+import { useFollowJob } from '../components/jobConsole/context';
 
 /** Everything under Security, invalidated together: one change shows everywhere at once. */
 const ALL = ['security'];
@@ -118,18 +119,32 @@ export interface SiteSecurityPatch {
 export const useUpdateSiteSecurity = (slug: string) =>
   useSecurityMutation((patch: SiteSecurityPatch) => api<SiteSecurityDto>(`/api/sites/${slug}/security`, { method: 'PUT', body: patch }));
 
-export const useScanNow = (slug: string) =>
-  useSecurityMutation(() => api<{ job: JobDto }>(`/api/sites/${slug}/security/scan`, { method: 'POST' }));
+export const useScanNow = (slug: string) => {
+  const follow = useFollowJob();
+  return useSecurityMutation(async () => {
+    // The scan already waiting, when there is one: the console shows that one.
+    const res = await api<{ job: JobDto }>(`/api/sites/${slug}/security/scan`, { method: 'POST' });
+    follow(res.job, { refresh: [ALL] });
+    return res;
+  });
+};
 
 export const useScanSettings = (slug: string) =>
   useSecurityMutation((body: { enabled?: boolean | null; onFinding?: ScanOnFinding | null }) =>
     api<SiteScanDto>(`/api/sites/${slug}/security/scan/settings`, { method: 'PUT', body }),
   );
 
-export const useFindingAction = (slug: string) =>
-  useSecurityMutation(({ id, action }: { id: number; action: 'ignore' | 'unignore' | 'resolve' | 'reinstall' | 'put-back' | 'quarantine' }) =>
-    api<unknown>(`/api/sites/${slug}/security/findings/${id}/${action}`, { method: 'POST' }),
+export const useFindingAction = (slug: string) => {
+  const follow = useFollowJob();
+  return useSecurityMutation(
+    async ({ id, action }: { id: number; action: 'ignore' | 'unignore' | 'resolve' | 'reinstall' | 'put-back' | 'quarantine' }) => {
+      const res = await api<unknown>(`/api/sites/${slug}/security/findings/${id}/${action}`, { method: 'POST' });
+      // These two run as jobs - a reinstall, a scan after the put-back; the rest is done when it answers.
+      if (action === 'reinstall' || action === 'put-back') follow((res as { job: JobDto }).job, { refresh: [ALL] });
+      return res;
+    },
   );
+};
 
 export const useQuarantineAction = (slug: string) =>
   useSecurityMutation(({ id, action }: { id: number; action: 'restore' | 'delete' }) =>

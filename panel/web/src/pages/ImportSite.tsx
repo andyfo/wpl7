@@ -2,11 +2,11 @@
 import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ImportConnectionCodeDto, ImportDto } from '../../../shared/types';
+import type { ImportConnectionCodeDto, ImportDto, JobDto } from '../../../shared/types';
 import { api } from '../api/client';
-import { useImport, useJob } from '../api/hooks';
+import { useImport } from '../api/hooks';
 import { Button, Card, ConfirmDialog, CopyField, ErrorNote, Spinner, Toggle } from '../components/ui';
-import { JobProgress } from '../components/JobProgress';
+import { useFollowJob } from '../components/jobConsole/context';
 import { ImportConfirm } from '../components/imports/ImportConfirm';
 import { ImportsList } from '../components/imports/ImportsList';
 import { formatBytes } from '../lib/format';
@@ -174,14 +174,20 @@ function ConnectionCode({ id }: { id: number }) {
 function ImportProgressCard({ imp }: { imp: ImportDto }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const job = useJob(imp.jobId);
+  const follow = useFollowJob();
   const [confirm, setConfirm] = useState<'stop' | 'delete' | null>(null);
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['import', imp.id] });
     void qc.invalidateQueries({ queryKey: ['imports'] });
   };
   const stop = useMutation({ mutationFn: () => api(`/api/jobs/${imp.jobId}/cancel`, { method: 'POST' }), onSuccess: refresh });
-  const retry = useMutation({ mutationFn: () => api(`/api/imports/${imp.id}/retry`, { method: 'POST' }), onSuccess: refresh });
+  const retry = useMutation({
+    mutationFn: async () => {
+      const res = await api<{ job: JobDto }>(`/api/imports/${imp.id}/retry`, { method: 'POST' });
+      follow(res.job, { refresh: [['import', imp.id], ['imports']] });
+    },
+    onSuccess: refresh,
+  });
   const remove = useMutation({
     mutationFn: () => api(`/api/imports/${imp.id}`, { method: 'DELETE' }),
     onSuccess: () => {
@@ -213,7 +219,14 @@ function ImportProgressCard({ imp }: { imp: ImportDto }) {
         )}
         {(imp.status === 'pulled' || imp.status === 'finishing') && <p>Pull finished. Setting the site up…</p>}
         {failed && imp.lastError && <ErrorNote error={imp.lastError} />}
-        <JobProgress job={job.job} logs={job.logs} />
+        {/* Its log is in the job console when it was started here; from anywhere, on its page. */}
+        {imp.jobId !== null && (
+          <p>
+            <Link to={`/jobs/${imp.jobId}`} className="text-xs text-neutral-500 hover:text-neutral-800 hover:underline">
+              Open job →
+            </Link>
+          </p>
+        )}
         <div className="flex flex-wrap gap-2">
           {running && imp.jobId !== null && (
             <Button variant="secondary" onClick={() => setConfirm('stop')} disabled={stop.isPending}>

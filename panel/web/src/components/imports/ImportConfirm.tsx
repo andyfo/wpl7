@@ -2,9 +2,10 @@
 import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { ImportDto } from '../../../../shared/types';
+import type { ImportDto, JobDto } from '../../../../shared/types';
 import { api } from '../../api/client';
 import { useMeta } from '../../api/hooks';
+import { useFollowJob } from '../jobConsole/context';
 import { formatBytes, localeName } from '../../lib/format';
 import { Button, Card, ConfirmDialog, ErrorNote, Field, Toggle, inputClass } from '../ui';
 
@@ -30,6 +31,7 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
   const [muPlugins, setMuPlugins] = useState(() => new Set(s.removeMuPlugins));
   const [rewritePaths, setRewritePaths] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  const follow = useFollowJob();
 
   const remove = useMutation({
     mutationFn: () => api(`/api/imports/${imp.id}`, { method: 'DELETE' }),
@@ -43,8 +45,8 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
   const multiServer = meta.data?.multiServer ?? false;
   const effServerId = serverId ?? meta.data?.defaultServerId ?? 1;
   const start = useMutation({
-    mutationFn: () =>
-      api(`/api/imports/${imp.id}/run`, {
+    mutationFn: async () => {
+      const res = await api<{ job: JobDto }>(`/api/imports/${imp.id}/run`, {
         method: 'POST',
         body: {
           title: title.trim(),
@@ -57,7 +59,10 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
           removeMuPlugins: [...muPlugins],
           rewritePaths,
         },
-      }),
+      });
+      follow(res.job, { refresh: [['import', imp.id], ['imports']] });
+      return res;
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['import', imp.id] });
       void qc.invalidateQueries({ queryKey: ['imports'] });

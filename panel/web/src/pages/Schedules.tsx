@@ -10,6 +10,7 @@ import { Button, Card, EmptyState, ErrorNote, inputClass, Spinner } from '../com
 import { ActionDialog } from '../components/files/common';
 import { ScheduleEditor } from '../components/schedules/ScheduleEditor';
 import { ScheduleTable, type ScheduleNote } from '../components/schedules/ScheduleTable';
+import { useFollowJob } from '../components/jobConsole/context';
 import { timeAgo } from '../lib/format';
 import { backgroundSummary, isPaused, sortSchedules, targetText } from '../lib/schedules';
 
@@ -27,6 +28,7 @@ export function Schedules() {
   const schedules = useSchedules();
   const meta = useMeta();
   const qc = useQueryClient();
+  const follow = useFollowJob();
   const location = useLocation();
   const [params, setParams] = useSearchParams();
   const now = useNow(5000);
@@ -153,6 +155,10 @@ export function Schedules() {
   const runNow = async (s: ScheduleDto) => {
     note(s.id, null);
     const run = await api<ScheduleRunDto>(`/api/schedules/${s.id}/run`, { method: 'POST' });
+    // One job shows in the job console. A run of many - a backup of every site - is like a bulk
+    // run: the note below lists them, and the console would hold a row per site.
+    const [only] = run.jobs;
+    if (only && run.jobs.length === 1) follow(only, { refresh: [['schedules']] });
     // Read the schedule again before saying anything: a background task is marked running
     // before the request is answered, so from here on its row tells running from finished.
     await refresh(s);

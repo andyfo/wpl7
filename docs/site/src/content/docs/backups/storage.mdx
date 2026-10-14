@@ -41,7 +41,9 @@ can write there before it keeps the new location.
 The **Move backups** job copies each backup, checks its checksums, points the panel at the copy,
 and only then deletes the original. An interrupted move leaves each backup whole, in one place or
 the other, and running it again finishes the job. A backup that another job is using stays where
-it is, and the log names it. New backups go to the new location once the move is done.
+it is, and the log names it. New backups go to the new location once the move is done. The
+dialog closes when the job starts, and the
+[job console](/docs/automations/jobs/#watch-the-jobs-you-start) follows it.
 
 ## Move them on the panel's own server
 

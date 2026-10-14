@@ -7,6 +7,9 @@ import { ApiError, api } from '../api/client';
 import { NOT_FOUND_ROUTE } from '../pages/ErrorPages';
 import { GodmodeBolt } from './Godmode';
 import { Icon, type IconName } from './Icon';
+import { JobConsole } from './jobConsole/JobConsole';
+import { JobConsoleChip } from './jobConsole/JobConsoleChip';
+import { forgetJobConsole } from './jobConsole/JobConsoleProvider';
 import { ThemeSwitch } from './ThemeSwitch';
 import { Wordmark } from './Wordmark';
 
@@ -126,6 +129,9 @@ export function Layout() {
   const location = useLocation();
   const notFound = useMatches().some((match) => match.id === NOT_FOUND_ROUTE);
   const [open, setOpen] = useState(false);
+  // The job console sits beside the content column, and its chip in the header.
+  const header = useRef<HTMLElement>(null);
+  const content = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setOpen(false);
   }, [location.pathname]);
@@ -271,6 +277,8 @@ export function Layout() {
             aria-label="Sign out"
             onClick={async () => {
               await api('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
+              // The jobs this tab followed are not the next admin's to see here.
+              forgetJobConsole();
               // A fresh document rather than a route change: it drops every page of
               // panel data this tab had cached, and what comes back is decided by the
               // panel, which now knows there is no session.
@@ -283,7 +291,7 @@ export function Layout() {
       </aside>
       {open && <button className="sidebar-backdrop" aria-label="Close navigation" onClick={() => setOpen(false)} />}
       <div className="workspace">
-        <header className="workspace-header">
+        <header ref={header} className="workspace-header">
           <div className="flex items-center gap-3">
             <button
               type="button"
@@ -299,6 +307,7 @@ export function Layout() {
             <span className="font-medium">{notFound ? 'Not found' : page}</span>
           </div>
           <div className="version-tag">
+            <JobConsoleChip headerRef={header} />
             {/*
               The version is the way in to About. It is the one thing on every page a reader
               already looks at to answer "what am I running", so the colophon - the licence,
@@ -323,7 +332,7 @@ export function Layout() {
           </div>
         </header>
         <main id="main-content" className="main-content" tabIndex={-1}>
-          <div className="mx-auto max-w-7xl">
+          <div ref={content} className="mx-auto max-w-7xl">
             {meta.data?.maintenance && (
               // On every page, not just Settings: a write refused with no explanation is the
               // thing this banner exists to prevent.
@@ -339,6 +348,7 @@ export function Layout() {
           </div>
         </main>
       </div>
+      <JobConsole contentRef={content} />
     </div>
   );
 }

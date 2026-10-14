@@ -2,7 +2,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import type { BackupCopyDto, BackupDestinationDto, ServerCheck } from '../../../shared/types';
+import type { BackupCopyDto, BackupDestinationDto, JobDto, ServerCheck } from '../../../shared/types';
 import {
   BACKUP_PROVIDERS,
   providerByKey,
@@ -13,6 +13,7 @@ import { offsiteCopyTypes } from '../../../shared/schemas';
 import { api } from '../api/client';
 import { useBackupDestinations, useMeta, useOffsiteOverview, useServers } from '../api/hooks';
 import { StorageModal } from '../components/StorageModal';
+import { useFollowJob } from '../components/jobConsole/context';
 import {
   Button,
   Card,
@@ -350,6 +351,9 @@ function PassphraseDialog({
   );
 }
 
+/** What an offsite job changes, read again when it ends. */
+const OFFSITE_QUERIES = [['backup-destinations'], ['offsite-overview'], ['meta']];
+
 function FailuresTable({
   failures,
   onChanged,
@@ -360,6 +364,7 @@ function FailuresTable({
   onError: (err: unknown) => void;
 }) {
   const [busy, setBusy] = useState<number | null>(null);
+  const follow = useFollowJob();
   return (
     <table className="w-full text-sm">
       <thead>
@@ -404,11 +409,14 @@ function FailuresTable({
                 disabled={busy === copy.id}
                 onClick={() => {
                   setBusy(copy.id);
-                  void api(`/api/backups/${copy.backupId}/offsite`, {
+                  void api<{ job: JobDto }>(`/api/backups/${copy.backupId}/offsite`, {
                     method: 'POST',
                     body: { destinationId: copy.destinationId },
                   })
-                    .then(onChanged)
+                    .then((res) => {
+                      follow(res.job, { refresh: OFFSITE_QUERIES });
+                      onChanged();
+                    })
                     .catch(onError)
                     .finally(() => setBusy(null));
                 }}
@@ -435,6 +443,7 @@ function RemoveDestinationDialog({
   onError: (err: unknown) => void;
 }) {
   const [deleteRemote, setDeleteRemote] = useState(false);
+  const follow = useFollowJob();
   return (
     <ConfirmDialog
       title={`Remove "${dest.name}"`}
@@ -457,8 +466,12 @@ function RemoveDestinationDialog({
         )
       }
       onConfirm={() => {
-        void api(`/api/backup-destinations/${dest.id}?deleteRemote=${deleteRemote}`, { method: 'DELETE' })
-          .then(onDone)
+        void api<{ job?: JobDto }>(`/api/backup-destinations/${dest.id}?deleteRemote=${deleteRemote}`, { method: 'DELETE' })
+          .then((res) => {
+            // Deleting the copies there runs as a job; forgetting them is done at once.
+            if (res.job) follow(res.job, { refresh: OFFSITE_QUERIES });
+            onDone();
+          })
           .catch(onError);
       }}
       onClose={onClose}

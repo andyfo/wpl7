@@ -1,12 +1,12 @@
 // @docs backups/storage
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { MountOption, ServerStorageDto } from '../../../shared/types';
+import type { JobDto, MountOption, ServerStorageDto } from '../../../shared/types';
 import { backupRootProblem, normalizeAbsolutePath } from '../../../shared/backupRoot';
 import { api } from '../api/client';
-import { isTerminal, useJob, useServerStorage } from '../api/hooks';
+import { useServerStorage } from '../api/hooks';
 import { formatBytes } from '../lib/format';
-import { JobProgress } from './JobProgress';
+import { useFollowJob } from './jobConsole/context';
 import { Button, CopyField, ErrorNote, Field, inputClass, Modal, Spinner, Toggle } from './ui';
 
 /**
@@ -36,8 +36,7 @@ export function StorageModal({
   const [moveExisting, setMoveExisting] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
-  const [jobId, setJobId] = useState<number | null>(null);
-  const job = useJob(jobId);
+  const follow = useFollowJob();
 
   // Two queries on purpose: the left half always describes where backups are now, the right
   // half describes wherever the field currently points.
@@ -74,10 +73,10 @@ export function StorageModal({
   const blocked = !!localProblem || !settled || !settled.visibleInPanel;
   const existingHere = current.data?.backups.count ?? 0;
 
+  /** What a new location changes: this form's own reads, the server's row, and the panel's facts. */
+  const changed = [['server-storage'], ['servers'], ['meta']];
   const refresh = () => {
-    void qc.invalidateQueries({ queryKey: ['server-storage'] });
-    void qc.invalidateQueries({ queryKey: ['servers'] });
-    void qc.invalidateQueries({ queryKey: ['meta'] });
+    for (const queryKey of changed) void qc.invalidateQueries({ queryKey });
   };
 
   const apply = async () => {
@@ -86,11 +85,13 @@ export function StorageModal({
     setError(null);
     try {
       if (moveExisting && existingHere > 0) {
-        const res = await api<{ job: { id: number } }>(`/api/servers/${serverId}/backups/relocate`, {
+        const res = await api<{ job: JobDto }>(`/api/servers/${serverId}/backups/relocate`, {
           method: 'POST',
           body: { to: trimmed! },
         });
-        setJobId(res.job.id);
+        // The move runs on in the job console, which reads all this again when it is done.
+        follow(res.job, { refresh: changed });
+        onClose();
       } else {
         await api(`/api/servers/${serverId}`, { method: 'PATCH', body: { backupRoot: trimmed! } });
         refresh();
@@ -102,28 +103,6 @@ export function StorageModal({
       setBusy(false);
     }
   };
-
-  if (jobId !== null) {
-    return (
-      <Modal title={`Moving backups on "${serverName}"`} onClose={onClose}>
-        <div className="space-y-3">
-          <JobProgress job={job.job} logs={job.logs} />
-          {isTerminal(job.job?.status) && (
-            <div className="flex justify-end">
-              <Button
-                onClick={() => {
-                  refresh();
-                  onClose();
-                }}
-              >
-                Done
-              </Button>
-            </div>
-          )}
-        </div>
-      </Modal>
-    );
-  }
 
   return (
     <Modal title={`Backup storage on "${serverName}"`} onClose={onClose}>
