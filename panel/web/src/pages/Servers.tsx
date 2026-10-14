@@ -311,9 +311,8 @@ function AddServerModal({ onClose }: { onClose: () => void }) {
               Cancel
             </Button>
             <Button
-              disabled={
-                !name || !sshHost || !effectiveDevDomain || (mode === 'provision' && !acmeEmail) || submitting || run.isPending
-              }
+              disabled={!name || !sshHost || !effectiveDevDomain || (mode === 'provision' && !acmeEmail)}
+              busy={submitting || run.active}
               onClick={() => void submit()}
             >
               {mode === 'provision' ? 'Provision server' : 'Verify & add'}

@@ -364,7 +364,7 @@ export function NewSite() {
               Continue
             </Button>
           ) : (
-            <Button onClick={create} disabled={run.isPending}>
+            <Button onClick={create} busy={run.active}>
               Create site
             </Button>
           )}

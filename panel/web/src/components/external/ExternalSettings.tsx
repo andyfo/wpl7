@@ -137,7 +137,7 @@ export function ExternalSettings({ slug }: { slug: string }) {
           <div className="text-sm text-neutral-600">
             Removes the site from the panel. It keeps running at {ext.home}.
           </div>
-          <Button variant="danger" onClick={() => setConfirm('remove')}>
+          <Button variant="danger" busy={run.active} onClick={() => setConfirm('remove')}>
             Remove from panel
           </Button>
         </div>
