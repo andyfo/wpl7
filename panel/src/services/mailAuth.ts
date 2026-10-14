@@ -105,6 +105,12 @@ export interface SenderOwner {
 }
 
 /**
+ * The domain WordPress sends a site's mail from: `wordpress@` and the host of its home URL,
+ * without `www.` (wp_mail in wp-includes/pluggable.php; see docs/internal/watchlist.md).
+ */
+export const mailDomainOf = (host: string): string => host.toLowerCase().replace(/^www\./, '');
+
+/**
  * `smtpd_sender_login_maps`: which login owns which sender domain. The `@domain` form
  * matches every address at that domain, which is what WordPress produces
  * (`wordpress@<site domain>`) without the panel having to enumerate local parts.

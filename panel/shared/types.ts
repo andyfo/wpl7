@@ -1413,6 +1413,7 @@ export interface MailDkimKeyDto {
 
 export interface MailDomainDto {
   domain: string;
+  /** The sites whose mail comes from this domain: each sends from its primary domain, without `www.`. */
   sites: string[];
   dkim: MailRecordCheck;
   spf: MailRecordCheck;
@@ -1445,7 +1446,12 @@ export interface MailSetupStep {
   title: string;
   /** One sentence on what breaks without it. */
   why: string;
-  record: { type: 'TXT'; name: string; value: string };
+  /**
+   * The record as it belongs in DNS. `zone` is the DNS zone its name is in (`example.com` for
+   * `_dmarc.shop.example.com`), so the name can be written the way a DNS provider asks for it;
+   * null when it cannot be told.
+   */
+  record: { type: 'TXT'; name: string; value: string; zone: string | null };
   /** Live state of the record as published right now. */
   status: MailRecordCheck;
   automation: MailStepAutomation;
@@ -1465,6 +1471,8 @@ export interface MailServerSetupDto {
   ip: string;
   /** Name postfix announces in HELO; both the A record and the PTR should point at it. */
   hostname: string;
+  /** The DNS zone the hostname's A record goes in; null when it cannot be told. */
+  hostnameZone: string | null;
   /**
    * What it announces without an override: MAIL_HOSTNAME in deploy/.env, as this server's
    * relay was created with it. Null when the relay cannot say (it is not running).

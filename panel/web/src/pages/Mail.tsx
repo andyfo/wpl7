@@ -8,6 +8,7 @@ import type {
   MailPublishResult,
   MailRecordCheck,
   MailServerSetupDto,
+  MailSetupDto,
   MailSetupStep,
   MailSiteStatsDto,
 } from '../../../shared/types';
@@ -38,7 +39,7 @@ import {
   Tabs,
   UpDot,
 } from '../components/ui';
-import { formatBytes, formatDate, timeAgo } from '../lib/format';
+import { formatBytes, formatClock, formatDate, timeAgo } from '../lib/format';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -718,7 +719,8 @@ function DeliverabilityTab() {
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const [open, setOpen] = useState<MailDomainDto | null>(null);
+  // The name rather than the row: a Check replaces the row, and the dialog shows the new one.
+  const [open, setOpen] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const act = async (key: string, fn: () => Promise<unknown>) => {
@@ -736,6 +738,7 @@ function DeliverabilityTab() {
   };
 
   const items = domains.data ?? [];
+  const openDomain = items.find((d) => d.domain === open);
 
   return (
     <div className="space-y-4">
@@ -778,11 +781,11 @@ function DeliverabilityTab() {
                   <div>
                     <span className="font-medium">{d.domain}</span>
                     <span className="ml-2 text-xs text-neutral-500">
-                      {d.sites.length > 0 ? d.sites.join(', ') : 'no site uses this domain'}
+                      {d.sites.length > 0 ? d.sites.join(', ') : 'no site sends from it'}
                     </span>
                   </div>
                   <div className="flex gap-1.5">
-                    <Button small variant="secondary" onClick={() => setOpen(d)}>
+                    <Button small variant="secondary" onClick={() => setOpen(d.domain)}>
                       Records
                     </Button>
                     {d.dkimKey ? (
@@ -825,7 +828,7 @@ function DeliverabilityTab() {
         )}
       </Card>
 
-      {open && <RecordsModal domain={open} onClose={() => setOpen(null)} />}
+      {openDomain && <RecordsModal domain={openDomain} onClose={() => setOpen(null)} />}
       {deleteTarget && (
         <ConfirmDialog
           title={`Remove the DKIM key for "${deleteTarget}"`}
@@ -844,70 +847,22 @@ function DeliverabilityTab() {
   );
 }
 
+/**
+ * One domain's records as the setup guide shows them, with their Check and Publish buttons,
+ * and the records already in place: this is where they are looked up later, to move DNS
+ * elsewhere for one.
+ */
 function RecordsModal({ domain, onClose }: { domain: MailDomainDto; onClose: () => void }) {
-  const [checking, setChecking] = useState(false);
   const qc = useQueryClient();
-
-  const recheck = async () => {
-    setChecking(true);
-    await api(`/api/mail/domains/${domain.domain}/check`, { method: 'POST' }).catch(() => undefined);
-    await qc.invalidateQueries({ queryKey: ['mail-domains'] });
-    setChecking(false);
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['mail-domains'] });
+    void qc.invalidateQueries({ queryKey: ['mail-setup'] });
   };
-
   return (
-    <Modal title={`DNS records for ${domain.domain}`} onClose={onClose}>
-      <div className="space-y-5 text-sm">
-        <section>
-          <h4 className="mb-1 font-semibold">1. SPF</h4>
-          <p className="mb-2 text-neutral-600">
-            TXT record on <code>{domain.domain}</code>. Merge into an existing SPF record rather than adding a
-            second one.
-          </p>
-          <CopyField value={domain.suggestedSpf} tone="plain" />
-          <CheckLine label="Now" check={domain.spf} />
-        </section>
-
-        <section>
-          <h4 className="mb-1 font-semibold">2. DKIM</h4>
-          {domain.dkimKey ? (
-            <>
-              <p className="mb-2 text-neutral-600">
-                TXT record on <code>{domain.dkimKey.recordName}</code>.
-              </p>
-              <CopyField value={domain.dkimKey.recordValue} tone="plain" />
-              <details className="mt-2">
-                <summary className="cursor-pointer text-xs text-neutral-500">
-                  Zone-file form (BIND)
-                </summary>
-                <pre className="mt-2 overflow-x-auto rounded-lg bg-[#18191c] p-3 text-xs text-[#f4f4f5]">
-                  {domain.dkimKey.recordBind}
-                </pre>
-              </details>
-            </>
-          ) : (
-            <p className="text-neutral-600">
-              No key yet — use <strong>Enable DKIM</strong> to generate one.
-            </p>
-          )}
-          <CheckLine label="Now" check={domain.dkim} />
-        </section>
-
-        <section>
-          <h4 className="mb-1 font-semibold">3. DMARC</h4>
-          <p className="mb-2 text-neutral-600">
-            TXT record on <code>_dmarc.{domain.domain}</code>. Publish SPF and DKIM first.
-          </p>
-          <CopyField value={domain.suggestedDmarc} tone="plain" />
-          <CheckLine label="Now" check={domain.dmarc} />
-        </section>
-
-        <div className="flex justify-between">
-          <Button variant="secondary" disabled={checking} onClick={() => void recheck()}>
-            {checking ? <Spinner /> : 'Check DNS again'}
-          </Button>
-          <Button onClick={onClose}>Close</Button>
-        </div>
+    <Modal title={`DNS records for ${domain.domain}`} onClose={onClose} wide>
+      <DomainSetupPanel domain={domain} onPublished={refresh} showDone />
+      <div className="mt-5 flex justify-end">
+        <Button onClick={onClose}>Close</Button>
       </div>
     </Modal>
   );
@@ -924,7 +879,7 @@ const VERDICT_PILL: Record<MailRecordCheck['verdict'], string> = {
 };
 const VERDICT_WORD: Record<MailRecordCheck['verdict'], string> = {
   ok: 'done',
-  warn: 'check',
+  warn: 'weak',
   missing: 'to do',
   error: 'wrong',
 };
@@ -1019,27 +974,123 @@ function EntityPicker({
   );
 }
 
-/** One thing to get right, with its live verdict and an optional action. */
+/** A Check button's state: it asks DNS again, and says when it last did. */
+interface Recheck {
+  run: () => void;
+  checking: boolean;
+  checkedAt: number | null;
+  error: unknown;
+}
+
+/**
+ * Asks DNS again for one domain or server and puts the answer where the guide and the DKIM &
+ * DMARC tab read it. The panel asks the domain's own nameservers (services/freshDns.ts), so a
+ * record shows up as soon as its DNS provider publishes it.
+ */
+function useRecheck<T>(path: string, apply: (fresh: T) => void): Recheck {
+  const [checking, setChecking] = useState(false);
+  const [checkedAt, setCheckedAt] = useState<number | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const run = async () => {
+    setChecking(true);
+    setError(null);
+    try {
+      apply(await api<T>(path, { method: 'POST' }));
+      setCheckedAt(Date.now());
+    } catch (err) {
+      setError(err);
+    } finally {
+      setChecking(false);
+    }
+  };
+  return { run: () => void run(), checking, checkedAt, error };
+}
+
+function useDomainRecheck(domain: string): Recheck {
+  const qc = useQueryClient();
+  return useRecheck<MailDomainDto>(`/api/mail/domains/${domain}/check`, (fresh) => {
+    const swap = (d: MailDomainDto) => (d.domain === fresh.domain ? fresh : d);
+    qc.setQueryData<MailSetupDto>(['mail-setup'], (old) => old && { ...old, domains: old.domains.map(swap) });
+    qc.setQueryData<MailDomainDto[]>(['mail-domains'], (old) => old?.map(swap));
+  });
+}
+
+function useServerRecheck(serverId: number): Recheck {
+  const qc = useQueryClient();
+  return useRecheck<MailServerSetupDto>(`/api/mail/servers/${serverId}/check`, (fresh) => {
+    const swap = (s: MailServerSetupDto) => (s.serverId === fresh.serverId ? fresh : s);
+    qc.setQueryData<MailSetupDto>(['mail-setup'], (old) => old && { ...old, servers: old.servers.map(swap) });
+  });
+}
+
+function CheckButton({ check }: { check: Recheck }) {
+  return (
+    <Button small variant="secondary" busy={check.checking} onClick={check.run}>
+      Check
+    </Button>
+  );
+}
+
+/** One thing to get right, with its live verdict, its Check and an optional action. */
 function SetupCheck({
   verdict,
   title,
   action,
+  check,
   children,
 }: {
   verdict: MailRecordCheck['verdict'];
   title: ReactNode;
   action?: ReactNode;
+  /** Left out where DNS has nothing to say about it. */
+  check?: Recheck;
   children: ReactNode;
 }) {
+  const open = verdict !== 'ok';
   return (
     <section className="border-t border-neutral-100 pt-4 first:border-0 first:pt-0">
       <div className="mb-1 flex flex-wrap items-center gap-2">
         <VerdictPill verdict={verdict} />
         <span className="font-medium">{title}</span>
-        {action && <span className="ml-auto">{action}</span>}
+        {(action || (check && open)) && (
+          <span className="ml-auto flex gap-1.5">
+            {check && open && <CheckButton check={check} />}
+            {action}
+          </span>
+        )}
       </div>
       {children}
+      {check && check.checkedAt !== null && open && (
+        <p className="mt-2 text-neutral-500">Checked at {formatClock(check.checkedAt)}.</p>
+      )}
     </section>
+  );
+}
+
+/** `name` the way a DNS provider's form asks for it: within its zone, and `@` for the zone itself. */
+function nameInZone(name: string, zone: string | null): string {
+  if (!zone) return name;
+  if (name === zone) return '@';
+  return name.endsWith(`.${zone}`) ? name.slice(0, -(zone.length + 1)) : name;
+}
+
+/** A record to add by hand, each part ready to copy into a DNS provider's form. */
+function RecordFields({ type, name, value, zone }: { type: string; name: string; value: string; zone: string | null }) {
+  return (
+    <div className="mt-3 grid gap-x-3 gap-y-2 text-sm sm:grid-cols-[3.5rem_minmax(0,1fr)] sm:items-center">
+      <span className="text-neutral-500">Type</span>
+      <span className="font-mono">{type}</span>
+      <span className="text-neutral-500">Name</span>
+      <div title={name}>
+        <CopyField value={nameInZone(name, zone)} tone="plain" size="sm" />
+      </div>
+      {value && (
+        <>
+          <span className="text-neutral-500">Value</span>
+          <CopyField value={value} tone="plain" size="sm" />
+        </>
+      )}
+    </div>
   );
 }
 
@@ -1084,8 +1135,8 @@ function SetupTab() {
           <strong>{direct ? 'directly, from these servers' : 'through your SMTP provider'}</strong>. Every step
           below is checked against public DNS.
         </p>
-        <Button variant="secondary" disabled={rechecking} onClick={() => void recheck()}>
-          {rechecking ? <Spinner /> : 'Check DNS again'}
+        <Button variant="secondary" busy={rechecking} onClick={() => void recheck()}>
+          Check all
         </Button>
       </div>
 
@@ -1127,11 +1178,7 @@ function SetupTab() {
           title="Sending domains"
           count={domains.length > 0 ? `${domainsReady} of ${domains.length} ready` : undefined}
           done={domains.length > 0 && domainsReady === domains.length}
-          intro={
-            <>
-              SPF, DKIM and DMARC, in the <em>customer’s</em> DNS zone. Publish them in the order shown.
-            </>
-          }
+          intro="SPF, DKIM and DMARC for each domain your sites send mail from. Add them in this order."
         >
           {domain ? (
             <>
@@ -1207,6 +1254,7 @@ function ServerSetupPanel({
   const [editingHostname, setEditingHostname] = useState(false);
   // What the dialog did, said here once it has closed: by then the checks below are about the new name.
   const [hostnameNote, setHostnameNote] = useState<string | null>(null);
+  const check = useServerRecheck(server.serverId);
   const guide = rdnsGuides.find((g) => g.id === guideId) ?? rdnsGuides[0];
 
   const publishHostname = async () => {
@@ -1226,15 +1274,16 @@ function ServerSetupPanel({
     <div className="space-y-4 text-sm">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <span className="font-medium text-neutral-800">{server.name}</span>
-        <span className="text-xs text-neutral-500">
+        <span className="text-neutral-500">
           {server.ip || 'no public IP'} · {server.mode === 'smarthost' ? 'smarthost' : 'direct delivery'}
         </span>
       </div>
-      <ErrorNote error={error} />
+      <ErrorNote error={error ?? check.error} />
 
       <SetupCheck
         verdict={server.hostnameA.verdict}
         title="Point the mail hostname at this server"
+        check={check}
         action={
           <Button small variant="secondary" onClick={() => setEditingHostname(true)}>
             Change hostname
@@ -1256,20 +1305,28 @@ function ServerSetupPanel({
               .
             </>
           )}
+          {server.hostnameZone && server.hostnameA.verdict !== 'ok' && (
+            <>
+              {' '}
+              Add it in the DNS of <strong>{server.hostnameZone}</strong>.
+            </>
+          )}
         </p>
-        <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
-          <CopyField
-            value={`${server.hostname || 'mail.example.com'}.  A  ${server.ip || '<server IP>'}`}
-            tone="plain"
-          />
-          {server.hostnameAutomatable && server.hostnameA.verdict !== 'ok' && (
+        <RecordFields
+          type="A"
+          name={server.hostname || 'mail.example.com'}
+          value={server.ip || '<server IP>'}
+          zone={server.hostnameZone}
+        />
+        {server.hostnameAutomatable && server.hostnameA.verdict !== 'ok' && (
+          <div className="mt-3">
             <Button disabled={busy} onClick={() => void publishHostname()}>
               {busy ? <Spinner /> : 'Publish A record'}
             </Button>
-          )}
-        </div>
-        <p className="mt-1 text-xs text-neutral-500">{server.hostnameA.detail}</p>
-        {hostnameNote && <p className="mt-2 text-xs text-emerald-700">{hostnameNote}</p>}
+          </div>
+        )}
+        <p className="mt-2 text-neutral-500">{server.hostnameA.detail}</p>
+        {hostnameNote && <p className="mt-2 text-emerald-700">{hostnameNote}</p>}
         {editingHostname && (
           <HostnameDialog
             server={server}
@@ -1286,17 +1343,18 @@ function ServerSetupPanel({
       <SetupCheck
         verdict={server.reverseDns.verdict}
         title={`Set reverse DNS (PTR) for ${server.ip || 'the server IP'}`}
+        check={server.ip ? check : undefined}
       >
         <p className="text-neutral-600">
           Set where you rented the server, not in your own DNS. Use exactly the hostname above.
         </p>
         <div className="mt-2">
-          <CopyField value={server.hostname || 'mail.example.com'} tone="plain" />
+          <CopyField value={server.hostname || 'mail.example.com'} tone="plain" size="sm" />
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <span className="text-xs text-neutral-500">Where did you rent this server?</span>
+          <span className="text-neutral-500">Where did you rent this server?</span>
           <select
-            className={`${inputClass} w-auto py-1 text-xs`}
+            className={`${inputClass} w-auto py-1`}
             value={guideId}
             onChange={(e) => setGuideId(e.target.value)}
           >
@@ -1314,7 +1372,7 @@ function ServerSetupPanel({
             ))}
           </ol>
         )}
-        <p className="mt-2 text-xs text-neutral-500">{server.reverseDns.detail}</p>
+        <p className="mt-2 text-neutral-500">{server.reverseDns.detail}</p>
       </SetupCheck>
 
       {server.port25 && (
@@ -1323,23 +1381,38 @@ function ServerSetupPanel({
             Most providers block port 25 for new accounts until you ask. Otherwise set{' '}
             <code>SMTP_RELAYHOST</code> and relay through a provider.
           </p>
-          <p className="mt-1 text-xs text-neutral-500">{server.port25.detail}</p>
+          <p className="mt-1 text-neutral-500">{server.port25.detail}</p>
         </SetupCheck>
       )}
     </div>
   );
 }
 
-function DomainSetupPanel({ domain, onPublished }: { domain: MailDomainDto; onPublished: () => void }) {
-  const [busy, setBusy] = useState(false);
+function DomainSetupPanel({
+  domain,
+  onPublished,
+  showDone = false,
+}: {
+  domain: MailDomainDto;
+  onPublished: () => void;
+  /** Show the records of finished steps too, not only what is left to do. */
+  showDone?: boolean;
+}) {
+  const [busy, setBusy] = useState<'publish' | 'key' | null>(null);
   const [results, setResults] = useState<MailPublishResult[] | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const check = useDomainRecheck(domain.domain);
 
   const publishable = domain.steps.filter((s) => s.automation.state === 'ready');
   const done = domain.steps.filter((s) => s.automation.state === 'satisfied').length;
+  // Said once when every record shown is in one zone; a record in a zone of its own says so.
+  const zones = new Set(
+    domain.steps.filter((s) => showDone || s.automation.state !== 'satisfied').map((s) => s.record.zone),
+  );
+  const sharedZone = zones.size === 1 ? [...zones][0]! : null;
 
   const publish = async () => {
-    setBusy(true);
+    setBusy('publish');
     setError(null);
     setResults(null);
     try {
@@ -1351,7 +1424,21 @@ function DomainSetupPanel({ domain, onPublished }: { domain: MailDomainDto; onPu
     } catch (err) {
       setError(err);
     } finally {
-      setBusy(false);
+      setBusy(null);
+    }
+  };
+
+  // The DKIM step needs a key before it has a record to add.
+  const createKey = async () => {
+    setBusy('key');
+    setError(null);
+    try {
+      await api('/api/mail/dkim', { method: 'POST', body: { domain: domain.domain } });
+      check.run();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -1364,25 +1451,59 @@ function DomainSetupPanel({ domain, onPublished }: { domain: MailDomainDto; onPu
             ready
           </span>
         ) : (
-          <span className="text-xs text-neutral-500">
+          <span className="text-neutral-500">
             {done}/{domain.steps.length} done
           </span>
         )}
-        <span className="text-xs text-neutral-400">
-          · {domain.sites.length > 0 ? domain.sites.join(', ') : 'no site uses this domain'}
+        <span className="text-neutral-400">
+          · {domain.sites.length > 0 ? domain.sites.join(', ') : 'no site sends from it'}
         </span>
         {publishable.length > 0 && (
           <span className="ml-auto">
-            <Button small disabled={busy} onClick={() => void publish()}>
-              {busy ? <Spinner /> : `Publish ${publishable.length} record${publishable.length === 1 ? '' : 's'}`}
+            <Button small busy={busy === 'publish'} disabled={busy !== null} onClick={() => void publish()}>
+              {`Publish ${publishable.length} record${publishable.length === 1 ? '' : 's'}`}
             </Button>
           </span>
         )}
       </div>
-      <ErrorNote error={error} />
+      <ErrorNote error={error ?? check.error} />
       {results && <PublishResults results={results} />}
+      {sharedZone && (
+        <p className="text-neutral-600">
+          {domain.ready ? 'Its records are' : 'Add these records'} in the DNS of <strong>{sharedZone}</strong>.
+        </p>
+      )}
       {domain.steps.map((step, i) => (
-        <SetupStepBlock key={step.id} n={i + 1} step={step} />
+        <SetupStepBlock
+          key={step.id}
+          n={i + 1}
+          step={step}
+          check={check}
+          showRecord={showDone}
+          zoneLine={!sharedZone}
+          action={
+            step.id === 'dkim' && !domain.dkimKey && step.automation.state === 'manual' ? (
+              <Button small busy={busy === 'key'} disabled={busy !== null} onClick={() => void createKey()}>
+                Create the key
+              </Button>
+            ) : undefined
+          }
+          extra={
+            step.id === 'dkim' && domain.dkimKey ? (
+              <>
+                <p className="mt-2 text-neutral-500">
+                  <code>{domain.dkimKey.selector}</code> is the signing key&apos;s name (its selector).
+                </p>
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-neutral-500">Zone-file form (BIND)</summary>
+                  <pre className="mt-2 overflow-x-auto rounded-lg bg-[#18191c] p-3 text-xs text-[#f4f4f5]">
+                    {domain.dkimKey.recordBind}
+                  </pre>
+                </details>
+              </>
+            ) : undefined
+          }
+        />
       ))}
     </div>
   );
@@ -1409,44 +1530,73 @@ function PublishResults({ results }: { results: MailPublishResult[] }) {
           </li>
         ))}
       </ul>
-      <p className="mt-2 text-xs text-neutral-500">
-        Public DNS can take a few minutes to catch up — use <em>Check DNS again</em> above once it has.
-      </p>
+      <p className="mt-2 text-neutral-500">A record still marked to do may need a few seconds more: use its Check.</p>
     </div>
   );
 }
 
-function SetupStepBlock({ n, step }: { n: number; step: MailSetupStep }) {
+function SetupStepBlock({
+  n,
+  step,
+  check,
+  action,
+  extra,
+  showRecord = false,
+  zoneLine = false,
+}: {
+  n: number;
+  step: MailSetupStep;
+  check: Recheck;
+  /** What has to happen before there is a record to add. */
+  action?: ReactNode;
+  /** More about the record, under it. */
+  extra?: ReactNode;
+  /** Show the record once the step is done, too. */
+  showRecord?: boolean;
+  /** Name the record's zone here: the domain's records are not all in one. */
+  zoneLine?: boolean;
+}) {
   const auto = step.automation;
   const value = auto.plannedValue ?? step.record.value;
+  const done = auto.state === 'satisfied';
+  const record = (
+    <>
+      {zoneLine && step.record.zone && (
+        <p className="mt-2 text-neutral-600">
+          In the DNS of <strong>{step.record.zone}</strong>.
+        </p>
+      )}
+      {value && <RecordFields type={step.record.type} name={step.record.name} value={value} zone={step.record.zone} />}
+      {extra}
+    </>
+  );
   return (
     <section className="border-t border-neutral-100 pt-4 first:border-0 first:pt-0">
       <div className="mb-1 flex flex-wrap items-center gap-2">
         <span className="text-xs font-semibold text-neutral-400">{n}.</span>
         <VerdictPill verdict={step.status.verdict} />
         <span className="font-medium">{step.title}</span>
+        {!done && !action && (
+          <span className="ml-auto">
+            <CheckButton check={check} />
+          </span>
+        )}
       </div>
-      <p className="text-sm text-neutral-600">{step.why}</p>
+      <p className="text-neutral-600">{step.why}</p>
 
-      {auto.state === 'satisfied' ? (
-        <p className="mt-2 text-sm text-emerald-700">✓ {auto.detail}</p>
+      {done ? (
+        <>
+          <p className="mt-2 text-emerald-700">✓ {auto.detail}</p>
+          {showRecord && record}
+        </>
       ) : (
         <>
-          <div className="mt-2 grid gap-1 text-xs sm:grid-cols-[4rem_1fr]">
-            <span className="text-neutral-400">Type</span>
-            <span className="font-mono">{step.record.type}</span>
-            <span className="text-neutral-400">Name</span>
-            <span className="font-mono break-all">{step.record.name}</span>
-          </div>
-          {value && (
-            <div className="mt-1">
-              <CopyField value={value} tone="plain" />
-            </div>
-          )}
-          <p className={`mt-1 text-xs ${auto.state === 'ready' ? 'text-emerald-700' : 'text-neutral-500'}`}>
+          <p className={`mt-2 ${auto.state === 'ready' ? 'text-emerald-700' : 'text-neutral-800'}`}>
             {auto.state === 'ready' ? 'The panel can publish this for you: ' : ''}
             {auto.detail}
           </p>
+          {action && <div className="mt-2">{action}</div>}
+          {record}
         </>
       )}
       {/*
@@ -1455,13 +1605,16 @@ function SetupStepBlock({ n, step }: { n: number; step: MailSetupStep }) {
         already said so, and a third sentence saying "not published" is noise.
       */}
       {step.status.found && step.status.verdict !== 'ok' && (
-        <>
-          <p className="mt-2 text-xs text-neutral-400">Published right now</p>
-          <p className="text-xs text-neutral-500">
-            <code className="break-all">{step.status.found}</code>
-          </p>
-          <p className="mt-1 text-xs text-neutral-500">{step.status.detail}</p>
-        </>
+        <div className="mt-3">
+          <p className="text-neutral-500">Published right now</p>
+          <code className="break-all">{step.status.found}</code>
+          <p className="mt-1 text-neutral-600">{step.status.detail}</p>
+        </div>
+      )}
+      {!done && check.checkedAt !== null && (
+        <p className="mt-2 text-neutral-500">
+          Checked at {formatClock(check.checkedAt)}.{step.status.verdict === 'missing' ? ' Not there yet.' : ''}
+        </p>
       )}
     </section>
   );

@@ -46,6 +46,7 @@ for a reason; remove one once there is nothing left to watch.
 | [WordPress 7.2: sudo mode and Application Passwords](#wordpress-72-sudo-mode-and-application-passwords) | Medium | 2026-10-09 15:55 UTC | On the roadmap only; Beta 1 is due 2026-10-20 |
 | [WP Godmode's `godmode` command on WPL7 Connect](#wp-godmodes-godmode-command-on-wpl7-connect) | Medium | 2026-10-09 15:55 UTC | Not released: Godmode calls on an external site answer 409 |
 | [WordPress's answer to a fatal error](#wordpresss-answer-to-a-fatal-error) | Low | 2026-10-09 15:55 UTC | 500, as relied on |
+| [WordPress's default From address](#wordpresss-default-from-address) | Medium | 2026-10-14 16:28 UTC | `wordpress@` and the home URL's host without `www.`, on 7.1.3 and trunk |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
 
 ## Traefik: an idle visitor's rate limit refills
@@ -610,6 +611,22 @@ for a reason; remove one once there is nothing left to watch.
 - **Check:** `gh api repos/WordPress/wordpress-develop/contents/src/wp-includes/class-wp-fatal-error-handler.php --jq .content | base64 -d | grep -n "'response'"`.
 - **When it changes:** the check in `ConnectorBackend.healthy()` (`panel/src/services/siteBackend.ts`)
   has to read the answer's body too (the handler's page), then run the Docker test.
+
+## WordPress's default From address
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-14 16:28 UTC. `wp_mail()` on trunk still sends as `wordpress@` and the
+  host of `network_home_url()`, with a leading `www.` taken off. Its last change (2026-10-07) was to
+  doc types. 7.1.3 is the latest release.
+- **What we rely on:** Mail → Setup guide lists one sending domain per site, its primary domain
+  without `www.` (`MailService.sendingDomains`, with `mailDomainOf` in
+  `panel/src/services/mailAuth.ts`). A site on `www.example.com` also owns `example.com` for the
+  relay and the signer (`MailService.senderOwners`). If WordPress sent from another address, the
+  guide would ask for records where no mail comes from, and the mail it does send would go out
+  unsigned.
+- **Check:** `gh api repos/WordPress/wordpress-develop/contents/src/wp-includes/pluggable.php --jq .content | base64 -d | grep -n "get rid of www" -A6`.
+- **When it changes:** make `mailDomainOf` follow it, and update "Which domains are listed" on
+  `docs/site/src/content/docs/mail/setup.mdx` and the owner rule on `mail/overview.mdx`.
 
 ## sodium_compat for PHP 7.0 in CI
 

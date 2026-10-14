@@ -52,6 +52,7 @@ const EXCEPTIONS: Record<string, string> = {
   'POST /api/servers/:id/test': 'manage',
   'POST /api/mail/ingest': 'manage',
   'POST /api/mail/queue/:serverId/flush': 'manage',
+  'POST /api/mail/servers/:serverId/check': 'manage',
   'POST /api/mail/domains/:domain/check': 'manage',
   'POST /api/mail/dkim/sync': 'manage',
   'POST /api/catalog/refresh': 'manage',

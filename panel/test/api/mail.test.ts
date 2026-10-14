@@ -49,14 +49,15 @@ function relayRunning(world: TestWorld): void {
   world.docker.containers.set(DKIM_CONTAINER, 'running');
 }
 
-function seedSite(world: TestWorld, slug: string, domain: string): void {
+/** `domain` is the site's one domain, or its domains with the primary first. */
+function seedSite(world: TestWorld, slug: string, domain: string | string[]): void {
   const now = Date.now();
   world.db
     .insert(sites)
     .values({
       slug,
       title: slug,
-      domains: JSON.stringify([domain]),
+      domains: JSON.stringify(typeof domain === 'string' ? [domain] : domain),
       phpVersion: '8.3',
       status: 'running',
       dbName: `wp_${slug}`,
@@ -432,6 +433,27 @@ describe('DKIM key management', () => {
     // asking the operator for three separate DNS records would be busywork.
     expect(domains.map((d) => d.domain).sort()).toEqual(['dev.example.test', 'shop.customer.test']);
     expect(domains.find((d) => d.domain === 'dev.example.test')!.sites).toEqual(['alpha', 'beta', 'gamma']);
+  });
+
+  it('lists each site once, at the domain WordPress sends its mail from', async () => {
+    const world = await makeWorld({ resolver: emptyResolver });
+    // Live, with its www twin and its old dev address left as redirects to the primary.
+    seedSite(world, 'shop', ['shop.customer.test', 'www.shop.customer.test', 'shop.dev.example.test']);
+    // WordPress drops the www: a site on www.other.test sends as wordpress@other.test.
+    seedSite(world, 'other', ['www.other.test', 'other.test']);
+    seedSite(world, 'alpha', 'alpha.dev.example.test');
+    world.core.mail.createDkimKey('www.old.test'); // a key nobody sends with any more
+    const { app, headers } = await authedApp(world);
+
+    const res = await app.inject({ method: 'GET', url: '/api/mail/domains', headers });
+    const domains = res.json().items as { domain: string; sites: string[] }[];
+    expect(domains.map((d) => [d.domain, d.sites])).toEqual([
+      ['dev.example.test', ['alpha']],
+      ['other.test', ['other']],
+      ['shop.customer.test', ['shop']],
+      // Listed for as long as its key exists: its record is still published.
+      ['www.old.test', []],
+    ]);
   });
 
   it('lists a domain with no key as something to enable', async () => {

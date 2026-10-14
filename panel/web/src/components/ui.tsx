@@ -455,9 +455,17 @@ export function ConfirmDialog({
 /**
  * A value to copy. `secret` is the loud one, for something shown once and never again;
  * `plain` is for a DNS record or a key that is public anyway, where amber reads as a
- * warning that is not there.
+ * warning that is not there. `sm` is for a value someone reads before typing it elsewhere.
  */
-export function CopyField({ value, tone = 'secret' }: { value: string; tone?: 'secret' | 'plain' }) {
+export function CopyField({
+  value,
+  tone = 'secret',
+  size = 'xs',
+}: {
+  value: string;
+  tone?: 'secret' | 'plain';
+  size?: 'xs' | 'sm';
+}) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
@@ -470,7 +478,7 @@ export function CopyField({ value, tone = 'secret' }: { value: string; tone?: 's
         tone === 'secret' ? 'border-amber-300 bg-amber-50' : 'border-neutral-200 bg-neutral-50'
       }`}
     >
-      <code className="flex-1 overflow-x-auto text-xs">{value}</code>
+      <code className={`flex-1 overflow-x-auto ${size === 'sm' ? 'text-sm' : 'text-xs'}`}>{value}</code>
       <Button
         small
         variant="secondary"

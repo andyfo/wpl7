@@ -14,7 +14,7 @@
 import path from 'node:path';
 import { and, asc, count, desc, eq, gte, isNotNull, like, lt, or } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { mailDkimKeys, mailMessages, sites, type MailDkimKeyRow, type MailMessageRow } from '../db/schema.js';
+import { mailDkimKeys, mailMessages, sites, type MailDkimKeyRow, type MailMessageRow, type ServerRow } from '../db/schema.js';
 import type { Config } from '../config.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
 import type { SettingsService } from './settings.js';
@@ -25,6 +25,7 @@ import { safeJoin } from '../lib/slug.js';
 import { MAIL_CONTAINER, DKIM_CONTAINER } from './stack.js';
 import {
   mailAuthPaths,
+  mailDomainOf,
   mailLogin,
   parseSaslUsers,
   renderSaslBlock,
@@ -82,6 +83,7 @@ import {
   type RelayHostnames,
 } from './mailHostname.js';
 import { CLOUDFLARE, type DnsService } from './dns.js';
+import { registrableDomain } from './domainLookups.js';
 import type {
   MailDkimKeyDto,
   MailDomainDto,
@@ -349,9 +351,9 @@ export class MailService {
 
   /**
    * Sender domain -> the login allowed to use it. Every hostname a site answers to is
-   * owned by that site; a domain that only has a DKIM key (kept after a site was deleted,
-   * or created ahead of a migration) is parked on a login nobody holds, so it cannot be
-   * spoofed either.
+   * owned by that site, and so is the domain of its www names; a domain that only has a DKIM
+   * key (kept after a site was deleted, or created ahead of a migration) is parked on a login
+   * nobody holds, so it cannot be spoofed either.
    */
   /**
    * The same owners, as the signing policy reads them: one per login, the pre-rename twin of a
@@ -373,6 +375,14 @@ export class MailService {
       if (site.devHostname) owners.push({ domain: site.devHostname, login });
     }
     const owned = new Set(owners.map((o) => o.domain.toLowerCase()));
+    // WordPress on www.example.com sends as wordpress@example.com, so a site owns the domain
+    // of its www names as well - unless another site answers to that domain itself.
+    for (const { domain, login } of [...owners]) {
+      const bare = mailDomainOf(domain);
+      if (owned.has(bare)) continue;
+      owners.push({ domain: bare, login });
+      owned.add(bare);
+    }
     for (const key of this.listDkimKeys()) {
       if (!owned.has(key.domain.toLowerCase())) owners.push({ domain: key.domain, login: RESERVED_LOGIN });
     }
@@ -691,11 +701,15 @@ export class MailService {
   // -------------------------------------------------------------------- status
 
   /**
-   * Domains this fleet sends from.
+   * Domains this fleet sends from: one for each site, the one WordPress writes in `From:`.
+   * That is `wordpress@` and the site's primary domain without `www.`, and msmtp takes the
+   * envelope sender from the same header. A site's other names are not listed: they redirect
+   * to the primary (labels.ts), so nothing on the site runs under them, and asking for records
+   * at `www.example.com` beside `example.com` is a second set nobody sends from.
    *
-   * Dev hostnames are collapsed into their dev domain: the signing table gives every key a
-   * `*@*.<domain>` entry, so one key published at `dev.example.com` signs all fifty dev
-   * sites under it. Listing them individually would be fifty rows asking for fifty DNS
+   * Dev hostnames are collapsed into their dev domain: the signing policy looks for a key up
+   * the name (renderSigningPolicy), so one key published at `dev.example.com` signs all fifty
+   * dev sites under it. Listing them individually would be fifty rows asking for fifty DNS
    * records that a single record already covers.
    */
   sendingDomains(serverId?: number): { domain: string; sites: string[] }[] {
@@ -706,12 +720,12 @@ export class MailService {
     const byDomain = new Map<string, Set<string>>();
     for (const site of this.db.select().from(sites).where(hostedSites()).all()) {
       if (serverId !== undefined && site.serverId !== serverId) continue;
-      for (const host of JSON.parse(site.domains) as string[]) {
-        const domain = collapse(host);
-        const list = byDomain.get(domain) ?? new Set<string>();
-        list.add(site.slug);
-        byDomain.set(domain, list);
-      }
+      const primary = (JSON.parse(site.domains) as string[])[0];
+      if (!primary) continue;
+      const domain = collapse(mailDomainOf(primary));
+      const list = byDomain.get(domain) ?? new Set<string>();
+      list.add(site.slug);
+      byDomain.set(domain, list);
     }
     return [...byDomain.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
@@ -1360,7 +1374,8 @@ export class MailService {
     return Promise.all(
       wanted.map(async ({ domain, sites: siteSlugs }) => {
         const key = keys.get(domain);
-        const [dkim, spf, dmarc, dnsManaged] = await Promise.all([
+        const names = [domain, dkimRecordName(domain, key?.selector ?? DEFAULT_DKIM_SELECTOR), `_dmarc.${domain}`];
+        const [dkim, spf, dmarc, dnsManaged, zones] = await Promise.all([
           key ? checkDkim(this.resolver, domain, key.selector, key.publicKeyB64) : Promise.resolve(dkimNotConfigured()),
           // A smarthost sends from the provider's IPs, not ours, so checking our addresses
           // against the record would report a failure that is not one.
@@ -1369,7 +1384,9 @@ export class MailService {
           // Memoized per zone inside DnsService, so a fleet of customer domains under one
           // account costs one lookup, not one per domain.
           this.dns?.canManage(domain) ?? Promise.resolve(false),
+          Promise.all(names.map((name) => this.zoneOf(name, domain))),
         ]);
+        const zoneByName = new Map(names.map((name, i) => [name, zones[i] ?? null]));
         const steps = planDomainSteps({
           domain,
           mode: this.config.mailMode,
@@ -1379,6 +1396,7 @@ export class MailService {
           dmarc,
           dkimKey: key ? { selector: key.selector, publicKeyB64: key.publicKeyB64 } : null,
           dnsManaged,
+          zoneOf: (name) => zoneByName.get(name) ?? null,
         });
         return {
           domain,
@@ -1406,34 +1424,7 @@ export class MailService {
     const byServer = new Map(statuses.map((st) => [st.serverId, st]));
 
     const servers: MailServerSetupDto[] = await Promise.all(
-      this.servers.listRows().map(async (row): Promise<MailServerSetupDto> => {
-        const status = byServer.get(row.id);
-        const hostname = status?.hostname ?? '';
-        const port25 = status?.checks.find((c) => c.name === 'port-25');
-        const [hostnameA, reverseDns, hostnameAutomatable, settings] = await Promise.all([
-          row.publicIp
-            ? checkHostnameA(this.resolver, hostname, row.publicIp)
-            : Promise.resolve({ verdict: 'missing' as const, found: null, detail: 'This server has no public IP recorded' }),
-          row.publicIp
-            ? checkReverseDns(this.resolver, row.publicIp, hostname || undefined)
-            : Promise.resolve({ verdict: 'missing' as const, found: null, detail: 'This server has no public IP recorded' }),
-          hostname ? (this.dns?.canManage(hostname) ?? Promise.resolve(false)) : Promise.resolve(false),
-          this.hostnameSettings(row.id),
-        ]);
-        return {
-          serverId: row.id,
-          name: row.name,
-          ip: row.publicIp,
-          hostname,
-          defaultHostname: settings.fallback,
-          hostnameOverride: settings.override,
-          mode: status?.mode ?? this.config.mailMode,
-          hostnameA,
-          reverseDns,
-          port25: port25 ? { ok: port25.ok, detail: port25.detail } : null,
-          hostnameAutomatable,
-        };
-      }),
+      this.servers.listRows().map((row) => this.serverSetup(row, byServer.get(row.id))),
     );
 
     return {
@@ -1452,6 +1443,54 @@ export class MailService {
       rdnsGuides: RDNS_GUIDES,
       domains: await this.domains(),
     };
+  }
+
+  /** One server's half of the guide, checked again: the step's Check button. */
+  async checkServer(serverId: number): Promise<MailServerSetupDto> {
+    const row = this.servers.listRows().find((r) => r.id === serverId);
+    if (!row) throw notFound(`No server with id ${serverId}`);
+    return this.serverSetup(row, await this.statusFor(serverId));
+  }
+
+  private async serverSetup(row: ServerRow, status: MailServerStatusDto | undefined): Promise<MailServerSetupDto> {
+    const hostname = status?.hostname ?? '';
+    const port25 = status?.checks.find((c) => c.name === 'port-25');
+    const [hostnameA, reverseDns, hostnameAutomatable, settings, hostnameZone] = await Promise.all([
+      row.publicIp
+        ? checkHostnameA(this.resolver, hostname, row.publicIp)
+        : Promise.resolve({ verdict: 'missing' as const, found: null, detail: 'This server has no public IP recorded' }),
+      row.publicIp
+        ? checkReverseDns(this.resolver, row.publicIp, hostname || undefined)
+        : Promise.resolve({ verdict: 'missing' as const, found: null, detail: 'This server has no public IP recorded' }),
+      hostname ? (this.dns?.canManage(hostname) ?? Promise.resolve(false)) : Promise.resolve(false),
+      this.hostnameSettings(row.id),
+      hostname ? this.zoneOf(hostname) : Promise.resolve(null),
+    ]);
+    return {
+      serverId: row.id,
+      name: row.name,
+      ip: row.publicIp,
+      hostname,
+      hostnameZone,
+      defaultHostname: settings.fallback,
+      hostnameOverride: settings.override,
+      mode: status?.mode ?? this.config.mailMode,
+      hostnameA,
+      reverseDns,
+      port25: port25 ? { ok: port25.ok, detail: port25.detail } : null,
+      hostnameAutomatable,
+    };
+  }
+
+  /**
+   * The zone a name is published in, so the guide can write the name the way a DNS provider's
+   * form asks for it: `_dmarc.shop` in example.com rather than `_dmarc.shop.example.com`. The
+   * resolver finds the real zone where it can; otherwise it is the registrable domain of
+   * `domain`, the name the record belongs to.
+   */
+  private async zoneOf(name: string, domain = name): Promise<string | null> {
+    const found = await this.resolver.zoneOf?.(name).catch(() => null);
+    return found ?? registrableDomain(domain);
   }
 
   /**
