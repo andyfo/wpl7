@@ -24,6 +24,7 @@ import { Backups } from './pages/Backups';
 import { BackupStorage } from './pages/BackupStorage';
 import { Jobs } from './pages/Jobs';
 import { JobDetail } from './pages/JobDetail';
+import { Reminders } from './pages/Reminders';
 import { Schedules } from './pages/Schedules';
 import { ApiKeys } from './pages/ApiKeys';
 import { Mcp } from './pages/Mcp';
@@ -45,6 +46,7 @@ const queryClient = new QueryClient({
 /** The panel's own pages, drawn inside the layout. */
 const pages: RouteObject[] = [
   { index: true, element: <Dashboard /> },
+  { path: 'reminders', element: <Reminders /> },
   { path: 'sites', element: <Sites /> },
   { path: 'servers', element: <Servers /> },
   // Before 'servers/:id', like 'sites/security' before 'sites/:slug'.

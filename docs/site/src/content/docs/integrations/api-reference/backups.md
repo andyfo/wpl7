@@ -2,7 +2,7 @@
 title: Backups
 description: Backups live on the server that holds the site. Offsite copies are made by that same server.
 sidebar:
-  order: 2.09
+  order: 2.11
 sources:
   - panel/shared/apiDocs.ts
 ---

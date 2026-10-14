@@ -2,7 +2,7 @@
 title: WordPress across the fleet
 description: One table of every plugin, theme and core version on every server, and one bulk run over the selection.
 sidebar:
-  order: 2.07
+  order: 2.09
 sources:
   - panel/shared/apiDocs.ts
 ---

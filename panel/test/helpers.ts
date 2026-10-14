@@ -1,3 +1,4 @@
+import { ReminderService } from '../src/services/reminders.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1450,6 +1451,8 @@ export async function makeWorld(
   core.wpInventory = new WpInventoryService(core, vulnerabilities);
   core.externalBackups = new ExternalBackupService(core);
   core.alerts = new AlertService(core);
+  const serverInfo = new SystemInfoService(servers, log, null, opts.resolver);
+  core.reminders = new ReminderService(core, serverInfo);
   // The hourly check of each external site and every uptime probe are what the alerts hear from.
   core.connections.attachEvents({ checked: (site, conn) => core.alerts.connectorChecked(site, conn) });
   core.monitor.attachExternal(core.connections, {
@@ -1476,7 +1479,7 @@ export async function makeWorld(
     pluginCatalog: new PluginCatalogService(db, config.paths.plugins, wporg),
     wpBulk: new WpBulkService(core, worker, core.wpInventory),
     wporg,
-    serverInfo: new SystemInfoService(servers, log, null, opts.resolver),
+    serverInfo,
     terminal: new TerminalService(db, config, servers, log, { connect: shell.connect }),
     // Never started: no timer runs in a test unless it calls `run()` / `runDueCustom()`.
     schedulers: new Schedulers(core, worker),

@@ -2,7 +2,7 @@
 title: Site imports
 description: "Bring an existing WordPress site in: create an import, install its plugin on the old site, then start it. The last two endpoints are the plugin's own."
 sidebar:
-  order: 2.02
+  order: 2.04
 sources:
   - panel/shared/apiDocs.ts
 ---

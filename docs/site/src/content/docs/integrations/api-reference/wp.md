@@ -2,7 +2,7 @@
 title: WordPress on one site
 description: "The snapshot (/wp/status) is a database read and answers instantly, even for a stopped site. Anything that changes the install is a job. A site hosted elsewhere takes the same calls through WPL7 Connect: WP-CLI runs only the commands its plugins registered, and a REST request runs as auth.username with no application password."
 sidebar:
-  order: 2.04
+  order: 2.06
 sources:
   - panel/shared/apiDocs.ts
 ---

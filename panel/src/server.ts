@@ -31,6 +31,7 @@ import { registerWpFleetRoutes } from './routes/wpFleet.js';
 import { registerPluginRoutes } from './routes/plugins.js';
 import { registerRecipeRoutes } from './routes/recipes.js';
 import { registerJobRoutes } from './routes/jobs.js';
+import { registerReminderRoutes } from './routes/reminders.js';
 import { registerScheduleRoutes } from './routes/schedules.js';
 import { registerMiscRoutes } from './routes/misc.js';
 import { registerSystemRoutes } from './routes/system.js';
@@ -121,6 +122,7 @@ export async function buildServer(
   registerRecipeRoutes(app, deps);
   registerJobRoutes(app, deps);
   registerScheduleRoutes(app, deps);
+  registerReminderRoutes(app, deps);
   registerMiscRoutes(app, deps);
   registerSystemRoutes(app, deps);
   registerServerRoutes(app, deps);

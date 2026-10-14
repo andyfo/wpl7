@@ -1,0 +1,82 @@
+---
+title: Reminders
+description: Track renewals, support deadlines and recurring work, with optional email and a calendar feed.
+sidebar:
+  order: 3
+sources:
+  - panel/shared/reminders.ts
+  - panel/src/services/reminders.ts
+  - panel/src/services/domainLookups.ts
+  - panel/src/services/reminderSources.ts
+  - panel/src/routes/reminders.ts
+  - panel/web/src/pages/Reminders.tsx
+  - panel/web/src/components/ReminderCard.tsx
+  - panel/web/src/components/ReminderTask.tsx
+---
+import Screenshot from '~/components/Screenshot.astro';
+
+**Reminders** tracks renewals, support deadlines and maintenance. Its badge is red for due or overdue, amber for upcoming warnings.
+
+<Screenshot name="reminders" alt="A reminder checklist grouped by due and upcoming dates" />
+
+## Add a reminder
+
+Choose **New reminder**, enter a title and date, then **Save reminder**.
+**Warn days before** takes comma-separated days, such as `30, 7, 0`. Due dates always warn and use the panel timezone.
+
+**Recurring** repeats every number of days, weeks, months or years. Templates cover licenses, restore tests, contracts and bills.
+Check the circle to complete a reminder. Repeats advance beyond today; missed occurrences produce one warning. Monthly repeats preserve their original day.
+Open **Completed** and uncheck an item to reopen it.
+
+Click a title to edit. The **…** menu has **Snooze**, **Edit** and **Delete**.
+**Snooze** hides warnings until tomorrow, next week or a chosen date.
+
+## Track renewals and support dates
+
+In **New reminder**, choose **PHP end of life** or **Server OS end of life** under **Kind**.
+Pick a PHP version or server; its support date fills automatically. **Check sources** loads server dates.
+Already tracked items are omitted. Unknown versions need a one-time reminder.
+**Cloudflare token expiry** uses the same picker.
+
+<Screenshot name="reminders-eol" alt="Adding a server OS end-of-life reminder with its support date filled in" />
+
+**Suggestions** also lists domains, PHP versions, operating systems and expiring tokens. Choose **Add** to track one.
+Source checks are cached daily.
+
+Domain dates come from RDAP. Without a published date, enter one manually and set the renewal term.
+Registry statuses still refresh for manually dated domains, without replacing the entered date.
+Marking a manual renewal done advances its date by that term.
+**Awaiting confirmation** waits three days for a changed registry date. It does not renew the domain.
+Undo mistakes with the clock circle or **Undo done** in the **…** menu; the date stays unchanged.
+Without a changed date, the usual status returns. Renewals made without clicking Done are detected too.
+
+Registry auto-renew grace does not confirm payment. Hold, redemption and deletion stay red, even during snooze.
+**Domains** shows expiry dates, registrars and registry status.
+
+PHP follows security support; OS dates cover Ubuntu standard maintenance and Debian LTS.
+Ubuntu dates mark the published final month’s first day. Upgrades resolve old support reminders.
+
+## Receive email or subscribe
+
+Enable **Email reminder** and choose the alert address or a user with confirmed email.
+Digests arrive daily after 09:00 panel time; overdue reminders repeat weekly. Failed delivery retries after 15 minutes.
+
+**Calendar feed** creates a secret subscription link. Anyone with it can read titles, dates and notes.
+**Replace link** invalidates the old link; **Revoke link** disables it.
+
+## Limits
+
+- Registry dates may differ from registrar billing dates. No WHOIS or registrar APIs.
+- Domain lookups run daily. Failures keep the last date.
+- Disable lookups in **Settings → Monitoring → Look up domain expiry dates**.
+- **Schedules** pauses reminder processing and domain lookups separately.
+- Paid support extensions are not detected.
+- Calendars show active reminders' next occurrence. Calendar apps control refresh intervals.
+- API and MCP changes require Full access.
+
+## Related
+
+- [Schedules](/docs/automations/schedules/)
+- [Monitoring settings](/docs/panel/settings/)
+- [Cloudflare](/docs/integrations/cloudflare/)
+- [REST API](/docs/integrations/api/)

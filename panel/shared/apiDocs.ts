@@ -74,6 +74,32 @@ export interface ApiDocGroup {
 
 export const API_DOC_GROUPS: ApiDocGroup[] = [
   {
+    id: 'reminders', title: 'Reminders', changes: 'full',
+    intro: 'Dates, renewals and support deadlines. Dates use YYYY-MM-DD on the panel clock. Changes need Full access.',
+    endpoints: [
+      { method: 'GET', path: '/api/reminders', summary: 'List reminders and their current state', input: '?siteId=&serverId=', returns: '{items: ReminderDto[]}', level: 'read' },
+      { method: 'GET', path: '/api/reminders/summary', summary: 'Count flagged reminders', returns: '{count, tone, today, timezone}', level: 'read' },
+      { method: 'GET', path: '/api/reminders/options', summary: 'List suggestions, links and confirmed recipients', level: 'read' },
+      { method: 'GET', path: '/api/reminders/:id', summary: 'Read a reminder', level: 'read' },
+      { method: 'POST', path: '/api/reminders', summary: 'Create a reminder', input: '{title, dueDate: "YYYY-MM-DD", kind?: "once"|"recurring"|"domain"|"cloudflare"|"php"|"os", note?, warningDays?: [0], every?: 1, unit?: "days"|"weeks"|"months"|"years", siteId?, serverId?, email?: false, recipientUserId?: null (alert address), domain?, automatic?: false, subject?: from suggestions}', level: 'full' },
+      { method: 'PATCH', path: '/api/reminders/:id', summary: 'Edit a reminder', input: 'Any create fields', level: 'full' },
+      { method: 'DELETE', path: '/api/reminders/:id', summary: 'Delete a reminder', level: 'full', danger: true },
+      { method: 'POST', path: '/api/reminders/:id/done', summary: 'Complete, advance or await renewal confirmation', level: 'full' },
+      { method: 'POST', path: '/api/reminders/:id/reopen', summary: 'Reopen a completed reminder', level: 'full' },
+      { method: 'POST', path: '/api/reminders/:id/snooze', summary: 'Snooze until a date or clear snooze', input: '{until: "YYYY-MM-DD"|null}', level: 'full' },
+      { method: 'POST', path: '/api/reminders/refresh', summary: 'Refresh token and server facts, subject to the daily cache', level: 'full' },
+      { method: 'POST', path: '/api/reminders/calendar', summary: 'Create or replace the secret calendar link', returns: '{path} (shown once)', level: 'full', mcp: false },
+      { method: 'DELETE', path: '/api/reminders/calendar', summary: 'Revoke the calendar link', level: 'full', danger: true, mcp: false },
+    ],
+  },
+  {
+    id: 'domains', title: 'Domains', changes: 'full', intro: 'Cached registry expiry dates and domain suggestions. No registrar credentials or WHOIS.',
+    endpoints: [
+      { method: 'GET', path: '/api/domains', summary: 'List cached domain expiry, registrar and status', level: 'read' },
+      { method: 'GET', path: '/api/domains/lookup', summary: 'Look up a domain, using the daily cache', input: '?name=example.com', returns: '{domain: DomainDto}', level: 'read' },
+    ],
+  },
+  {
     id: 'sites',
     title: 'Sites',
     changes: 'manage',
