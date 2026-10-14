@@ -17,6 +17,9 @@ for a reason; remove one once there is nothing left to watch.
 
 | Entry | Priority | Last checked | Status |
 |---|---|---|---|
+| [RDAP: registry endpoints and bootstrap](#rdap-registry-endpoints-and-bootstrap) | Medium | 2026-10-13 08:35 UTC | .co, .io, .me and .us still absent from IANA; supplement used |
+| [Reminders: PHP and OS support dates](#reminders-php-and-os-support-dates) | Medium | 2026-10-13 08:35 UTC | PHP, Ubuntu and Debian dates match upstream tables |
+| [Reminders: Cloudflare token lifetime](#reminders-cloudflare-token-lifetime) | Medium | 2026-10-13 08:35 UTC | User and account verification endpoints expose status and optional expiry |
 | [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-10-14 11:05 UTC | Open upstream; worked around |
 | [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-10-12 05:42 UTC | 0.21.15 is the latest; same definitions as the pinned 0.21.12 |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-10-02 05:12 UTC | Both overrides apply to 0.21.12; signatures named |
@@ -622,3 +625,50 @@ for a reason; remove one once there is nothing left to watch.
 - **When it changes:** pin the last 1.x that installs (`paragonie/sodium_compat:^1.24`), or copy the
   sodium_compat WordPress 5.2 bundles into the test folder.
 
+
+
+## RDAP: registry endpoints and bootstrap
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-13 08:35 UTC. IANA's current bootstrap has no entries for .co, .io,
+  .me or .us. The registry endpoints identified in the RDAP investigation remain the supplement.
+- **Status:** The panel uses IANA first, then the four entries in `RDAP_SUPPLEMENT` in
+  `panel/src/services/domainLookups.ts`. Dates without an `expiration` event stay manual.
+- **Check:** Fetch [IANA's bootstrap](https://data.iana.org/rdap/dns.json), check those four TLDs,
+  and check each supplement endpoint's domain response. Check [RFC 8056](https://www.rfc-editor.org/rfc/rfc8056)
+  for status mappings and ICANN's RDAP requirements for changes to expiration events.
+- **When it changes:** Remove a supplement entry once IANA supplies it, or update an endpoint
+  that has moved. Update the RDAP tests and Reminders documentation. Never treat `auto renew period`
+  as proof that the registrant has renewed, or discard a known date after a failed lookup.
+
+## Reminders: PHP and OS support dates
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-13 08:35 UTC. The shipped PHP 7.0 through 8.5, Ubuntu LTS 18.04
+  through 26.04, and Debian 10 through 13 dates match the upstream support tables.
+- **Status:** `PHP_EOL` and `OS_EOL` in `panel/src/services/reminderSources.ts` are the shipped
+  security-support dates. Ubuntu standard maintenance ends in a published month, so the reminder
+  uses its first day and says so. Debian includes LTS. Paid extensions are excluded.
+- **Check:** Compare [supported PHP](https://www.php.net/supported-versions.php),
+  [unsupported PHP](https://www.php.net/eol.php),
+  [Ubuntu's release cycle](https://ubuntu.com/about/release-cycle) and
+  [Debian's release table](https://www.debian.org/releases/index.en.html) with both maps.
+  Include newly stable branches and support extensions announced upstream.
+- **When it changes:** Update the maps, their tests and the documented coverage. Existing tracked
+  reminders pick up revised dates on the next reminder pass. Unknown releases must never get
+  an invented support date.
+
+## Reminders: Cloudflare token lifetime
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-13 08:35 UTC. Both verification endpoints return `status` and optional
+  `expires_on`. Account tokens need their account endpoint. Zone Read provides the account ID.
+- **Status:** `ReminderSources` uses user verification for user tokens and account verification
+  for account tokens, including legacy tokens discovered through visible zones. A working token
+  whose verification is refused retains its last known date, without claiming it is expired.
+- **Check:** Read Cloudflare's [user-token verification](https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/verify/),
+  [account-token verification](https://developers.cloudflare.com/api/resources/accounts/subresources/tokens/methods/verify/)
+  and [zone listing](https://developers.cloudflare.com/api/resources/zones/methods/list/) contracts.
+  Check response fields, required permissions and supported token formats.
+- **When it changes:** Update `ReminderSources`, its failure-handling tests and Reminders docs.
+  Never expose the token in a reminder, a response, an error or a calendar feed.

@@ -1,3 +1,4 @@
+import { ReminderService } from './services/reminders.js';
 // @docs get-started/installation, get-started/quick-start
 import fsp from 'node:fs/promises';
 import { eq } from 'drizzle-orm';
@@ -223,6 +224,8 @@ async function main(): Promise<void> {
   core.wpInventory = new WpInventoryService(core, vulnerabilities);
   core.externalBackups = new ExternalBackupService(core);
   core.alerts = new AlertService(core);
+  const serverInfo = new SystemInfoService(servers, log, hostExec);
+  core.reminders = new ReminderService(core, serverInfo);
   // The hourly check of each external site and every uptime probe are what the alerts hear from.
   core.connections.attachEvents({ checked: (site, conn) => core.alerts.connectorChecked(site, conn) });
   core.monitor.attachExternal(core.connections, {
@@ -251,7 +254,7 @@ async function main(): Promise<void> {
     pluginCatalog: new PluginCatalogService(db, config.paths.plugins, wporg),
     wpBulk: new WpBulkService(core, worker, core.wpInventory),
     wporg,
-    serverInfo: new SystemInfoService(servers, log, hostExec),
+    serverInfo,
     terminal: new TerminalService(db, config, servers, log),
     schedulers,
   };

@@ -55,6 +55,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     sitesCountFor: hosted('hostedSites()'),
     externalCountFor: both('counts the external sites a server keeps the backups of'),
   },
+  'services/reminders.ts': { siteRows: both('reads domains, PHP versions and reminder links for both hosted and external sites; never invokes a container') },
   'services/alerts.ts': { vulnerabilities: both('alerts are for every site') },
   'services/backup.ts': {
     expire: both("reads each site's own keep period: the backups of either kind are deleted by age"),

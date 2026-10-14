@@ -50,6 +50,17 @@ const steps =
   };
 
 export const SHOTS: Shot[] = [
+  { name: 'reminders', what: 'Reminders: a checklist with due and upcoming work', path: '/reminders', theme: 'both' },
+  { name: 'reminders-new', what: 'A reminder with a repeat interval and an email recipient', path: '/reminders', theme: 'light', prepare: button('New reminder') },
+  {
+    name: 'reminders-eol', what: 'Adding a server OS end-of-life reminder', path: '/reminders', theme: 'light',
+    prepare: async (page) => {
+      await page.getByRole('button', { name: 'New reminder', exact: true }).click();
+      await page.getByLabel('Kind').selectOption('os');
+      await page.getByLabel('Server operating system').selectOption({ index: 1 });
+    },
+  },
+  { name: 'reminders-domains', what: 'Domains and their registry dates', path: '/reminders?tab=domains', theme: 'light' },
   { name: 'overview', what: 'The Dashboard: the fleet at a glance', path: '/', theme: 'both', hero: true },
   { name: 'sites-list', what: 'Sites → All sites: eleven sites on three servers, and two hosted elsewhere', path: '/sites', theme: 'both', hero: true },
   {

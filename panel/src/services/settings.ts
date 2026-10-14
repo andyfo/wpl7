@@ -68,6 +68,7 @@ export interface PanelSettings {
   alertsBackups: boolean;
   /** Email when WPL7 Connect on a site hosted elsewhere stops answering, or its certificate is about to expire. */
   alertsConnector: boolean;
+  domainLookups: boolean;
   /** CPU cores a site container may use (fractional allowed). 0 = uncapped. */
   siteCpuLimit: number;
   /** Memory ceiling per site container. */
@@ -184,6 +185,7 @@ const KEY_MAP: Record<keyof PanelSettings, string> = {
   alertsVulnerabilities: 'alerts.vulnerabilities',
   alertsBackups: 'alerts.backups',
   alertsConnector: 'alerts.connector',
+  domainLookups: 'reminders.domainLookups',
   siteCpuLimit: 'site.cpuLimit',
   siteMemoryLimitMb: 'site.memoryLimitMb',
   sitePidsLimit: 'site.pidsLimit',

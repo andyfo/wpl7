@@ -1,3 +1,4 @@
+import { ReminderCard } from '../components/ReminderCard';
 // @docs backups/overview, get-started/first-site, sites/domains, sites/move, sites/overview, sites/settings, sites/visitors, sites/wordpress
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
@@ -120,6 +121,7 @@ export function SiteDetail() {
 
       {site.isError && <ErrorNote error={site.error} />}
 
+      <ReminderCard siteId={s.id} />
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
       {tab === 'overview' && (external ? <ExternalOverview slug={slug} /> : <OverviewTab slug={slug} />)}

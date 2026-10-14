@@ -2,7 +2,7 @@
 title: Sites
 description: "Create, change and remove sites. Everything that touches a container is asynchronous: you get a job back and poll it."
 sidebar:
-  order: 2.01
+  order: 2.03
 sources:
   - panel/shared/apiDocs.ts
 ---

@@ -1,6 +1,7 @@
 // @docs panel/appearance
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, NavLink, Outlet, matchPath, useLocation, useMatches } from 'react-router';
+import { useReminderSummary } from '../api/reminders';
 import { useMe, useMeta } from '../api/hooks';
 import { ApiError, api } from '../api/client';
 import { NOT_FOUND_ROUTE } from '../pages/ErrorPages';
@@ -79,6 +80,7 @@ const NAV: NavItem[] = [
     ],
   },
   { to: '/mail', label: 'Mail', icon: 'mail' },
+  { to: '/reminders', label: 'Reminders', icon: 'clock' },
   {
     to: '/jobs',
     label: 'Automations',
@@ -116,6 +118,11 @@ const OFF_NAV_PAGES: Record<string, string> = { '/about': 'About', '/support': '
 export function Layout() {
   const me = useMe();
   const meta = useMeta();
+  const reminderSummary = useReminderSummary(!!me.data);
+  useEffect(() => {
+    const count = reminderSummary.data?.count ?? 0;
+    document.title = `${count ? `(${count}) ` : ''}WPL7`;
+  }, [reminderSummary.data?.count]);
   const location = useLocation();
   const notFound = useMatches().some((match) => match.id === NOT_FOUND_ROUTE);
   const [open, setOpen] = useState(false);
@@ -187,6 +194,7 @@ export function Layout() {
                   >
                     <Icon name={item.icon} />
                     <span>{item.label}</span>
+                    {item.to === '/reminders' && !!reminderSummary.data?.count && <span aria-label={`${reminderSummary.data.count} reminders need attention`} className={`ml-auto rounded-full px-2 py-0.5 text-xs font-semibold ${reminderSummary.data.tone === 'red' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{reminderSummary.data.count}</span>}
                     <span className="nav-indicator" />
                   </NavLink>
                 </div>

@@ -41,6 +41,7 @@ interface PanelSettings {
   alertsVulnerabilities: boolean;
   alertsBackups: boolean;
   alertsConnector: boolean;
+  domainLookups: boolean;
   siteCpuLimit: number;
   siteMemoryLimitMb: number;
   sitePidsLimit: number;
@@ -136,6 +137,7 @@ const SETTING_TAB: Record<keyof PanelSettings, TabId> = {
   alertsVulnerabilities: 'monitoring',
   alertsBackups: 'monitoring',
   alertsConnector: 'monitoring',
+  domainLookups: 'monitoring',
   monitorUptimeIntervalSec: 'monitoring',
   monitorStatsIntervalSec: 'monitoring',
   monitorDuIntervalMin: 'monitoring',
@@ -702,6 +704,10 @@ function MonitoringTab({ s, set }: TabProps) {
         <p className="mt-2 text-xs text-neutral-500">Interval changes apply after a panel restart.</p>
       </Card>
 
+      <Card title="Reminders">
+        <Toggle checked={s.domainLookups} onChange={(v) => set('domainLookups', v)} label="Look up domain expiry dates" />
+        <p className="text-sm text-neutral-500 mt-2">Sends tracked domain names to their registries once a day.</p>
+      </Card>
       <Card title="Alerts" id="alerts">
         <div className="space-y-4">
           <Field label="Send alerts to" hint="Empty = log only.">

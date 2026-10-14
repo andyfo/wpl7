@@ -1469,6 +1469,7 @@ export const settingsUpdateBody = z.object({
   alertsVulnerabilities: z.boolean().optional(),
   alertsBackups: z.boolean().optional(),
   alertsConnector: z.boolean().optional(),
+  domainLookups: z.boolean().optional(),
   /** 0 = uncapped. Fractional cores allowed. */
   siteCpuLimit: z.number().min(0).max(64).optional(),
   siteMemoryLimitMb: z.number().int().min(128).max(65536).optional(),

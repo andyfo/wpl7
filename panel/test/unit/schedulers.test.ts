@@ -37,6 +37,8 @@ describe('built-in schedules', () => {
     const list = w.deps.schedulers.list();
     const byKey = new Map(list.map((s) => [s.key, s]));
     expect([...byKey.keys()]).toEqual([
+      'reminders',
+      'domain-lookups',
       'backups',
       'wp-scan',
       'malware-scan',

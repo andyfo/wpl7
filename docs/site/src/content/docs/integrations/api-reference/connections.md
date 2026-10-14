@@ -2,7 +2,7 @@
 title: Sites hosted elsewhere
 description: "Connect a WordPress site hosted elsewhere through the WPL7 Connect plugin: create a connection, install its plugin on the site, then add the site. The last three endpoints are the plugin's own."
 sidebar:
-  order: 2.03
+  order: 2.05
 sources:
   - panel/shared/apiDocs.ts
 ---

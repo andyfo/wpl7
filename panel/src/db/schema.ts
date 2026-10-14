@@ -1694,3 +1694,28 @@ export const vulnNotices = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.siteId, t.kind, t.slug, t.advisory] })],
 );
+
+// @docs automations/reminders
+export const reminders = sqliteTable('reminders', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  data: text('data').notNull(), // validated ReminderInput, no credentials
+  anchor: text('anchor').notNull(),
+  subjectKey: text('subject_key').unique(),
+  siteId: integer('site_id').references(() => sites.id, { onDelete: 'set null' }),
+  serverId: integer('server_id').references(() => servers.id, { onDelete: 'set null' }),
+  recipientUserId: integer('recipient_user_id').references(() => users.id, { onDelete: 'set null' }),
+  recipientSelected: integer('recipient_selected').notNull().default(0),
+  snoozedUntil: text('snoozed_until'),
+  pendingUntil: integer('pending_until'),
+  doneAt: integer('done_at'),
+  emailKey: text('email_key'),
+  emailedAt: integer('emailed_at'),
+  createdBy: text('created_by').notNull(),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+export type ReminderRow = typeof reminders.$inferSelect;
+export const domainLookups = sqliteTable('domain_lookups', {
+  domain: text('domain').primaryKey(),
+  data: text('data').notNull(), // DomainDto
+});
