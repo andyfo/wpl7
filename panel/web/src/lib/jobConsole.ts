@@ -21,18 +21,20 @@ export interface ConsoleSession {
   view: ConsoleView;
 }
 
-/** Where the console was put by hand. */
+/**
+ * Where the console was put by hand: the corner of the window it is nearest, and its distance
+ * from that corner's two sides, in px. A resize keeps those distances. Anchored at the bottom,
+ * the console grows upward when its log shows; anchored at the top, downward.
+ */
 export interface StoredPlace {
-  /** The side of the window it is nearer to. */
-  edge: 'left' | 'right';
-  /** Its distance from that side, in px. */
-  inset: number;
-  /** Its header's vertical centre, as a fraction of the window's height. */
-  center: number;
+  x: 'left' | 'right';
+  xInset: number;
+  y: 'top' | 'bottom';
+  yInset: number;
 }
 
 export interface ConsolePrefs {
-  /** null = the default place, beside the content. */
+  /** null = the default place, the window's bottom right corner. */
   position: StoredPlace | null;
   /**
    * The user minimized it. It stays in the header through later jobs until they open it again;
@@ -48,10 +50,8 @@ export interface ConsoleState {
 
 /** From the window's edges, in px. */
 export const MARGIN = 16;
-/** From the content column, in px. */
-export const GAP = 16;
-/** 28rem: one width for the bar and the log, so the buttons never move sideways. */
-export const MAX_WIDTH = 448;
+/** Where the console goes until it is moved: the window's bottom right corner. */
+export const DEFAULT_PLACE: StoredPlace = { x: 'right', xInset: MARGIN, y: 'bottom', yInset: MARGIN };
 /** How long a bar whose jobs have all ended shows how they ended before it minimizes itself. */
 export const SETTLE_MS = 3000;
 /** Jobs kept. The oldest ended one makes room; a job still queued or running never does. */
@@ -160,13 +160,15 @@ export function sessionFrom(raw: string | null): ConsoleSession {
   };
 }
 
+const isInset = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100_000;
+
 function placeFrom(value: unknown): StoredPlace | null {
   if (!value || typeof value !== 'object') return null;
-  const { edge, inset, center } = value as Record<string, unknown>;
-  if (edge !== 'left' && edge !== 'right') return null;
-  if (typeof inset !== 'number' || !Number.isFinite(inset) || inset < 0 || inset > 100_000) return null;
-  if (typeof center !== 'number' || !Number.isFinite(center) || center < 0 || center > 1) return null;
-  return { edge, inset, center };
+  const { x, xInset, y, yInset } = value as Record<string, unknown>;
+  if ((x !== 'left' && x !== 'right') || (y !== 'top' && y !== 'bottom')) return null;
+  if (!isInset(xInset) || !isInset(yInset)) return null;
+  return { x, xInset, y, yInset };
 }
 
 /** This browser's console preferences as stored, read back. Anything that does not fit is left out. */
@@ -182,59 +184,44 @@ export interface Frame {
   /** The window, without its scrollbars. */
   windowWidth: number;
   windowHeight: number;
-  /** The right edge of the page's content column. */
-  contentRight: number;
-  /** The console as drawn now: its width, its header's height (the bar), its whole height. */
+  /** The console as drawn now: one width whether its log shows or not, and its whole height. */
   width: number;
-  headerHeight: number;
   height: number;
-}
-
-/** The console's width in a window this wide. */
-export function consoleWidth(windowWidth: number): number {
-  return Math.max(0, Math.min(MAX_WIDTH, windowWidth - 2 * MARGIN));
-}
-
-/** Just right of the content column when it fits there, against the window's right edge when not. */
-export function defaultLeft(contentRight: number, windowWidth: number, width: number): number {
-  return Math.max(MARGIN, Math.min(contentRight + GAP, windowWidth - MARGIN - width));
 }
 
 /** A position kept inside the window, MARGIN from each edge. */
 export function clampToWindow(left: number, top: number, frame: Frame): { left: number; top: number } {
   return {
     left: Math.max(MARGIN, Math.min(left, frame.windowWidth - MARGIN - frame.width)),
-    // Expanding grows the box downward; near the foot of the window it moves up as far as it must.
     top: Math.max(MARGIN, Math.min(top, frame.windowHeight - MARGIN - frame.height)),
   };
 }
 
 /**
- * Where the console goes: where it was put, or by default on the right with its header at half
- * the window's height. Always inside the window. The stored place itself never changes here, so
- * a box pushed up by its log goes back down when the log is hidden.
+ * Where the console goes: where it was put, or the window's bottom right corner. Always inside
+ * the window. Anchored at the top, an expanded console near the foot of the window moves up only
+ * as far as it must, and the stored place itself never changes here: hidden again, the log
+ * leaves the console where it was.
  */
 export function place(stored: StoredPlace | null, frame: Frame): { left: number; top: number } {
-  const left = !stored
-    ? defaultLeft(frame.contentRight, frame.windowWidth, frame.width)
-    : stored.edge === 'left'
-      ? stored.inset
-      : frame.windowWidth - stored.inset - frame.width;
-  const top = (stored?.center ?? 0.5) * frame.windowHeight - frame.headerHeight / 2;
+  const at = stored ?? DEFAULT_PLACE;
+  const left = at.x === 'left' ? at.xInset : frame.windowWidth - at.xInset - frame.width;
+  const top = at.y === 'top' ? at.yInset : frame.windowHeight - at.yInset - frame.height;
   return clampToWindow(Math.round(left), Math.round(top), frame);
 }
 
-/** A place to store for a console dropped at `left`, `top`. */
+/** A place to store for a console dropped at `left`, `top`: measured from the nearest corner. */
 export function toStored(left: number, top: number, frame: Frame): StoredPlace {
   const at = clampToWindow(left, top, frame);
-  const fromLeft = at.left;
   const fromRight = frame.windowWidth - at.left - frame.width;
-  const edge = fromLeft < fromRight ? 'left' : 'right';
-  const center = frame.windowHeight > 0 ? (at.top + frame.headerHeight / 2) / frame.windowHeight : 0.5;
+  const fromBottom = frame.windowHeight - at.top - frame.height;
+  const x = at.left < fromRight ? 'left' : 'right';
+  const y = at.top < fromBottom ? 'top' : 'bottom';
   return {
-    edge,
-    inset: Math.max(0, Math.round(edge === 'left' ? fromLeft : fromRight)),
-    center: Math.min(1, Math.max(0, center)),
+    x,
+    xInset: Math.max(0, Math.round(x === 'left' ? at.left : fromRight)),
+    y,
+    yInset: Math.max(0, Math.round(y === 'top' ? at.top : fromBottom)),
   };
 }
 

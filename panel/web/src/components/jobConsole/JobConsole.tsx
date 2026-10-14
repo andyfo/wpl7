@@ -39,24 +39,24 @@ const LINE_TONES: Record<JobLogLine['level'], string> = {
 const DRAG_START = 4;
 
 /**
- * The job console: the jobs started in this tab, floating over the page wherever it was put.
- * Collapsed (the bar) it names the selected job and shows its newest line; expanded it shows the
- * log as well. Drawn only while it is open - minimized, it is the chip in the header.
+ * The job console: the jobs started in this tab, floating over the page in the window's bottom
+ * right corner, or wherever it was put. Collapsed (the bar) it names the selected job and shows
+ * its newest line; expanded it shows the log as well. Drawn only while it is open - minimized, it
+ * is the chip in the header.
  */
-export function JobConsole({ contentRef }: { contentRef: RefObject<HTMLElement | null> }) {
+export function JobConsole() {
   const { state } = useConsoleControls();
   if (state.session.view !== 'bar' && state.session.view !== 'log') return null;
-  return <ConsoleBox contentRef={contentRef} />;
+  return <ConsoleBox />;
 }
 
-function ConsoleBox({ contentRef }: { contentRef: RefObject<HTMLElement | null> }) {
+function ConsoleBox() {
   const { state, dispatch, setPosition, focusNext } = useConsoleControls();
   const snapshots = useJobSnapshots();
   const log = useConsoleLog();
   const { session, prefs } = state;
   const expanded = session.view === 'log';
   const box = useRef<HTMLElement>(null);
-  const head = useRef<HTMLDivElement>(null);
   const toggle = useRef<HTMLButtonElement>(null);
   const bodyId = useId();
 
@@ -66,20 +66,18 @@ function ConsoleBox({ contentRef }: { contentRef: RefObject<HTMLElement | null> 
   const allEnded = session.jobs.length > 0 && session.jobs.every((id) => snapshots.get(id)?.ended);
   const othersRunning = session.jobs.filter((id) => id !== session.selected && !snapshots.get(id)?.ended).length;
 
-  // Where it is: measured, then placed - before the first paint, so it never shows in the wrong place.
+  // Where it is: measured, then placed - before the first paint, so it never shows in the wrong
+  // place. Measured again when it grows or shrinks (its log), and when the window does.
   const [frame, setFrame] = useState<Frame | null>(null);
   useLayoutEffect(() => {
     const measure = () => {
       const b = box.current;
-      const h = head.current;
-      if (!b || !h) return;
+      if (!b) return;
       const root = document.documentElement;
       const next: Frame = {
         windowWidth: root.clientWidth,
         windowHeight: root.clientHeight,
-        contentRight: contentRef.current?.getBoundingClientRect().right ?? root.clientWidth,
         width: b.offsetWidth,
-        headerHeight: h.offsetHeight,
         height: b.offsetHeight,
       };
       setFrame((prev) =>
@@ -89,13 +87,12 @@ function ConsoleBox({ contentRef }: { contentRef: RefObject<HTMLElement | null> 
     measure();
     const resize = new ResizeObserver(measure);
     if (box.current) resize.observe(box.current);
-    if (contentRef.current) resize.observe(contentRef.current);
     window.addEventListener('resize', measure);
     return () => {
       resize.disconnect();
       window.removeEventListener('resize', measure);
     };
-  }, [contentRef]);
+  }, []);
 
   // Dragging moves the box directly, without a render per pointer move. A render in between (a
   // poll) keeps it where the pointer has it.
@@ -179,7 +176,7 @@ function ConsoleBox({ contentRef }: { contentRef: RefObject<HTMLElement | null> 
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false);
       }}
     >
-      <div ref={head} className="flex items-start gap-1.5 py-2 pl-1.5 pr-2">
+      <div className="flex items-start gap-1.5 py-2 pl-1.5 pr-2">
         <button
           type="button"
           className="job-console-handle"

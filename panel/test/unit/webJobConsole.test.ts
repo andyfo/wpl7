@@ -3,14 +3,10 @@ import {
   chipSummary,
   chipText,
   clampToWindow,
-  consoleWidth,
   DEFAULT_PREFS,
-  defaultLeft,
   EMPTY_SESSION,
-  GAP,
   MARGIN,
   MAX_JOBS,
-  MAX_WIDTH,
   nudge,
   outcomeOf,
   place,
@@ -173,7 +169,7 @@ describe('the job console: what the browser stored', () => {
   it('reads back what it wrote', () => {
     const session = { jobs: [12, 11], selected: 11, view: 'log' as const };
     expect(sessionFrom(JSON.stringify(session))).toEqual(session);
-    const prefs = { position: { edge: 'left' as const, inset: 40, center: 0.25 }, minimized: true };
+    const prefs = { position: { x: 'left' as const, xInset: 40, y: 'bottom' as const, yInset: 120 }, minimized: true };
     expect(prefsFrom(JSON.stringify(prefs))).toEqual(prefs);
   });
 
@@ -181,11 +177,14 @@ describe('the job console: what the browser stored', () => {
     for (const position of [
       null,
       'right',
-      { edge: 'top', inset: 10, center: 0.5 },
-      { edge: 'right', inset: -5, center: 0.5 },
-      { edge: 'right', inset: 1e9, center: 0.5 },
-      { edge: 'right', inset: 10, center: 1.5 },
-      { edge: 'right', inset: '10', center: 0.5 },
+      { x: 'top', xInset: 10, y: 'bottom', yInset: 10 },
+      { x: 'right', xInset: 10, y: 'left', yInset: 10 },
+      { x: 'right', xInset: -5, y: 'bottom', yInset: 10 },
+      { x: 'right', xInset: 10, y: 'bottom', yInset: 1e9 },
+      { x: 'right', xInset: '10', y: 'bottom', yInset: 10 },
+      { x: 'right', xInset: 10, y: 'bottom' },
+      // How an earlier build of this branch stored it: the default place again.
+      { edge: 'right', inset: 16, center: 0.5 },
     ]) {
       expect(prefsFrom(JSON.stringify({ position, minimized: true }))).toEqual({ position: null, minimized: true });
     }
@@ -194,64 +193,65 @@ describe('the job console: what the browser stored', () => {
   });
 });
 
-/** A 1440×900 window: a 242 px sidebar, a content column ending 40 px from the right. */
-const laptop: Frame = { windowWidth: 1440, windowHeight: 900, contentRight: 1400, width: MAX_WIDTH, headerHeight: 56, height: 56 };
-/** A 2560×1440 window: the 1280 px content column ends 519 px from the right. */
-const wide: Frame = { windowWidth: 2560, windowHeight: 1440, contentRight: 2041, width: MAX_WIDTH, headerHeight: 56, height: 56 };
+/** A 1440×900 window, and the console collapsed to its bar: 448 px wide, 64 high. */
+const laptop: Frame = { windowWidth: 1440, windowHeight: 900, width: 448, height: 64 };
+/** The same with its log showing. */
+const expanded: Frame = { ...laptop, height: 420 };
 
 describe('the job console: where it sits', () => {
-  it('sits just right of the content when it fits there', () => {
-    expect(place(null, wide)).toEqual({ left: 2041 + GAP, top: 720 - 28 });
+  it('sits in the bottom right corner of the window until it is moved, whatever its size', () => {
+    expect(place(null, laptop)).toEqual({ left: 1440 - MARGIN - 448, top: 900 - MARGIN - 64 });
+    const wide: Frame = { windowWidth: 2560, windowHeight: 1440, width: 448, height: 64 };
+    expect(place(null, wide)).toEqual({ left: 2560 - MARGIN - 448, top: 1440 - MARGIN - 64 });
   });
 
-  it('sits against the right edge when it does not', () => {
-    expect(place(null, laptop)).toEqual({ left: 1440 - MARGIN - MAX_WIDTH, top: 450 - 28 });
+  it('grows upward from the corner when its log shows, and goes back down when it is hidden', () => {
+    expect(place(null, expanded)).toEqual({ left: 1440 - MARGIN - 448, top: 900 - MARGIN - 420 });
+    expect(place(null, laptop).top + 64).toBe(place(null, expanded).top + 420);
   });
 
   it('keeps inside a window narrower than itself', () => {
-    const phone: Frame = { ...laptop, windowWidth: 390, contentRight: 372, width: consoleWidth(390) };
-    expect(consoleWidth(390)).toBe(390 - 2 * MARGIN);
-    expect(place(null, phone).left).toBe(MARGIN);
-    expect(defaultLeft(100, 200, 400)).toBe(MARGIN);
+    const phone: Frame = { windowWidth: 390, windowHeight: 844, width: 390 - 2 * MARGIN, height: 64 };
+    expect(place(null, phone)).toEqual({ left: MARGIN, top: 844 - MARGIN - 64 });
+    expect(place(null, { ...laptop, windowWidth: 300 }).left).toBe(MARGIN);
   });
 
-  it('stores the nearer side, and keeps its distance to it when the window changes', () => {
-    const right = toStored(900, 422, laptop);
-    expect(right).toEqual({ edge: 'right', inset: 1440 - 900 - MAX_WIDTH, center: 0.5 });
-    const narrower = { ...laptop, windowWidth: 1200, contentRight: 1160 };
-    expect(place(right, narrower).left).toBe(1200 - right.inset - MAX_WIDTH);
+  it('stores the nearest corner, and keeps its distance to it when the window changes', () => {
+    const topLeft = toStored(300, 100, laptop);
+    expect(topLeft).toEqual({ x: 'left', xInset: 300, y: 'top', yInset: 100 });
+    const bottomRight = toStored(900, 700, laptop);
+    expect(bottomRight).toEqual({ x: 'right', xInset: 1440 - 900 - 448, y: 'bottom', yInset: 900 - 700 - 64 });
 
-    const left = toStored(300, 100, laptop);
-    expect(left.edge).toBe('left');
-    expect(place(left, narrower).left).toBe(300);
+    const smaller: Frame = { ...laptop, windowWidth: 1200, windowHeight: 700 };
+    expect(place(topLeft, smaller)).toEqual({ left: 300, top: 100 });
+    expect(place(bottomRight, smaller)).toEqual({ left: 1200 - 92 - 448, top: 700 - 136 - 64 });
   });
 
-  it('keeps the header at the same share of the window height', () => {
-    const stored = toStored(300, 178, laptop);
-    expect(stored.center).toBeCloseTo(206 / 900);
-    expect(place(stored, { ...laptop, windowHeight: 450 }).top).toBeCloseTo((206 / 900) * 450 - 28);
+  it('keeps the header where it is when the log shows under a console anchored at the top', () => {
+    const topLeft = toStored(300, 100, laptop);
+    expect(place(topLeft, expanded).top).toBe(place(topLeft, laptop).top);
   });
 
-  it('moves an expanded console up only as far as the window needs', () => {
-    const stored = toStored(300, 700, laptop);
-    const expanded = { ...laptop, height: 420 };
-    expect(place(stored, expanded).top).toBe(900 - MARGIN - 420);
-    // The stored place is left alone: collapsed again, it is back where it was.
-    expect(place(stored, laptop).top).toBe(700);
+  it('moves a console anchored at the top up only as far as its log needs, and leaves the stored place alone', () => {
+    const high = toStored(300, 400, laptop);
+    expect(high.y).toBe('top');
+    // A long log: 600 px from 400 down would end below the window.
+    expect(place(high, { ...laptop, height: 600 }).top).toBe(900 - MARGIN - 600);
+    expect(place(high, laptop).top).toBe(400);
   });
 
   it('keeps a console dropped past an edge inside the window', () => {
-    expect(clampToWindow(-200, 5000, laptop)).toEqual({ left: MARGIN, top: 900 - MARGIN - 56 });
-    expect(toStored(5000, -300, laptop)).toEqual({ edge: 'right', inset: MARGIN, center: (MARGIN + 28) / 900 });
+    expect(clampToWindow(-200, 5000, laptop)).toEqual({ left: MARGIN, top: 900 - MARGIN - 64 });
+    expect(toStored(5000, -300, laptop)).toEqual({ x: 'right', xInset: MARGIN, y: 'top', yInset: MARGIN });
   });
 
   it('moves with the arrow keys, from the default place when none is stored, and not out of the window', () => {
     const from = place(null, laptop);
-    const moved = nudge(null, -16, 64, laptop);
-    expect(place(moved, laptop)).toEqual({ left: from.left - 16, top: from.top + 64 });
+    const moved = nudge(null, -16, -64, laptop);
+    expect(place(moved, laptop)).toEqual({ left: from.left - 16, top: from.top - 64 });
     let s = moved;
-    for (let i = 0; i < 100; i++) s = nudge(s, 64, 64, laptop);
-    expect(place(s, laptop)).toEqual({ left: 1440 - MARGIN - MAX_WIDTH, top: 900 - MARGIN - 56 });
+    for (let i = 0; i < 100; i++) s = nudge(s, -64, -64, laptop);
+    expect(place(s, laptop)).toEqual({ left: MARGIN, top: MARGIN });
   });
 });
 

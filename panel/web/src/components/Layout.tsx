@@ -129,9 +129,8 @@ export function Layout() {
   const location = useLocation();
   const notFound = useMatches().some((match) => match.id === NOT_FOUND_ROUTE);
   const [open, setOpen] = useState(false);
-  // The job console sits beside the content column, and its chip in the header.
+  // The job console's chip sits in the header, and is pinned to the window while it is scrolled away.
   const header = useRef<HTMLElement>(null);
-  const content = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setOpen(false);
   }, [location.pathname]);
@@ -332,7 +331,7 @@ export function Layout() {
           </div>
         </header>
         <main id="main-content" className="main-content" tabIndex={-1}>
-          <div ref={content} className="mx-auto max-w-7xl">
+          <div className="mx-auto max-w-7xl">
             {meta.data?.maintenance && (
               // On every page, not just Settings: a write refused with no explanation is the
               // thing this banner exists to prevent.
@@ -348,7 +347,7 @@ export function Layout() {
           </div>
         </main>
       </div>
-      <JobConsole contentRef={content} />
+      <JobConsole />
     </div>
   );
 }
