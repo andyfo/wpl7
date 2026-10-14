@@ -109,6 +109,31 @@ describe('sender ownership', () => {
   });
 });
 
+describe('sender ownership of a www site', () => {
+  it('gives a site the domain of its www names, unless another site answers to that domain', async () => {
+    const w = await makeWorld();
+    // WordPress on www.alpha.example sends as wordpress@alpha.example.
+    addSite(w, 'alpha', ['www.alpha.example']);
+    addSite(w, 'beta', ['www.beta.example']);
+    addSite(w, 'gamma', ['beta.example']);
+
+    const owners = w.core.mail.senderOwners();
+    const byDomain = new Map(owners.map((o) => [o.domain, o.login]));
+    expect(byDomain.get('alpha.example')).toBe('alpha@wpl7');
+    expect(byDomain.get('www.alpha.example')).toBe('alpha@wpl7');
+    expect(owners.filter((o) => o.domain === 'beta.example')).toEqual([{ domain: 'beta.example', login: 'gamma@wpl7' }]);
+  });
+
+  it('keeps a key at the bare domain from locking the www site out of its own mail', async () => {
+    const w = await makeWorld();
+    addSite(w, 'alpha', ['www.alpha.example']);
+    // The guide lists alpha.example, so that is where the key is made.
+    w.core.mail.createDkimKey('alpha.example');
+    const owners = w.core.mail.senderOwners().filter((o) => o.domain === 'alpha.example');
+    expect(owners).toEqual([{ domain: 'alpha.example', login: 'alpha@wpl7' }]);
+  });
+});
+
 describe('the owners the DKIM signer holds a From: header to', () => {
   it('are published with every relay publish, twins and go-live extras included', async () => {
     const w = await makeWorld();

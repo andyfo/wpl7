@@ -165,6 +165,60 @@ describe('GET /api/mail/setup', () => {
   });
 });
 
+describe('the zone a record goes in', () => {
+  type Step = { id: string; record: { name: string; zone: string | null } };
+  const zonesOf = (domain: { steps: Step[] }) => Object.fromEntries(domain.steps.map((s) => [s.id, s.record.zone]));
+
+  it("names each record's zone, so the guide can write its name the way a DNS provider asks for it", async () => {
+    const { world } = await setupWorld();
+    seedSite(world, 'shop', 'shop.acme.test');
+    const { app, headers } = await authedApp(world);
+
+    const setup = (await app.inject({ method: 'GET', url: '/api/mail/setup', headers })).json();
+    const domain = (name: string) => setup.domains.find((d: { domain: string }) => d.domain === name);
+    expect(zonesOf(domain('acme.test'))).toEqual({ spf: 'acme.test', dkim: 'acme.test', dmarc: 'acme.test' });
+    expect(zonesOf(domain('shop.acme.test'))).toEqual({ spf: 'acme.test', dkim: 'acme.test', dmarc: 'acme.test' });
+  });
+
+  it('takes the zone DNS reports for each record, a delegated _domainkey included', async () => {
+    // _domainkey.acme.test is a zone of its own: wpl7 goes in there, not wpl7._domainkey in acme.test.
+    const resolver = {
+      ...resolverFor(),
+      zoneOf: async (name: string) => (name.endsWith('._domainkey.acme.test') ? '_domainkey.acme.test' : 'acme.test'),
+    };
+    const { world } = await setupWorld({ resolver });
+    const { app, headers } = await authedApp(world);
+
+    const res = await app.inject({ method: 'POST', url: '/api/mail/domains/acme.test/check', headers });
+    expect(zonesOf(res.json())).toEqual({ spf: 'acme.test', dkim: '_domainkey.acme.test', dmarc: 'acme.test' });
+  });
+});
+
+describe('POST /api/mail/servers/:serverId/check', () => {
+  it("checks one server's mail hostname and reverse DNS again", async () => {
+    const { world } = await setupWorld({ resolver: resolverFor({}, { 'mail.acme.test': ['203.0.113.9'] }) });
+    world.docker.execQueue.push({ stdout: 'mail.acme.test\n\ninet:dkim:8891\n', stderr: '', exitCode: 0 });
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: 0 }); // postqueue -j
+    const { app, headers } = await authedApp(world);
+
+    const res = await app.inject({ method: 'POST', url: '/api/mail/servers/1/check', headers });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      serverId: 1,
+      hostname: 'mail.acme.test',
+      hostnameZone: 'acme.test',
+      hostnameA: { verdict: 'ok' },
+      reverseDns: { verdict: 'error' },
+    });
+  });
+
+  it('answers an unknown server with 404', async () => {
+    const { world } = await setupWorld();
+    const { app, headers } = await authedApp(world);
+    expect((await app.inject({ method: 'POST', url: '/api/mail/servers/99/check', headers })).statusCode).toBe(404);
+  });
+});
+
 describe('POST /api/mail/domains/:domain/publish', () => {
   it('publishes all three records and generates the DKIM key on the way', async () => {
     const { world, dnsProvider } = await setupWorld({ zones: ['acme.test'] });

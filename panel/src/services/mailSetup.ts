@@ -24,6 +24,8 @@ export interface SpfMerge {
   action: 'create' | 'merge' | 'unchanged' | 'conflict';
   /** What the change does, in one sentence. */
   detail: string;
+  /** The mechanisms the record gains. */
+  added: string[];
 }
 
 /** `v=spf1 a mx include:x -all` -> ['a', 'mx', 'include:x', '-all'] */
@@ -53,18 +55,19 @@ export function mergeSpf(existing: string | null, mechanisms: string[]): SpfMerg
 
   if (!existing) {
     if (wanted.length === 0) {
-      return { record: 'v=spf1 ~all', action: 'create', detail: 'Publishes an SPF record' };
+      return { record: 'v=spf1 ~all', action: 'create', detail: 'Publishes an SPF record', added: [] };
     }
     return {
       record: `v=spf1 ${wanted.join(' ')} ~all`,
       action: 'create',
       detail: `Publishes an SPF record authorizing ${wanted.join(', ')}`,
+      added: wanted,
     };
   }
 
   const trimmed = existing.trim();
   if (!/^v=spf1(\s|$)/i.test(trimmed)) {
-    return { record: trimmed, action: 'conflict', detail: 'The published record is not an SPF record' };
+    return { record: trimmed, action: 'conflict', detail: 'The published record is not an SPF record', added: [] };
   }
 
   const terms = spfTerms(trimmed);
@@ -79,11 +82,12 @@ export function mergeSpf(existing: string | null, mechanisms: string[]): SpfMerg
       record: trimmed,
       action: 'conflict',
       detail: `The published record explicitly denies ${denied.join(', ')}; remove that qualifier first if this server should be allowed to send`,
+      added: [],
     };
   }
   const missing = wanted.filter((m) => !terms.some((t) => bareMechanism(t) === bareMechanism(m)));
   if (missing.length === 0) {
-    return { record: trimmed, action: 'unchanged', detail: 'The published record already authorizes this server' };
+    return { record: trimmed, action: 'unchanged', detail: 'The published record already authorizes this server', added: [] };
   }
 
   const allIndex = terms.findIndex(isAllTerm);
@@ -92,6 +96,7 @@ export function mergeSpf(existing: string | null, mechanisms: string[]): SpfMerg
     record: `v=spf1 ${merged.join(' ')}`,
     action: 'merge',
     detail: `Adds ${missing.join(', ')} to the existing record, keeping ${terms.filter((t) => !isAllTerm(t)).length} mechanism(s) already there`,
+    added: missing,
   };
 }
 
@@ -132,6 +137,11 @@ export interface PlanInput {
   dkimKey: { selector: string; publicKeyB64: string } | null;
   /** True when the panel holds an API token that can write this zone. */
   dnsManaged: boolean;
+  /**
+   * The zone each record's name is published in. Asked per name: `_domainkey.example.com` or
+   * `_dmarc.example.com` can be a zone of its own, and a name is only right within its zone.
+   */
+  zoneOf?: (name: string) => string | null;
 }
 
 /**
@@ -141,6 +151,7 @@ export interface PlanInput {
  */
 export function planDomainSteps(input: PlanInput): MailSetupStep[] {
   const { domain, mode, serverIps, dnsManaged } = input;
+  const zone = (name: string) => input.zoneOf?.(name) ?? null;
 
   // ----- SPF
   //
@@ -176,7 +187,12 @@ export function planDomainSteps(input: PlanInput): MailSetupStep[] {
               ? manual(merge.record, 'The merged record would need more than 10 DNS lookups. Consolidate the existing includes first.')
               : dnsManaged
                 ? ready(merge.record, merge.detail)
-                : manual(merge.record, merge.detail);
+                : manual(
+                    merge.record,
+                    merge.action === 'merge'
+                      ? `Replace the SPF record that is there with this one. It adds ${merge.added.join(', ')} and keeps the rest.`
+                      : 'Add this record.',
+                  );
 
   // ----- DKIM
   const dkimName = input.dkimKey ? dkimRecordName(domain, input.dkimKey.selector) : `wpl7._domainkey.${domain}`;
@@ -184,15 +200,18 @@ export function planDomainSteps(input: PlanInput): MailSetupStep[] {
   const dkimAutomation: MailStepAutomation = !input.dkimKey
     ? dnsManaged
       ? ready('', 'Generates a signing key and publishes its public half')
-      : manual(null, 'Generate the key first (Enable DKIM), then publish the record it gives you.')
+      : manual(null, 'Create the key first, then add the record it gives you.')
     : input.dkim.verdict === 'ok'
       ? satisfied('The published key matches the one this server signs with')
       : dnsManaged
         ? ready(dkimValue, input.dkim.verdict === 'missing' ? 'Publishes the signing key' : 'Replaces the published key with the current one')
-        : manual(dkimValue, input.dkim.verdict === 'missing' ? 'Publish this value' : 'Replace the published value with this one');
+        : manual(dkimValue, input.dkim.verdict === 'missing' ? 'Add this record.' : 'Replace the published value with this one.');
 
   // ----- DMARC
   const dmarcValue = suggestedDmarc(`dmarc@${domain}`);
+  // A published record that receivers act on is the domain's record, and stays: it is what
+  // belongs in DNS, not our starter policy, which copied elsewhere would weaken it.
+  const dmarcInForce = input.dmarc.found !== null && input.dmarc.verdict !== 'error' ? input.dmarc.found : null;
   const dmarcAutomation: MailStepAutomation =
     input.dmarc.found !== null
       ? // Overwriting someone's p=reject with our starter p=none would quietly weaken a
@@ -208,14 +227,14 @@ export function planDomainSteps(input: PlanInput): MailSetupStep[] {
         : satisfied('A DMARC record is already published; the panel leaves it alone.')
       : dnsManaged
         ? ready(dmarcValue, 'Publishes a monitoring-only policy (p=none) with a reports address')
-        : manual(dmarcValue, 'Publish this value once SPF and DKIM pass');
+        : manual(dmarcValue, 'Add this record once SPF and DKIM are done.');
 
   return [
     {
       id: 'spf',
       title: 'SPF — say which servers may send',
       why: 'Without it, anyone can forge the domain.',
-      record: { type: 'TXT', name: domain, value: spfValue },
+      record: { type: 'TXT', name: domain, value: spfValue, zone: zone(domain) },
       status: input.spf,
       automation: spfAutomation,
     },
@@ -223,7 +242,7 @@ export function planDomainSteps(input: PlanInput): MailSetupStep[] {
       id: 'dkim',
       title: 'DKIM — sign the mail',
       why: 'Survives forwarding, which SPF does not, and is what DMARC checks against.',
-      record: { type: 'TXT', name: dkimName, value: dkimValue },
+      record: { type: 'TXT', name: dkimName, value: dkimValue, zone: zone(dkimName) },
       status: input.dkim,
       automation: dkimAutomation,
     },
@@ -231,7 +250,7 @@ export function planDomainSteps(input: PlanInput): MailSetupStep[] {
       id: 'dmarc',
       title: 'DMARC — tell receivers what to do',
       why: 'Publish it last — it acts on SPF and DKIM failures.',
-      record: { type: 'TXT', name: `_dmarc.${domain}`, value: dmarcValue },
+      record: { type: 'TXT', name: `_dmarc.${domain}`, value: dmarcInForce ?? dmarcValue, zone: zone(`_dmarc.${domain}`) },
       status: input.dmarc,
       automation: dmarcAutomation,
     },

@@ -36,8 +36,10 @@ another server keeps signing with the same published key.
 
 ## Who may send as which domain
 
-A site's login owns the site's domains and its dev address. The relay holds the sender address to
-that list, and the signer holds the `From:` header to it. This
+A site's login owns the site's domains and its dev address. It also owns `example.com` when the
+site has `www.example.com`, unless another site has `example.com`, because WordPress sends from the
+domain without `www.`. The relay holds the sender address to that list, and the signer holds the
+`From:` header to it. This
 [sender authorization](/docs/reference/glossary/#sender-authorization) keeps a hacked site from
 mailing as another customer.
 

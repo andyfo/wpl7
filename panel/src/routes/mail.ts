@@ -160,6 +160,12 @@ export function registerMailRoutes(app: FastifyInstance, deps: AppDeps): void {
     return deps.mail.publishHostnameA(req.params.serverId);
   });
 
+  /** Re-check one server's mail hostname and reverse DNS: the guide's Check button for a server. */
+  r.post('/api/mail/servers/:serverId/check', { schema: { params: serverIdParams } }, async (req) => {
+    requireServer(req.params.serverId);
+    return deps.mail.checkServer(req.params.serverId);
+  });
+
   /**
    * Re-check one domain's published records. Separate from the list endpoint so the UI can
    * offer a "I've added the record, check again" button without re-resolving every domain.

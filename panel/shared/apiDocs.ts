@@ -1507,7 +1507,13 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         danger: true,
         level: 'full',
       },
-      { method: 'POST', path: '/api/mail/domains/:domain/check', summary: 'Re-check one domain', level: 'manage', levelReason: 'Only re-checks DNS; changes nothing' },
+      {
+        method: 'POST',
+        path: '/api/mail/domains/:domain/check',
+        summary: "Re-check one domain's records, asking its own nameservers",
+        level: 'manage',
+        levelReason: 'Only re-checks DNS; changes nothing',
+      },
       {
         method: 'PUT',
         path: '/api/mail/servers/:serverId/hostname',
@@ -1527,6 +1533,13 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         summary: 'Point the relay hostname\'s A record at that server',
         danger: true,
         level: 'full',
+      },
+      {
+        method: 'POST',
+        path: '/api/mail/servers/:serverId/check',
+        summary: "Re-check one server's mail hostname and reverse DNS",
+        level: 'manage',
+        levelReason: 'Only re-checks DNS; changes nothing',
       },
       { method: 'GET', path: '/api/mail/dkim', summary: 'DKIM keys with their DNS record values', level: 'read' },
       {

@@ -18,6 +18,8 @@ export interface DnsResolver {
   resolve4(hostname: string): Promise<string[]>;
   resolveMx(hostname: string): Promise<{ exchange: string; priority: number }[]>;
   reverse(ip: string): Promise<string[]>;
+  /** The zone a name is published in, where the resolver can tell (services/freshDns.ts). */
+  zoneOf?(hostname: string): Promise<string | null>;
 }
 
 export const systemResolver: DnsResolver = {

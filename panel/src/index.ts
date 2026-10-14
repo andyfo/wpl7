@@ -31,6 +31,7 @@ import { AccountRecoveryService } from './services/accountRecovery.js';
 import { OAuthService } from './services/oauth.js';
 import { WporgDirectoryService } from './services/wporg.js';
 import { MailService } from './services/mail.js';
+import { FreshResolver } from './services/freshDns.js';
 import { TrafficService } from './services/traffic.js';
 import { UpdateService } from './services/updates.js';
 import { SystemUpdateService } from './services/systemUpdate.js';
@@ -106,7 +107,8 @@ async function main(): Promise<void> {
   const traefikDns = new TraefikDnsSync(config, servers, () => dnsAccount.token(), log);
   dnsAccount.onChange = () => void traefikDns.kickAll();
   // The mail setup guide publishes SPF/DKIM/DMARC through the same token, when there is one.
-  const mail = new MailService(db, config, servers, settings, log, undefined, dns);
+  // Checks ask each domain's own nameservers, so a record shows up the moment it is published.
+  const mail = new MailService(db, config, servers, settings, log, new FreshResolver(), dns);
   const geoip = new GeoIpService(config, log);
   // The country table sits on disk from the last weekly download, but nothing read it in
   // before the nightly housekeeping asked whether it was stale - so for the hours between a

@@ -6,6 +6,7 @@ sidebar:
 sources:
   - panel/src/services/mailSetup.ts
   - panel/src/services/mailDns.ts
+  - panel/src/services/freshDns.ts
   - panel/src/services/mailHostname.ts
   - panel/src/services/mail.ts
   - panel/src/routes/mail.ts
@@ -17,7 +18,8 @@ import Since from '~/components/Since.astro';
 import UiPath from '~/components/UiPath.astro';
 
 **Mail → Setup guide** lists what delivery needs, in order, with your servers' addresses filled in.
-Every check runs against public DNS, so a green mark means the record is published.
+Every check asks the domain's own nameservers, so a record shows as done as soon as your DNS
+provider publishes it.
 
 <Screenshot name="mail-setup" alt="Mail → Setup guide with a server's hostname, reverse DNS and port 25 checks, and a domain's SPF, DKIM and DMARC steps" />
 
@@ -34,9 +36,21 @@ Every check runs against public DNS, so a green mark means the record is publish
 3. **Prove it works**: send a test message from the relay and from a site to a Gmail or Outlook
    address. Its headers should show `DKIM-Signature`, `spf=pass` and `dkim=pass`.
 
-Choose **Check DNS again** after a change. All dev addresses count as one sending domain, since a
-key at the dev domain signs every site under it. Reverse DNS is set where you rent the server, and
-**Where did you rent this server?** gives the steps for common providers.
+Each record names the DNS zone it goes in, and gives its name within that zone, the way DNS
+providers' forms ask for it: `_dmarc` in `example.com`, and `@` for the domain itself. Choose
+**Check** beside a record once you have added it, or **Check all** at the top. Reverse DNS is set
+where you rent the server, and **Where did you rent this server?** gives the steps for common
+providers.
+
+## Which domains are listed
+
+WordPress sends a site's mail from its primary domain, without `www.`: a site on `www.example.com`
+sends as `wordpress@example.com`. So each site adds one sending domain.
+
+- A site's other domains are not listed. They redirect to the primary, and no mail comes from them.
+- All dev addresses count as one sending domain, the dev domain, since a key there signs every site
+  under it.
+- A domain with a DKIM key stays listed until you remove the key, even when no site sends from it.
 
 ## Let the panel publish the records
 

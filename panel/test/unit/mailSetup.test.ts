@@ -115,6 +115,45 @@ describe('planDomainSteps', () => {
     expect(steps[2]!.automation.plannedValue).toContain('v=DMARC1');
   });
 
+  it('says what to do by hand, not what the panel would do', () => {
+    const [spf, dkim, dmarc] = planDomainSteps(input({ dkimKey: { selector: 'wpl7', publicKeyB64: 'MIIB' } }));
+    expect(spf!.automation.detail).toBe('Add this record.');
+    expect(dkim!.automation.detail).toBe('Add this record.');
+    expect(dmarc!.automation.detail).toBe('Add this record once SPF and DKIM are done.');
+
+    // A record already there is replaced, keeping what it allowed.
+    const merged = planDomainSteps(input({ spf: check('error', 'v=spf1 include:_spf.mail.example ~all') }))[0]!;
+    expect(merged.automation.plannedValue).toBe('v=spf1 include:_spf.mail.example ip4:203.0.113.9 ~all');
+    expect(merged.automation.detail).toBe(
+      'Replace the SPF record that is there with this one. It adds ip4:203.0.113.9 and keeps the rest.',
+    );
+  });
+
+  it('gives each record the zone its name is in', () => {
+    const zones: Record<string, string> = { 'wpl7._domainkey.acme.test': '_domainkey.acme.test' };
+    const steps = planDomainSteps(
+      input({ dkimKey: { selector: 'wpl7', publicKeyB64: 'MIIB' }, zoneOf: (name) => zones[name] ?? 'acme.test' }),
+    );
+    expect(steps.map((s) => [s.record.name, s.record.zone])).toEqual([
+      ['acme.test', 'acme.test'],
+      ['wpl7._domainkey.acme.test', '_domainkey.acme.test'],
+      ['_dmarc.acme.test', 'acme.test'],
+    ]);
+    expect(planDomainSteps(input())[0]!.record.zone).toBeNull();
+  });
+
+  it('gives a published DMARC record as the record, never the starter policy over it', () => {
+    // Someone copying the records to another DNS provider must not turn p=reject into p=none.
+    const published = 'v=DMARC1; p=reject; rua=mailto:reports@acme.test';
+    const dmarc = planDomainSteps(input({ dmarc: check('ok', published) }))[2]!;
+    expect(dmarc.automation.state).toBe('satisfied');
+    expect(dmarc.record.value).toBe(published);
+
+    // One receivers ignore is not the domain's record: the suggestion stands.
+    const broken = planDomainSteps(input({ dmarc: check('error', 'v=DMARC1; rua=mailto:x@acme.test') }))[2]!;
+    expect(broken.record.value).toContain('p=none');
+  });
+
   it('never proposes an SPF record for a smarthost, whose value only the provider knows', () => {
     const steps = planDomainSteps(input({ mode: 'smarthost', dnsManaged: true }));
     expect(steps[0]!.automation.state).toBe('manual');
