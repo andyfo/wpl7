@@ -12,13 +12,10 @@ import { COMMAND_JOBS, jobToDto, liveJobToDto, ofASite, seesCommands, viewerOf }
 import { requireAccess } from '../plugins/auth.js';
 import type { JobRow } from '../db/schema.js';
 import { backupPolicyPart } from '../../shared/scheduleActions.js';
-import { getRegistry } from '../jobs/registry.js';
+import { getRegistry, jobDeadline } from '../jobs/registry.js';
 import type { AppDeps } from './deps.js';
 
 const idParams = z.object({ id: z.coerce.number().int().positive() });
-
-/** The worker's default, for a type whose registry entry sets no limit of its own. */
-const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 
 /**
  * `#123` or `123` is that job. Anything else: a case-insensitive substring of what a person
@@ -107,14 +104,20 @@ export function registerJobRoutes(app: FastifyInstance, deps: AppDeps): void {
     const registry = getRegistry();
     const info: Record<string, JobTypeInfo> = JOB_TYPE_INFO;
     return {
-      items: (Object.keys(JOB_TYPE_INFO) as JobType[]).map((type) => ({
-        type,
-        label: info[type]!.label,
-        description: info[type]!.description,
-        category: info[type]!.category,
-        internal: info[type]!.internal === true,
-        timeoutMs: registry[type]?.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-      })),
+      items: (Object.keys(JOB_TYPE_INFO) as JobType[]).map((type) => {
+        // As usually queued, and - for an update - when it backs the site up first.
+        const timeoutMs = jobDeadline(registry[type], {});
+        const withBackup = jobDeadline(registry[type], { backupFirst: true });
+        return {
+          type,
+          label: info[type]!.label,
+          description: info[type]!.description,
+          category: info[type]!.category,
+          internal: info[type]!.internal === true,
+          timeoutMs,
+          ...(withBackup !== timeoutMs ? { timeoutWithBackupMs: withBackup } : {}),
+        };
+      }),
     };
   });
 

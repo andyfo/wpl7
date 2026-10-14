@@ -99,9 +99,11 @@ A run is **one job per site**, grouped into a *batch*:
 - The panel already guarantees one active job per site and one running job per server. Reusing
   that means a run of 14 sites on one server updates them one after another, on three servers
   three at a time — with per-site logs, per-site cancellation and per-site failure.
-- Each job optionally takes a **pre-update backup** (`pre_update`, kept until you delete it),
-  runs the site's operations in order inside its container, optionally **checks the site still
-  answers**, then re-scans the snapshot.
+- Each job optionally takes a **pre-update backup** (`pre_update`, kept until you delete it or its
+  keep period ends), runs the site's operations in order inside its container, optionally **checks
+  the site still answers**, then re-scans the snapshot. For an update, each site's **Back up before
+  updates** setting decides the backup: always, never, or ask, where the run's own **Back up first**
+  answers (docs/api.md#backing-up-before-an-update).
 - Updates of one kind are coalesced into a single `wp plugin update a b c --format=json` call
   — one WordPress bootstrap instead of twenty — and the JSON it prints is split back per slug,
   because `wp` exits non-zero when *any* item failed and the per-item status is the truth.

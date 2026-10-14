@@ -2,7 +2,7 @@
 import { asc } from 'drizzle-orm';
 import { z } from 'zod';
 import { sites, type SiteRow } from '../../db/schema.js';
-import { wpComponentActions, wpComponentKinds } from '../../../shared/schemas.js';
+import { wpComponentActions, wpComponentKinds, type BackupType } from '../../../shared/schemas.js';
 import type { WpBulkOpResult } from '../../../shared/types.js';
 import { policyOps } from '../../../shared/wpOps.js';
 import type { CoreServices } from '../../services/index.js';
@@ -12,15 +12,33 @@ import { loadSite, requireRunning, siteDomains, siteUrl } from './shared.js';
 import { backendFor, type SiteBackend } from '../../services/siteBackend.js';
 import { isExternal } from '../../lib/siteKind.js';
 
-export const wpCoreUpdatePayload = z.object({ siteId: z.number().int() });
+/**
+ * The backup an update was asked to take before anything changes (routes decide it from the site's
+ * setting, wpBulk.backupFirst). Recorded in the result at once, so a failed update still names it.
+ */
+async function backupBeforeUpdate(ctx: JobContext<unknown>, backend: SiteBackend, type: BackupType = 'pre_update'): Promise<number> {
+  ctx.info('Taking a pre-update backup…');
+  const row = await backend.backupFirst(ctx, type);
+  ctx.info(`Pre-update backup #${row.id} complete.`);
+  ctx.setResult({ backupId: row.id });
+  return row.id;
+}
+
+export const wpCoreUpdatePayload = z.object({
+  siteId: z.number().int(),
+  /** Take a `pre_update` backup first. */
+  backupFirst: z.boolean().default(false),
+});
 
 export async function wpCoreUpdate(ctx: JobContext<z.infer<typeof wpCoreUpdatePayload>>, s: CoreServices): Promise<void> {
   const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
   const backend = backendFor(s, site);
   const restoreState = await backend.prepare(ctx);
   try {
+    const backupId = ctx.payload.backupFirst ? await backupBeforeUpdate(ctx, backend) : null;
+    ctx.checkCanceled();
     const { from, to } = await backend.coreUpdate(ctx);
-    ctx.setResult({ from, to });
+    ctx.setResult({ from, to, ...(backupId ? { backupId } : {}) });
   } finally {
     // Every WordPress job leaves the snapshot current - the panel reads that snapshot
     // everywhere now, so a job that changes a site without re-reading it makes the UI lie
@@ -43,6 +61,8 @@ export const wpPluginTaskPayload = z.object({
     .optional(),
   name: z.string().optional(),
   activate: z.boolean().default(true),
+  /** update-only: take a `pre_update` backup first. */
+  backupFirst: z.boolean().default(false),
 });
 
 export async function wpPluginTask(ctx: JobContext<z.infer<typeof wpPluginTaskPayload>>, s: CoreServices): Promise<void> {
@@ -90,10 +110,16 @@ async function runPluginTask(ctx: JobContext<z.infer<typeof wpPluginTaskPayload>
       ctx.warn(`Deactivate failed (plugin may already be inactive); continuing with delete.`);
     }
     await backend.componentAction('plugin', name, 'delete', actor);
+  } else if (ctx.payload.action === 'update') {
+    const backupId = ctx.payload.backupFirst ? await backupBeforeUpdate(ctx, backend) : null;
+    ctx.checkCanceled();
+    ctx.info(`Running plugin update for ${name}…`);
+    await updateOne(ctx, backend, 'plugin', name, actor);
+    ctx.setResult({ update: name, ...(backupId ? { backupId } : {}) });
+    return;
   } else {
     ctx.info(`Running plugin ${ctx.payload.action} for ${name}…`);
-    if (ctx.payload.action === 'update') await updateOne(ctx, backend, 'plugin', name, actor);
-    else await backend.componentAction('plugin', name, ctx.payload.action, actor);
+    await backend.componentAction('plugin', name, ctx.payload.action, actor);
   }
   ctx.setResult({ [ctx.payload.action]: name });
 }
@@ -145,6 +171,8 @@ export const wpThemeTaskPayload = z.object({
   siteId: z.number().int(),
   action: z.enum(['activate', 'update', 'delete']),
   name: z.string(),
+  /** update-only: take a `pre_update` backup first. */
+  backupFirst: z.boolean().default(false),
 });
 
 /**
@@ -158,13 +186,15 @@ export async function wpThemeTask(ctx: JobContext<z.infer<typeof wpThemeTaskPayl
   const restoreState = await backend.prepare(ctx);
   try {
     const actor = await backend.actor(ctx);
+    const backupId = ctx.payload.action === 'update' && ctx.payload.backupFirst ? await backupBeforeUpdate(ctx, backend) : null;
+    ctx.checkCanceled();
     ctx.info(`Running theme ${ctx.payload.action} for ${ctx.payload.name}…`);
     // wp-cli refuses to delete the active theme or the active theme's parent without
     // --force, which the panel never passes - that refusal is the safety rail. WPL7 Connect
     // refuses the same.
     if (ctx.payload.action === 'update') await updateOne(ctx, backend, 'theme', ctx.payload.name, actor);
     else await backend.componentAction('theme', ctx.payload.name, ctx.payload.action, actor);
-    ctx.setResult({ [ctx.payload.action]: ctx.payload.name });
+    ctx.setResult({ [ctx.payload.action]: ctx.payload.name, ...(backupId ? { backupId } : {}) });
   } finally {
     // Before restoreState(), not after: a stopped site is stopped again in there, and a scan
     // needs the container up.
@@ -236,14 +266,10 @@ export async function wpBulkTask(ctx: JobContext<BulkPayload>, s: CoreServices):
     if (nothingToDo) return;
 
     if (ctx.payload.backupFirst) {
-      ctx.info('Taking a pre-update backup…');
       // An update schedule's backups are `scheduled` ones: retention bounds them. A nightly
       // policy taking `pre_update` backups - which only a keep period deletes, and that is off
       // by default - fills the disk.
-      const type = ctx.payload.policy ? 'scheduled' : 'pre_update';
-      const row = await backend.backupFirst(ctx, type);
-      backupId = row.id;
-      ctx.info(`Pre-update backup #${row.id} complete.`);
+      backupId = await backupBeforeUpdate(ctx, backend, ctx.payload.policy ? 'scheduled' : 'pre_update');
     }
     ctx.checkCanceled();
 

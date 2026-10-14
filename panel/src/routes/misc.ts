@@ -12,6 +12,7 @@ import {
   siteTrafficQuery,
 } from '../../shared/schemas.js';
 import { WP_LOCALES } from '../../shared/locales.js';
+import { backupBeforeUpdatesOf } from '../../shared/updateBackups.js';
 import { jobToDto, viewerOf } from '../lib/dto.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { mcpUnavailableReason } from '../lib/panelUrl.js';
@@ -53,6 +54,9 @@ export function registerMiscRoutes(app: FastifyInstance, deps: AppDeps): void {
       // its scheduled backups either way.
       backupKeepDays: deps.settings.get('backupKeepDays') ?? 0,
       backupRetention: deps.settings.get('backupRetention') || 10,
+      // Whether an update backs a site up first, for the sites without a setting of their own:
+      // the update buttons ask, or say what happens, from it.
+      backupBeforeUpdates: backupBeforeUpdatesOf(null, deps.settings.get('backupBeforeUpdates')),
       // Where each server keeps its backups, so Settings and the site page can say so
       // without every page learning to call the storage endpoint.
       backupRoots: deps.storage.roots(),
@@ -117,6 +121,7 @@ export function registerMiscRoutes(app: FastifyInstance, deps: AppDeps): void {
     settings: deps.settings.getAll(),
     // Beside the default they differ from, so Settings can name them.
     ownBackupKeepDays: deps.sites.ownBackupKeepDays(),
+    ownBackupBeforeUpdates: deps.sites.ownBackupBeforeUpdates(),
   }));
 
   r.put('/api/settings', { schema: { body: settingsUpdateBody } }, async (req) => {

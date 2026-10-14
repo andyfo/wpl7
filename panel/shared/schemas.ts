@@ -652,6 +652,13 @@ export const MAX_BACKUP_FILTER_SITES = 200;
 export const MAX_BACKUP_KEEP_DAYS = 3650;
 
 /**
+ * Whether an update takes a backup first: always, never, or whoever starts it decides each time.
+ * Settings holds the one for every site, and a site can hold its own (`sites.backup_before_updates`).
+ */
+export const backupBeforeUpdatesValues = ['always', 'ask', 'never'] as const;
+export type BackupBeforeUpdates = (typeof backupBeforeUpdatesValues)[number];
+
+/**
  * Site slugs, comma-separated: `a,b,c`. `panel` is one too. Unlike the other filters, one given
  * empty is refused rather than read as no filter at all: these filters choose what a bulk delete
  * takes, and a list of chosen sites that came out empty must not mean every site.
@@ -1217,12 +1224,18 @@ export const wpBulkOp = z
     message: 'plugin and theme operations need a slug; core only supports "update"',
   });
 
+/**
+ * Whether to take a `pre_update` backup before touching anything. A run with an update follows the
+ * site's setting (backupBeforeUpdatesValues): this answers it for a site set to ask, which needs
+ * it, and is ignored for one set to always or never. Any other run backs up only when it says so.
+ */
+const backupFirstAnswer = z.boolean().optional();
+
 /** Single-site bulk run: the site page's "Update all" and "Fix vulnerable" buttons. */
 export const wpBulkOpsBody = z
   .object({
     ops: z.array(wpBulkOp).min(1).max(300),
-    /** Take a `pre_update` backup before touching anything. */
-    backupFirst: z.boolean().default(false),
+    backupFirst: backupFirstAnswer,
     /** Ask the site for its home page afterwards and fail the job when it stops answering. */
     healthCheck: z.boolean().default(true),
   })
@@ -1244,10 +1257,13 @@ export const wpFleetBulkBody = z
       )
       .min(1)
       .max(2000),
-    backupFirst: z.boolean().default(false),
+    backupFirst: backupFirstAnswer,
     healthCheck: z.boolean().default(true),
   })
   .strict();
+
+/** Updating one plugin, one theme or WordPress on its own: the answer for a site set to ask. */
+export const wpUpdateOneBody = z.object({ backupFirst: backupFirstAnswer }).strict();
 
 export const wpInventoryFilters = ['updates', 'vulnerable', 'inactive', 'closed'] as const;
 export type WpInventoryFilter = (typeof wpInventoryFilters)[number];
@@ -1410,6 +1426,13 @@ export const backupKeepDaysBody = z
   })
   .strict();
 
+export const backupBeforeUpdatesBody = z
+  .object({
+    /** Whether an update of this site backs it up first. null = as Settings -> Backups says for every site. */
+    value: z.enum(backupBeforeUpdatesValues).nullable(),
+  })
+  .strict();
+
 export const mailSuspensionBody = z
   .object({
     suspended: z.boolean(),
@@ -1424,6 +1447,8 @@ export const settingsUpdateBody = z.object({
   backupKeepDays: z.number().int().min(0).max(MAX_BACKUP_KEEP_DAYS).optional(),
   /** The same for the panel's own database backups. 0 = never. */
   panelBackupKeepDays: z.number().int().min(0).max(MAX_BACKUP_KEEP_DAYS).optional(),
+  /** Whether an update backs the site up first; a site can say otherwise. */
+  backupBeforeUpdates: z.enum(backupBeforeUpdatesValues).optional(),
   monitorUptimeIntervalSec: z.number().int().min(15).max(3600).optional(),
   monitorStatsIntervalSec: z.number().int().min(15).max(3600).optional(),
   monitorDuIntervalMin: z.number().int().min(5).max(1440).optional(),
@@ -1638,6 +1663,7 @@ export type SettingsUpdateBody = z.infer<typeof settingsUpdateBody>;
 export type MailSuspensionBody = z.infer<typeof mailSuspensionBody>;
 export type BackupsEnabledBody = z.infer<typeof backupsEnabledBody>;
 export type BackupKeepDaysBody = z.infer<typeof backupKeepDaysBody>;
+export type BackupBeforeUpdatesBody = z.infer<typeof backupBeforeUpdatesBody>;
 export type WpPluginInstallBody = z.infer<typeof wpPluginInstallBody>;
 export type SiteMoveBody = z.infer<typeof siteMoveBody>;
 export type ServerCreateBody = z.infer<typeof serverCreateBody>;

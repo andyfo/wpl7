@@ -234,6 +234,16 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       },
       {
         method: 'PUT',
+        path: '/api/sites/:slug/backup-before-updates',
+        summary: 'Set whether an update backs this site up first, or put it back on the panel\'s setting',
+        input: '{value: "always" | "ask" | "never" | null} (null = Settings)',
+        returns: 'SiteDetail (sync)',
+        danger: true,
+        level: 'full',
+        levelReason: 'Never backing up before an update removes a safety net',
+      },
+      {
+        method: 'PUT',
         path: '/api/sites/:slug/mail-suspension',
         summary: 'Stop or resume the relay accepting this site\'s mail',
         input: '{suspended, reason?}',
@@ -510,7 +520,8 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         method: 'POST',
         path: '/api/sites/:slug/wp/bulk',
         summary: 'Run several update/activate/deactivate/delete operations as one job',
-        input: '{ops: [{kind, slug?, action}], backupFirst?: false, healthCheck?: true}',
+        input:
+          '{ops: [{kind, slug?, action}], backupFirst?, healthCheck?: true} (with an update, the site\'s backupBeforeUpdates decides; backupFirst is needed when it is ask)',
         job: true,
         danger: true,
         level: 'manage',
@@ -544,7 +555,14 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         job: true,
         level: 'manage',
       },
-      { method: 'POST', path: '/api/sites/:slug/wp/plugins/:name/update', summary: 'Update one plugin', job: true, level: 'manage' },
+      {
+        method: 'POST',
+        path: '/api/sites/:slug/wp/plugins/:name/update',
+        summary: 'Update one plugin',
+        input: '{backupFirst?} (needed when the site\'s backupBeforeUpdates is ask)',
+        job: true,
+        level: 'manage',
+      },
       {
         method: 'DELETE',
         path: '/api/sites/:slug/wp/plugins/:name',
@@ -554,7 +572,14 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         level: 'manage',
       },
       { method: 'POST', path: '/api/sites/:slug/wp/themes/:name/activate', summary: 'Activate a theme', job: true, level: 'manage' },
-      { method: 'POST', path: '/api/sites/:slug/wp/themes/:name/update', summary: 'Update one theme', job: true, level: 'manage' },
+      {
+        method: 'POST',
+        path: '/api/sites/:slug/wp/themes/:name/update',
+        summary: 'Update one theme',
+        input: '{backupFirst?} (needed when the site\'s backupBeforeUpdates is ask)',
+        job: true,
+        level: 'manage',
+      },
       {
         method: 'DELETE',
         path: '/api/sites/:slug/wp/themes/:name',
@@ -563,7 +588,14 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         danger: true,
         level: 'manage',
       },
-      { method: 'POST', path: '/api/sites/:slug/wp/core-update', summary: 'Update WordPress core', job: true, level: 'manage' },
+      {
+        method: 'POST',
+        path: '/api/sites/:slug/wp/core-update',
+        summary: 'Update WordPress core',
+        input: '{backupFirst?} (needed when the site\'s backupBeforeUpdates is ask)',
+        job: true,
+        level: 'manage',
+      },
       {
         method: 'GET',
         path: '/api/sites/:slug/wp/version',
@@ -915,7 +947,8 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         method: 'POST',
         path: '/api/wp/bulk',
         summary: 'Run one action over many sites as a batch - one job per site',
-        input: '{action, targets: [{siteSlug, kind, slug?}], backupFirst?: false, healthCheck?: true}',
+        input:
+          '{action, targets: [{siteSlug, kind, slug?}], backupFirst?, healthCheck?: true} (an update follows each site\'s backupBeforeUpdates; backupFirst answers the sites set to ask)',
         returns: '202 {batch, jobs[], skipped[]}',
         job: true,
         danger: true,
@@ -1656,7 +1689,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         method: 'GET',
         path: '/api/jobs/types',
         summary: 'Every job type with its name, description, category and time limit',
-        returns: '{items: [{type, label, description, category, internal, timeoutMs}]}',
+        returns: '{items: [{type, label, description, category, internal, timeoutMs, timeoutWithBackupMs?}]}',
         level: 'read',
       },
       {
@@ -1752,7 +1785,8 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         method: 'GET',
         path: '/api/settings',
         summary: 'Every panel setting',
-        returns: '{settings, ownBackupKeepDays: [{slug, days}]} - the sites that keep their backups for a time of their own',
+        returns:
+          '{settings, ownBackupKeepDays: [{slug, days}], ownBackupBeforeUpdates: [{slug, value}]} - the sites with a keep period, or a backup-before-updates setting, of their own',
         level: 'read',
       },
       {
@@ -2248,7 +2282,7 @@ export const API_DOC_RECIPES: ApiDocRecipe[] = [
     steps: [
       { comment: 'Every plugin with an update waiting, across every site.', method: 'GET', path: '/api/wp/inventory?kind=plugin&filter=updates' },
       {
-        comment: 'One job per site, with a backup first and a health check after.',
+        comment: 'One job per site, with a health check after. backupFirst answers the sites set to ask whether to back up first.',
         method: 'POST',
         path: '/api/wp/bulk',
         body: {

@@ -32,11 +32,12 @@ The **backup root** defaults to `${SRV_ROOT}/backups` and is set per server — 
   with it (**Delete its existing backups too**, off by default): with a final backup as well, that one is
   the site's only backup afterwards.
 - **pre_restore** — automatic safety backup before every restore.
-- **pre_update** — taken before a WordPress update run when "Back up first" is ticked (it is, by
-  default, for live sites). The job's result carries the id, and a failed health check afterwards names
-  it, so recovering from a bad update is the ordinary restore below. Kept until you delete them, like
-  every other non-scheduled kind — so a weekly fleet-wide update run does accumulate them, and they are
-  yours to prune.
+- **pre_update** — taken before a WordPress update when the site's **Back up before updates** says
+  so: always, never, or ask, where the update's "Back up first" switch answers (Settings → Backups sets
+  it for every site, a site's Backups tab for itself). The job's result carries the id, and a failed
+  health check afterwards names it, so recovering from a bad update is the ordinary restore below. Kept
+  until you delete them or their keep period ends, like every other non-scheduled kind — so a weekly
+  fleet-wide update run does accumulate them, and they are yours to prune.
 - **move** — both ends of a server move: the source snapshot (note "pre-move to …") and the staged
   copy registered on the target (note "staged copy (move)"), so a moved site arrives with a backup at
   its new home. Kept until you delete them.

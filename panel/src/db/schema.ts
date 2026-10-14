@@ -92,6 +92,11 @@ export const sites = sqliteTable(
      * which kinds): NULL = the `backup.keepDays` setting, 0 = never.
      */
     backupKeepDays: integer('backup_keep_days'),
+    /**
+     * Whether an update of this site backs it up first: 'always', 'ask' or 'never'
+     * (shared/schemas.ts backupBeforeUpdatesValues). NULL = the `backup.beforeUpdates` setting.
+     */
+    backupBeforeUpdates: text('backup_before_updates'),
     diskBytes: integer('disk_bytes'),
     /**
      * 'hosted' | 'external'. An external site is hosted elsewhere and reached through the WPL7

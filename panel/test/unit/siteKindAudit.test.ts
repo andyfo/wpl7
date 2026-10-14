@@ -113,6 +113,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     applyLimits: hosted('hostedSites()'),
     list: both('the site list shows both kinds'),
     ownBackupKeepDays: NAMES,
+    ownBackupBeforeUpdates: NAMES,
   },
   'services/traffic.ts': { apply: both("slugs from Traefik's log, which only hosted sites are in") },
   'services/wildcardSites.ts': { sweepWildcardSites: hosted('hostedSites()') },

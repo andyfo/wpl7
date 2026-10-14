@@ -3,6 +3,7 @@ import type { AccessLevel } from './access.js';
 import type { WpLocale } from './locales.js';
 import type { RecipeHook } from './recipes.js';
 import type {
+  BackupBeforeUpdates,
   BackupType,
   CopyStatus,
   ImportRunBody,
@@ -79,6 +80,8 @@ export interface SiteSummary {
    * as `backupKeepDays` in the settings says for every site.
    */
   backupKeepDays: number | null;
+  /** Whether an update backs this site up first, when it says so itself. null = as `backupBeforeUpdates` in the settings says. */
+  backupBeforeUpdates: BackupBeforeUpdates | null;
   createdAt: number;
 }
 
@@ -416,7 +419,10 @@ export interface JobTypeInfoDto {
   description: string;
   category: JobCategory;
   internal: boolean;
+  /** How long a job of this type may run. */
   timeoutMs: number;
+  /** An update's, when it backs the site up first: the backup's time on top. */
+  timeoutWithBackupMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1008,7 +1014,11 @@ export interface BatchDto {
   id: number;
   kind: 'wp.bulk';
   action: WpBulkAction;
-  options: { backupFirst: boolean; healthCheck: boolean };
+  /**
+   * As the run was asked for. `backupFirst` is the answer for the sites set to ask whether to back
+   * up before an update (null: none was given); a site set to always or never followed its setting.
+   */
+  options: { backupFirst: boolean | null; healthCheck: boolean };
   /** How many (site, component) operations the batch was asked to run. */
   targets: number;
   totalJobs: number;
@@ -1523,6 +1533,8 @@ export interface MetaDto {
   backupKeepDays: number;
   /** How many scheduled backups each site keeps, whatever their age. */
   backupRetention: number;
+  /** Whether an update backs a site up first, unless the site sets its own. */
+  backupBeforeUpdates: BackupBeforeUpdates;
   /** Where each server keeps its backups, so a page can say so without a second call. */
   backupRoots: { serverId: number; serverName: string; root: string; isDefault: boolean; backups: number }[];
   /** True once at least one offsite destination exists; gates the offsite UI. */

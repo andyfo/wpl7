@@ -84,8 +84,9 @@ to its end or to its time limit.
 
 ## Stuck and timed-out jobs
 
-Each job type has a time limit, listed in [Job types](/docs/reference/job-types/). A job past its
-limit fails with "Job timed out after" a number of minutes, and stops at its next safe step.
+Each job type has a time limit, which `GET /api/jobs/types` lists. An update that backs the site
+up first gets an hour more, the time a backup job has. A job past its limit fails with "Job timed
+out after" a number of minutes, and stops at its next safe step.
 
 A job that was running when the panel restarted fails with "Interrupted by panel restart". A site
 it was creating or deleting is marked as an error. Run the job again.

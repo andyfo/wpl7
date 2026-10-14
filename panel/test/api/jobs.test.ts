@@ -198,6 +198,8 @@ describe('GET /api/jobs/types', () => {
       timeoutMs: 3600_000,
     });
     expect(items.find((t) => t.type === 'demo')!.internal).toBe(true);
+    // An update that backs the site up first gets the backup's hour on top.
+    expect(items.find((t) => t.type === 'wp.pluginTask')).toMatchObject({ timeoutMs: 600_000, timeoutWithBackupMs: 4_200_000 });
   });
 });
 

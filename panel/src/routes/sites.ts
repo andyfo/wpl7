@@ -4,6 +4,7 @@ import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { z } from 'zod';
 import { and, eq } from 'drizzle-orm';
 import {
+  backupBeforeUpdatesBody,
   backupKeepDaysBody,
   backupsEnabledBody,
   domainsUpdateBody,
@@ -149,6 +150,19 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
     { schema: { params: slugParams, body: backupKeepDaysBody } },
     async (req, reply) => {
       deps.sites.setBackupKeepDays(req.params.slug, req.body.days);
+      return reply.send(await deps.sites.detail(req.params.slug));
+    },
+  );
+
+  /**
+   * Whether an update of this site backs it up first: always, never, or ask whoever starts it.
+   * `null` puts it back on the panel's setting. The update routes read it (wpBulk.backupFirst).
+   */
+  r.put(
+    '/api/sites/:slug/backup-before-updates',
+    { schema: { params: slugParams, body: backupBeforeUpdatesBody } },
+    async (req, reply) => {
+      deps.sites.setBackupBeforeUpdates(req.params.slug, req.body.value);
       return reply.send(await deps.sites.detail(req.params.slug));
     },
   );

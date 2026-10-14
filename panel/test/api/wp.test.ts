@@ -119,12 +119,13 @@ describe('theme management routes', () => {
     const { app, world, headers } = await authedApp();
     const site = addRunningSite(world, 'blog');
 
-    for (const [method, url] of [
-      ['POST', '/api/sites/blog/wp/themes/old/activate'],
-      ['POST', '/api/sites/blog/wp/themes/old/update'],
-      ['DELETE', '/api/sites/blog/wp/themes/old'],
+    for (const [method, url, payload] of [
+      ['POST', '/api/sites/blog/wp/themes/old/activate', undefined],
+      // The site asks whether to back up before an update, as every site does by default.
+      ['POST', '/api/sites/blog/wp/themes/old/update', { backupFirst: false }],
+      ['DELETE', '/api/sites/blog/wp/themes/old', undefined],
     ] as const) {
-      const res = await app.inject({ method, url, headers });
+      const res = await app.inject({ method, url, headers, payload });
       expect(res.statusCode, url).toBe(202);
       const job = (res.json() as { job: JobDto }).job;
       expect(job.type).toBe('wp.themeTask');
@@ -414,7 +415,7 @@ describe('sites whose name was reserved later', () => {
       method: 'POST',
       url: '/api/wp/bulk',
       headers,
-      payload: { action: 'update', targets: [{ siteSlug: 'bulk', kind: 'plugin', slug: 'cf7' }] },
+      payload: { action: 'update', targets: [{ siteSlug: 'bulk', kind: 'plugin', slug: 'cf7' }], backupFirst: false },
     });
     expect(run.statusCode).toBe(202);
 

@@ -77,6 +77,8 @@ export async function seed(db: Db, config: Config): Promise<SeedResult> {
   // were kept until somebody deleted them.
   s.seedRaw('backup.keepDays', 0);
   s.seedRaw('backup.panelKeepDays', 0);
+  // Whoever starts an update says whether to back up first, until the operator decides for them.
+  s.seedRaw('backup.beforeUpdates', 'ask');
   s.seedRaw('monitor.uptimeIntervalSec', 60);
   s.seedRaw('monitor.statsIntervalSec', 60);
   s.seedRaw('monitor.duIntervalMin', 30);
