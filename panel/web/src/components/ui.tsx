@@ -233,8 +233,11 @@ export function Field({
   );
 }
 
-export const inputClass =
-  'w-full rounded-lg border border-neutral-300 bg-surface px-3 py-2 text-sm text-neutral-900 focus:border-neutral-500 focus:outline-none';
+/**
+ * A text field or a menu, as wide as its column. Its look is `.field-input` in styles.css, under the
+ * utilities, so a class added where it is used wins: `w-auto`, `w-56`, `py-1`.
+ */
+export const inputClass = 'field-input';
 
 /** The same look without the full width, for a number or a choice inside a sentence. */
 export const compactInputClass =
