@@ -579,12 +579,16 @@
  * The job console (components/jobConsole): over the page, the sidebar and its fly-outs, and the
  * phone drawer's backdrop (30); under the phone drawer (40) and dialogs (50), so it never covers
  * a dialog - one that starts a job closes once the job is queued. One width whether the log
- * shows or not, so its buttons never move sideways under the pointer.
+ * shows or not, so its buttons never move sideways under the pointer. Never taller than the
+ * window: on a short one the log gives way first, then the part under the bar scrolls.
  */
 .job-console {
   position: fixed;
   z-index: 35;
+  display: flex;
+  flex-direction: column;
   width: min(28rem, calc(100% - 32px));
+  max-height: calc(100% - 32px);
   border: 1px solid var(--n200);
   border-radius: 12px;
   background: var(--surface);

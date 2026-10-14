@@ -176,7 +176,7 @@ function ConsoleBox() {
         if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false);
       }}
     >
-      <div className="flex items-start gap-1.5 py-2 pl-1.5 pr-2">
+      <div className="flex shrink-0 items-start gap-1.5 py-2 pl-1.5 pr-2">
         <button
           type="button"
           className="job-console-handle"
@@ -250,7 +250,7 @@ function ConsoleBox() {
         </div>
       </div>
       {expanded && (
-        <div id={bodyId} className="space-y-2 border-t border-neutral-200 px-3 pb-3 pt-2.5">
+        <div id={bodyId} className="flex min-h-0 flex-col gap-2 overflow-y-auto border-t border-neutral-200 px-3 pb-3 pt-2.5">
           {session.jobs.length > 1 && (
             <div className="flex flex-wrap gap-1.5">
               {session.jobs.map((id) => (

@@ -130,12 +130,13 @@ export function JobLogViewer({
 function InlineLog({ logs }: { logs: JobLogLine[] }) {
   const follow = useFollowTail(logs.length, logs.length, '');
   if (logs.length === 0) return null;
+  // In the console's column, the log is what gives way on a short window - to four lines or so.
   return (
-    <div className="relative">
+    <div className="relative flex min-h-16 flex-col">
       <div
         ref={follow.ref}
         onScroll={follow.onScroll}
-        className="max-h-[min(20rem,50vh)] overflow-y-auto rounded-lg bg-neutral-950 p-3 font-mono text-xs leading-relaxed"
+        className="max-h-[min(20rem,50vh)] min-h-0 overflow-y-auto rounded-lg bg-neutral-950 p-3 font-mono text-xs leading-relaxed"
       >
         {logs.map((l) => (
           <LogLine key={l.seq} line={l} needle="" highlight={false} />
