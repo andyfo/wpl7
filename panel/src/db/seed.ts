@@ -101,6 +101,7 @@ export async function seed(db: Db, config: Config): Promise<SeedResult> {
   s.seedRaw('alerts.vulnerabilities', true);
   s.seedRaw('alerts.backups', true);
   s.seedRaw('alerts.connector', true);
+  s.seedRaw('reminders.domainLookups', true);
   s.seedRaw('site.cpuLimit', 2);
   s.seedRaw('site.memoryLimitMb', 512);
   s.seedRaw('site.pidsLimit', 512);

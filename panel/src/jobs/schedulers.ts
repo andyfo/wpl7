@@ -166,6 +166,20 @@ export class Schedulers {
     const s = this.s;
     return [
       {
+        key: 'reminders', group: 'background', name: 'Reminders',
+        description: 'Checks token and support dates and sends the daily reminder digest.',
+        pausable: true, pauseWarning: 'Reminder emails and token and OS checks stop until resumed.',
+        cadence: () => ({ everyMs: 5 * MIN, text: 'Every 5 minutes', settingsHref: '/reminders' }),
+        tick: async () => { await s.reminders.tick(); },
+      },
+      {
+        key: 'domain-lookups', group: 'background', name: 'Domain lookups',
+        description: 'Refreshes domain expiry dates from their registries, once a day per domain.',
+        pausable: true, pauseWarning: 'Domain expiry dates and statuses stop refreshing.',
+        cadence: () => ({ everyMs: MIN, text: 'Daily per domain, staggered', settingsHref: '/settings?tab=monitoring' }),
+        tick: async () => { await s.reminders.lookupTick(); },
+      },
+      {
         key: 'backups',
         group: 'jobs',
         name: 'Scheduled backups',
@@ -492,6 +506,8 @@ export class Schedulers {
     const every = (key: string, ms: number) => setInterval(() => void this.run(key, 'timer'), ms);
     const after = (ms: number, fn: () => void) => setTimeout(fn, ms);
     this.timers = [
+      every('reminders', 5 * MIN),
+      every('domain-lookups', MIN),
       every('uptime', this.uptimeMs),
       // Sites hosted elsewhere: their plugin asked whether it answers, and offered an update.
       every('external-check', 3600_000),

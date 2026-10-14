@@ -1,3 +1,4 @@
+import { ReminderCard } from '../components/ReminderCard';
 // @docs servers/overview
 import { Link } from 'react-router';
 import type { SiteSummary } from '../../../shared/types';
@@ -43,6 +44,7 @@ export function Dashboard() {
         </Link>
       </div>
 
+      <ReminderCard />
       <ErrorNote error={monitor.error || sites.error} />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <StatTile

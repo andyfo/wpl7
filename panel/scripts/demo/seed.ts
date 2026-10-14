@@ -3,6 +3,7 @@
  * page's data can be changed without reading the rest.
  */
 import type { TestWorld } from '../../test/helpers.js';
+import { seedReminders } from './reminders.js';
 import { seedServers } from './servers.js';
 import { presentSrvAs } from './paths.js';
 import { seedSites } from './sites.js';
@@ -37,4 +38,5 @@ export async function seedAll(world: TestWorld): Promise<void> {
   seedFtp(world);
   seedImports(world);
   installDemoTerminal(world);
+  seedReminders(world);
 }

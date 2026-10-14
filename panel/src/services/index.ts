@@ -34,6 +34,7 @@ import type { QuarantineService } from './quarantine.js';
 import type { ImportService } from './imports.js';
 import type { ConnectionsService } from './connections.js';
 import type { ExternalBackupService } from './externalBackup.js';
+import type { ReminderService } from './reminders.js';
 import type { AlertService } from './alerts.js';
 
 export interface Logger {
@@ -117,5 +118,6 @@ export interface CoreServices {
   externalBackups: ExternalBackupService;
   /** Emails about sites: down and back up, new vulnerabilities, failed backups, external sites' plugin and certificate. */
   alerts: AlertService;
+  reminders: ReminderService;
   log: Logger;
 }

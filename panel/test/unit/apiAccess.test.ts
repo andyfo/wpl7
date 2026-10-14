@@ -72,6 +72,8 @@ const DESTRUCTIVE = [
   'DELETE /api/plugins/:id',
   'DELETE /api/recipes/:id/inputs/:input',
   'DELETE /api/recipes/:id/install',
+  'DELETE /api/reminders/:id',
+  'DELETE /api/reminders/calendar',
   'DELETE /api/schedules/:id',
   'DELETE /api/security/blocks/:id',
   'DELETE /api/security/never-block/:id',
@@ -141,6 +143,8 @@ const DESTRUCTIVE = [
 
 /** Never through MCP, whatever the connection's level. */
 const NOT_THROUGH_MCP = [
+  'POST /api/reminders/calendar',
+  'DELETE /api/reminders/calendar',
   // Reachable without a key: logins, resets, the health probe.
   'GET /api/health',
   'POST /api/auth/login',
@@ -212,6 +216,8 @@ describe('access levels in the API catalog', () => {
 
   it('draws the line at the sites: a change inside them is Manage, a change to the panel Full', () => {
     expect(Object.fromEntries(API_DOC_GROUPS.map((g) => [g.id, g.changes]))).toEqual({
+      reminders: 'full',
+      domains: 'full',
       sites: 'manage',
       imports: 'manage',
       connections: 'manage',
