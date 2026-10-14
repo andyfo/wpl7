@@ -1,33 +1,56 @@
 // @docs sites/overview
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { Link, useNavigate, type NavigateFunction } from 'react-router';
 import type { SiteSummary } from '../../../shared/types';
 import { useMeta, useSites } from '../api/hooks';
-import { Button, Card, EmptyState, ExternalLinkIcon, inputClass, SiteHealthBadge, StatusBadge } from '../components/ui';
+import { Button, Card, EmptyState, ExternalLinkIcon, inputClass, Segmented, SiteHealthBadge, StatusBadge } from '../components/ui';
 import { SeverityBadge } from '../components/wp/severity';
 import { formatBytes, timeAgo } from '../lib/format';
 import { siteHealth } from '../lib/siteHealth';
+import { layoutFrom, sitesView, type SitesLayout } from './sitesLayout';
+
+const LAYOUTS = [
+  { id: 'split', label: 'Split', title: 'Sites hosted elsewhere in a list of their own' },
+  { id: 'single', label: 'Single list', title: 'Every site in one list' },
+] as const;
+
+/** Where this browser keeps the layout last chosen. */
+const LAYOUT_KEY = 'wpl7-sites-layout';
+
+function storedLayout(): SitesLayout {
+  try {
+    return layoutFrom(localStorage.getItem(LAYOUT_KEY));
+  } catch {
+    return 'split';
+  }
+}
 
 export function Sites() {
   const sites = useSites();
   const meta = useMeta();
-  const navigate = useNavigate();
   const [serverFilter, setServerFilter] = useState<number | 'all'>('all');
+  const [layout, setLayout] = useState<SitesLayout>(storedLayout);
   const multiServer = meta.data?.multiServer ?? false;
   // Whether a site is reachable over https depends on the deployment's TLS mode, not on
   // whether it has gone live: under TLS_MODE=none every "live" link was a dead https URL.
   const scheme = meta.data?.tlsMode === 'none' ? 'http' : 'https';
-  const all = sites.data ?? [];
-  const external = all.filter((s) => s.kind === 'external');
-  // An external site's server only keeps its backups: the server filter is for sites hosted here.
-  const filtered = all.filter((s) => s.kind !== 'external' && (serverFilter === 'all' || s.serverId === serverFilter));
-  const showHosted = filtered.length > 0 || external.length === 0 || serverFilter !== 'all';
+  const view = sitesView(sites.data ?? [], layout, serverFilter);
+
+  const chooseLayout = (next: SitesLayout) => {
+    setLayout(next);
+    try {
+      localStorage.setItem(LAYOUT_KEY, next);
+    } catch {
+      // Storage refused (a private window): the choice lasts until the page is left.
+    }
+  };
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="page-title">Sites</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {view.choice && <Segmented label="Layout" options={LAYOUTS} value={layout} onChange={chooseLayout} />}
           {multiServer && (
             <select
               className={`${inputClass} w-auto`}
@@ -53,93 +76,125 @@ export function Sites() {
           </Link>
         </div>
       </div>
-      {showHosted && (
-        <Card>
-          {filtered.length === 0 ? (
+      {view.showMain && (
+        <Card title={view.choice && !view.single ? 'Hosted' : undefined}>
+          {view.main.length === 0 ? (
             <EmptyState>No sites{serverFilter !== 'all' ? ' on this server' : ' yet'}.</EmptyState>
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-neutral-400">
-                  <th className="pb-2">Site</th>
-                  <th className="pb-2">Status</th>
-                  <th className="pb-2">Mode</th>
-                  {multiServer && <th className="pb-2">Server</th>}
-                  <th className="pb-2">PHP</th>
-                  <th className="pb-2 text-right" title="Plugin, theme and core updates found by the last scan">
-                    Updates
-                  </th>
-                  <th className="pb-2 text-right" title="Unique visitors in the last 24 hours">
-                    Visitors
-                  </th>
-                  <th className="pb-2 text-right">Disk</th>
-                  <th className="pb-2 text-right">Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((site) => (
-                  <tr
-                    key={site.slug}
-                    // A mouse convenience on top of the real link in the first cell, not a
-                    // replacement for it: the title stays an anchor so the row is still
-                    // reachable by keyboard and still opens in a tab on cmd/middle click.
-                    onClick={(e) => {
-                      // The domain link and anything else interactive owns its own click.
-                      if ((e.target as HTMLElement).closest('a, button, input, select')) return;
-                      if (e.metaKey || e.ctrlKey) window.open(`/sites/${site.slug}`, '_blank');
-                      else void navigate(`/sites/${site.slug}`);
-                    }}
-                    className="cursor-pointer border-t border-neutral-100 transition-colors hover:bg-neutral-50"
-                  >
-                    <td className="py-2.5 pr-3">
-                      <Link to={`/sites/${site.slug}`} className="font-medium hover:underline">
-                        {site.title}
-                      </Link>
-                      <div className="text-xs text-neutral-500">
-                        <a
-                          href={`${scheme}://${site.primaryDomain}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          title={`Open ${site.primaryDomain} in a new tab`}
-                          className="inline-flex items-center gap-1 hover:text-neutral-700 hover:underline"
-                        >
-                          {site.primaryDomain}
-                          <ExternalLinkIcon />
-                        </a>
-                      </div>
-                    </td>
-                    <td className="py-2.5 pr-3">
-                      <SiteHealthBadge health={siteHealth(site)} />
-                    </td>
-                    <td className="py-2.5 pr-3">
-                      <StatusBadge status={site.isLive ? 'live' : 'dev'} />
-                    </td>
-                    {multiServer && <td className="py-2.5 pr-3 text-xs text-neutral-600">{site.serverName}</td>}
-                    <td className="py-2.5 pr-3 text-neutral-600">{site.phpVersion}</td>
-                    <td className="py-2.5 pr-3 text-right whitespace-nowrap">
-                      <UpdatesCell site={site} />
-                    </td>
-                    <td
-                      className="py-2.5 pr-3 text-right tabular-nums text-neutral-500"
-                      title={
-                        site.recentTraffic
-                          ? `${site.recentTraffic.pageViews.toLocaleString()} page views in the last 24h`
-                          : 'no visits recorded in the last 24h'
-                      }
-                    >
-                      {site.recentTraffic ? site.recentTraffic.visitors.toLocaleString() : '–'}
-                    </td>
-                    <td className="py-2.5 text-right text-neutral-500">{formatBytes(site.diskBytes)}</td>
-                    <td className="py-2.5 text-right text-xs text-neutral-500">{timeAgo(site.createdAt)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <SitesTable sites={view.main} multiServer={multiServer} scheme={scheme} single={view.single} />
           )}
         </Card>
       )}
-      {external.length > 0 && <ExternalSitesCard sites={external} />}
+      {view.externalCard.length > 0 && <ExternalSitesCard sites={view.externalCard} />}
     </div>
+  );
+}
+
+/**
+ * A row opens its site. A mouse convenience on top of the real link in the first cell, not a
+ * replacement for it: the title stays an anchor so the row is still reachable by keyboard and
+ * still opens in a tab on cmd/middle click.
+ */
+function openSite(navigate: NavigateFunction, slug: string) {
+  return (e: React.MouseEvent) => {
+    // The domain link and anything else interactive owns its own click.
+    if ((e.target as HTMLElement).closest('a, button, input, select')) return;
+    if (e.metaKey || e.ctrlKey) window.open(`/sites/${slug}`, '_blank');
+    else void navigate(`/sites/${slug}`);
+  };
+}
+
+/** The sites hosted here or, as a single list, every site: one hosted elsewhere fills what it can. */
+function SitesTable({ sites, multiServer, scheme, single }: { sites: SiteSummary[]; multiServer: boolean; scheme: string; single: boolean }) {
+  const navigate = useNavigate();
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="text-left text-xs uppercase tracking-wide text-neutral-400">
+          <th className="pb-2">Site</th>
+          <th className="pb-2">Status</th>
+          <th className="pb-2">Mode</th>
+          {multiServer && <th className="pb-2">Server</th>}
+          <th className="pb-2">PHP</th>
+          <th className="pb-2 text-right" title="Plugin, theme and core updates found by the last scan">
+            Updates
+          </th>
+          <th className="pb-2 text-right" title="Unique visitors in the last 24 hours">
+            Visitors
+          </th>
+          <th className="pb-2 text-right">Disk</th>
+          <th className="pb-2 text-right">{single ? 'Added' : 'Created'}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {sites.map((site) => {
+          const external = site.kind === 'external';
+          return (
+            <tr
+              key={site.slug}
+              onClick={openSite(navigate, site.slug)}
+              className="cursor-pointer border-t border-neutral-100 transition-colors hover:bg-neutral-50"
+            >
+              <td className="py-2.5 pr-3">
+                <SiteCell site={site} href={external ? undefined : `${scheme}://${site.primaryDomain}`} />
+              </td>
+              <td className="py-2.5 pr-3">
+                <SiteHealthBadge health={siteHealth(site)} />
+              </td>
+              <td className="py-2.5 pr-3">
+                <StatusBadge status={external ? 'external' : site.isLive ? 'live' : 'dev'} />
+              </td>
+              {multiServer && (
+                <td className="py-2.5 pr-3 text-xs text-neutral-600" title={external ? 'Hosted elsewhere' : undefined}>
+                  {external ? '–' : site.serverName}
+                </td>
+              )}
+              <td className="py-2.5 pr-3 text-neutral-600">{site.phpVersion}</td>
+              <td className="py-2.5 pr-3 text-right whitespace-nowrap">
+                <UpdatesCell site={site} />
+              </td>
+              <td
+                className="py-2.5 pr-3 text-right tabular-nums text-neutral-500"
+                title={
+                  external
+                    ? 'Not counted for sites hosted elsewhere'
+                    : site.recentTraffic
+                      ? `${site.recentTraffic.pageViews.toLocaleString()} page views in the last 24h`
+                      : 'no visits recorded in the last 24h'
+                }
+              >
+                {site.recentTraffic ? site.recentTraffic.visitors.toLocaleString() : '–'}
+              </td>
+              <td className="py-2.5 text-right text-neutral-500">{formatBytes(site.diskBytes)}</td>
+              <td className="py-2.5 text-right text-xs text-neutral-500">{timeAgo(site.createdAt)}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+/** The title, which opens the site's page, and its address, which opens the site in a new tab. */
+function SiteCell({ site, href }: { site: SiteSummary; href?: string }) {
+  return (
+    <>
+      <Link to={`/sites/${site.slug}`} className="font-medium hover:underline">
+        {site.title}
+      </Link>
+      <div className="text-xs text-neutral-500">
+        <a
+          href={href ?? site.external?.home ?? `https://${site.primaryDomain}`}
+          target="_blank"
+          rel="noreferrer"
+          title={`Open ${site.primaryDomain} in a new tab`}
+          className="inline-flex items-center gap-1 hover:text-neutral-700 hover:underline"
+        >
+          {site.primaryDomain}
+          <ExternalLinkIcon />
+        </a>
+      </div>
+    </>
   );
 }
 
@@ -165,29 +220,11 @@ function ExternalSitesCard({ sites }: { sites: SiteSummary[] }) {
           {sites.map((site) => (
             <tr
               key={site.slug}
-              onClick={(e) => {
-                if ((e.target as HTMLElement).closest('a, button, input, select')) return;
-                if (e.metaKey || e.ctrlKey) window.open(`/sites/${site.slug}`, '_blank');
-                else void navigate(`/sites/${site.slug}`);
-              }}
+              onClick={openSite(navigate, site.slug)}
               className="cursor-pointer border-t border-neutral-100 transition-colors hover:bg-neutral-50"
             >
               <td className="py-2.5 pr-3">
-                <Link to={`/sites/${site.slug}`} className="font-medium hover:underline">
-                  {site.title}
-                </Link>
-                <div className="text-xs text-neutral-500">
-                  <a
-                    href={site.external?.home ?? `https://${site.primaryDomain}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    title={`Open ${site.primaryDomain} in a new tab`}
-                    className="inline-flex items-center gap-1 hover:text-neutral-700 hover:underline"
-                  >
-                    {site.primaryDomain}
-                    <ExternalLinkIcon />
-                  </a>
-                </div>
+                <SiteCell site={site} />
               </td>
               <td className="py-2.5 pr-3">
                 <SiteHealthBadge health={siteHealth(site)} />
