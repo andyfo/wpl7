@@ -9,7 +9,7 @@ import { JobCanceledError } from '../lib/errors.js';
 import type { CoreServices } from '../services/index.js';
 import { currentActor, withoutActor } from './actor.js';
 import { JobContext } from './context.js';
-import { SECRET_PAYLOAD_KEYS, SITE_INTERRUPTING_JOBS, getRegistry } from './registry.js';
+import { SECRET_PAYLOAD_KEYS, SITE_INTERRUPTING_JOBS, getRegistry, jobDeadline } from './registry.js';
 import { summarizeJob } from './summaries.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -518,7 +518,7 @@ export class JobWorker {
       if (!parsed.success) throw new Error(`Invalid job payload: ${parsed.error.message}`);
       (ctx as { payload: unknown }).payload = parsed.data;
 
-      const timeoutMs = entry.timeoutMs ?? 30 * 60_000;
+      const timeoutMs = jobDeadline(entry, parsed.data);
       if (job.siteId !== null && SITE_INTERRUPTING_JOBS.has(job.type as JobType)) {
         release = this.services.monitor.holdChecks(job.siteId);
       }

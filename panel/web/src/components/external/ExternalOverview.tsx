@@ -8,8 +8,10 @@ import { formatDate, timeAgo } from '../../lib/format';
 import { siteHealth } from '../../lib/siteHealth';
 import { JobProgress } from '../JobProgress';
 import { Sparkline } from '../Sparkline';
-import { Button, Card, ErrorNote, Spinner } from '../ui';
+import { Button, Card, ConfirmDialog, ErrorNote, Spinner } from '../ui';
 import { WpAdminLoginButton } from '../WpAdminLoginButton';
+import { BulkRunOptions, keptFor, type BulkRunOptionsValue } from '../wp/BulkRunOptions';
+import { backupBeforeUpdatesOf } from '../../../../shared/updateBackups';
 
 /** A site hosted elsewhere: how it answers, what WPL7 Connect says about it, and what can be done from here. */
 export function ExternalOverview({ slug }: { slug: string }) {
@@ -20,6 +22,9 @@ export function ExternalOverview({ slug }: { slug: string }) {
   const qc = useQueryClient();
   const [homeBusy, setHomeBusy] = useState(false);
   const [homeError, setHomeError] = useState<unknown>(null);
+  /** The Update dialog for WPL7 Connect itself, open when the site asks whether to back up first. */
+  const [askUpdate, setAskUpdate] = useState(false);
+  const [updateOptions, setUpdateOptions] = useState<BulkRunOptionsValue>({ backupFirst: false, healthCheck: true });
   const s = site.data;
   if (!s?.external) return <Spinner />;
 
@@ -28,6 +33,13 @@ export function ExternalOverview({ slug }: { slug: string }) {
   const connected = s.status === 'connected';
   const multiServer = meta.data?.multiServer ?? false;
   const samples = history.data ?? [];
+  // Updating WPL7 Connect is an update like any other: the site's setting says whether it backs up first.
+  const backupSetting = backupBeforeUpdatesOf(s.backupBeforeUpdates, meta.data?.backupBeforeUpdates);
+  const updateConnect = (options: BulkRunOptionsValue) =>
+    run.mutate({
+      path: `/api/sites/${slug}/wp/bulk`,
+      body: { ops: [{ kind: 'plugin', slug: 'wpl7-connect', action: 'update' }], ...options },
+    });
 
   const rebindHome = () => {
     setHomeBusy(true);
@@ -103,16 +115,30 @@ export function ExternalOverview({ slug }: { slug: string }) {
               small
               disabled={run.isPending}
               onClick={() =>
-                run.mutate({
-                  path: `/api/sites/${slug}/wp/bulk`,
-                  body: { ops: [{ kind: 'plugin', slug: 'wpl7-connect', action: 'update' }], backupFirst: false, healthCheck: true },
-                })
+                backupSetting === 'ask'
+                  ? setAskUpdate(true)
+                  : updateConnect({ backupFirst: backupSetting === 'always', healthCheck: true })
               }
             >
               Update to {ext.offer.version}
             </Button>
           )}
         </div>
+        {askUpdate && ext.offer && (
+          <ConfirmDialog
+            title={`Update WPL7 Connect to ${ext.offer.version}`}
+            message={`The site runs ${ext.pluginVersion ?? 'an older version'} now.`}
+            confirmLabel="Run it"
+            onClose={() => setAskUpdate(false)}
+            onConfirm={() => updateConnect(updateOptions)}
+          >
+            <BulkRunOptions
+              value={updateOptions}
+              onChange={setUpdateOptions}
+              backupHint={`Database and files, ${keptFor([s.backupKeepDays], meta.data?.backupKeepDays ?? 0)}.`}
+            />
+          </ConfirmDialog>
+        )}
         <div className="mt-3">
           <ErrorNote error={run.error} />
           <JobProgress job={run.job} logs={run.logs} />

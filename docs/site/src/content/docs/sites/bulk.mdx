@@ -43,6 +43,10 @@ The numbers come from the last scan. **Rescan all** scans every running site now
 2. The bar at the bottom offers only what every selected item accepts: **Update**,
    **Update WordPress**, **Activate**, **Deactivate** or **Delete**. Choose one.
 3. Keep or change **Back up first** and **Check the site answers afterwards**. Both start on.
+   For an update, each site's
+   [Back up before updates](/docs/plugins/updates/#choose-whether-updates-back-up-first) decides
+   the backup. The switch answers only for the sites set to **Ask each time**, and the dialog says
+   what the others do.
 4. Confirm, for example with **Update now**. **Delete** asks you to type `delete`.
 
 ## Follow the run
@@ -55,8 +59,9 @@ asked for on those sites again. **Recent bulk runs** keeps the earlier runs.
 ## What happens
 
 Each server runs one job at a time, so a server's sites take their turn while servers work in
-parallel. Sites hosted elsewhere share two lanes of their own. Each job takes the backup if asked,
-then runs the changes inside the site's container, or through WPL7 Connect, with WordPress last. It then checks that the site answers and scans it again. A job
+parallel. Sites hosted elsewhere share two lanes of their own. Each job takes the backup if its
+site's setting or the switch says so, then runs the changes inside the site's container, or through
+WPL7 Connect, with WordPress last. It then checks that the site answers and scans it again. A job
 fails when a change or the check fails.
 
 A selection with any item that cannot run the action is refused whole, and nothing is queued.

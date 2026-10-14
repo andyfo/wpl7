@@ -1,8 +1,10 @@
 // @docs plugins/overview, plugins/updates, sites/wordpress
 import { useState } from 'react';
+import { Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { WpComponentDto } from '../../../../shared/types';
 import { fixVulnerableOps, updateAllOps, type WpUpdateOp } from '../../../../shared/wpOps';
+import { backupBeforeUpdatesOf } from '../../../../shared/updateBackups';
 import { api, ApiError } from '../../api/client';
 import { useMeta, useRunJob, useSite, useWpMaintenance, useWpStatus } from '../../api/hooks';
 import {
@@ -23,7 +25,13 @@ import { WporgPluginSearch } from '../WporgPluginSearch';
 import { timeAgo } from '../../lib/format';
 import { tokenizeCli } from '../../lib/cliArgs';
 import { ComponentTable } from './ComponentTable';
-import { BulkRunOptions, keptFor, type BulkRunOptionsValue } from './BulkRunOptions';
+import {
+  BACKUP_BEFORE_UPDATES_LABELS,
+  backupDecidedFor,
+  BulkRunOptions,
+  keptFor,
+  type BulkRunOptionsValue,
+} from './BulkRunOptions';
 import { FeedFooter } from './FeedFooter';
 import { CoverageNote, SeverityBadge } from './severity';
 import { VulnerabilityList } from './VulnerabilityList';
@@ -50,6 +58,11 @@ export function WordPressTab({ slug }: { slug: string }) {
   const meta = useMeta();
   // How long the backup taken before an update stays: the site's keep period, or the panel's.
   const kept = keptFor([site.data?.backupKeepDays ?? null], meta.data?.backupKeepDays ?? 0);
+  // Whether an update backs the site up first: its own setting, or the panel's. Only `ask` leaves
+  // it to the switch in the update dialog, and only then does a row's Update open that dialog.
+  const ownBackupSetting = site.data?.backupBeforeUpdates ?? null;
+  const backupSetting = backupBeforeUpdatesOf(ownBackupSetting, meta.data?.backupBeforeUpdates);
+  const backupDecided = backupDecidedFor(backupSetting, ownBackupSetting !== null, slug, kept);
   const status = useWpStatus(slug);
   // Every WordPress job ends by re-reading the snapshot, so the status query is what has
   // to be invalidated when one finishes - not a plugin list that no longer exists.
@@ -70,8 +83,8 @@ export function WordPressTab({ slug }: { slug: string }) {
   const [failure, setFailure] = useState<{ action: string; error: unknown } | null>(null);
   /** The value the maintenance switch is being moved to, while the PUT is in flight. */
   const [maintenanceTo, setMaintenanceTo] = useState<boolean | null>(null);
-  // Live sites get a backup by default and dev copies do not: on a dev site the whole point
-  // is to find out whether the update breaks anything.
+  // On a site that asks, the switch starts on for a live site and off for a dev copy: on a dev
+  // site the whole point is to find out whether the update breaks anything.
   const [runOptions, setRunOptions] = useState<BulkRunOptionsValue>({ backupFirst: isLive, healthCheck: true });
   const [pending, setPending] = useState<{ title: string; message: string; ops: WpUpdateOp[] } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<WpComponentDto | null>(null);
@@ -111,8 +124,19 @@ export function WordPressTab({ slug }: { slug: string }) {
   const runOps = (ops: WpUpdateOp[]) =>
     run.mutate({
       path: `/api/sites/${slug}/wp/bulk`,
-      body: { ops, backupFirst: runOptions.backupFirst, healthCheck: runOptions.healthCheck },
+      body: { ops, backupFirst: backupDecided?.on ?? runOptions.backupFirst, healthCheck: runOptions.healthCheck },
     });
+
+  /** One plugin or theme: at once, unless the site asks whether to back up first. */
+  const updateOne = (item: WpComponentDto) => {
+    const ops: WpUpdateOp[] = [{ kind: item.kind, slug: item.slug, action: 'update' }];
+    if (backupDecided) return runOps(ops);
+    setPending({
+      title: `Update ${item.title} to ${item.updateVersion ?? 'the latest version'}`,
+      message: external ? 'Runs through WPL7 Connect.' : "Runs inside this site's container.",
+      ops,
+    });
+  };
 
   const data = status.data;
   const neverScanned = !!data && data.scannedAt === null;
@@ -229,6 +253,12 @@ export function WordPressTab({ slug }: { slug: string }) {
                   Update core
                 </Button>
               )}
+              <span className="ml-auto text-xs text-neutral-500">
+                Back up before updates:{' '}
+                <Link className="underline" to={`/sites/${slug}?tab=backups`}>
+                  {BACKUP_BEFORE_UPDATES_LABELS[backupSetting]}
+                </Link>
+              </span>
             </div>
           </>
         )}
@@ -303,9 +333,7 @@ export function WordPressTab({ slug }: { slug: string }) {
                         small
                         variant="secondary"
                         disabled={!running}
-                        onClick={() =>
-                          runOps([{ kind: item.kind, slug: item.slug, action: 'update' }])
-                        }
+                        onClick={() => updateOne(item)}
                       >
                         Update to {item.updateVersion}
                       </Button>
@@ -361,7 +389,7 @@ export function WordPressTab({ slug }: { slug: string }) {
           items={data?.plugins ?? []}
           busy={!running}
           empty={neverScanned ? 'Not scanned yet.' : 'No plugins installed.'}
-          onUpdate={(item) => runOps([{ kind: 'plugin', slug: item.slug, action: 'update' }])}
+          onUpdate={updateOne}
           onActivate={(item) => run.mutate({ path: `/api/sites/${slug}/wp/plugins/${item.slug}/activate` })}
           onDeactivate={(item) => run.mutate({ path: `/api/sites/${slug}/wp/plugins/${item.slug}/deactivate` })}
           onDelete={(item) => setConfirmDelete(item)}
@@ -374,7 +402,7 @@ export function WordPressTab({ slug }: { slug: string }) {
           items={data?.themes ?? []}
           busy={!running}
           empty={neverScanned ? 'Not scanned yet.' : 'No themes installed.'}
-          onUpdate={(item) => runOps([{ kind: 'theme', slug: item.slug, action: 'update' }])}
+          onUpdate={updateOne}
           onActivate={(item) => run.mutate({ path: `/api/sites/${slug}/wp/themes/${item.slug}/activate` })}
           onDeactivate={() => undefined}
           onDelete={(item) => setConfirmDelete(item)}
@@ -538,6 +566,7 @@ export function WordPressTab({ slug }: { slug: string }) {
           <BulkRunOptions
             value={runOptions}
             onChange={setRunOptions}
+            backupDecided={backupDecided}
             backupHint={
               isLive ? `On by default for a live site. ${capitalized(kept)}.` : `Database and files, ${kept}.`
             }

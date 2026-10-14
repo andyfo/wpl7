@@ -17,6 +17,7 @@ import {
   wpResetPasswordBody,
   wpRestBody,
   wpTestEmailBody,
+  wpUpdateOneBody,
   waitsOnGodmode,
   wpCliHelpQuery,
 } from '../../shared/schemas.js';
@@ -144,17 +145,31 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
     },
   );
 
-  for (const action of ['activate', 'update'] as const) {
-    r.post(`/api/sites/:slug/wp/themes/:name/${action}`, { schema: { params: pluginParams } }, async (req, reply) => {
+  r.post('/api/sites/:slug/wp/themes/:name/activate', { schema: { params: pluginParams } }, async (req, reply) => {
+    const site = jobSite(req.params.slug);
+    const job = deps.worker.enqueue(
+      'wp.themeTask',
+      { siteId: site.id, action: 'activate', name: req.params.name },
+      { id: site.id, slug: site.slug, serverId: site.serverId },
+    );
+    return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
+  });
+
+  /** An update backs the site up first as its setting says: `backupFirst` answers a site set to ask. */
+  r.post(
+    '/api/sites/:slug/wp/themes/:name/update',
+    { schema: { params: pluginParams, body: wpUpdateOneBody.nullish() } },
+    async (req, reply) => {
       const site = jobSite(req.params.slug);
+      const backupFirst = deps.wpBulk.backupFirst(site, [{ action: 'update' }], req.body?.backupFirst);
       const job = deps.worker.enqueue(
         'wp.themeTask',
-        { siteId: site.id, action, name: req.params.name },
+        { siteId: site.id, action: 'update', name: req.params.name, backupFirst },
         { id: site.id, slug: site.slug, serverId: site.serverId },
       );
       return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
-    });
-  }
+    },
+  );
 
   r.delete('/api/sites/:slug/wp/themes/:name', { schema: { params: pluginParams } }, async (req, reply) => {
     const site = jobSite(req.params.slug);
@@ -183,7 +198,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
         {
           siteId: site.id,
           ops,
-          backupFirst: req.body.backupFirst,
+          backupFirst: deps.wpBulk.backupFirst(site, ops, req.body.backupFirst),
           healthCheck: req.body.healthCheck,
         },
         { id: site.id, slug: site.slug, serverId: site.serverId },
@@ -192,15 +207,20 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
     },
   );
 
-  r.post('/api/sites/:slug/wp/core-update', { schema: { params: slugParams } }, async (req, reply) => {
-    const site = jobSite(req.params.slug);
-    const job = deps.worker.enqueue(
-      'wp.coreUpdate',
-      { siteId: site.id },
-      { id: site.id, slug: site.slug, serverId: site.serverId },
-    );
-    return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
-  });
+  r.post(
+    '/api/sites/:slug/wp/core-update',
+    { schema: { params: slugParams, body: wpUpdateOneBody.nullish() } },
+    async (req, reply) => {
+      const site = jobSite(req.params.slug);
+      const backupFirst = deps.wpBulk.backupFirst(site, [{ action: 'update' }], req.body?.backupFirst);
+      const job = deps.worker.enqueue(
+        'wp.coreUpdate',
+        { siteId: site.id, backupFirst },
+        { id: site.id, slug: site.slug, serverId: site.serverId },
+      );
+      return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
+    },
+  );
 
   r.post(
     '/api/sites/:slug/wp/plugins',
@@ -216,7 +236,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
     },
   );
 
-  for (const action of ['activate', 'deactivate', 'update'] as const) {
+  for (const action of ['activate', 'deactivate'] as const) {
     r.post(`/api/sites/:slug/wp/plugins/:name/${action}`, { schema: { params: pluginParams } }, async (req, reply) => {
       const site = jobSite(req.params.slug);
       const job = deps.worker.enqueue(
@@ -227,6 +247,21 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
       return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
     });
   }
+
+  r.post(
+    '/api/sites/:slug/wp/plugins/:name/update',
+    { schema: { params: pluginParams, body: wpUpdateOneBody.nullish() } },
+    async (req, reply) => {
+      const site = jobSite(req.params.slug);
+      const backupFirst = deps.wpBulk.backupFirst(site, [{ action: 'update' }], req.body?.backupFirst);
+      const job = deps.worker.enqueue(
+        'wp.pluginTask',
+        { siteId: site.id, action: 'update', name: req.params.name, backupFirst },
+        { id: site.id, slug: site.slug, serverId: site.serverId },
+      );
+      return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
+    },
+  );
 
   r.delete('/api/sites/:slug/wp/plugins/:name', { schema: { params: pluginParams } }, async (req, reply) => {
     const site = jobSite(req.params.slug);

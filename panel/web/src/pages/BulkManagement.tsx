@@ -30,7 +30,8 @@ import {
   visibleTargets,
   type Target,
 } from './bulkSelection';
-import { BulkRunOptions, keptFor, type BulkRunOptionsValue } from '../components/wp/BulkRunOptions';
+import { BulkRunOptions, bulkBackupChoice, keptFor, type BulkRunOptionsValue } from '../components/wp/BulkRunOptions';
+import { backupBeforeUpdatesOf } from '../../../shared/updateBackups';
 import { FeedFooter } from '../components/wp/FeedFooter';
 import { CoverageNote, SeverityBadge } from '../components/wp/severity';
 import { VulnerabilityList } from '../components/wp/VulnerabilityList';
@@ -120,6 +121,24 @@ export function BulkManagement() {
   );
   const actions = allowedActions(selectedRows);
   const selectedSites = new Set([...selected.values()].map((t) => t.siteSlug));
+  const selectedSummaries = [...selectedSites].map((slug) => (sites.data ?? []).find((site) => site.slug === slug));
+  // How long the backups taken first stay: each selected site's keep period.
+  const kept = keptFor(
+    selectedSummaries.map((site) => site?.backupKeepDays ?? null),
+    meta.data?.backupKeepDays ?? 0,
+  );
+  // An update backs each site up as that site is set: the switch answers only the ones that ask.
+  // Any other action backs up when the switch says so.
+  const backupChoice = (() => {
+    if (pendingAction !== 'update' && pendingAction !== 'core-update') {
+      return { decided: null, hint: `Database and files, ${kept}.` };
+    }
+    const count = { always: 0, ask: 0, never: 0 };
+    for (const site of selectedSummaries) {
+      count[backupBeforeUpdatesOf(site?.backupBeforeUpdates, meta.data?.backupBeforeUpdates)] += 1;
+    }
+    return bulkBackupChoice(count, kept);
+  })();
 
   const setFilterChip = (id: WpInventoryFilter, on: boolean) => {
     const next = on ? [...new Set([...filters, id])] : filters.filter((f) => f !== id);
@@ -655,13 +674,8 @@ export function BulkManagement() {
           <BulkRunOptions
             value={runOptions}
             onChange={setRunOptions}
-            // How long the backups taken first stay: each selected site's keep period.
-            backupHint={`Database and files, ${keptFor(
-              [...new Set([...selected.values()].map((t) => t.siteSlug))].map(
-                (slug) => (sites.data ?? []).find((site) => site.slug === slug)?.backupKeepDays ?? null,
-              ),
-              meta.data?.backupKeepDays ?? 0,
-            )}.`}
+            backupHint={backupChoice.hint}
+            backupDecided={backupChoice.decided}
           />
         </ConfirmDialog>
       )}

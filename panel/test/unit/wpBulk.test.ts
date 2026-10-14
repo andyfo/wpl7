@@ -416,6 +416,95 @@ describe('the older single-action jobs keep the snapshot current', () => {
   });
 });
 
+describe('a single update takes the backup its request was given', () => {
+  const logOf = (w: TestWorld, jobId: number) =>
+    w.db.select({ message: jobLogs.message }).from(jobLogs).where(eq(jobLogs.jobId, jobId)).all().map((l) => l.message);
+  const backupsOf = (w: TestWorld) => w.db.select().from(backups).where(eq(backups.siteSlug, 'blog')).all();
+
+  it('backs up before a plugin update, and names the backup in the result', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = addRunningSite(w, 'blog', { files: true });
+    await seedSnapshot(w, site);
+    w.docker.execQueue.push(ok('Success: Updated 1 of 1 plugins.'));
+    scriptScan(w);
+
+    const job = w.worker.enqueue(
+      'wp.pluginTask',
+      { siteId: site.id, action: 'update', name: 'cf7', backupFirst: true },
+      { id: site.id, slug: site.slug, serverId: 1 },
+    );
+    const done = await runJob(w, job.id);
+
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    const [row] = backupsOf(w);
+    expect(row!.type).toBe('pre_update');
+    expect(JSON.parse(done.result!)).toEqual({ update: 'cf7', backupId: row!.id });
+    const log = logOf(w, done.id);
+    expect(log.indexOf(`Pre-update backup #${row!.id} complete.`)).toBeLessThan(log.indexOf('Running plugin update for cf7…'));
+    expect(execLines(w)).toContain('wp plugin update cf7 --user=1');
+  });
+
+  it('still names the backup when the update after it fails', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = addRunningSite(w, 'blog', { files: true });
+    await seedSnapshot(w, site);
+    w.docker.execQueue.push(fail('Error: Download failed.'));
+    scriptScan(w);
+
+    const job = w.worker.enqueue(
+      'wp.themeTask',
+      { siteId: site.id, action: 'update', name: 'old', backupFirst: true },
+      { id: site.id, slug: site.slug, serverId: 1 },
+    );
+    const done = await runJob(w, job.id);
+
+    expect(done.status).toBe('failed');
+    const [row] = backupsOf(w);
+    expect(JSON.parse(done.result!)).toEqual({ backupId: row!.id });
+  });
+
+  it('backs up before a core update', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = addRunningSite(w, 'blog', { files: true });
+    await seedSnapshot(w, site);
+    w.docker.execQueue.push(
+      ok('6.8.2\n'), // version before
+      ok('Success: WordPress updated successfully.'),
+      ok('Success: WordPress database upgraded.'),
+      ok('6.8.3\n'), // version after
+    );
+    w.docker.execQueue.push(ok(PLUGIN_LIST), ok(THEME_LIST), ok('6.8.3\n'), ok(''));
+
+    const job = w.worker.enqueue('wp.coreUpdate', { siteId: site.id, backupFirst: true }, { id: site.id, slug: site.slug, serverId: 1 });
+    const done = await runJob(w, job.id);
+
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    const [row] = backupsOf(w);
+    expect(row!.type).toBe('pre_update');
+    expect(JSON.parse(done.result!)).toEqual({ from: '6.8.2', to: '6.8.3', backupId: row!.id });
+  });
+
+  it('takes none when it was not asked to, or for anything but an update', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = addRunningSite(w, 'blog', { files: true });
+    await seedSnapshot(w, site);
+    w.docker.execQueue.push(ok('Success: Updated 1 of 1 plugins.'));
+    scriptScan(w);
+    const update = w.worker.enqueue('wp.pluginTask', { siteId: site.id, action: 'update', name: 'cf7' }, { id: site.id, slug: site.slug, serverId: 1 });
+    expect((await runJob(w, update.id)).status).toBe('succeeded');
+
+    w.docker.execQueue.push(ok('Success: Plugin activated.'));
+    scriptScan(w);
+    const activate = w.worker.enqueue(
+      'wp.pluginTask',
+      { siteId: site.id, action: 'activate', name: 'seo', backupFirst: true },
+      { id: site.id, slug: site.slug, serverId: 1 },
+    );
+    expect((await runJob(w, activate.id)).status).toBe('succeeded');
+    expect(backupsOf(w)).toHaveLength(0);
+  });
+});
+
 describe('WpBulkService.createBatch', () => {
   it('enqueues one job per site, all sharing the batch', async () => {
     const w = await makeWorld();

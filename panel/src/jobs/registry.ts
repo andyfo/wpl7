@@ -74,7 +74,11 @@ import { pluginZipCheck, pluginZipCheckPayload, siteMalwareScan, siteMalwareScan
 export interface RegistryEntry<TSchema extends z.ZodType = z.ZodType> {
   payloadSchema: TSchema;
   handler: (ctx: JobContext<z.infer<TSchema>>, services: CoreServices) => Promise<void>;
-  timeoutMs?: number;
+  /**
+   * How long one job may run (jobDeadline): 30 minutes when left out. A function works it out from
+   * the job's payload, for a job that is asked to do more than its usual work - a backup first.
+   */
+  timeoutMs?: number | ((payload: z.infer<TSchema>) => number);
   /** Synchronous undo of state the enqueueing request reserved, when the job is canceled before it ran. */
   onQueuedCancel?: (payload: z.infer<TSchema>, services: CoreServices) => void;
 }
@@ -82,9 +86,29 @@ export interface RegistryEntry<TSchema extends z.ZodType = z.ZodType> {
 const entry = <TSchema extends z.ZodType>(
   payloadSchema: TSchema,
   handler: (ctx: JobContext<z.infer<TSchema>>, services: CoreServices) => Promise<void>,
-  timeoutMs?: number,
+  timeoutMs?: RegistryEntry<TSchema>['timeoutMs'],
   onQueuedCancel?: (payload: z.infer<TSchema>, services: CoreServices) => void,
 ): RegistryEntry<TSchema> => ({ payloadSchema, handler, timeoutMs, onQueuedCancel });
+
+/**
+ * One job's deadline: its type's, worked out from its payload where the type says how, and 30
+ * minutes for a type that sets none.
+ */
+export function jobDeadline(entry: Pick<RegistryEntry, 'timeoutMs'> | undefined, payload: unknown): number {
+  const ms = typeof entry?.timeoutMs === 'function' ? entry.timeoutMs(payload) : entry?.timeoutMs;
+  return ms ?? 30 * 60_000;
+}
+
+/**
+ * How long a backup may take: a backup job's deadline, and what an update that backs the site up
+ * first (`backupFirst`) gets on top of its own. Archiving a big site's files can take most of it,
+ * and an update whose deadline ran out during the backup would fail without updating anything.
+ */
+const BACKUP_TIME_MS = 60 * 60_000;
+const plusBackup =
+  (ms: number) =>
+  (payload: { backupFirst?: boolean }): number =>
+    ms + (payload.backupFirst ? BACKUP_TIME_MS : 0);
 
 // Only tests queue it. `stepMs` lets one that just needs a job to have run skip the wait.
 const demoPayload = zod.object({
@@ -110,7 +134,7 @@ const registry: Partial<Record<JobType, RegistryEntry>> = {
   'site.changePhp': entry(siteChangePhpPayload, siteChangePhp, 20 * 60_000) as RegistryEntry,
   'site.reconcile': entry(siteReconcilePayload, siteReconcile, 20 * 60_000) as RegistryEntry,
   'site.updateDomains': entry(siteUpdateDomainsPayload, siteUpdateDomains, 20 * 60_000) as RegistryEntry,
-  'backup.create': entry(backupCreatePayload, backupCreate, 60 * 60_000) as RegistryEntry,
+  'backup.create': entry(backupCreatePayload, backupCreate, BACKUP_TIME_MS) as RegistryEntry,
   'backup.restore': entry(backupRestorePayload, backupRestore, 60 * 60_000) as RegistryEntry,
   // Twelve hours: a first backfill of a year of backups over a domestic uplink is a real
   // thing to ask for, and the lane means nothing else is waiting on it.
@@ -121,12 +145,13 @@ const registry: Partial<Record<JobType, RegistryEntry>> = {
   // destinations, is hours rather than minutes.
   'backup.delete': entry(backupDeletePayload, backupDelete, 6 * 3600_000) as RegistryEntry,
   'panel.snapshot': entry(panelSnapshotPayload, panelSnapshot, 10 * 60_000) as RegistryEntry,
-  'wp.coreUpdate': entry(wpCoreUpdatePayload, wpCoreUpdate, 20 * 60_000) as RegistryEntry,
-  'wp.pluginTask': entry(wpPluginTaskPayload, wpPluginTask, 10 * 60_000) as RegistryEntry,
-  'wp.themeTask': entry(wpThemeTaskPayload, wpThemeTask, 10 * 60_000) as RegistryEntry,
-  // Long: a bulk run can take a pre-update backup, update thirty plugins and probe the
-  // site afterwards, all inside this one job.
-  'wp.bulkTask': entry(wpBulkTaskPayload, wpBulkTask, 30 * 60_000) as RegistryEntry,
+  // An update that backs the site up first gets the backup's time on top of its own.
+  'wp.coreUpdate': entry(wpCoreUpdatePayload, wpCoreUpdate, plusBackup(20 * 60_000)) as RegistryEntry,
+  'wp.pluginTask': entry(wpPluginTaskPayload, wpPluginTask, plusBackup(10 * 60_000)) as RegistryEntry,
+  'wp.themeTask': entry(wpThemeTaskPayload, wpThemeTask, plusBackup(10 * 60_000)) as RegistryEntry,
+  // Long: a bulk run can update thirty plugins and probe the site afterwards, all inside this
+  // one job - after a backup, when it takes one.
+  'wp.bulkTask': entry(wpBulkTaskPayload, wpBulkTask, plusBackup(30 * 60_000)) as RegistryEntry,
   // A fleet pass touches every running site on every server; the per-site work is small
   // but the sum of it on a big install is not.
   'wp.scanAll': entry(wpScanAllPayload, wpScanAll, 60 * 60_000) as RegistryEntry,

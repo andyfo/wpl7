@@ -43,6 +43,7 @@ import {
 import { describeCron } from '../../../shared/cron';
 import { JobProgress } from '../components/JobProgress';
 import { KeepDaysSetting } from '../components/backups/KeepDays';
+import { BackupBeforeUpdatesSetting } from '../components/backups/BackupBeforeUpdates';
 import { WpAdminLoginButton } from '../components/WpAdminLoginButton';
 import { ExternalOverview } from '../components/external/ExternalOverview';
 import { ExternalSettings } from '../components/external/ExternalSettings';
@@ -963,6 +964,23 @@ function BackupsTab({ slug }: { slug: string }) {
               <span className="max-w-xl text-xs text-neutral-500">
                 Manual and final backups, and the newest one, always stay. Scheduled ones stop at the newest{' '}
                 {meta.data?.backupRetention ?? 10} either way.
+              </span>
+            </div>
+          )}
+          {site.data && (
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-3">
+              <BackupBeforeUpdatesSetting
+                slug={slug}
+                value={site.data.backupBeforeUpdates}
+                fallback={meta.data?.backupBeforeUpdates ?? 'ask'}
+                onSaved={(detail) => {
+                  qc.setQueryData(['site', slug], detail);
+                  void qc.invalidateQueries({ queryKey: ['sites'] });
+                }}
+                onError={setActionError}
+              />
+              <span className="max-w-xl text-xs text-neutral-500">
+                Before a plugin, theme or WordPress update. Schedules use their own switch.
               </span>
             </div>
           )}

@@ -9,7 +9,8 @@ import {
   type SiteRow,
   type SiteWpComponentRow,
 } from '../db/schema.js';
-import type { JobStatus, WpBulkAction, WpComponentAction, WpComponentKind } from '../../shared/schemas.js';
+import type { BackupBeforeUpdates, JobStatus, WpBulkAction, WpComponentAction, WpComponentKind } from '../../shared/schemas.js';
+import { backupBeforeUpdatesOf, backupFirstFor, updatesSomething } from '../../shared/updateBackups.js';
 import type { BatchDto } from '../../shared/types.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import type { JobWorker } from '../jobs/worker.js';
@@ -44,8 +45,22 @@ export interface BulkOp {
 }
 
 export interface BulkOptions {
-  backupFirst: boolean;
+  /** The answer for a site set to ask whether to back up before an update (backupFirst in the API). */
+  backupFirst?: boolean;
   healthCheck: boolean;
+}
+
+/**
+ * The refusal for an update on sites set to ask whether to back up first, when the request did not
+ * say. Nothing decides for them: whoever wants the update is the one who was to be asked.
+ */
+function askFirst(slugs: string[]) {
+  const which = slugs.length === 1 ? `"${slugs[0]}" is` : `${slugs.length} sites are`;
+  const names = slugs.length === 1 ? '' : `: ${slugs.slice(0, 10).join(', ')}${slugs.length > 10 ? ', …' : ''}`;
+  return badRequest(
+    `${which} set to ask whether to back up before an update${names}. Ask whoever wants the update, then send backupFirst: true or false.`,
+    { sites: slugs },
+  );
 }
 
 /** Which per-component action a fleet-wide action means. */
@@ -94,6 +109,23 @@ export class WpBulkService {
     };
   }
 
+  /** Whether an update of this site backs it up first: its own setting, or the panel's. */
+  backupSetting(site: Pick<SiteRow, 'backupBeforeUpdates'>): BackupBeforeUpdates {
+    return backupBeforeUpdatesOf(site.backupBeforeUpdates, this.s.settings.get('backupBeforeUpdates'));
+  }
+
+  /**
+   * Whether a run on this site takes a backup first. One that updates something follows the site's
+   * setting, and on a site set to ask, `answer` decides. Without one the request is refused with a
+   * 400. Any other run backs up only when `answer` says so.
+   */
+  backupFirst(site: SiteRow, ops: readonly { action: WpComponentAction }[], answer: boolean | undefined): boolean {
+    if (!updatesSomething(ops)) return answer ?? false;
+    const decided = backupFirstFor(this.backupSetting(site), answer);
+    if (decided === undefined) throw askFirst([site.slug]);
+    return decided;
+  }
+
   /**
    * Validate every target against the snapshot, then enqueue one job per site.
    *
@@ -111,7 +143,7 @@ export class WpBulkService {
     const bySlug = new Map(this.db.select().from(sites).all().map((site) => [site.slug, site]));
     const componentsFor = this.componentCache();
     const problems: string[] = [];
-    const perSite = new Map<number, { site: SiteRow; ops: BulkOp[] }>();
+    const perSite = new Map<number, { site: SiteRow; ops: BulkOp[]; backupFirst?: boolean }>();
 
     for (const target of targets) {
       const site = bySlug.get(target.siteSlug);
@@ -149,6 +181,17 @@ export class WpBulkService {
       );
     }
     if (perSite.size === 0) throw badRequest('No targets to run');
+    // Each site's own answer to "back up first?", decided before anything is queued: a site that
+    // asks and got no answer refuses the whole selection, as an item that cannot run does.
+    const unanswered: string[] = [];
+    for (const entry of perSite.values()) {
+      const decided = updatesSomething(entry.ops)
+        ? backupFirstFor(this.backupSetting(entry.site), options.backupFirst)
+        : (options.backupFirst ?? false);
+      if (decided === undefined) unanswered.push(entry.site.slug);
+      else entry.backupFirst = decided;
+    }
+    if (unanswered.length > 0) throw askFirst(unanswered);
 
     const skipped: BulkSkip[] = [];
     const created: JobRow[] = [];
@@ -158,7 +201,7 @@ export class WpBulkService {
         .values({
           kind: 'wp.bulk',
           action,
-          options: JSON.stringify(options),
+          options: JSON.stringify({ backupFirst: options.backupFirst ?? null, healthCheck: options.healthCheck }),
           skipped: '[]',
           targetCount: [...perSite.values()].reduce((n, e) => n + e.ops.length, 0),
           totalJobs: 0,
@@ -166,7 +209,7 @@ export class WpBulkService {
         })
         .returning()
         .get();
-      for (const { site, ops } of perSite.values()) {
+      for (const { site, ops, backupFirst } of perSite.values()) {
         try {
           created.push(
             this.worker.enqueue(
@@ -175,7 +218,7 @@ export class WpBulkService {
                 siteId: site.id,
                 batchId: row.id,
                 ops: sortOps(ops),
-                backupFirst: options.backupFirst,
+                backupFirst: backupFirst ?? false,
                 healthCheck: options.healthCheck,
               },
               { id: site.id, slug: site.slug, serverId: site.serverId },
@@ -311,9 +354,9 @@ export class WpBulkService {
       kind: 'wp.bulk',
       action: row.action as WpBulkAction,
       options: {
-        backupFirst: false,
+        backupFirst: null,
         healthCheck: true,
-        ...(JSON.parse(row.options) as Partial<BulkOptions>),
+        ...(JSON.parse(row.options) as Partial<BatchDto['options']>),
       },
       targets: row.targetCount,
       totalJobs: row.totalJobs,

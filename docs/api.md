@@ -361,12 +361,14 @@ checks that user may.
 |---|---|---|
 | `GET /sites/:slug/wp/status` | – | the site's inventory **snapshot**: `core`, `plugins[]`, `themes[]`, `counts`, `feed`. A database read — no `docker exec` — so it answers instantly and answers for a stopped site. `scannedAt: null` means never scanned (which is not "nothing installed"); `partial: true` means the listing had to run with `--skip-plugins`, so update info from premium plugins is missing |
 | `POST /sites/:slug/wp/scan` | – | re-reads this site now and returns the fresh snapshot. **Synchronous** (≈5-20 s: `wp plugin list` re-checks wordpress.org), rate-limited to 10/min, `409` when the container is not running |
-| `POST /sites/:slug/wp/bulk` | `{ops: [{kind:"plugin"\|"theme"\|"core", slug?, action:"update"\|"activate"\|"deactivate"\|"delete"}], backupFirst?: false, healthCheck?: true}` | `202 {job}` (`wp.bulkTask`) — every operation in one job: optional `pre_update` backup, the operations in order, optional HTTP health check, then a re-scan. `400` listing the offending ops when the snapshot says one of them cannot run |
+| `POST /sites/:slug/wp/bulk` | `{ops: [{kind:"plugin"\|"theme"\|"core", slug?, action:"update"\|"activate"\|"deactivate"\|"delete"}], backupFirst?, healthCheck?: true}` | `202 {job}` (`wp.bulkTask`) — every operation in one job: optional `pre_update` backup, the operations in order, optional HTTP health check, then a re-scan. `400` listing the offending ops when the snapshot says one of them cannot run. With an update among the ops, the site's **back up before updates** setting decides the backup (below); otherwise `backupFirst` does, default `false` |
 | `GET /sites/:slug/wp/plugins` | – | installed plugins w/ available updates, read **live** from the container (sync, `409` when stopped). The snapshot above is what the UI uses |
-| `POST /sites/:slug/wp/core-update` | – | `202 {job}` |
+| `POST /sites/:slug/wp/core-update` | `{backupFirst?}` | `202 {job}` (`wp.coreUpdate`). The backup follows the site's setting, as below |
 | `POST /sites/:slug/wp/plugins` | `{source: {kind:"wporg",slug}\|{kind:"catalog",id}, activate?}` | `202 {job}` |
-| `POST /sites/:slug/wp/plugins/:name/activate` · `/deactivate` · `/update`; `DELETE …/plugins/:name` | – | `202 {job}` |
-| `POST /sites/:slug/wp/themes/:name/activate` · `/update`; `DELETE …/themes/:name` | – | `202 {job}` (`wp.themeTask`). Deliberately no theme *install*. wp-cli refuses to delete the active theme or its parent and the panel never passes `--force` |
+| `POST /sites/:slug/wp/plugins/:name/activate` · `/deactivate`; `DELETE …/plugins/:name` | – | `202 {job}` |
+| `POST /sites/:slug/wp/plugins/:name/update` | `{backupFirst?}` | `202 {job}` (`wp.pluginTask`). The backup follows the site's setting, as below |
+| `POST /sites/:slug/wp/themes/:name/activate`; `DELETE …/themes/:name` | – | `202 {job}` (`wp.themeTask`). Deliberately no theme *install*. wp-cli refuses to delete the active theme or its parent and the panel never passes `--force` |
+| `POST /sites/:slug/wp/themes/:name/update` | `{backupFirst?}` | `202 {job}` (`wp.themeTask`). The backup follows the site's setting, as below |
 | `POST /sites/:slug/wp/users/reset-password` | `{user}` | `{newPassword}` (sync, never stored) |
 | `GET /sites/:slug/wp/maintenance` | – | `{enabled}` (current state) |
 | `PUT /sites/:slug/wp/maintenance` | `{enabled}` | sync |
@@ -381,6 +383,21 @@ checks that user may.
 | `POST /sites/:slug/wp/rest` | `{method?: "GET", route: "wp/v2/posts?per_page=5", body?, auth?: {username, applicationPassword}, async?: false, timeoutMin?: 10}` | `{status, statusText, contentType, headers, body, truncated, sizeBytes, durationMs, error}` — the site's answer, whatever its status (sync, 45 s cap, the first 1 MB of the body; `502` when nothing answered at all). With `async: true`: `202 {job}` (`wp.rest`) — the answer goes to the job log, and anything but a 2xx fails the job. Made from inside the site's container, signed in with the application password when `auth` is given (docs/jobs.md#rest-api-requests); `409` for a stopped or busy site |
 | `GET /sites/:slug/wp/recipes` | – | `{items: SiteLicense[]}` — where each plugin recipe stands on this site (`status`: `active`, `failed`, `inactive`, `not-set-up`, `released`, `unknown`), from the inventory snapshot and the last run; a database read (docs/licenses.md) |
 | `POST /sites/:slug/wp/recipes/apply` | `{recipeId?, hook?: "afterInstall"\|"verify"}` | `202 {job}` — run the recipes now (every recipe whose plugin is on the site, or the one named). Starts a stopped site for it. The job fails when a recipe does |
+
+#### Backing up before an update
+
+Whether an update takes a `pre_update` backup first is the site's **back up before updates**
+setting: `always`, `ask` or `never`. A site's own (`backupBeforeUpdates` on the site, `null` when it
+has none) wins over the panel's (`backupBeforeUpdates` in the settings and in `GET /meta`, `ask` by
+default). `always` and `never` decide whatever `backupFirst` says. `ask` leaves it to `backupFirst`,
+and an update without it is a `400` that names the site in `error.details.sites`: ask whoever wants
+the update, then send it again. That holds for every endpoint that updates something: `wp/bulk`
+with an update among its ops, the single plugin, theme and core updates, and `POST /wp/bulk`.
+Update schedules (`wp.update`) keep their own `backupFirst`.
+
+| Method & path | Body | Returns |
+|---|---|---|
+| `PUT /sites/:slug/backup-before-updates` | `{value: "always"\|"ask"\|"never"\|null}` | `SiteDetail` (sync). `null` puts the site back on the panel's setting. Full access: `never` removes a safety net |
 
 #### WP Godmode
 
@@ -507,7 +524,7 @@ docs/security.md#settings).
 | Method & path | Body / query | Returns |
 |---|---|---|
 | `GET /wp/inventory` | `?kind=plugin\|theme\|core` (default `plugin`), `filter=` any comma-separated mix of `updates,vulnerable,inactive,closed` (AND-ed), `q=`, `serverId=`, `siteSlug=`, `includeStopped=true` | one row per component slug with its per-site rows: `rows[]` (aggregate counts, distinct `versions`, `worstSeverity`, `closedOnWporg`, `feedCoverage`, `siteRows[]`), `fleet` counters, `feed`, and the current/last `scanJob`. Reads the snapshot only |
-| `POST /wp/bulk` | `{action: "update"\|"activate"\|"deactivate"\|"delete"\|"core-update", targets: [{siteSlug, kind, slug?}], backupFirst?: false, healthCheck?: true}` | `202 {batch, jobs[], skipped[]}` — **one `wp.bulkTask` job per site**, sharing `batch.id`. Sites whose job lane is busy come back in `skipped` (retryable); a target that cannot run the action is a `400` with every problem in `error.details` and **nothing queued** |
+| `POST /wp/bulk` | `{action: "update"\|"activate"\|"deactivate"\|"delete"\|"core-update", targets: [{siteSlug, kind, slug?}], backupFirst?, healthCheck?: true}` | `202 {batch, jobs[], skipped[]}` — **one `wp.bulkTask` job per site**, sharing `batch.id`. Sites whose job lane is busy come back in `skipped` (retryable); a target that cannot run the action is a `400` with every problem in `error.details` and **nothing queued**. An update backs each site up as that site's setting says, and `backupFirst` answers the sites set to `ask`: without it, a run that includes one is a `400` too (`error.details.sites`). For the other actions `backupFirst` decides, default `false` |
 | `GET /wp/batches?limit=10` | – | recent runs with rolled-up job counts |
 | `GET /wp/batches/:id` | – | `{batch, jobs}` — one poll drives the whole progress table; each job carries its own `result.ops[]`, `result.backupId` and `result.healthy` |
 | `POST /wp/scan` | – | `202 {job}` (`wp.scanAll`) — refresh the whole fleet's snapshot. Lane-less; `409` while one is queued or running |

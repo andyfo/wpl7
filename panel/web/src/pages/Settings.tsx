@@ -12,7 +12,8 @@ import { DnsTab } from '../components/settings/DnsTab';
 import { cronPatternError } from '../lib/cron';
 import { MalwareScanSettingsCard, TrustedProxiesCard, trustedProxiesProblem } from '../components/security/SettingsCards';
 import type { ScanOnFinding, TrustedProxiesSetting } from '../../../shared/security';
-import { MAX_BACKUP_KEEP_DAYS } from '../../../shared/schemas';
+import { backupBeforeUpdatesValues, MAX_BACKUP_KEEP_DAYS, type BackupBeforeUpdates } from '../../../shared/schemas';
+import { BACKUP_BEFORE_UPDATES_LABELS } from '../components/wp/BulkRunOptions';
 import type { MetaDto } from '../../../shared/types';
 
 interface PanelSettings {
@@ -20,6 +21,7 @@ interface PanelSettings {
   backupRetention: number;
   backupKeepDays: number;
   panelBackupKeepDays: number;
+  backupBeforeUpdates: BackupBeforeUpdates;
   monitorUptimeIntervalSec: number;
   monitorStatsIntervalSec: number;
   monitorDuIntervalMin: number;
@@ -82,6 +84,7 @@ const CARD_TAB: Record<string, TabId> = {
   limits: 'sites',
   ftp: 'sites',
   backups: 'backups',
+  'before-updates': 'backups',
   wordpress: 'security',
   security: 'security',
   proxies: 'security',
@@ -114,6 +117,7 @@ const SETTING_TAB: Record<keyof PanelSettings, TabId> = {
   backupRetention: 'backups',
   backupKeepDays: 'backups',
   panelBackupKeepDays: 'backups',
+  backupBeforeUpdates: 'backups',
   wpScanIntervalHours: 'security',
   vulnerabilityFeed: 'security',
   securityTrustedProxies: 'security',
@@ -148,6 +152,14 @@ interface TabProps {
   meta: MetaDto | undefined;
   /** The sites that keep their backups for a time of their own. */
   ownBackupKeepDays: { slug: string; days: number }[];
+  /** The sites that decide for themselves whether an update backs them up first. */
+  ownBackupBeforeUpdates: { slug: string; value: BackupBeforeUpdates }[];
+}
+
+/** What GET /api/settings says beside the settings: the sites that differ from them. */
+interface OwnSettings {
+  ownBackupKeepDays: { slug: string; days: number }[];
+  ownBackupBeforeUpdates: { slug: string; value: BackupBeforeUpdates }[];
 }
 
 export function Settings() {
@@ -158,10 +170,9 @@ export function Settings() {
     queryFn: () => api<{ settings: PanelSettings }>('/api/settings').then((r) => r.settings),
   });
   // Its own key: ['settings'] holds the settings alone wherever a page reads them.
-  const ownBackupKeepDays = useQuery({
-    queryKey: ['settings', 'own-backup-keep-days'],
-    queryFn: () =>
-      api<{ ownBackupKeepDays: { slug: string; days: number }[] }>('/api/settings').then((r) => r.ownBackupKeepDays),
+  const own = useQuery({
+    queryKey: ['settings', 'own'],
+    queryFn: () => api<OwnSettings>('/api/settings'),
   });
   // The page's, not a tab's: a change not saved yet outlives a look at another tab, and the
   // one Save takes the changes on every tab.
@@ -247,7 +258,13 @@ export function Settings() {
     }
   };
 
-  const props: TabProps = { s, set, meta: meta.data, ownBackupKeepDays: ownBackupKeepDays.data ?? [] };
+  const props: TabProps = {
+    s,
+    set,
+    meta: meta.data,
+    ownBackupKeepDays: own.data?.ownBackupKeepDays ?? [],
+    ownBackupBeforeUpdates: own.data?.ownBackupBeforeUpdates ?? [],
+  };
   const formTab = tab !== 'dns' && tab !== 'updates';
 
   return (
@@ -468,7 +485,7 @@ function SitesTab({ s, set, meta }: TabProps) {
 // ---------------------------------------------------------------------------
 // Backups
 
-function BackupsTab({ s, set, meta, ownBackupKeepDays }: TabProps) {
+function BackupsTab({ s, set, meta, ownBackupKeepDays, ownBackupBeforeUpdates }: TabProps) {
   return (
     <Card title="Backups" id="backups">
       {meta?.backupsPaused && (
@@ -511,6 +528,31 @@ function BackupsTab({ s, set, meta, ownBackupKeepDays }: TabProps) {
           follow their destination&apos;s own retention.
         </p>
         <OwnKeepDays sites={ownBackupKeepDays} />
+        <div id="before-updates" className="space-y-2 border-t border-neutral-100 pt-4">
+          <Field
+            label="Back up before updates"
+            hint="A site can set its own on its Backups tab. Schedules use their own switch."
+            width="sm"
+          >
+            <select
+              className={inputClass}
+              value={s.backupBeforeUpdates ?? 'ask'}
+              onChange={(e) => set('backupBeforeUpdates', e.target.value as BackupBeforeUpdates)}
+            >
+              {backupBeforeUpdatesValues.map((v) => (
+                <option key={v} value={v}>
+                  {BACKUP_BEFORE_UPDATES_LABELS[v]}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <OwnSiteList
+            sites={ownBackupBeforeUpdates.map((site) => ({
+              slug: site.slug,
+              label: BACKUP_BEFORE_UPDATES_LABELS[site.value].toLowerCase(),
+            }))}
+          />
+        </div>
       </div>
       <div className="measure mt-4 border-t border-neutral-100 pt-3 text-xs text-neutral-500">
         Stored on each server's own disk. Locations and remote copies live under{' '}
@@ -532,6 +574,13 @@ function BackupsTab({ s, set, meta, ownBackupKeepDays }: TabProps) {
 
 /** The sites that keep their backups for a time of their own, each linked to where it is set. */
 function OwnKeepDays({ sites }: { sites: { slug: string; days: number }[] }) {
+  return (
+    <OwnSiteList sites={sites.map((site) => ({ slug: site.slug, label: site.days === 0 ? 'never' : `${site.days} days` }))} />
+  );
+}
+
+/** Sites with a backup setting of their own, each linked to its Backups tab, where it is set. */
+function OwnSiteList({ sites }: { sites: { slug: string; label: string }[] }) {
   if (sites.length === 0) return null;
   return (
     <p className="text-xs text-neutral-500">
@@ -542,7 +591,7 @@ function OwnKeepDays({ sites }: { sites: { slug: string; days: number }[] }) {
           <Link className="underline" to={`/sites/${site.slug}?tab=backups`}>
             {site.slug}
           </Link>{' '}
-          ({site.days === 0 ? 'never' : `${site.days} days`})
+          ({site.label})
         </span>
       ))}
     </p>

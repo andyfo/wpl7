@@ -24,7 +24,8 @@ on demand too. Both live under **Automations** in the sidebar: *All jobs* and *S
   [backup-restore.md](backup-restore.md#deleting-several-at-once)).
   A malware scan carries no site, so the site's other jobs are not held up by it.
 - A job that outlives its time limit is failed and asked to stop at its next safe step. Every
-  type has its own limit (`GET /api/jobs/types`).
+  type has its own limit (`GET /api/jobs/types`). An update that backs the site up first
+  (`backupFirst`) gets a backup job's hour on top of its own (`timeoutWithBackupMs`).
 - Finished jobs are kept `jobsRetentionDays` days (default 90; the footer of the Jobs list
   changes it), then removed by the nightly housekeeping.
 

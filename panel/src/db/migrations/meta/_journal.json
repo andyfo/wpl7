@@ -169,6 +169,13 @@
       "when": 1791821369687,
       "tag": "0023_backup_keep_days",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1791985386585,
+      "tag": "0024_backup_before_updates",
+      "breakpoints": true
     }
   ]
 }

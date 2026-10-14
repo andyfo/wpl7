@@ -31,7 +31,9 @@ export function registerWpFleetRoutes(app: FastifyInstance, deps: AppDeps): void
    * 400 with the list of offending targets when anything cannot run the action (a stale
    * tab, a component deleted since the last scan) - nothing is queued in that case, so a
    * partly-invalid selection never half-runs. Sites whose job lane is busy come back in
-   * `skipped`, because that one is worth retrying rather than fixing.
+   * `skipped`, because that one is worth retrying rather than fixing. An update backs each site
+   * up first as that site's setting says; `backupFirst` answers the sites set to ask, and an
+   * update on one of those without it is refused the same way.
    */
   r.post('/api/wp/bulk', { schema: { body: wpFleetBulkBody } }, async (req, reply) => {
     const { batch, jobs, skipped } = deps.wpBulk.createBatch(req.body.action, req.body.targets, {

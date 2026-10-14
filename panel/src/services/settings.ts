@@ -2,6 +2,7 @@
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { settings } from '../db/schema.js';
+import type { BackupBeforeUpdates } from '../../shared/schemas.js';
 import type {
   AutoBlockMode,
   DetectionRules,
@@ -21,6 +22,11 @@ export interface PanelSettings {
   backupKeepDays: number;
   /** The same for the panel's own database backups. 0 = never. */
   panelBackupKeepDays: number;
+  /**
+   * Whether an update backs a site up first: always, never, or `ask` whoever starts it. A site can
+   * say otherwise (`sites.backup_before_updates`). Schedules have a switch of their own.
+   */
+  backupBeforeUpdates: BackupBeforeUpdates;
   monitorUptimeIntervalSec: number;
   monitorStatsIntervalSec: number;
   monitorDuIntervalMin: number;
@@ -160,6 +166,7 @@ const KEY_MAP: Record<keyof PanelSettings, string> = {
   backupRetention: 'backup.retention',
   backupKeepDays: 'backup.keepDays',
   panelBackupKeepDays: 'backup.panelKeepDays',
+  backupBeforeUpdates: 'backup.beforeUpdates',
   monitorUptimeIntervalSec: 'monitor.uptimeIntervalSec',
   monitorStatsIntervalSec: 'monitor.statsIntervalSec',
   monitorDuIntervalMin: 'monitor.duIntervalMin',

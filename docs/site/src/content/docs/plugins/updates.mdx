@@ -10,15 +10,19 @@ sources:
   - panel/src/services/siteBackend.ts
   - panel/src/services/alerts.ts
   - panel/shared/wpOps.ts
+  - panel/shared/updateBackups.ts
   - panel/shared/scheduleActions.ts
   - panel/web/src/components/wp/WordPressTab.tsx
   - panel/web/src/components/wp/VulnerabilityList.tsx
   - panel/web/src/components/wp/severity.tsx
   - panel/web/src/components/wp/BulkRunOptions.tsx
   - panel/web/src/components/wp/FeedFooter.tsx
+  - panel/web/src/components/backups/BackupBeforeUpdates.tsx
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
+import Since from '~/components/Since.astro';
+import UiPath from '~/components/UiPath.astro';
 
 The panel rates every plugin, theme and WordPress version on your sites against the advisories
 that [wpvulnerability.net](https://www.wpvulnerability.net/) publishes, a free feed. The ratings
@@ -61,17 +65,41 @@ On the site's **WordPress** tab:
 - **Update all** updates everything that has an update, WordPress included.
 - **Update core** updates WordPress only.
 - **Fix vulnerable**, in the **Security** card, updates only what an available release fixes.
-- **Update** on a plugin's or theme's row updates that one at once.
+- **Update** on a plugin's or theme's row updates that one.
 
 The first three ask first. Set the two switches, then choose **Run it**:
 
 - **Back up first** takes a backup before anything changes, kept until you delete it or its
-  [keep period](/docs/backups/delete-old/) ends. It is on by default
-  for a live site.
+  [keep period](/docs/backups/delete-old/) ends. The site's **Back up before updates** decides
+  it, as the next section explains. On a site set to **Ask each time**, the switch decides, and it
+  starts on for a live site.
 - **Check the site answers afterwards** fails the job if the site stops answering.
 
-A row's **Update** uses the switches as last set on the page, so by default a live site gets a
-backup first.
+A row's **Update** runs at once, with **Check the site answers afterwards** as last set on the
+page. On a site set to **Ask each time**, it opens the same dialog first.
+
+## Choose whether updates back up first
+
+<Since v="0.3.0-beta.3" /> **Back up before updates** decides whether an update backs the site up
+first:
+
+| Setting | Before an update |
+|---|---|
+| **Always** | The panel backs the site up. The dialog shows **Back up first** on, and locked. |
+| **Ask each time** | Every update opens a dialog with **Back up first**. This is the default. |
+| **Never** | No backup. The dialog shows **Back up first** off, and locked. |
+
+Set it for every site in <UiPath href="/docs/panel/settings/#backups">Settings → Backups</UiPath>.
+A site's own goes in **Back up before updates** on its **Backups** tab, whose first choice follows
+Settings. The site's **Updates** card names the setting in force.
+
+It holds for every update the panel starts: on the **WordPress** tab, in
+[Bulk management](/docs/sites/bulk/), and over the API and MCP. An update schedule goes by its own
+**Back up first** switch instead.
+
+Over the API, an update of a site set to **Ask each time** needs `backupFirst`, `true` or `false`.
+Without it the request is refused, and an app connected over MCP is told to ask you first. For a
+site set to **Always** or **Never**, `backupFirst` changes nothing.
 
 ## What the update job does
 
@@ -102,8 +130,9 @@ the same two switches, as [Bulk management](/docs/sites/bulk/) explains.
 4. Set **Back up first** and **Check the site answers afterwards**, and under **When**, how often
    it runs.
 
-Each run reads the site again and decides then what to update. Its backups count as scheduled
-backups, so retention removes the old ones.
+Each run reads the site again and decides then what to update. Its **Back up first** switch
+decides the backup for every site it updates, whatever their **Back up before updates** says. Its
+backups count as scheduled backups, so retention removes the old ones.
 
 ## Limits
 
@@ -112,6 +141,8 @@ backups, so retention removes the old ones.
   every other change made to the site since.
 - Where no fixed release exists, **Fix vulnerable** leaves the plugin as it is. Deactivating it is
   your decision.
+- An update from the WP-CLI console, a recipe, WP Godmode or WordPress's own automatic updates
+  takes no backup first, whatever **Back up before updates** says.
 
 ## Related
 

@@ -1,6 +1,7 @@
 // @docs sites/create, sites/move, sites/overview, sites/settings
 import { and, asc, eq, isNotNull } from 'drizzle-orm';
-import type { SiteCreateBody } from '../../shared/schemas.js';
+import type { BackupBeforeUpdates, SiteCreateBody } from '../../shared/schemas.js';
+import { isBackupBeforeUpdates } from '../../shared/updateBackups.js';
 import type { SiteDetail, SiteSummary, SiteWpSummary } from '../../shared/types.js';
 import { jobs as jobsTable, moveCleanups, plugins, sites, type JobRow, type ServerRow, type SiteRow } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
@@ -327,6 +328,31 @@ export class SitesService {
       .get();
   }
 
+  /**
+   * Whether an update of this site backs it up first: null follows the panel's setting. Not a job:
+   * the update routes read it when an update is asked for.
+   */
+  setBackupBeforeUpdates(slug: string, value: BackupBeforeUpdates | null): SiteRow {
+    const site = this.bySlug(slug, { kinds: 'any' });
+    return this.db
+      .update(sites)
+      .set({ backupBeforeUpdates: value, updatedAt: Date.now() })
+      .where(eq(sites.id, site.id))
+      .returning()
+      .get();
+  }
+
+  /** The sites that decide for themselves whether an update backs them up first, by name. */
+  ownBackupBeforeUpdates(): { slug: string; value: BackupBeforeUpdates }[] {
+    return this.db
+      .select({ slug: sites.slug, value: sites.backupBeforeUpdates })
+      .from(sites)
+      .where(isNotNull(sites.backupBeforeUpdates))
+      .orderBy(asc(sites.slug))
+      .all()
+      .flatMap((site) => (isBackupBeforeUpdates(site.value) ? [{ slug: site.slug, value: site.value }] : []));
+  }
+
   /** The sites that keep their backups for a time of their own, by name. */
   ownBackupKeepDays(): { slug: string; days: number }[] {
     return this.db
@@ -416,6 +442,7 @@ export class SitesService {
       kind: site.kind as SiteSummary['kind'],
       external: this.s.connections.externalSummary(site),
       backupKeepDays: site.backupKeepDays,
+      backupBeforeUpdates: isBackupBeforeUpdates(site.backupBeforeUpdates) ? site.backupBeforeUpdates : null,
       createdAt: site.createdAt,
     };
   }

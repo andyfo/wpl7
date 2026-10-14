@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { jobs } from '../../src/db/schema.js';
-import { getRegistry, type RegistryEntry } from '../../src/jobs/registry.js';
+import { getRegistry, jobDeadline, type RegistryEntry } from '../../src/jobs/registry.js';
+import type { JobType } from '../../shared/schemas.js';
 import { offsiteLane } from '../../src/services/offsite.js';
 import { makeWorld, waitFor, type TestWorld } from '../helpers.js';
 
@@ -139,6 +140,48 @@ describe('per-server job lanes', () => {
       finishZombie();
       await waitFor(() => row(next.id).status === 'succeeded', 10_000);
       await w.worker.stop();
+    } finally {
+      registry.demo = original;
+    }
+  });
+});
+
+describe('job deadlines', () => {
+  it('gives an update that backs the site up first the time of a backup on top of its own', () => {
+    const registry = getRegistry();
+    const minutes = (type: JobType, payload: Record<string, unknown>) => jobDeadline(registry[type], payload) / 60_000;
+    expect(minutes('backup.create', {})).toBe(60);
+    for (const [type, own] of [
+      ['wp.pluginTask', 10],
+      ['wp.themeTask', 10],
+      ['wp.coreUpdate', 20],
+      ['wp.bulkTask', 30],
+    ] as const) {
+      expect(minutes(type, { backupFirst: false }), type).toBe(own);
+      expect(minutes(type, { backupFirst: true }), type).toBe(own + 60);
+    }
+  });
+
+  it("holds each job to the deadline its own payload gives", async () => {
+    const registry = getRegistry();
+    const original = registry.demo!;
+    // One step: 100 ms, which the handler's 300 ms outlasts. Two: plenty.
+    registry.demo = {
+      payloadSchema: original.payloadSchema,
+      timeoutMs: (payload: { steps: number }) => (payload.steps === 1 ? 100 : 10_000),
+      handler: async () => {
+        await new Promise((r) => setTimeout(r, 300));
+      },
+    } as unknown as RegistryEntry;
+
+    try {
+      const w = await makeWorld();
+      const short = enqueueDemo(w, 1);
+      const long = enqueueDemo(w, 2);
+      const [rs, rl] = await runAll(w, [short.id, long.id]);
+      expect(rs!.status).toBe('failed');
+      expect(rs!.error).toMatch(/timed out/);
+      expect(rl!.status).toBe('succeeded');
     } finally {
       registry.demo = original;
     }
