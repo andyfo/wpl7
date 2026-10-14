@@ -267,7 +267,8 @@ export function FilesTab({ slug }: { slug: string }) {
               <div className="mt-3">
                 <Button
                   small
-                  disabled={startJob.isPending || (startJob.job !== null && startJob.job.status !== 'failed')}
+                  disabled={startJob.job !== null && startJob.job.status !== 'failed'}
+                  busy={startJob.active}
                   onClick={() => startJob.mutate({ path: `/api/sites/${slug}/start` })}
                 >
                   Start the site

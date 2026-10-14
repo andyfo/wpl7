@@ -49,12 +49,15 @@ export function OffsiteBadges({ copies }: { copies: BackupCopyDto[] }) {
 export function BackupActions({
   backup,
   canRestore,
+  busy = () => false,
   onRestore,
   onFetch,
   onDelete,
 }: {
   backup: BackupDto;
   canRestore: boolean;
+  /** This backup's restore or fetch is still running, and its button shows a spinner meanwhile. */
+  busy?: (action: 'restore' | 'fetch') => boolean;
   onRestore: () => void;
   onFetch: () => void;
   onDelete: () => void;
@@ -84,14 +87,14 @@ export function BackupActions({
             <DownloadMenu backupId={backup.id} />
           )}
           {canRestore && (
-            <Button small variant="secondary" onClick={onRestore}>
+            <Button small variant="secondary" busy={busy('restore')} onClick={onRestore}>
               Restore
             </Button>
           )}
         </>
       )}
       {complete && !backup.filesPresent && (
-        <Button small variant="secondary" onClick={onFetch}>
+        <Button small variant="secondary" busy={busy('fetch')} onClick={onFetch}>
           <span className="whitespace-nowrap">Fetch back</span>
         </Button>
       )}

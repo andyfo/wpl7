@@ -3,10 +3,15 @@ import type { WpComponentDto } from '../../../../shared/types';
 import { Button, EmptyState, StatusBadge } from '../ui';
 import { CoverageNote, SeverityBadge } from './severity';
 
+/** What a row's buttons start. */
+export type ComponentAction = 'update' | 'activate' | 'deactivate' | 'delete';
+
 export interface ComponentTableProps {
   items: WpComponentDto[];
-  /** Disables every button while a job for this site is in flight. */
-  busy?: boolean;
+  /** Disables every button: the site is not running. */
+  disabled?: boolean;
+  /** The buttons whose job is still running, which show a spinner meanwhile. */
+  busy?: (item: WpComponentDto, action: ComponentAction) => boolean;
   onUpdate: (item: WpComponentDto) => void;
   onActivate: (item: WpComponentDto) => void;
   onDeactivate: (item: WpComponentDto) => void;
@@ -25,7 +30,8 @@ export interface ComponentTableProps {
  */
 export function ComponentTable({
   items,
-  busy,
+  disabled,
+  busy = () => false,
   onUpdate,
   onActivate,
   onDeactivate,
@@ -93,7 +99,13 @@ export function ComponentTable({
                 {!unmanageable && (
                   <div className="flex justify-end gap-1.5">
                     {item.actionable.update && (
-                      <Button small variant="secondary" disabled={busy} onClick={() => onUpdate(item)}>
+                      <Button
+                        small
+                        variant="secondary"
+                        disabled={disabled}
+                        busy={busy(item, 'update')}
+                        onClick={() => onUpdate(item)}
+                      >
                         Update
                       </Button>
                     )}
@@ -102,19 +114,32 @@ export function ComponentTable({
                           <Button
                             small
                             variant="ghost"
-                            disabled={busy}
+                            disabled={disabled}
+                            busy={busy(item, item.actionable.deactivate ? 'deactivate' : 'activate')}
                             onClick={() => (item.actionable.deactivate ? onDeactivate(item) : onActivate(item))}
                           >
                             {item.actionable.deactivate ? 'Deactivate' : 'Activate'}
                           </Button>
                         )
                       : item.actionable.activate && (
-                          <Button small variant="ghost" disabled={busy} onClick={() => onActivate(item)}>
+                          <Button
+                            small
+                            variant="ghost"
+                            disabled={disabled}
+                            busy={busy(item, 'activate')}
+                            onClick={() => onActivate(item)}
+                          >
                             Activate
                           </Button>
                         )}
                     {item.actionable.delete && (
-                      <Button small variant="ghost" disabled={busy} onClick={() => onDelete(item)}>
+                      <Button
+                        small
+                        variant="ghost"
+                        disabled={disabled}
+                        busy={busy(item, 'delete')}
+                        onClick={() => onDelete(item)}
+                      >
                         Delete
                       </Button>
                     )}
