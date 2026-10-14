@@ -500,19 +500,27 @@ export class MailService {
       removed++;
     }
 
-    // saslpasswd2 creates the db 0600 root:root, but smtpd reads it as the unprivileged
-    // postfix user - without this every login fails with "unable to open Berkeley db".
-    if (written > 0 || removed > 0) {
-      const perms = await handle.docker.exec(
-        MAIL_CONTAINER,
-        ['sh', '-c', `chmod 640 ${SASLDB_IN_CONTAINER} && chown root:postfix ${SASLDB_IN_CONTAINER}`],
-        { timeoutMs: 20_000 },
+    // smtpd reads the db as the unprivileged postfix user, which has to get into its folder as
+    // well as read the file. Neither starts out that way: saslpasswd2 creates the db 0600
+    // root:root, and setup.sh used to make the folder 0700. Either fails every site's login
+    // with "unable to open Berkeley db: Permission denied", which a site's msmtp reports as
+    // "454 4.7.0 Temporary authentication failure". Done on every sync, not only after a
+    // write, so a server set up that way is put right the next time the panel starts.
+    const saslDir = path.posix.dirname(SASLDB_IN_CONTAINER);
+    const perms = await handle.docker.exec(
+      MAIL_CONTAINER,
+      [
+        'sh',
+        '-c',
+        `chown root:postfix ${saslDir} && chmod 750 ${saslDir} && ` +
+          `if [ -e ${SASLDB_IN_CONTAINER} ]; then chown root:postfix ${SASLDB_IN_CONTAINER} && chmod 640 ${SASLDB_IN_CONTAINER}; fi`,
+      ],
+      { timeoutMs: 20_000 },
+    );
+    if (perms.exitCode !== 0) {
+      this.log.warn(
+        `Mail auth: could not let postfix read the login database (${perms.stderr.trim().slice(0, 200)}) - site mail will fail to log in`,
       );
-      if (perms.exitCode !== 0) {
-        this.log.warn(
-          `Mail auth: could not set sasldb ownership (${perms.stderr.trim().slice(0, 200)}) - logins may fail`,
-        );
-      }
     }
 
     // texthash maps are read when a process starts, so the new maps only reach smtpd on reload.

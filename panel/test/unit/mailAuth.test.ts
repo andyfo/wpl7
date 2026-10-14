@@ -204,6 +204,27 @@ describe('syncMailAuthTo', () => {
     expect(forced.written).toBe(1);
   });
 
+  it('lets postfix into the login folder on every sync, not only after a write', async () => {
+    // A folder setup.sh made 0700 failed every site's login ("454 4.7.0 Temporary
+    // authentication failure") while every login was in place, so nothing was written and
+    // nothing put it right. Each panel start does now.
+    const w = await makeWorld();
+    addSite(w, 'alpha', ['alpha.example']);
+    w.docker.relayAuthResult = {
+      stdout: 'alpha@wpl7: userPassword\nalpha@ceo: userPassword\n',
+      stderr: '',
+      exitCode: 0,
+    };
+
+    const res = await w.core.mail.syncMailAuthTo(1);
+
+    expect(res.written).toBe(0);
+    const perms = execLines(w).filter((l) => l.includes('chown root:postfix'));
+    expect(perms).toHaveLength(1);
+    expect(perms[0]).toContain('chown root:postfix /etc/postfix/sasl && chmod 750 /etc/postfix/sasl &&');
+    expect(perms[0]).toContain('chmod 640 /etc/postfix/sasl/sasldb2');
+  });
+
   it('revokes a login whose site is gone', async () => {
     const w = await makeWorld();
     addSite(w, 'alpha', ['alpha.example']);

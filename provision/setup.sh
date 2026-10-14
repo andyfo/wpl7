@@ -174,7 +174,10 @@ else
   fi
 fi
 mkdir -p "$SRV_ROOT/mail/dkim" "$SRV_ROOT/mail/policy" "$SRV_ROOT/mail/sasl" "$SRV_ROOT/mail/sasl2"
-chmod 700 "$SRV_ROOT/backups" "$SRV_ROOT/mysql" "$SRV_ROOT/panel" "$SRV_ROOT/mail/dkim" "$SRV_ROOT/mail/sasl"
+# Not mail/sasl: the relay reads its login database there as its own postfix user, and the
+# panel gives the folder to postfix's group (MailService.syncMailAuthTo). Made 0700 here, it
+# failed every site's mail login.
+chmod 700 "$SRV_ROOT/backups" "$SRV_ROOT/mysql" "$SRV_ROOT/panel" "$SRV_ROOT/mail/dkim"
 
 # Postfix opens its sender-authorization maps when it starts and tempfails every message if
 # one is missing, so they exist from the start - empty means "no domain is owned yet", which
