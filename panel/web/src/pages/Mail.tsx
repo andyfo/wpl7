@@ -1,5 +1,5 @@
 // @docs mail/overview, mail/setup, mail/traffic
-import { useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type {
@@ -358,7 +358,7 @@ function SiteVolumeRow({ row }: { row: MailSiteStatsDto }) {
 // ---------------------------------------------------------------------------
 // Traffic
 
-const STATUS_OPTIONS = ['', 'sent', 'deferred', 'bounced', 'rejected', 'queued', 'expired'];
+const STATUS_OPTIONS = ['', 'sent', 'deferred', 'bounced', 'rejected', 'queued', 'expired', 'deleted'];
 const PAGE_SIZE = 100;
 
 function TrafficTab() {
@@ -371,6 +371,11 @@ function TrafficTab() {
   const [page, setPage] = useState(0);
   const [detail, setDetail] = useState<MailMessageDto | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  /** Rows ticked on this page. */
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<unknown>(null);
 
   const messages = useMailMessages({
     status: status || undefined,
@@ -390,6 +395,53 @@ function TrafficTab() {
   };
 
   const total = messages.data?.total ?? 0;
+  const items = useMemo(() => messages.data?.items ?? [], [messages.data]);
+
+  // A selection is made under these filters, on this page: changing either starts it over.
+  useEffect(() => setSelected(new Set()), [status, siteSlug, search, hours, page]);
+  // A row that left the page (newer mail pushed it down, retention took it) leaves the
+  // selection too, so nothing ticked out of sight goes with the next Delete.
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(items.map((m) => m.id));
+      const kept = new Set([...prev].filter((id) => visible.has(id)));
+      return kept.size === prev.size ? prev : kept;
+    });
+  }, [items]);
+  // Deleting the last page's rows leaves it empty: go back to the last page there still is.
+  useEffect(() => {
+    if (page > 0 && messages.data && messages.data.items.length === 0) {
+      setPage(Math.max(0, Math.ceil(messages.data.total / PAGE_SIZE) - 1));
+    }
+  }, [page, messages.data]);
+
+  const ticked = items.filter((m) => selected.has(m.id)).length;
+  const pageTick = ticked === 0 ? 'none' : ticked === items.length ? 'all' : 'some';
+  const tick = (id: number, on: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  const deleteSelected = async () => {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await api('/api/mail/messages/delete', { method: 'POST', body: { ids: [...selected] } });
+      setSelected(new Set());
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['mail-messages'] }),
+        qc.invalidateQueries({ queryKey: ['mail-stats'] }),
+      ]);
+    } catch (err) {
+      setDeleteError(err);
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -463,7 +515,8 @@ function TrafficTab() {
         }
       >
         <ErrorNote error={messages.error} />
-        {(messages.data?.items ?? []).length === 0 ? (
+        <ErrorNote error={deleteError} />
+        {items.length === 0 ? (
           <EmptyState>
             {messages.isPending ? 'Loading…' : 'No mail matched. Traffic appears within a minute of being sent.'}
           </EmptyState>
@@ -472,6 +525,17 @@ function TrafficTab() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-neutral-400">
+                  <th className="w-7 pb-2 pr-2">
+                    <input
+                      type="checkbox"
+                      aria-label="Select every message on this page"
+                      checked={pageTick === 'all'}
+                      ref={(el) => {
+                        if (el) el.indeterminate = pageTick === 'some';
+                      }}
+                      onChange={(e) => setSelected(e.target.checked ? new Set(items.map((m) => m.id)) : new Set())}
+                    />
+                  </th>
                   <th className="pb-2">When</th>
                   <th className="pb-2">Site</th>
                   <th className="pb-2">From</th>
@@ -481,12 +545,21 @@ function TrafficTab() {
                 </tr>
               </thead>
               <tbody>
-                {(messages.data?.items ?? []).map((m) => (
+                {items.map((m) => (
                   <tr
                     key={m.id}
-                    className="cursor-pointer border-t border-neutral-100 hover:bg-neutral-50"
+                    className={`cursor-pointer border-t border-neutral-100 hover:bg-neutral-50 ${selected.has(m.id) ? 'bg-neutral-50' : ''}`}
                     onClick={() => setDetail(m)}
                   >
+                    {/* The whole cell ticks, and opens nothing: the row's click shows the details. */}
+                    <td className="py-2 pr-2" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select the message to ${m.to || 'a pending recipient'}`}
+                        checked={selected.has(m.id)}
+                        onChange={(e) => tick(m.id, e.target.checked)}
+                      />
+                    </td>
                     <td className="py-2 pr-3 text-xs text-neutral-500" title={formatDate(m.lastEventAt)}>
                       {timeAgo(m.lastEventAt)}
                     </td>
@@ -495,13 +568,13 @@ function TrafficTab() {
                       {m.from || '–'}
                     </td>
                     <td className="max-w-[16rem] truncate py-2 pr-3" title={m.to}>
-                      {m.to || <span className="text-neutral-400">(pending)</span>}
+                      {m.to || (m.status === 'queued' ? <span className="text-neutral-400">(pending)</span> : '–')}
                     </td>
                     <td className="py-2 pr-3">
                       <DkimPill signed={m.dkimSigned} domain={m.dkimDomain} />
                     </td>
                     <td className="py-2">
-                      <StatusBadge status={mailBadge(m.status)} />
+                      <StatusBadge status={mailBadge(m.status)} label={m.status} />
                     </td>
                   </tr>
                 ))}
@@ -511,16 +584,46 @@ function TrafficTab() {
         )}
       </Card>
 
+      {/* Sticky, like the bulk bars on Backups and Sites: there only while something is ticked. */}
+      {selected.size > 0 && (
+        <div className="sticky bottom-4 z-20 rounded-xl border border-neutral-300 bg-surface p-4 shadow-lg">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="text-sm font-medium">
+              {selected.size} {selected.size === 1 ? 'message' : 'messages'} selected
+            </span>
+            <Button small variant="ghost" onClick={() => setSelected(new Set())}>
+              Clear
+            </Button>
+            <span className="ml-auto">
+              <Button small variant="danger" busy={deleting} onClick={() => setConfirmDelete(true)}>
+                Delete {selected.size}
+              </Button>
+            </span>
+          </div>
+        </div>
+      )}
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title={`Delete ${selected.size} ${selected.size === 1 ? 'message' : 'messages'} from Traffic`}
+          message="This deletes the history only. Mail still in the queue is still sent."
+          confirmLabel="Delete"
+          onConfirm={() => void deleteSelected()}
+          onClose={() => setConfirmDelete(false)}
+        />
+      )}
+
       {detail && <MessageModal message={detail} onClose={() => setDetail(null)} />}
     </div>
   );
 }
 
-/** Map mail statuses onto the shared badge palette. */
+/** Map mail statuses onto the shared badge palette: the colour, while the badge keeps the word. */
 function mailBadge(status: string): string {
   if (status === 'sent') return 'succeeded';
   if (status === 'deferred' || status === 'queued') return 'queued';
   if (status === 'bounced' || status === 'rejected' || status === 'expired') return 'failed';
+  if (status === 'deleted') return 'canceled';
   return status;
 }
 
@@ -541,8 +644,8 @@ function MessageModal({ message, onClose }: { message: MailMessageDto; onClose: 
     ['Server', message.serverName],
     ['Site', message.siteSlug ?? 'panel / relay'],
     ['From', message.from || '–'],
-    ['To', message.to || '(not yet delivered)'],
-    ['Status', <StatusBadge key="s" status={mailBadge(message.status)} />],
+    ['To', message.to || (message.status === 'queued' ? '(not yet delivered)' : '–')],
+    ['Status', <StatusBadge key="s" status={mailBadge(message.status)} label={message.status} />],
     ['DKIM', <DkimPill key="d" signed={message.dkimSigned} domain={message.dkimDomain} />],
     ['Size', formatBytes(message.sizeBytes)],
     ['Relay', message.relay ?? '–'],
@@ -586,7 +689,11 @@ function QueueTab() {
     setError(null);
     try {
       await fn();
-      await qc.invalidateQueries({ queryKey: ['mail-queue'] });
+      // Traffic too: what was deleted here shows there as `deleted`.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['mail-queue'] }),
+        qc.invalidateQueries({ queryKey: ['mail-messages'] }),
+      ]);
     } catch (err) {
       setError(err);
     } finally {

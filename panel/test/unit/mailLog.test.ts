@@ -127,6 +127,18 @@ describe('parseMailLogLine', () => {
     expect(event).toMatchObject({ kind: 'dkim', signed: false });
   });
 
+  it('tells a message deleted from the queue from one the queue manager is done with', () => {
+    // Verbatim from boky/postfix: `postsuper -d -` given an id, and the count it ends with -
+    // all that `postsuper -d ALL` logs. qmgr's `removed` ends every message's life.
+    expect(parseMailLogLine('2026-10-15T07:21:17.974814+00:00 INFO    postfix/postsuper[1111]: CB874C60: removed')).toMatchObject({
+      kind: 'deleted',
+      queueId: 'CB874C60',
+      ts: Date.UTC(2026, 9, 15, 7, 21, 17, 974),
+    });
+    expect(parseMailLogLine('2026-10-15T07:21:17.976379+00:00 INFO    postfix/postsuper[1111]: Deleted: 2 messages')).toBeNull();
+    expect(parseMailLogLine('2026-10-15T07:21:17.980000+00:00 INFO    postfix/qmgr[978]: CB874C60: removed')).toBeNull();
+  });
+
   it('ignores daemon chatter that carries no traffic information', () => {
     for (const line of [
       '2026-09-18T05:38:57+00:00 INFO    postfix/master[976]: daemon started -- version 3.10.5',

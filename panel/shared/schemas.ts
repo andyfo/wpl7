@@ -236,8 +236,11 @@ export const DEFAULT_COPY_TYPES = ['scheduled', 'manual', 'final', 'panel'] as c
 export const copyStatuses = ['pending', 'uploading', 'complete', 'failed'] as const;
 export type CopyStatus = (typeof copyStatuses)[number];
 
-/** Delivery outcome of one recipient, as reconstructed from the postfix log. */
-export const mailStatuses = ['queued', 'sent', 'deferred', 'bounced', 'expired', 'rejected'] as const;
+/**
+ * Delivery outcome of one recipient, as reconstructed from the postfix log. `deleted` = taken
+ * out of the queue (Queue → Delete or Empty, or `postsuper -d`) before it was delivered.
+ */
+export const mailStatuses = ['queued', 'sent', 'deferred', 'bounced', 'expired', 'rejected', 'deleted'] as const;
 export type MailStatusName = (typeof mailStatuses)[number];
 
 export const serverKinds = ['local', 'ssh'] as const;
@@ -1562,6 +1565,11 @@ export const mailMessagesQuery = z.object({
   hours: queryNumber(z.coerce.number().int().min(1).max(24 * 90).optional()),
   limit: queryNumber(z.coerce.number().int().min(1).max(500).default(100)),
   offset: queryNumber(z.coerce.number().int().min(0).default(0)),
+}).strict();
+
+/** POST /api/mail/messages/delete: rows of the traffic history, by id - a page of the list at most. */
+export const mailMessagesDeleteBody = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(500),
 }).strict();
 
 export const mailStatsQuery = z.object({

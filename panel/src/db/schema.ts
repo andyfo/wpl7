@@ -880,7 +880,7 @@ export const mailMessages = sqliteTable(
     toAddr: text('to_addr').notNull().default(''),
     sizeBytes: integer('size_bytes'),
     nrcpt: integer('nrcpt'),
-    /** 'queued' | 'sent' | 'deferred' | 'bounced' | 'expired' | 'rejected' */
+    /** 'queued' | 'sent' | 'deferred' | 'bounced' | 'expired' | 'rejected' | 'deleted' */
     status: text('status').notNull(),
     dsn: text('dsn'),
     relay: text('relay'),
@@ -892,12 +892,21 @@ export const mailMessages = sqliteTable(
     dkimDomain: text('dkim_domain'),
     firstSeenAt: integer('first_seen_at').notNull(),
     lastEventAt: integer('last_event_at').notNull(),
+    /**
+     * Deleted from the traffic history at this time. Every view leaves the row out from then on,
+     * and it is removed for good once the relay can log nothing more about it - until then, a
+     * line read again would only write it back - and the abuse guard's hour is over
+     * (MailService.deleteMessages).
+     */
+    hiddenAt: integer('hidden_at'),
   },
   (t) => [
     uniqueIndex('mail_messages_queue_rcpt_idx').on(t.serverId, t.queueId, t.toAddr),
     index('mail_messages_last_event_idx').on(t.lastEventAt),
     index('mail_messages_site_idx').on(t.siteSlug, t.lastEventAt),
     index('mail_messages_status_idx').on(t.status, t.lastEventAt),
+    // Only the few rows deleted and waiting to go: the purge after every read looks for them.
+    index('mail_messages_hidden_idx').on(t.serverId, t.hiddenAt).where(sql`hidden_at IS NOT NULL`),
   ],
 );
 

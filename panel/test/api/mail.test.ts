@@ -81,6 +81,25 @@ const POSTFIX_LOG = `
 
 const DKIM_LOG = 'Sep 18 05:39:24 host opendkim[85]: C17462B13: DKIM-Signature field added (s=wpl7, d=acme.test)';
 
+const MINUTE = 60_000;
+
+/** A relay log line from `msAgo` before now, in boky/postfix's shape. */
+const logLine = (msAgo: number, text: string): string =>
+  `${new Date(Date.now() - msAgo).toISOString().replace('Z', '+00:00')} INFO    ${text}`;
+
+/** A message from acme to two recipients, `ago` before now: one delivered, one still waiting. */
+function recentLog(ago = 10 * MINUTE): string[] {
+  return [
+    logLine(ago, 'postfix/smtpd[984]: 7ADB5C5D: client=wp-acme.wpl7_proxy[172.22.0.5]'),
+    logLine(ago, 'postfix/qmgr[978]: 7ADB5C5D: from=<wordpress@acme.test>, size=443, nrcpt=2 (queue active)'),
+    logLine(ago, 'postfix/smtp[990]: 7ADB5C5D: to=<one@somewhere.test>, relay=mx[203.0.113.9]:25, delay=0.4, dsn=2.0.0, status=sent (250 Ok)'),
+    logLine(
+      ago,
+      'postfix/smtp[990]: 7ADB5C5D: to=<two@elsewhere.test>, relay=none, delay=30, dsn=4.4.1, status=deferred (connect to mx2[203.0.113.8]:25: Connection refused)',
+    ),
+  ];
+}
+
 describe('mail traffic ingest', () => {
   it('reconstructs one row per recipient, with the sending site and signing verdict', async () => {
     const world = await makeWorld({ resolver: emptyResolver });
@@ -165,6 +184,28 @@ describe('mail traffic ingest', () => {
     await world.core.mail.ingestServer(1);
     const sent = world.db.select().from(mailMessages).all().find((r) => r.toAddr === 'one@somewhere.test')!;
     expect(sent.dkimSigned).toBe(0);
+  });
+
+  it('shows mail deleted from the queue as deleted, and leaves what was delivered alone', async () => {
+    const world = await makeWorld({ resolver: emptyResolver });
+    relayRunning(world);
+    world.docker.logs.set(
+      MAIL_CONTAINER,
+      [
+        ...recentLog(),
+        logLine(MINUTE, 'postfix/postsuper[1052]: 7ADB5C5D: removed'),
+        logLine(MINUTE, 'postfix/postsuper[1052]: Deleted: 1 message'),
+      ].join('\n'),
+    );
+
+    await world.core.mail.ingestServer(1);
+    const rows = world.db.select().from(mailMessages).all();
+    expect(rows.find((r) => r.toAddr === 'one@somewhere.test')?.status).toBe('sent');
+    const waiting = rows.find((r) => r.toAddr === 'two@elsewhere.test')!;
+    // The last reason it was waiting stays with it, and so does the time of that last try: the
+    // abuse guard counts by it, and deleting mail is not sending it.
+    expect(waiting).toMatchObject({ status: 'deleted', detail: expect.stringContaining('Connection refused') });
+    expect(waiting.lastEventAt).toBeLessThan(Date.now() - 9 * MINUTE);
   });
 
   it('does nothing when the relay is not running on that server', async () => {
@@ -508,14 +549,166 @@ describe('mail queue', () => {
 
     const del = await app.inject({ method: 'DELETE', url: '/api/mail/queue/1/C17462B13', headers });
     expect(del.statusCode).toBe(204);
-    const postsuper = world.docker.calls.find((c) => c.method === 'exec' && (c.args[1] as string[])?.[0] === 'postsuper');
-    expect(postsuper!.args[1]).toEqual(['postsuper', '-d', 'C17462B13']);
+    // By id on stdin: postsuper logs "<id>: removed" for that, which is what Traffic reads.
+    const at = world.docker.calls.findIndex((c) => c.method === 'execWithInput' && (c.args[1] as string[])?.[0] === 'postsuper');
+    expect(world.docker.calls[at]!.args[1]).toEqual(['postsuper', '-d', '-']);
+    expect(world.docker.inputs.at(-1)!.toString()).toBe('C17462B13\n');
+    // And the log is read at once, so Traffic shows it deleted without waiting a minute.
+    expect(world.docker.calls.slice(at).some((c) => c.method === 'containerLogs' && c.args[0] === MAIL_CONTAINER)).toBe(true);
+  });
+
+  it('empties the queue message by message, then takes whatever the list missed', async () => {
+    const world = await makeWorld({ resolver: emptyResolver });
+    relayRunning(world);
+    world.docker.execQueue.push({
+      stdout: [
+        '{"queue_name": "deferred", "queue_id": "7ADB5C5D", "arrival_time": 1792048837, "message_size": 273, "sender": "wordpress@acme.test", "recipients": [{"address": "two@elsewhere.test", "delay_reason": "Connection refused"}]}',
+        '{"queue_name": "active", "queue_id": "99FE8C63", "arrival_time": 1792048838, "message_size": 273, "sender": "wordpress@acme.test", "recipients": [{"address": "one@somewhere.test"}]}',
+      ].join('\n'),
+      stderr: '',
+      exitCode: 0,
+    });
+    const { app, headers } = await authedApp(world);
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/mail/queue/1/ALL', headers });
+    expect(res.statusCode).toBe(204);
+    const commands = world.docker.calls
+      .filter((c) => c.method === 'exec' || c.method === 'execWithInput')
+      .map((c) => (c.args[1] as string[]).join(' '))
+      .filter((cmd) => cmd.startsWith('postqueue') || cmd.startsWith('postsuper'));
+    // `postsuper -d ALL` alone would log only a count, and Traffic would never learn which went.
+    expect(commands).toEqual(['postqueue -j', 'postsuper -d -', 'postsuper -d ALL']);
+    expect(world.docker.inputs.at(-1)!.toString()).toBe('7ADB5C5D\n99FE8C63\n');
+  });
+
+  it('still empties a queue it cannot list', async () => {
+    const world = await makeWorld({ resolver: emptyResolver });
+    relayRunning(world);
+    world.docker.execQueue.push({ stdout: '', stderr: 'postqueue: fatal: Queue report unavailable', exitCode: 75 });
+    const { app, headers } = await authedApp(world);
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/mail/queue/1/ALL', headers });
+    expect(res.statusCode).toBe(204);
+    const postsuper = world.docker.calls.filter((c) => (c.args[1] as string[])?.[0] === 'postsuper');
+    expect(postsuper.map((c) => (c.args[1] as string[]).join(' '))).toEqual(['postsuper -d ALL']);
   });
 
   it('will not pass an arbitrary string to postsuper', async () => {
     const { app, headers } = await authedApp();
     const res = await app.inject({ method: 'DELETE', url: '/api/mail/queue/1/..%2F..%2Fetc', headers });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('deleting traffic rows', () => {
+  /** Ingest recentLog(ago) on server 1, and the app to call. */
+  async function withTraffic(ago?: number) {
+    const world = await makeWorld({ resolver: emptyResolver });
+    relayRunning(world);
+    seedSite(world, 'acme', 'acme.test');
+    world.docker.logs.set(MAIL_CONTAINER, recentLog(ago).join('\n'));
+    await world.core.mail.ingestServer(1);
+    const row = (to: string) => world.db.select().from(mailMessages).all().find((r) => r.toAddr === to)!;
+    return { ...(await authedApp(world)), row };
+  }
+
+  it('takes them out of the list and the totals at once', async () => {
+    const { app, headers, row } = await withTraffic();
+    const sent = row('one@somewhere.test');
+
+    const res = await app.inject({ method: 'POST', url: '/api/mail/messages/delete', headers, payload: { ids: [sent.id] } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ removed: 1 });
+
+    const list = await app.inject({ method: 'GET', url: '/api/mail/messages', headers });
+    expect(list.json().items.map((m: { to: string }) => m.to)).toEqual(['two@elsewhere.test']);
+    expect(list.json().total).toBe(1);
+    const stats = await app.inject({ method: 'GET', url: '/api/mail/stats?hours=1', headers });
+    expect(stats.json()).toMatchObject({ total: 1, byStatus: { sent: 0, deferred: 1 } });
+
+    // Deleting it again changes nothing.
+    const again = await app.inject({ method: 'POST', url: '/api/mail/messages/delete', headers, payload: { ids: [sent.id] } });
+    expect(again.json()).toEqual({ removed: 0 });
+  });
+
+  it('does not let the next read of the log write a deleted row back', async () => {
+    const { app, headers, world, row } = await withTraffic();
+    await app.inject({ method: 'POST', url: '/api/mail/messages/delete', headers, payload: { ids: [row('one@somewhere.test').id] } });
+
+    // This fake hands over the whole log every time: a read that goes over the same lines again.
+    await world.core.mail.ingestServer(1);
+    expect(world.db.select().from(mailMessages).all()).toHaveLength(2);
+    const list = await app.inject({ method: 'GET', url: '/api/mail/messages', headers });
+    expect(list.json().total).toBe(1);
+  });
+
+  it('keeps mail that is still queued out of the list while the relay goes on trying it', async () => {
+    const world = await makeWorld({ resolver: emptyResolver });
+    relayRunning(world);
+    const lines = [
+      logLine(10 * MINUTE, 'postfix/smtpd[984]: 7ADB5C5D: client=wp-acme.wpl7_proxy[172.22.0.5]'),
+      logLine(10 * MINUTE, 'postfix/qmgr[978]: 7ADB5C5D: from=<wordpress@acme.test>, size=443, nrcpt=2 (queue active)'),
+      logLine(10 * MINUTE, 'postfix/smtp[990]: 7ADB5C5D: to=<one@somewhere.test>, relay=none, delay=30, dsn=4.4.1, status=deferred (Connection refused)'),
+    ];
+    world.docker.logs.set(MAIL_CONTAINER, lines.join('\n'));
+    await world.core.mail.ingestServer(1);
+    const { app, headers } = await authedApp(world);
+    const [only] = world.db.select().from(mailMessages).all();
+    await app.inject({ method: 'POST', url: '/api/mail/messages/delete', headers, payload: { ids: [only!.id] } });
+
+    // The next try: delivered to the first recipient, and the second recipient tried for the first time.
+    world.docker.logs.set(
+      MAIL_CONTAINER,
+      [
+        ...lines,
+        logLine(MINUTE, 'postfix/qmgr[978]: 7ADB5C5D: from=<wordpress@acme.test>, size=443, nrcpt=2 (queue active)'),
+        logLine(MINUTE, 'postfix/smtp[990]: 7ADB5C5D: to=<one@somewhere.test>, relay=mx[203.0.113.9]:25, delay=600, dsn=2.0.0, status=sent (250 Ok)'),
+        logLine(MINUTE, 'postfix/smtp[990]: 7ADB5C5D: to=<two@elsewhere.test>, relay=none, delay=600, dsn=4.4.1, status=deferred (Connection refused)'),
+      ].join('\n'),
+    );
+    await world.core.mail.ingestServer(1);
+
+    const rows = world.db.select().from(mailMessages).all();
+    expect(rows.map((r) => `${r.toAddr} ${r.status} ${r.hiddenAt !== null}`).sort()).toEqual([
+      'one@somewhere.test sent true',
+      'two@elsewhere.test deferred true',
+    ]);
+    const list = await app.inject({ method: 'GET', url: '/api/mail/messages', headers });
+    expect(list.json().total).toBe(0);
+  });
+
+  it('removes deleted rows for good once the log can no longer reach them', async () => {
+    // Two hours ago: past the hour the abuse guard counts as well.
+    const { app, headers, world, row } = await withTraffic(120 * MINUTE);
+    const sent = row('one@somewhere.test');
+    const waiting = row('two@elsewhere.test');
+    await app.inject({ method: 'POST', url: '/api/mail/messages/delete', headers, payload: { ids: [sent.id, waiting.id] } });
+
+    // Right after: the next read starts a few seconds back, so both stay (hidden) for now.
+    await world.core.mail.ingestServer(1);
+    expect(world.db.select().from(mailMessages).all()).toHaveLength(2);
+
+    // Deleted ten minutes ago, last logged two hours ago: no read reaches back that far.
+    world.db.update(mailMessages).set({ hiddenAt: Date.now() - 10 * MINUTE }).run();
+    await world.core.mail.ingestServer(1);
+    // The delivered one is gone; the one still waiting stays, since the relay will try it again.
+    expect(world.db.select().from(mailMessages).all().map((r) => r.id)).toEqual([waiting.id]);
+
+    // Past any queue lifetime, the waiting one goes too. (The real read starts at its cursor;
+    // this fake hands over the whole log, so it is emptied to stand for that.)
+    world.docker.logs.set(MAIL_CONTAINER, '');
+    world.db.update(mailMessages).set({ firstSeenAt: Date.now() - 8 * 24 * 60 * MINUTE }).run();
+    await world.core.mail.ingestServer(1);
+    expect(world.db.select().from(mailMessages).all()).toHaveLength(0);
+  });
+
+  it('takes from one row to a page of them', async () => {
+    const { app, headers } = await withTraffic();
+    const none = await app.inject({ method: 'POST', url: '/api/mail/messages/delete', headers, payload: { ids: [] } });
+    expect(none.statusCode).toBe(400);
+    const ids = Array.from({ length: 501 }, (_, i) => i + 1);
+    const tooMany = await app.inject({ method: 'POST', url: '/api/mail/messages/delete', headers, payload: { ids } });
+    expect(tooMany.statusCode).toBe(400);
   });
 });
 

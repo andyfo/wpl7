@@ -183,6 +183,13 @@
       "when": 1791988970874,
       "tag": "0025_backup_before_updates",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1792050216466,
+      "tag": "0026_mail_hidden_rows",
+      "breakpoints": true
     }
   ]
 }
