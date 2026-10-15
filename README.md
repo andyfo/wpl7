@@ -12,7 +12,7 @@ and more.
 **[wpl7.com](https://wpl7.com)** · [Documentation](https://wpl7.com/docs/) ·
 [Quick start](#quick-start)
 
-![The Sites page: every site with its status, server, PHP version, pending updates, visitors and disk use](docs/site/public/screens/sites-list-light.png)
+![The Sites page: every site with its status, server, PHP version, pending updates, visitors and disk use](docs/site/screens/sites-list-light.png)
 
 WPL7 turns a plain Ubuntu server into WordPress hosting: every site in its own container with
 its own PHP version, certificates, working mail, backups and a REST API. It is for agencies and
@@ -41,12 +41,12 @@ Listed the way the panel's menu is.
 
 <table>
   <tr>
-    <td><img alt="A site's overview" src="docs/site/public/screens/site-overview-light.png"></td>
-    <td><img alt="Bulk management: plugins across every site, with updates and known vulnerabilities" src="docs/site/public/screens/sites-bulk-light.png"></td>
+    <td><img alt="A site's overview" src="docs/site/screens/site-overview-light.png"></td>
+    <td><img alt="Bulk management: plugins across every site, with updates and known vulnerabilities" src="docs/site/screens/sites-bulk-light.png"></td>
   </tr>
   <tr>
-    <td><img alt="Web FTP: a site's files in the browser" src="docs/site/public/screens/site-files-light.png"></td>
-    <td><img alt="Mail: every message the sites sent" src="docs/site/public/screens/mail-overview-light.png"></td>
+    <td><img alt="Web FTP: a site's files in the browser" src="docs/site/screens/site-files-light.png"></td>
+    <td><img alt="Mail: every message the sites sent" src="docs/site/screens/mail-overview-light.png"></td>
   </tr>
 </table>
 
