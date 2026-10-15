@@ -6,17 +6,16 @@ import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { jobs, siteConnections, sites } from '../../src/db/schema.js';
 import { zipEntries } from '../../src/lib/pluginZip.js';
-import { PANEL_VERSION } from '../../src/lib/version.js';
 import type { ConnectionDto, SiteDetail, SiteSummary } from '../../shared/types.js';
 import { makeApp, makeWorld, waitFor, type TestWorld } from '../helpers.js';
 import { FakeConnectedSite } from '../connectFake.js';
 
-/** A stand-in for panel/connect-plugin: the files the zip is built from. */
-function stubPlugin(world: TestWorld): void {
+/** A stand-in for panel/connect-plugin: the files the zip is built from, at the version the fake site runs. */
+function stubPlugin(world: TestWorld, version = '0.4.0'): void {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-connect-src-'));
   const dir = path.join(root, 'wpl7-connect');
   fs.mkdirSync(path.join(dir, 'includes'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'wpl7-connect.php'), "<?php\n/*\n * Plugin Name: WPL7 Connect\n * Version: 0.0.0-dev\n */\n");
+  fs.writeFileSync(path.join(dir, 'wpl7-connect.php'), `<?php\n/*\n * Plugin Name: WPL7 Connect\n * Version: ${version}\n */\n`);
   fs.writeFileSync(path.join(dir, 'includes', 'class-wpl7-connect-server.php'), '<?php // server\n');
   fs.writeFileSync(path.join(dir, 'connection.php'), "<?php return array('token' => 'stale');\n");
   (world.config as { connectPluginDir: string }).connectPluginDir = root;
@@ -86,7 +85,7 @@ describe('connecting a site hosted elsewhere', () => {
       'wpl7-connect/connection.php',
     ]);
     const unzip = (name: string) => execFileSync('unzip', ['-p', file, name], { encoding: 'utf8' });
-    expect(unzip('wpl7-connect/wpl7-connect.php')).toContain(`Version: ${PANEL_VERSION}`);
+    expect(unzip('wpl7-connect/wpl7-connect.php')).toContain('Version: 0.4.0');
     const connection = unzip('wpl7-connect/connection.php');
     expect(connection).toContain(`'panel' => 'http://panel.example.test', 'connection' => ${dto.id}, 'token' => '${token}', 'key' => '${publicKey}'`);
     expect(connection).not.toContain('stale');
@@ -211,6 +210,42 @@ describe('connecting a site hosted elsewhere', () => {
     expect(off.json()).toMatchObject({ status: 'disconnected' });
     expect(fake.connection).toBeNull();
     expect(world.db.select().from(siteConnections).where(eq(siteConnections.id, pending.id)).get()!.privateKey).toBeNull();
+  });
+
+  it('offers a site the WPL7 Connect the panel ships when the site runs a lower version', async () => {
+    const { app, world, headers, ready, add } = await connectWorld();
+    const { id, fake } = await ready();
+    expect((await add(id)).statusCode).toBe(201);
+    const site = world.db.select().from(sites).where(eq(sites.slug, 'shop')).get()!;
+    /** Two hourly checks: the first hears the site's version, the second offers on it. */
+    const check = async (version: string) => {
+      fake.plugins.get('wpl7-connect')!.version = version;
+      expect(await world.core.connections.checkSite(site)).toBe(true);
+      fake.offer = null;
+      expect(await world.core.connections.checkSite(site)).toBe(true);
+      const detail = (await app.inject({ method: 'GET', url: '/api/sites/shop', headers })).json() as SiteDetail;
+      return { sent: fake.offer, shown: detail.external!.offer };
+    };
+
+    expect(await check('0.4.0')).toEqual({ sent: null, shown: null });
+    expect(await check('0.5.0')).toEqual({ sent: null, shown: null });
+
+    // A copy that carried the panel's version, from a source build.
+    const { sent, shown } = await check('0.3.0-beta.3-source');
+    expect(shown).toEqual({ version: '0.4.0' });
+    expect(sent).toMatchObject({ version: '0.4.0', package: expect.stringMatching(/^http:\/\/panel\.example\.test\/api\/connect\/package\?v=0\.4\.0&e=\d+&s=/) });
+    const url = sent!.package.slice('http://panel.example.test'.length);
+    const res = await app.inject({ method: 'GET', url });
+    expect(res.statusCode).toBe(200);
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-zip-')), 'p.zip');
+    fs.writeFileSync(file, res.rawPayload);
+    expect(zipEntries(file)!.map((e) => e.name)).not.toContain('wpl7-connect/connection.php');
+    expect(execFileSync('unzip', ['-p', file, 'wpl7-connect/wpl7-connect.php'], { encoding: 'utf8' })).toContain('Version: 0.4.0');
+
+    // An update of the panel that ships another version: links to the old one are gone.
+    stubPlugin(world, '0.4.1');
+    expect((await app.inject({ method: 'GET', url })).statusCode).toBe(404);
+    expect((await check('0.4.0')).sent).toMatchObject({ version: '0.4.1' });
   });
 
   it('removes an external site from the panel, leaving it running elsewhere', async () => {

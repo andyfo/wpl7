@@ -157,7 +157,7 @@ export function registerConnectionRoutes(app: FastifyInstance, deps: AppDeps): v
     { config: { rateLimit: { max: 30, timeWindow: 60_000 } } },
     async (req, reply) => {
       const query = req.query as Record<string, unknown>;
-      if (query.v !== PANEL_VERSION || !deps.connections.verifyLink('/api/connect/package', query, ['v', 'e'])) {
+      if (query.v !== deps.connections.shippedVersion() || !deps.connections.verifyLink('/api/connect/package', query, ['v', 'e'])) {
         throw notFound();
       }
       const zip = deps.connections.pluginPackage();

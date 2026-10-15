@@ -29,9 +29,8 @@ The differences from the import protocol, in short:
 
 ## 1. The download
 
-The plugin is installed from a zip the panel builds for one connection. The panel replaces the
-version string `0.0.0-dev` in the plugin's `.php` and `.txt` files and writes `connection.php`
-into the plugin's folder:
+The plugin is installed from a zip the panel builds for one connection: the plugin's folder as the
+panel ships it, with `connection.php` written into it:
 
 ```php
 <?php
@@ -592,6 +591,11 @@ broken update is off (no loader).
 
 `ping` may carry an offer: `{ "offer": { "version": "1.2.4", "package": "<url>", "expires": <unix> } }`.
 
+- The offer is the WPL7 Connect the panel ships, and the panel makes it when its version is above
+  the `plugin` the site last answered, as PHP's `version_compare` ranks them. The version is the
+  plugin's own: its header's `Version`, which `WPL7_CONNECT_VERSION` and `readme.txt`'s
+  `Stable tag` repeat. It rises with every change to the plugin's files, and only then, so a
+  change reaches the sites whatever the panel's own version is (docs/development.md).
 - An offer of the wrong shape is **422** `unsupported` with `detail: "offer"`. A `package` that
   does not start with `<panel address>/api/connect/package?` is ignored, silently.
 - The plugin keeps the offer in the option `wpl7_connect_offer`. While it has not expired and its
@@ -604,3 +608,5 @@ broken update is off (no loader).
   wordpress.org about it. The transient filter above covers the versions before.
 - The panel signs the package link with an HMAC only it knows and lets it live two hours; a ping
   every hour renews it. Before it updates the plugin itself, the panel sends a fresh offer.
+- The link names the version it was offered for (`v`). Once the panel ships another version, the
+  link answers 404.
