@@ -38,6 +38,7 @@ import {
   StatusBadge,
   Tabs,
   UpDot,
+  useTabParam,
 } from '../components/ui';
 import { formatBytes, formatClock, formatDate, timeAgo } from '../lib/format';
 
@@ -50,7 +51,7 @@ const TABS = [
 ];
 
 export function Mail() {
-  const [tab, setTab] = useState('overview');
+  const [tab, setTab] = useTabParam(TABS);
   return (
     <div className="space-y-6">
       <div>

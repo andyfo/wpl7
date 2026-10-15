@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useApiKeys } from '../api/hooks';
 import { api } from '../api/client';
-import { Button, Card, ConfirmDialog, CopyField, EmptyState, ErrorNote, Field, inputClass, Modal, Tabs } from '../components/ui';
+import { Button, Card, ConfirmDialog, CopyField, EmptyState, ErrorNote, Field, inputClass, Modal, Tabs, useTabParam } from '../components/ui';
 import { ActivityTab } from '../components/apiKeys/ActivityTab';
 import { DocsTab } from '../components/apiKeys/DocsTab';
 import { AccessBadge, AccessPicker } from '../components/AccessPicker';
@@ -17,7 +17,7 @@ const TABS = [
 ];
 
 export function ApiKeys() {
-  const [tab, setTab] = useState('keys');
+  const [tab, setTab] = useTabParam(TABS);
   return (
     <div className="space-y-6">
       <div>

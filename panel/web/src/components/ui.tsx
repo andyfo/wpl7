@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router';
 import type { JobStatus } from '../../../shared/schemas';
 import type { HealthTone, SiteHealth } from '../lib/siteHealth';
 
@@ -591,15 +592,31 @@ export function ErrorNote({ error }: { error: unknown }) {
   return <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{message}</div>;
 }
 
-export function Tabs({
+/**
+ * The open tab of a page, kept in the URL as `?tab=` so a reload, Back or a link
+ * (`/mail?tab=queue`) opens it. The first tab is the bare URL; a URL naming no tab the page has
+ * opens `fallback`. Switching drops the other parameters: they belong to the tab being left.
+ */
+export function useTabParam<T extends string>(tabs: readonly { id: T }[], fallback: T = tabs[0]!.id): [T, (id: T) => void] {
+  const [params, setParams] = useSearchParams();
+  const asked = params.get('tab');
+  const tab = tabs.find((t) => t.id === asked)?.id ?? fallback;
+  const setTab = (id: T) => {
+    if (id !== tab) setParams(id === tabs[0]!.id ? {} : { tab: id });
+  };
+  return [tab, setTab];
+}
+
+/** A page's tabs keep the open one in the URL with useTabParam; a dialog's keep it in state. */
+export function Tabs<T extends string>({
   tabs,
   active,
   onChange,
 }: {
   /** A label is text, or text with a marker after it (a tab holding changes not saved yet). */
-  tabs: { id: string; label: ReactNode }[];
-  active: string;
-  onChange: (id: string) => void;
+  tabs: readonly { id: T; label: ReactNode }[];
+  active: T;
+  onChange: (id: T) => void;
 }) {
   // A row wider than the page - Settings' seven on a phone - scrolls sideways on its own instead
   // of making the whole page wider. The scroller overlaps the outer border by a pixel, so the

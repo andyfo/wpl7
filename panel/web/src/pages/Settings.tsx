@@ -1,10 +1,10 @@
 // @docs get-started/quick-start, panel/settings, sites/ftp-sftp, sites/settings, sites/visitors
 import { useEffect, useRef, useState } from 'react';
-import { Link, useLocation, useSearchParams } from 'react-router';
+import { Link, useLocation } from 'react-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useMeta } from '../api/hooks';
-import { Button, Card, ErrorNote, Field, inputClass, Tabs, Toggle } from '../components/ui';
+import { Button, Card, ErrorNote, Field, inputClass, Tabs, Toggle, useTabParam } from '../components/ui';
 import { CronField } from '../components/CronField';
 import { LocaleSelect } from '../components/LocaleSelect';
 import { UpdatesCard } from '../components/UpdatesCard';
@@ -73,8 +73,6 @@ const TABS = [
   { id: 'updates', label: 'Updates' },
 ] as const;
 type TabId = (typeof TABS)[number]['id'];
-
-const isTab = (id: string | null): id is TabId => TABS.some((t) => t.id === id);
 
 /**
  * The tab each card is on. A link to a card - /settings#limits from the Schedules page, the
@@ -184,11 +182,8 @@ export function Settings() {
   const [saved, setSaved] = useState<{ applying: boolean } | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const [params, setParams] = useSearchParams();
   const location = useLocation();
-  const requested = params.get('tab');
-  const tab: TabId = isTab(requested) ? requested : (CARD_TAB[location.hash.slice(1)] ?? 'sites');
-  const setTab = (id: string) => setParams(id === 'sites' ? {} : { tab: id });
+  const [tab, setTab] = useTabParam(TABS, CARD_TAB[location.hash.slice(1)]);
 
   // Links land on a card. The cards only exist once the settings have loaded, which is later
   // than the browser looks for the anchor.

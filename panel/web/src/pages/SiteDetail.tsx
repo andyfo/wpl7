@@ -1,7 +1,7 @@
 import { ReminderCard } from '../components/ReminderCard';
 // @docs backups/overview, get-started/first-site, sites/domains, sites/move, sites/overview, sites/settings, sites/visitors, sites/wordpress
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useBackups,
@@ -31,6 +31,7 @@ import {
   StatusBadge,
   Tabs,
   Toggle,
+  useTabParam,
 } from '../components/ui';
 import { BarChart } from '../components/BarChart';
 import {
@@ -72,12 +73,8 @@ const EXTERNAL_TABS = SITE_TABS.filter((t) => ['overview', 'backups', 'wordpress
 export function SiteDetail() {
   const { slug = '' } = useParams();
   const site = useSite(slug);
-  // In the URL, so a folder in the Files tab (and the file open in its editor) can be linked
-  // to, and reloading the page stays where it was.
-  const [params, setParams] = useSearchParams();
   const tabs = site.data?.kind === 'external' ? EXTERNAL_TABS : SITE_TABS;
-  const tab = tabs.some((t) => t.id === params.get('tab')) ? params.get('tab')! : 'overview';
-  const setTab = (id: string) => setParams(id === 'overview' ? {} : { tab: id });
+  const [tab, setTab] = useTabParam(tabs);
 
   // Only a site that never loaded is an error page. A refresh that fails - the 15-second
   // poll, a network blip, an expired session - keeps the page as it was, with the error above

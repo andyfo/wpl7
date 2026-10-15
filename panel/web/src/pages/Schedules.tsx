@@ -288,7 +288,7 @@ export function Schedules() {
                 No custom schedules yet. <b>New schedule</b> runs a backup, an update or a command on the sites you pick, on
                 a timetable or once. Integrations can create them too, with <code>POST /api/schedules</code> — see the
                 Docs tab under{' '}
-                <Link className="underline" to="/api-keys">
+                <Link className="underline" to="/api-keys?tab=docs">
                   API keys
                 </Link>
                 .
