@@ -1,6 +1,6 @@
 // @docs security/site-protection
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router';
+import { Link } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import {
   SCAN_ON_FINDING_INFO,
@@ -19,7 +19,7 @@ import { BlockDialog } from '../components/security/BlockDialog';
 import { PolicyEditor } from '../components/security/PolicyEditor';
 import { ScanOutcomeBadge } from '../components/security/ScanCards';
 import { SiteSecuritySettings } from '../components/security/SiteSecuritySettings';
-import { Button, Card, EmptyState, ErrorNote, Segmented, Spinner, StatTile, Tabs, Toggle } from '../components/ui';
+import { Button, Card, EmptyState, ErrorNote, Segmented, Spinner, StatTile, Tabs, Toggle, useTabParam } from '../components/ui';
 import { flagOf, timeAgo } from '../lib/format';
 
 const TABS = [
@@ -39,8 +39,7 @@ interface DefaultDraft {
  * every site gets unless it chose its own, and the sites that did.
  */
 export function SitesSecurity() {
-  const [params, setParams] = useSearchParams();
-  const tab = TABS.some((t) => t.id === params.get('tab')) ? params.get('tab')! : 'findings';
+  const [tab, setTab] = useTabParam(TABS);
   const overview = useSecurityOverview();
   const settings = useQuery({
     queryKey: ['settings'],
@@ -99,7 +98,7 @@ export function SitesSecurity() {
         </div>
       )}
 
-      <Tabs tabs={TABS} active={tab} onChange={(id) => setParams(id === 'findings' ? {} : { tab: id })} />
+      <Tabs tabs={TABS} active={tab} onChange={setTab} />
       {tab === 'findings' && <FindingsTab o={o} onBlock={setBlocking} />}
       {tab === 'settings' && <SettingsTab o={o} draft={draft} preview={preview} onChange={setDraft} onEdit={setEditing} />}
 

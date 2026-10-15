@@ -1,7 +1,6 @@
 // @docs security/blocked-addresses
-import { useSearchParams } from 'react-router';
 import { BlockedTab, DetectionTab, EnforcementTab, NeverBlockTab } from '../components/security/ServerTabs';
-import { Tabs } from '../components/ui';
+import { Tabs, useTabParam } from '../components/ui';
 
 const TABS = [
   { id: 'blocked', label: 'Blocked addresses' },
@@ -15,8 +14,7 @@ const TABS = [
  * that never are, and where each server stands with enforcing the list.
  */
 export function ServersSecurity() {
-  const [params, setParams] = useSearchParams();
-  const tab = TABS.some((t) => t.id === params.get('tab')) ? params.get('tab')! : 'blocked';
+  const [tab, setTab] = useTabParam(TABS);
   return (
     <div className="space-y-6">
       <div>
@@ -25,7 +23,7 @@ export function ServersSecurity() {
           Addresses refused on every server - found by the attack detection, or blocked by hand - and those that never are.
         </p>
       </div>
-      <Tabs tabs={TABS} active={tab} onChange={(id) => setParams(id === 'blocked' ? {} : { tab: id })} />
+      <Tabs tabs={TABS} active={tab} onChange={setTab} />
       {tab === 'blocked' && <BlockedTab />}
       {tab === 'detection' && <DetectionTab />}
       {tab === 'never-block' && <NeverBlockTab />}

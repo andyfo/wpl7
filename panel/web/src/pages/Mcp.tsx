@@ -403,7 +403,7 @@ function ActivityCard({ data }: { data: McpPageDto }) {
     <Card
       title="Recent calls"
       action={
-        <Link className="text-xs text-neutral-500 hover:underline" to="/api-keys">
+        <Link className="text-xs text-neutral-500 hover:underline" to="/api-keys?tab=activity">
           All API activity →
         </Link>
       }

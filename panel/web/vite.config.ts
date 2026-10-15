@@ -25,8 +25,9 @@ export default defineConfig({
     //
     // MCP and its OAuth endpoints too - but not /oauth/authorize, which is a page of the app.
     // To sign in through here, give the API PANEL_DOMAIN=localhost:<this port> (docs/mcp.md).
+    // The keys are prefixes: '/api' would take the /api-keys page to the API as well.
     proxy: {
-      '/api': { target: apiTarget, ws: true },
+      '/api/': { target: apiTarget, ws: true },
       '/mcp': { target: apiTarget },
       '/oauth/register': { target: apiTarget },
       '/oauth/token': { target: apiTarget },

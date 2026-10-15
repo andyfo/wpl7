@@ -15,7 +15,7 @@ import {
 } from '../../../shared/reminders';
 import { api } from '../api/client';
 import { useDomains, useReminderAction, useReminderOptions, useReminders, useReminderSummary } from '../api/reminders';
-import { Button, Card, ErrorNote, Field, Modal, Toggle, inputClass, Spinner, Tabs } from '../components/ui';
+import { Button, Card, ErrorNote, Field, Modal, Toggle, inputClass, Spinner, Tabs, useTabParam } from '../components/ui';
 import { Icon } from '../components/Icon';
 import { ReminderTask } from '../components/ReminderTask';
 
@@ -34,6 +34,10 @@ const TEMPLATES: Record<string, Partial<ReminderInput>> = {
   'Client contract': { title: 'Renew maintenance contract', kind: 'recurring', every: 1, unit: 'years', warningDays: [30, 7, 0] },
   'Server bill': { title: 'Pay server bill', kind: 'recurring', every: 1, unit: 'months', warningDays: [7, 0] },
 };
+const TABS = [
+  { id: 'reminders', label: 'Reminders' },
+  { id: 'domains', label: 'Domains' },
+];
 export function Reminders() {
   const list = useReminders();
   const options = useReminderOptions();
@@ -41,6 +45,7 @@ export function Reminders() {
   const action = useReminderAction();
   const client = useQueryClient();
   const [search, setSearch] = useSearchParams();
+  const [tab, setTab] = useTabParam(TABS);
   const [edit, setEdit] = useState<Partial<ReminderDto> | null>(null);
   const [snooze, setSnooze] = useState<ReminderDto | null>(null);
   const [until, setUntil] = useState('');
@@ -50,7 +55,7 @@ export function Reminders() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const today = summary.data?.today ?? panelDate();
-  const domainsTab = search.get('tab') === 'domains';
+  const domainsTab = tab === 'domains';
   useEffect(() => {
     const id = Number(search.get('reminder'));
     const found = list.data?.find((r) => r.id === id);
@@ -126,14 +131,7 @@ export function Reminders() {
           <Button onClick={() => setEdit({})}>New reminder</Button>
         </div>
       </div>
-      <Tabs
-        tabs={[
-          { id: 'reminders', label: 'Reminders' },
-          { id: 'domains', label: 'Domains' },
-        ]}
-        active={domainsTab ? 'domains' : 'reminders'}
-        onChange={(tab) => setSearch(tab === 'domains' ? { tab } : {})}
-      />
+      <Tabs tabs={TABS} active={tab} onChange={setTab} />
       <ErrorNote error={list.error || options.error || summary.error || action.error || error} />
       {domainsTab ? (
         <Domains onAdd={addSuggestion} busy={busy || action.isPending} reminders={list.data ?? []} onEdit={setEdit} />
