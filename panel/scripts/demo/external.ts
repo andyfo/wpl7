@@ -6,7 +6,6 @@
  */
 import { siteConnections, siteStats, sites } from '../../src/db/schema.js';
 import { sha256Hex } from '../../src/lib/crypto.js';
-import { PANEL_VERSION } from '../../src/lib/version.js';
 import type { TestWorld } from '../../test/helpers.js';
 import { DAY, HOUR, MINUTE, ago } from './clock.js';
 import { ADMIN_EMAIL, CONNECT_SOURCE, EXTERNAL_SITES, rng, seedOf, type DemoExternalSite } from './data.js';
@@ -26,12 +25,12 @@ const ADMINS = [
 ];
 
 /** What WPL7 Connect reports about a site (docs/internal/connect-protocol.md, The report). */
-function report(home: string, title: string, php: string, opts: { loader: boolean; plugins: { slug: string; name: string; version: string }[] }) {
+function report(home: string, title: string, php: string, opts: { loader: boolean; connect: string; plugins: { slug: string; name: string; version: string }[] }) {
   const host = new URL(home).hostname;
   const user = host.split('.')[0]!.replace(/-/g, '');
   return {
     protocol: 1,
-    plugin: PANEL_VERSION,
+    plugin: opts.connect,
     time: Math.floor(ago(3 * MINUTE) / 1000),
     endpoint: `${home}/wp-json/wpl7-connect/v1/`,
     home,
@@ -67,7 +66,7 @@ function report(home: string, title: string, php: string, opts: { loader: boolea
     dropins: [],
     mu_plugins: opts.loader ? [{ file: 'wpl7-connect-loader.php', name: 'WPL7 Connect loader' }] : [],
     plugins: [
-      { file: 'wpl7-connect/wpl7-connect.php', slug: 'wpl7-connect', name: 'WPL7 Connect', version: PANEL_VERSION, active: true },
+      { file: 'wpl7-connect/wpl7-connect.php', slug: 'wpl7-connect', name: 'WPL7 Connect', version: opts.connect, active: true },
       ...opts.plugins.map((p) => ({ file: `${p.slug}/${p.slug}.php`, slug: p.slug, name: p.name, version: p.version, active: true })),
     ],
     theme: { slug: 'twentytwentyfive', name: 'Twenty Twenty-Five', version: '1.5' },
@@ -85,7 +84,15 @@ function report(home: string, title: string, php: string, opts: { loader: boolea
 
 const addedAt = (site: DemoExternalSite): number => ago(site.ageDays * DAY + 5 * HOUR);
 
+/** WPL7 Connect as the panel ships it. The demo's sites run it, so no update of it waits. */
+export function connectVersion(world: TestWorld): string {
+  const version = world.core.connections.shippedVersion();
+  if (!version) throw new Error('The demo needs WPL7 Connect in panel/connect-plugin');
+  return version;
+}
+
 export function seedExternalSites(world: TestWorld): void {
+  const connect = connectVersion(world);
   for (const site of EXTERNAL_SITES) {
     const host = new URL(site.home).hostname;
     const row = world.db
@@ -132,9 +139,9 @@ export function seedExternalSites(world: TestWorld): void {
         homeUrl: site.home,
         endpointUrl: `${site.home}/wp-json/wpl7-connect/v1/`,
         transport: 'rest',
-        pluginVersion: PANEL_VERSION,
+        pluginVersion: connect,
         protocol: 1,
-        report: JSON.stringify(report(site.home, site.title, `${site.php}.26`, { loader: true, plugins })),
+        report: JSON.stringify(report(site.home, site.title, `${site.php}.26`, { loader: true, connect, plugins })),
         warnings: '[]',
         commands: '[]',
         actAsUserId: 1,
@@ -195,8 +202,10 @@ function seedMonitoring(world: TestWorld): void {
  * Its must-use folder is not writable, so the page warns that a rollback would not work there.
  */
 function seedWaitingConnection(world: TestWorld): void {
+  const connect = connectVersion(world);
   const r = report(CONNECT_SOURCE, 'Riverside Books', '8.3.26', {
     loader: false,
+    connect,
     plugins: [
       { slug: 'woocommerce', name: 'WooCommerce', version: '11.1.2' },
       { slug: 'wordpress-seo', name: 'Yoast SEO', version: '28.6' },
@@ -216,7 +225,7 @@ function seedWaitingConnection(world: TestWorld): void {
       homeUrl: CONNECT_SOURCE,
       endpointUrl: r.endpoint,
       transport: 'rest',
-      pluginVersion: PANEL_VERSION,
+      pluginVersion: connect,
       protocol: 1,
       report: JSON.stringify(r),
       warnings: '[]',
