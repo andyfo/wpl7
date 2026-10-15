@@ -29,6 +29,17 @@ below `0.3.0` and above `0.2.9`, which is exactly what an edge build is, and `de
 `provision/update.sh` refuses to overwrite without `--force` — the image-mode equivalent of
 `deploy.sh` refusing a dirty tree.
 
+### WPL7 Connect's version
+
+WPL7 Connect, the plugin on a site hosted elsewhere, has a version of its own: `Version:` in
+`panel/connect-plugin/wpl7-connect/wpl7-connect.php`, repeated in `WPL7_CONNECT_VERSION` and
+in `readme.txt`'s `Stable tag`. The panel offers its copy to every site that runs a lower
+version, as PHP's `version_compare` ranks them, so the version has to rise with every change to
+the plugin's files. A build's number cannot do that: `0.3.0-source` ranks below
+`0.3.0-beta.3-source`, every source build between two releases has the same number, and edge
+builds rank by their commit hash. `panel/test/unit/connectPluginVersion.test.ts` pins the
+version to a hash of the files, and fails when one changes without the other.
+
 ## Two channels
 
 | | `edge` | `stable` |

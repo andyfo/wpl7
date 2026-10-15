@@ -307,7 +307,7 @@ export class Schedulers {
         group: 'background',
         name: 'External sites check',
         description:
-          'Asks WPL7 Connect on every site hosted elsewhere whether it answers, and offers it the panel’s version of the plugin. Three hours without an answer sends an alert.',
+          'Asks WPL7 Connect on every site hosted elsewhere whether it answers, and offers it a newer version of the plugin when the panel has one. Three hours without an answer sends an alert.',
         pausable: true,
         pauseWarning: 'A site hosted elsewhere whose plugin stops answering is not noticed until you resume.',
         cadence: () => ({ everyMs: 3600_000, text: 'Every hour' }),

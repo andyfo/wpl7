@@ -8,18 +8,17 @@ import path from 'node:path';
 import { pluginZipChecks, plugins, siteWpComponents, siteWpStatus, vulnFeed } from '../../src/db/schema.js';
 import { zipOf, type TestWorld } from '../../test/helpers.js';
 import { HOUR, MINUTE, ago } from './clock.js';
-import { PANEL_VERSION } from '../../src/lib/version.js';
 import { CATALOG, DEMO_ADVISORY, EXTERNAL_INVENTORY, INVENTORY, LATEST, type DemoComponent } from './plugins.js';
+import { connectVersion } from './external.js';
 import { siteIds } from './sites.js';
 import { onDisk } from './paths.js';
 
 /** wpvulnerability.net has no record of these: it answers "no such slug". It knows the rest, the premium plugins too. */
 const UNKNOWN_TO_FEED = new Set(['breakdance-zero', 'wpl7-connect']);
 
-/** WPL7 Connect on a site hosted elsewhere: the panel's own version, so no update waits for it. */
-const CONNECTOR: DemoComponent = { kind: 'plugin', slug: 'wpl7-connect', title: 'WPL7 Connect', status: 'active', version: PANEL_VERSION };
-
 export function seedInventory(world: TestWorld): void {
+  /** WPL7 Connect on a site hosted elsewhere, as the panel ships it: no update waits for it. */
+  const connector: DemoComponent = { kind: 'plugin', slug: 'wpl7-connect', title: 'WPL7 Connect', status: 'active', version: connectVersion(world) };
   const db = world.db;
   const slugs = new Map<string, 'plugin' | 'theme'>();
   db.transaction((tx) => {
@@ -27,7 +26,7 @@ export function seedInventory(world: TestWorld): void {
       const siteId = siteIds.get(slug)!;
       // Granite Gym was last scanned before its plugin stopped answering.
       const scannedAt = ago((slug === 'oak-and-ivy' ? 7 : slug === 'granite-gym' ? 4 * 60 + 40 : 52) * MINUTE);
-      const components = slug in EXTERNAL_INVENTORY ? [CONNECTOR, ...inv.components] : inv.components;
+      const components = slug in EXTERNAL_INVENTORY ? [connector, ...inv.components] : inv.components;
       tx.insert(siteWpStatus)
         .values({
           siteId,

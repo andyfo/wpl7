@@ -94,27 +94,54 @@ export function zipOf(entries: ZipEntry[]): Buffer {
 }
 
 /**
- * A WordPress plugin's folder as the zip a site installs: `<folder>/` and everything under `root`,
- * with `version` written over the placeholder `0.0.0-dev` in its `.php` and `.txt` files, and the
- * `extra` files added. A `connection.php` lying in the folder from testing is never taken: only
- * the one in `extra` goes out.
+ * Everything under a WordPress plugin's folder, as its zip takes it: names relative to `root`, a
+ * folder's ending in `/`, sorted within each folder. A `connection.php` lying in the folder from
+ * testing is never taken: only the one a download adds goes out.
  */
-export function pluginFolderZip(root: string, folder: string, version: string, extra: ZipEntry[] = []): Buffer {
-  const entries: ZipEntry[] = [{ name: `${folder}/` }];
+export function pluginFolderEntries(root: string): { name: string; data?: Buffer }[] {
+  const entries: { name: string; data?: Buffer }[] = [];
   const walk = (dir: string, rel: string) => {
     for (const item of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const relPath = `${rel}${item.name}`;
       if (relPath === 'connection.php') continue;
       if (item.isDirectory()) {
-        entries.push({ name: `${folder}/${relPath}/` });
+        entries.push({ name: `${relPath}/` });
         walk(path.join(dir, item.name), `${relPath}/`);
       } else if (item.isFile()) {
-        let data = fs.readFileSync(path.join(dir, item.name));
-        if (/\.(php|txt)$/.test(item.name)) data = Buffer.from(data.toString('utf8').replaceAll('0.0.0-dev', version), 'utf8');
-        entries.push({ name: `${folder}/${relPath}`, data });
+        entries.push({ name: relPath, data: fs.readFileSync(path.join(dir, item.name)) });
       }
     }
   };
   walk(root, '');
-  return zipOf([...entries, ...extra.map((e) => ({ ...e, name: `${folder}/${e.name}` }))]);
+  return entries;
+}
+
+/**
+ * A WordPress plugin's folder as the zip a site installs: `<folder>/` and everything under `root`,
+ * with `version` written over the placeholder `0.0.0-dev` in its `.php` and `.txt` files, and the
+ * `extra` files added.
+ */
+export function pluginFolderZip(root: string, folder: string, version: string, extra: ZipEntry[] = []): Buffer {
+  const entries = pluginFolderEntries(root).map(({ name, data }): ZipEntry => {
+    if (data === undefined || !/\.(php|txt)$/.test(name)) return { name: `${folder}/${name}`, data };
+    return { name: `${folder}/${name}`, data: Buffer.from(data.toString('utf8').replaceAll('0.0.0-dev', version), 'utf8') };
+  });
+  return zipOf([{ name: `${folder}/` }, ...entries, ...extra.map((e) => ({ ...e, name: `${folder}/${e.name}` }))]);
+}
+
+/**
+ * A plugin's `Version` header, read as WordPress reads it (get_file_data: the file's first 8 KB),
+ * or null when the file or the header is missing.
+ */
+export function pluginHeaderVersion(file: string): string | null {
+  let head: string;
+  try {
+    head = fs.readFileSync(file).subarray(0, 8192).toString('utf8').replaceAll('\r', '\n');
+  } catch {
+    return null;
+  }
+  const match = /^(?:[ \t]*<\?php)?[ \t/*#@]*Version:(.*)$/im.exec(head);
+  if (!match) return null;
+  const version = match[1]!.replace(/\s*(?:\*\/|\?>).*/, '').trim();
+  return version || null;
 }

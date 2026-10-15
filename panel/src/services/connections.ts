@@ -1,6 +1,5 @@
 // @docs security/privacy, sites/external
 import crypto from 'node:crypto';
-import fs from 'node:fs';
 import path from 'node:path';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import type { Config } from '../config.js';
@@ -18,11 +17,10 @@ import type {
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { sameSecret, sha256Hex } from '../lib/crypto.js';
 import { panelUrl } from '../lib/panelUrl.js';
-import { PANEL_VERSION } from '../lib/version.js';
 import { compareVersions } from '../lib/wpVersions.js';
 import { isValidSlug } from '../lib/slug.js';
 import { externalSites, isExternal } from '../lib/siteKind.js';
-import { pluginFolderZip } from '../lib/zipWriter.js';
+import { pluginFolderZip, pluginHeaderVersion } from '../lib/zipWriter.js';
 import { OutboundRefusedError, assertAllowedSource, type LookupFn } from '../lib/outboundGuard.js';
 import { probeExternal, type ExternalProbe } from '../lib/httpProbe.js';
 import type { JobWorker } from '../jobs/worker.js';
@@ -207,12 +205,24 @@ export class ConnectionsService {
 
   // ------------------------------------------------------------------ the plugin
 
-  private pluginRoot(): string {
+  private shipped: { file: string; version: string | null } | null = null;
+
+  /**
+   * The version of the WPL7 Connect this panel hands out, from the plugin's header, or null when
+   * the build has none. It is the plugin's own version, not the panel's: it rises with every
+   * change to the plugin's files, and only then (test/unit/connectPluginVersion.test.ts).
+   */
+  shippedVersion(): string | null {
+    const file = path.join(this.config.connectPluginDir, 'wpl7-connect', 'wpl7-connect.php');
+    if (this.shipped?.file !== file) this.shipped = { file, version: pluginHeaderVersion(file) };
+    return this.shipped.version;
+  }
+
+  private shippedPlugin(): { root: string; version: string } {
     const root = path.join(this.config.connectPluginDir, 'wpl7-connect');
-    if (!fs.existsSync(path.join(root, 'wpl7-connect.php'))) {
-      throw conflict(`WPL7 Connect is not in this build of the panel (${root})`);
-    }
-    return root;
+    const version = this.shippedVersion();
+    if (!version) throw conflict(`WPL7 Connect is not in this build of the panel (${root})`);
+    return { root, version };
   }
 
   private assertDownloadable(row: SiteConnectionRow): void {
@@ -222,16 +232,16 @@ export class ConnectionsService {
   }
 
   /**
-   * WPL7 Connect for this connection: the folder the panel ships, its version set to the
-   * panel's, and `connection.php` - where to enroll, with what, and the panel's public key -
-   * added (section 1).
+   * WPL7 Connect for this connection: the folder the panel ships, with `connection.php` - where
+   * to enroll, with what, and the panel's public key - added (section 1).
    */
   pluginZip(id: number): { name: string; data: Buffer } {
     const row = this.get(id);
     this.assertDownloadable(row);
     const origin = this.origin();
     if (!origin) throw conflict('Set PANEL_DOMAIN first: the site connects to the panel at that address');
-    const data = pluginFolderZip(this.pluginRoot(), 'wpl7-connect', PANEL_VERSION, [
+    const plugin = this.shippedPlugin();
+    const data = pluginFolderZip(plugin.root, 'wpl7-connect', plugin.version, [
       {
         name: 'connection.php',
         data:
@@ -248,7 +258,8 @@ export class ConnectionsService {
 
   /** The plugin without a connection: what a site's self-update downloads (section 12). */
   pluginPackage(): { name: string; data: Buffer } {
-    return { name: 'wpl7-connect.zip', data: pluginFolderZip(this.pluginRoot(), 'wpl7-connect', PANEL_VERSION) };
+    const plugin = this.shippedPlugin();
+    return { name: 'wpl7-connect.zip', data: pluginFolderZip(plugin.root, 'wpl7-connect', plugin.version) };
   }
 
   /** What the plugin's own form takes when it came without its connection file. */
@@ -640,18 +651,26 @@ export class ConnectionsService {
     });
   }
 
-  /** The update offer a ping carries: the panel's own WPL7 Connect, when the site runs an older one. */
+  /** The update offer a ping carries: the WPL7 Connect this panel ships, when the site runs a lower version. */
   offerFor(row: SiteConnectionRow): { version: string; package: string; expires: number } | null {
     const origin = this.origin();
-    if (!origin || !row.pluginVersion || row.pluginVersion === PANEL_VERSION) return null;
-    let newer: boolean;
+    const version = this.newerPlugin(row);
+    if (!origin || !version) return null;
+    return { version, package: `${origin}${this.packagePath(version)}`, expires: Math.floor((Date.now() + PACKAGE_LINK_MS) / 1000) };
+  }
+
+  /**
+   * The version of WPL7 Connect this panel ships, when it is above the one the site last reported,
+   * as PHP's version_compare ranks them: the plugin takes an offer only then (section 12).
+   */
+  private newerPlugin(row: SiteConnectionRow): string | null {
+    const shipped = this.shippedVersion();
+    if (!shipped || !row.pluginVersion || row.pluginVersion === shipped) return null;
     try {
-      newer = compareVersions(PANEL_VERSION, row.pluginVersion) > 0;
+      return compareVersions(shipped, row.pluginVersion) > 0 ? shipped : null;
     } catch {
-      newer = false;
+      return null;
     }
-    if (!newer) return null;
-    return { version: PANEL_VERSION, package: `${origin}${this.packagePath()}`, expires: Math.floor((Date.now() + PACKAGE_LINK_MS) / 1000) };
   }
 
   /**
@@ -767,11 +786,14 @@ export class ConnectionsService {
     return `${pathname}?${query}&s=${this.signLink(pathname, fields)}`;
   }
 
-  /** `/api/connect/package?v=…&e=…&s=…`: the plugin of this panel, for two hours. */
-  packagePath(): string {
+  /**
+   * `/api/connect/package?v=…&e=…&s=…`: the plugin of this panel, for two hours. `v` is the
+   * version it was offered as: once the panel ships another, the link answers 404.
+   */
+  packagePath(version: string): string {
     const expires = String(Math.floor((Date.now() + PACKAGE_LINK_MS) / 1000));
     return this.link('/api/connect/package', [
-      ['v', PANEL_VERSION],
+      ['v', version],
       ['e', expires],
     ]);
   }
@@ -904,6 +926,7 @@ export class ConnectionsService {
     const report = row ? this.reportOf(row) : null;
     const warnings = row ? this.warningsOf(row) : [];
     const homeChanged = warnings.find((w) => w.code === 'home_changed');
+    const offer = row?.status === 'active' ? this.newerPlugin(row) : null;
     return {
       ...summary,
       connectionId: row?.id ?? 0,
@@ -918,19 +941,10 @@ export class ConnectionsService {
       certExpiresAt: row?.certExpiresAt ?? null,
       warnings: warnings.filter((w) => w.code !== 'home_changed'),
       commands: parseJson<string[]>(row?.commands ?? null) ?? [],
-      offer: row && row.status === 'active' ? (this.offerVersion(row) ? { version: PANEL_VERSION } : null) : null,
+      offer: offer ? { version: offer } : null,
       homeChanged: homeChanged?.value ?? null,
       allowHttp: row?.allowHttp === 1,
     };
-  }
-
-  private offerVersion(row: SiteConnectionRow): boolean {
-    if (!row.pluginVersion || row.pluginVersion === PANEL_VERSION) return false;
-    try {
-      return compareVersions(PANEL_VERSION, row.pluginVersion) > 0;
-    } catch {
-      return false;
-    }
   }
 
 }

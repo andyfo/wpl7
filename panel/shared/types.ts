@@ -126,7 +126,7 @@ export interface ExternalSiteDto extends ExternalSiteSummary {
   warnings: ConnectWarning[];
   /** The commands plugins registered on WPL7 Connect (`/wp/cli` runs only these). */
   commands: string[];
-  /** A newer WPL7 Connect the panel offers this site; null when it runs the panel's own. */
+  /** The newer WPL7 Connect the panel ships, offered to this site; null when the site runs that version or a higher one. */
   offer: { version: string } | null;
   /** The address the site answers with now, when it is not the one the connection is bound to. */
   homeChanged: string | null;

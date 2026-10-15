@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WPL7 Connect
  * Description: Connects this site to a WPL7 panel, which then keeps it updated, backed up and watched.
- * Version: 0.0.0-dev
+ * Version: 1.0.0
  * Requires at least: 5.2
  * Requires PHP: 7.0
  * Author: WPL7
@@ -24,14 +24,16 @@
 // updates and changes the panel asks for. The plugin stays: nothing makes it switch itself off.
 //
 // `Update URI: false` keeps WordPress.org from offering a plugin of the same name as an update.
-// Updates of this plugin come from the panel (class-wpl7-connect-selfupdate.php).
+// Updates of this plugin come from the panel (class-wpl7-connect-selfupdate.php), which offers its
+// copy to a site that runs a lower version. The version is this plugin's own, not the panel's:
+// raise it in the header, in WPL7_CONNECT_VERSION and in readme.txt with any change to its files.
 //
 // This file must still parse on PHP 5: it is what tells an old PHP that the plugin needs 7.0. So
 // no closures and no short arrays here; the classes it loads are PHP 7.
 
 defined('ABSPATH') || exit;
 
-define('WPL7_CONNECT_VERSION', '0.0.0-dev');
+define('WPL7_CONNECT_VERSION', '1.0.0');
 define('WPL7_CONNECT_FILE', __FILE__);
 
 if (version_compare(PHP_VERSION, '7.0', '<')) {

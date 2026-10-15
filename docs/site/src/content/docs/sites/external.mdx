@@ -79,6 +79,11 @@ An update runs through WordPress's own updater. The plugin first keeps a copy of
 theme it updates. If the site or the plugin stops answering afterwards, the plugin puts the copies
 back. A small must-use plugin makes that work even when the update breaks WordPress.
 
+WPL7 Connect gets its own updates from the panel. Its version number is its own, and changes only
+when the plugin changes. When the panel has a newer version than the site, the **Overview** tab
+shows **Update to** and the version. The update is also listed on the **WordPress** tab and in
+wp-admin, and scheduled plugin updates include it.
+
 A backup copies the site's files and database to the server that keeps its backups, and packs
 them as every backup is packed. Each backup after the first copies only what changed.
 `wp-config.php` is in it.
