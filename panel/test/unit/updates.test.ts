@@ -7,12 +7,12 @@ import type { MetaDto, SystemVersionDto } from '../../shared/types.js';
 const silentLog = { info: () => {}, warn: () => {}, error: () => {} };
 
 const manifest = (over: Partial<UpdateManifest> = {}): Record<string, unknown> => ({
-  version: '0.3.0',
+  version: '99.3.0',
   channel: 'stable',
   publishedAt: '2026-10-01T12:00:00Z',
-  notesUrl: 'https://example.test/releases/v0.3.0',
+  notesUrl: 'https://example.test/releases/v99.3.0',
   gitSha: 'a'.repeat(40),
-  images: { panel: 'ghcr.io/x/y/panel:0.3.0', wordpress: { '8.3': 'ghcr.io/x/y/wordpress:php8.3-0.3.0' } },
+  images: { panel: 'ghcr.io/x/y/panel:99.3.0', wordpress: { '8.3': 'ghcr.io/x/y/wordpress:php8.3-99.3.0' } },
   minUpgradeFrom: '0.2.0',
   requiresDowntime: false,
   ...over,
@@ -69,7 +69,7 @@ describe('the check', () => {
 
     const status = await svc.check();
 
-    expect(status.latest?.version).toBe('0.3.0');
+    expect(status.latest?.version).toBe('99.3.0');
     expect(status.updateAvailable).toBe(true);
     expect(status.error).toBeNull();
     expect(status.checkedAt).not.toBeNull();
@@ -87,10 +87,10 @@ describe('the check', () => {
         { draft: false, prerelease: false, assets: [{ name: 'manifest.json', url: 'https://api.github.com/x/releases/assets/9' }] },
       ],
     });
-    github.on('/releases/assets/', { status: 200, body: manifest({ version: '0.4.0' }) });
+    github.on('/releases/assets/', { status: 200, body: manifest({ version: '99.4.0' }) });
     const { svc } = service(github);
 
-    expect((await svc.check()).latest?.version).toBe('0.4.0');
+    expect((await svc.check()).latest?.version).toBe('99.4.0');
   });
 
   it('asks for the `edge` tag when that is the channel', async () => {
@@ -115,7 +115,7 @@ describe('the check', () => {
     const status = await svc.check();
 
     expect(github.requests.at(-1)!.headers['if-none-match']).toBe('W/"v1"');
-    expect(status.latest?.version).toBe('0.3.0'); // still known
+    expect(status.latest?.version).toBe('99.3.0'); // still known
     expect(status.error).toBeNull();
     // A 304 is a successful check - it just says the answer has not changed.
     expect(status.checkedAt!).toBeGreaterThan(before);
@@ -149,17 +149,17 @@ describe('the check', () => {
 
     await svc.check();
     await svc.check();
-    expect(seen).toEqual(['0.3.0']);
+    expect(seen).toEqual(['99.3.0']);
 
     // A newer one is worth another email; the same one never is.
-    github.release(manifest({ version: '0.4.0' }));
+    github.release(manifest({ version: '99.4.0' }));
     settings.setRaw('updates.latest', { ...(settings.getRaw('updates.latest') as object), etag: null });
     await svc.check();
-    expect(seen).toEqual(['0.3.0', '0.4.0']);
+    expect(seen).toEqual(['99.3.0', '99.4.0']);
   });
 
   it('refuses a release whose manifest is not a manifest', async () => {
-    const github = new FakeGitHub().release({ version: '0.3.0' }); // no images
+    const github = new FakeGitHub().release({ version: '99.3.0' }); // no images
     const { svc } = service(github);
 
     const status = await svc.check();
@@ -221,7 +221,7 @@ describe('the API', () => {
     expect(world.github.requests).toHaveLength(0); // reading the page asked nobody
 
     const checked = await app.inject({ method: 'POST', url: '/api/system/update/check', headers });
-    expect((checked.json() as SystemVersionDto).latest?.version).toBe('0.3.0');
+    expect((checked.json() as SystemVersionDto).latest?.version).toBe('99.3.0');
 
     const meta = (await app.inject({ method: 'GET', url: '/api/meta', headers })).json() as MetaDto;
     expect(meta.updateAvailable).toBe(true);
