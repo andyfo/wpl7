@@ -100,6 +100,7 @@ const DESTRUCTIVE = [
   'POST /api/jobs/:id/cancel',
   'POST /api/mail/dkim',
   'POST /api/mail/domains/:domain/publish',
+  'POST /api/mail/messages/delete',
   'POST /api/mail/servers/:serverId/publish-hostname',
   'POST /api/recipes/local',
   'POST /api/schedules',

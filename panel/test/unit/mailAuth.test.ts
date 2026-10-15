@@ -13,7 +13,7 @@ import {
   renderSenderLogin,
   RESERVED_LOGIN,
 } from '../../src/services/mailAuth.js';
-import { DKIM_CONTAINER, mailPaths } from '../../src/services/mail.js';
+import { DKIM_CONTAINER, MAIL_CONTAINER, mailPaths } from '../../src/services/mail.js';
 
 const execLines = (w: TestWorld): string[] =>
   w.docker.calls.filter((c) => c.method === 'exec').map((c) => (c.args[1] as string[]).join(' '));
@@ -320,6 +320,55 @@ describe('mail abuse guard', () => {
 
     expect((await w.core.mail.enforceVolumeLimits()).suspended).toEqual([]);
     expect(w.db.select().from(sites).where(eq(sites.slug, 'alpha')).get()!.mailSuspendedAt).toBeNull();
+  });
+
+  it('goes on counting what was deleted from the history within the hour', async () => {
+    const w = await makeWorld();
+    addSite(w, 'alpha', ['alpha.example']);
+    w.deps.settings.update({ mailSuspendPerSitePerHour: 10 });
+    logMessages(w, 'alpha', 11);
+    w.core.mail.deleteMessages(w.db.select().from(mailMessages).all().map((r) => r.id));
+    // Sent half an hour ago and deleted since, then a read of the log: the log has no more use
+    // for them, the guard's hour still has.
+    w.db.update(mailMessages).set({ lastEventAt: Date.now() - 30 * 60_000, hiddenAt: Date.now() - 10 * 60_000 }).run();
+    w.docker.containers.set(MAIL_CONTAINER, 'running');
+    await w.core.mail.ingestServer(1);
+
+    expect(w.db.select().from(mailMessages).all()).toHaveLength(11);
+    expect((await w.core.mail.enforceVolumeLimits()).suspended).toEqual(['alpha']);
+  });
+
+  it('does not count mail deleted from the queue as sent now', async () => {
+    const w = await makeWorld();
+    addSite(w, 'alpha', ['alpha.example']);
+    w.deps.settings.update({ mailSuspendPerSitePerHour: 10 });
+    // A backlog nobody has tried for two hours, emptied now: deleting it is not sending it.
+    const old = Date.now() - 2 * 3600_000;
+    for (let i = 0; i < 11; i++) {
+      w.db
+        .insert(mailMessages)
+        .values({
+          serverId: 1,
+          queueId: `QALPHA${i}`,
+          siteSlug: 'alpha',
+          fromAddr: 'wordpress@alpha.example',
+          toAddr: `x${i}@elsewhere.test`,
+          status: 'deferred',
+          firstSeenAt: old,
+          lastEventAt: old,
+        })
+        .run();
+    }
+    const now = new Date().toISOString().replace('Z', '+00:00');
+    w.docker.logs.set(
+      MAIL_CONTAINER,
+      Array.from({ length: 11 }, (_, i) => `${now} INFO    postfix/postsuper[1052]: QALPHA${i}: removed`).join('\n'),
+    );
+    w.docker.containers.set(MAIL_CONTAINER, 'running');
+    await w.core.mail.ingestServer(1);
+
+    expect(w.db.select().from(mailMessages).all().map((r) => r.status)).toEqual(Array(11).fill('deleted'));
+    expect((await w.core.mail.enforceVolumeLimits()).suspended).toEqual([]);
   });
 
   it('counts only the last hour', async () => {

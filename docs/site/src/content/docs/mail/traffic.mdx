@@ -27,7 +27,7 @@ what is still waiting, and the abuse guard stops a site that sends like a spam r
 
 New mail appears within a minute, and **Refresh now** reads the relays' logs at once. The site is
 taken from the connection, never from the `From:` header, so a hacked site cannot pin its mail on
-another one. History is kept for 30 days by default.
+another one.
 
 | Status | Means |
 |---|---|
@@ -37,6 +37,19 @@ another one. History is kept for 30 days by default.
 | `rejected` | The relay refused it, such as a sender domain the site does not own. |
 | `expired` | The relay tried until it gave up. |
 | `queued` | Accepted and not tried yet. |
+| `deleted` | Deleted from the queue before it was delivered. |
+
+## Delete rows from the history
+
+1. In **Mail → Traffic**, tick the rows. The box in the header ticks every row on the page.
+2. Choose **Delete** in the bar at the bottom, and confirm.
+
+Only the history goes. Mail still in the queue is still sent, so delete it under **Queue** to stop
+it. Deleted rows leave the list and the totals on **Overview** at once. The abuse guard still
+counts them until they are an hour old.
+
+The panel also deletes history by itself every night: whatever is older than **Keep traffic history
+for (days)** in <UiPath href="/docs/panel/settings/">Settings → Mail</UiPath>, 30 by default.
 
 ## Clear the queue
 
@@ -47,6 +60,8 @@ deferred messages are normal. A growing queue means delivery is failing.
 - **Delete** drops one message.
 - **Empty** discards every waiting message on that server, legitimate mail included. You type
   `delete` to confirm.
+
+**Traffic** then shows what you deleted as `deleted`.
 
 ## Watch the volume by site
 
@@ -82,6 +97,8 @@ the limit is suspended again within a minute. With a Full API key,
 - `sent` means the receiving server accepted the message, not that it reached the inbox.
 - Traffic comes from each relay's log. If the panel cannot read a log for longer than the server
   keeps it, the messages in between never appear.
+- Mail deleted on the server with `postsuper -d ALL` keeps its last status in **Traffic**, because
+  Postfix logs no message ids for it.
 
 ## Related
 

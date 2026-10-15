@@ -62,13 +62,24 @@ export interface MailDkimEvent {
   selector?: string;
 }
 
-export type MailLogEvent = MailEnvelopeEvent | MailDeliveryEvent | MailRejectEvent | MailDkimEvent;
+/**
+ * Somebody deleted a queued message (`postsuper -d`): its recipients still waiting will never
+ * be tried again. Logged only for a message named by its id - `postsuper -d ALL` logs a count
+ * and nothing else, which is why the panel's Empty names every id.
+ */
+export interface MailDeletedEvent {
+  kind: 'deleted';
+  ts: number;
+  queueId: string;
+}
 
-export const MAIL_STATUSES = ['queued', 'sent', 'deferred', 'bounced', 'expired', 'rejected'] as const;
+export type MailLogEvent = MailEnvelopeEvent | MailDeliveryEvent | MailRejectEvent | MailDkimEvent | MailDeletedEvent;
+
+export const MAIL_STATUSES = ['queued', 'sent', 'deferred', 'bounced', 'expired', 'rejected', 'deleted'] as const;
 export type MailStatus = (typeof MAIL_STATUSES)[number];
 
 /** `<prefix> <program>[/<subprogram>][<pid>]: <tail>` — the shape both syslog styles share. */
-const LINE_RE = /^(.*?)\b([a-z][a-z-]*)(?:\/[a-z][a-z-]*)?\[\d+\]:\s+(.*)$/;
+const LINE_RE = /^(.*?)\b([a-z][a-z-]*)(?:\/([a-z][a-z-]*))?\[\d+\]:\s+(.*)$/;
 /** Postfix queue ids are hex (or base-36 with long_queue_ids); 6-20 chars covers both. */
 const QUEUE_ID_RE = /^([A-Za-z0-9]{6,20}):\s+(.*)$/;
 
@@ -144,7 +155,7 @@ function toStatus(word: string): MailStatus {
 export function parseMailLogLine(line: string, now = Date.now()): MailLogEvent | null {
   const m = LINE_RE.exec(line.trimEnd());
   if (!m) return null;
-  const [, prefix = '', program = '', tail = ''] = m;
+  const [, prefix = '', program = '', subprogram = '', tail = ''] = m;
   const ts = parseSyslogTimestamp(prefix, now) ?? now;
 
   if (program === 'opendkim') return parseDkimLine(tail, ts);
@@ -212,7 +223,12 @@ export function parseMailLogLine(line: string, now = Date.now()): MailLogEvent |
     };
   }
 
-  // `removed`, `message-id=`, `resent-message-id=` and friends add nothing we store.
+  // qmgr logs `removed` for every message it is done with; only postsuper's means deleted.
+  if (rest === 'removed' && subprogram === 'postsuper') {
+    return { kind: 'deleted', ts, queueId };
+  }
+
+  // qmgr's `removed`, `message-id=`, `resent-message-id=` and friends add nothing we store.
   return null;
 }
 

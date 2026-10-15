@@ -12,7 +12,7 @@
  */
 // @docs mail/overview, mail/setup, mail/traffic, security/privacy
 import path from 'node:path';
-import { and, asc, count, desc, eq, gte, isNotNull, like, lt, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, like, lt, or, type SQL } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { mailDkimKeys, mailMessages, sites, type MailDkimKeyRow, type MailMessageRow, type ServerRow } from '../db/schema.js';
 import type { Config } from '../config.js';
@@ -112,6 +112,26 @@ const INGEST_OVERLAP_MS = 5_000;
 const INGEST_COLD_START_MS = 6 * 3600_000;
 /** Hard cap per tick so a log flood cannot blow up panel memory. */
 const INGEST_MAX_LINES = 20_000;
+/** The abuse guard counts what each site sent in this window (enforceVolumeLimits). */
+const GUARD_WINDOW_MS = 3600_000;
+/**
+ * A row deleted from the traffic history goes for good once its last event, and its deletion,
+ * are this far behind the log cursor. The next read starts INGEST_OVERLAP_MS before the cursor;
+ * the rest is slack for a server whose clock runs ahead of the panel's.
+ */
+const HIDDEN_SETTLE_MS = 5 * 60_000;
+/**
+ * A deleted row of mail still waiting stays (hidden) while the relay may try it again, since
+ * each try logs anew. Postfix gives up on a message 5 days after it arrived
+ * (maximal_queue_lifetime, which WPL7 leaves at its default), so past this nothing will.
+ */
+const HIDDEN_PENDING_MAX_MS = 7 * 24 * 3600_000;
+/** Statuses the relay logs nothing more about. */
+const FINAL_STATUSES: MailStatus[] = ['sent', 'bounced', 'expired', 'rejected', 'deleted'];
+/** Mail still in the queue, for each recipient whose outcome is not known yet. */
+const PENDING_STATUSES: MailStatus[] = ['queued', 'deferred'];
+/** Queue → Empty lists the queue first; a long one needs more than the default 1 MiB. */
+const EMPTY_LISTING_CAP = 16 * 1024 * 1024;
 /**
  * The port-25 probe opens a real connection to a remote MX and takes seconds. The UI polls
  * status every minute, so the answer is cached - whether a provider blocks the port changes
@@ -605,7 +625,9 @@ export class MailService {
     const threshold = this.settings.get('mailSuspendPerSitePerHour') || 0;
     if (threshold <= 0) return { suspended: [] };
 
-    const since = Date.now() - 3600_000;
+    const since = Date.now() - GUARD_WINDOW_MS;
+    // Rows deleted from the history count too: they stay, hidden, until this window is over
+    // (purgeHidden), so deleting what a site sent does not lift it back under the limit.
     const rows = this.db
       .select({ slug: mailMessages.siteSlug, n: count() })
       .from(mailMessages)
@@ -908,9 +930,9 @@ export class MailService {
 
   // -------------------------------------------------------------------- queue
 
-  async queueFor(serverId: number): Promise<QueueEntry[]> {
+  async queueFor(serverId: number, outputCap?: number): Promise<QueueEntry[]> {
     const handle = this.servers.handleFor(serverId);
-    const res = await handle.docker.exec(MAIL_CONTAINER, ['postqueue', '-j'], { timeoutMs: 30_000 });
+    const res = await handle.docker.exec(MAIL_CONTAINER, ['postqueue', '-j'], { timeoutMs: 30_000, outputCap });
     if (res.exitCode !== 0) throw badGateway('Could not read the mail queue', (res.stderr || res.stdout).slice(0, 300));
     return parsePostqueueJson(res.stdout);
   }
@@ -954,12 +976,37 @@ export class MailService {
     if (res.exitCode !== 0) throw badGateway('Queue flush failed', (res.stderr || res.stdout).slice(0, 300));
   }
 
-  /** Drop one message, or the whole queue when `queueId` is 'ALL' (postsuper's own syntax). */
+  /**
+   * Drop one message, or the whole queue when `queueId` is 'ALL' (postsuper's own syntax).
+   * Each message goes by its id, even for ALL: postsuper logs "<id>: removed" only for a message
+   * it was given by id, and that line is what shows the message as `deleted` in Traffic.
+   * `postsuper -d ALL` itself logs nothing but a count.
+   */
   async deleteQueued(serverId: number, queueId: string): Promise<void> {
     if (!/^(ALL|[A-Za-z0-9]{6,20})$/.test(queueId)) throw badRequest('Not a valid queue id');
     const handle = this.servers.handleFor(serverId);
-    const res = await handle.docker.exec(MAIL_CONTAINER, ['postsuper', '-d', queueId], { timeoutMs: 60_000 });
-    if (res.exitCode !== 0) throw badGateway('Deleting from the queue failed', (res.stderr || res.stdout).slice(0, 300));
+    // A queue that cannot be listed is still emptied below, only without its messages marked
+    // in Traffic: Empty worked without a listing before, and must not start failing on one.
+    const ids =
+      queueId === 'ALL'
+        ? (await this.queueFor(serverId, EMPTY_LISTING_CAP).catch(() => [] as QueueEntry[]))
+            .map((e) => e.queueId)
+            .filter((id) => /^[A-Za-z0-9]{6,20}$/.test(id))
+        : [queueId];
+    if (ids.length > 0) {
+      const res = await handle.docker.execWithInput(MAIL_CONTAINER, ['postsuper', '-d', '-'], Buffer.from(`${ids.join('\n')}\n`), {
+        timeoutMs: 60_000,
+      });
+      if (res.exitCode !== 0) throw badGateway('Deleting from the queue failed', (res.stderr || res.stdout).slice(0, 300));
+    }
+    if (queueId === 'ALL') {
+      // Whatever the list missed - mail that arrived since, or a queue too long to list in
+      // full - goes too, though without the line that marks it in Traffic.
+      const res = await handle.docker.exec(MAIL_CONTAINER, ['postsuper', '-d', 'ALL'], { timeoutMs: 60_000 });
+      if (res.exitCode !== 0) throw badGateway('Emptying the queue failed', (res.stderr || res.stdout).slice(0, 300));
+    }
+    // Read the log now, so Traffic shows the mail deleted rather than still waiting.
+    await this.ingestServer(serverId).catch(() => undefined);
   }
 
   // -------------------------------------------------------------------- test send
@@ -1079,6 +1126,7 @@ export class MailService {
       if (failed > 1) this.log.warn(`${failed} mail log events were skipped on server #${serverId}`);
     }
     this.setCursor(serverId, readAt);
+    this.purgeHidden(serverId, readAt);
     return { events: events.length };
   }
 
@@ -1138,6 +1186,25 @@ export class MailService {
       return;
     }
 
+    if (event.kind === 'deleted') {
+      // Only the recipients still waiting: one already delivered or bounced keeps that outcome.
+      // lastEventAt stays the last delivery attempt. The abuse guard counts by it, and emptying
+      // a backlog is not sending it: dated now, the backlog would suspend its site. The line
+      // itself only ever updates, so nothing needs its time to keep a row from being written back.
+      this.db
+        .update(mailMessages)
+        .set({ status: 'deleted' })
+        .where(
+          and(
+            eq(mailMessages.serverId, serverId),
+            eq(mailMessages.queueId, event.queueId),
+            inArray(mailMessages.status, PENDING_STATUSES),
+          ),
+        )
+        .run();
+      return;
+    }
+
     // Delivery: complete the placeholder if it is still waiting for a recipient, otherwise
     // this is another recipient of the same message and gets its own row.
     const rows = this.rowsForQueue(serverId, event.queueId);
@@ -1174,6 +1241,9 @@ export class MailService {
       dkimSigned: envelope?.dkimSigned ?? null,
       dkimDomain: envelope?.dkimDomain ?? null,
       firstSeenAt: envelope?.firstSeenAt ?? event.ts,
+      // A message whose rows were all deleted from the history stays deleted there, recipient
+      // by recipient as the relay gets to them.
+      hiddenAt: rows.length > 0 && rows.every((r) => r.hiddenAt !== null) ? rows[0]!.hiddenAt : null,
       ...delivery,
     });
   }
@@ -1193,7 +1263,8 @@ export class MailService {
     values: Partial<typeof mailMessages.$inferInsert> & { status?: string; firstSeenAt?: number; lastEventAt?: number },
   ): void {
     const now = Date.now();
-    const { firstSeenAt, lastEventAt, status, ...rest } = values;
+    // Whether a row is deleted from the history is never the log's to change, only to inherit.
+    const { firstSeenAt, lastEventAt, status, hiddenAt, ...rest } = values;
     this.db
       .insert(mailMessages)
       .values({
@@ -1203,6 +1274,7 @@ export class MailService {
         status: status ?? 'queued',
         firstSeenAt: firstSeenAt ?? now,
         lastEventAt: lastEventAt ?? now,
+        hiddenAt: hiddenAt ?? null,
         ...rest,
       })
       .onConflictDoUpdate({
@@ -1215,7 +1287,7 @@ export class MailService {
   // -------------------------------------------------------------------- queries
 
   messages(filter: MessageFilter): { items: MailMessageDto[]; total: number } {
-    const conditions = [];
+    const conditions: (SQL | undefined)[] = [isNull(mailMessages.hiddenAt)];
     if (filter.siteSlug) conditions.push(eq(mailMessages.siteSlug, filter.siteSlug));
     if (filter.status) conditions.push(eq(mailMessages.status, filter.status));
     if (filter.serverId !== undefined) conditions.push(eq(mailMessages.serverId, filter.serverId));
@@ -1224,7 +1296,7 @@ export class MailService {
       const needle = `%${filter.search.toLowerCase()}%`;
       conditions.push(or(like(mailMessages.fromAddr, needle), like(mailMessages.toAddr, needle)));
     }
-    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    const where = and(...conditions);
 
     const total = this.db.select({ n: count() }).from(mailMessages).where(where).get()?.n ?? 0;
     const rows = this.db
@@ -1268,9 +1340,13 @@ export class MailService {
    */
   stats(hours: number): MailStatsDto {
     const since = Date.now() - hours * 3600_000;
-    const rows = this.db.select().from(mailMessages).where(gte(mailMessages.lastEventAt, since)).all();
+    const rows = this.db
+      .select()
+      .from(mailMessages)
+      .where(and(gte(mailMessages.lastEventAt, since), isNull(mailMessages.hiddenAt)))
+      .all();
 
-    const byStatus: Record<string, number> = { queued: 0, sent: 0, deferred: 0, bounced: 0, expired: 0, rejected: 0 };
+    const byStatus: Record<string, number> = { queued: 0, sent: 0, deferred: 0, bounced: 0, expired: 0, rejected: 0, deleted: 0 };
     const perSite = new Map<string, { sent: number; failed: number; recipients: Set<string>; lastAt: number }>();
     const perHour = new Map<number, { ts: number; sent: number; failed: number }>();
     const perRecipientDomain = new Map<string, number>();
@@ -1348,6 +1424,44 @@ export class MailService {
     if (doomed.length === 0) return 0;
     this.db.delete(mailMessages).where(lt(mailMessages.lastEventAt, cutoff)).run();
     return doomed.length;
+  }
+
+  /**
+   * Delete rows from the traffic history (Traffic → Delete). They leave every view at once,
+   * but stay in the table, hidden, until the relay can log nothing more about them: the next
+   * read of the log starts a few seconds back and would write a just-deleted row anew, and mail
+   * still in the queue logs again at every try - as a new row, without its site. While hidden
+   * they take in whatever is logged about them, and the abuse guard goes on counting them for
+   * its hour. purgeHidden then removes them for good.
+   */
+  deleteMessages(ids: number[]): { removed: number } {
+    const removed = this.db
+      .update(mailMessages)
+      .set({ hiddenAt: Date.now() })
+      .where(and(inArray(mailMessages.id, ids), isNull(mailMessages.hiddenAt)))
+      .run().changes;
+    return { removed };
+  }
+
+  /**
+   * Remove for good the deleted rows of one server that nothing needs any more: done with (or
+   * long past waiting), their last event and their deletion out of the next read's reach, and
+   * their last event out of the abuse guard's hour. Runs after each read, with its cursor.
+   */
+  private purgeHidden(serverId: number, cursor: number): number {
+    const settled = cursor - HIDDEN_SETTLE_MS;
+    const now = Date.now();
+    return this.db
+      .delete(mailMessages)
+      .where(
+        and(
+          eq(mailMessages.serverId, serverId),
+          lt(mailMessages.hiddenAt, settled),
+          lt(mailMessages.lastEventAt, Math.min(settled, now - GUARD_WINDOW_MS)),
+          or(inArray(mailMessages.status, FINAL_STATUSES), lt(mailMessages.firstSeenAt, now - HIDDEN_PENDING_MAX_MS)),
+        ),
+      )
+      .run().changes;
   }
 
   // -------------------------------------------------------------------- deliverability

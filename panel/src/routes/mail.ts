@@ -7,6 +7,7 @@ import {
   mailDkimCreateBody,
   mailDomainsQuery,
   mailHostnameBody,
+  mailMessagesDeleteBody,
   mailMessagesQuery,
   mailQueueActionParams,
   mailQueueQuery,
@@ -54,6 +55,11 @@ export function registerMailRoutes(app: FastifyInstance, deps: AppDeps): void {
       limit: req.query.limit,
       offset: req.query.offset,
     }),
+  );
+
+  /** Traffic → Delete: the rows go from the history, the mail itself is not touched. */
+  r.post('/api/mail/messages/delete', { schema: { body: mailMessagesDeleteBody } }, async (req) =>
+    deps.mail.deleteMessages(req.body.ids),
   );
 
   r.get('/api/mail/stats', { schema: { querystring: mailStatsQuery } }, async (req) =>
