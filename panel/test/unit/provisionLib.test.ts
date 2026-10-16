@@ -256,4 +256,13 @@ describe('setup.sh', () => {
     expect(res.stderr).toContain('This is an ARM server (aarch64). WPL7 runs on x86-64 (amd64) servers only');
     expect(calls()).toEqual(['uname -m']);
   });
+
+  it("does not lock the relay's postfix user out of its login folder", () => {
+    // smtpd reads the login database as postfix. A folder only root can enter failed every
+    // site's mail login; the panel gives it to postfix's group (MailService.syncMailAuthTo),
+    // and an update's setup.sh run must not take it back.
+    const script = fs.readFileSync(path.join(ROOT, 'provision/setup.sh'), 'utf8');
+    const locking = script.split('\n').filter((line) => /^\s*(chmod|chown|install)\b/.test(line) && line.includes('/mail/sasl"'));
+    expect(locking).toEqual([]);
+  });
 });
