@@ -134,6 +134,22 @@ CREATE TABLE wp_other.secret (s text);
     ).rejects.toMatchObject({ statusCode: 400 });
   });
 
+  it('pages through rows sorted by a column full of ties, each row once', async () => {
+    rootSql("CREATE TABLE wp_shop.t_ties (id int PRIMARY KEY, grp varchar(10), filler varchar(200)); INSERT INTO wp_shop.t_ties SELECT seq, 'same', REPEAT('x', 100) FROM wp_shop.seq_1_to_100;");
+    try {
+      for (const dir of ['asc', 'desc'] as const) {
+        const seen = new Set<string>();
+        for (let offset = 0; offset < 100; offset += 10) {
+          const page = await service.rows(site, 't_ties', { offset, limit: 10, sort: 'grp', dir, filters: [] });
+          for (const r of page.rows) seen.add(String(r[0]));
+        }
+        expect(seen.size, dir).toBe(100);
+      }
+    } finally {
+      rootSql('DROP TABLE wp_shop.t_ties;');
+    }
+  });
+
   it('shows binary data as bytes, and big numbers whole', async () => {
     const page = await service.rows(site, 't_bin', { offset: 0, limit: 5, dir: 'asc', filters: [] });
     expect(page.rows[0]).toEqual(['1', { binary: 3, hex: '00ff10' }, '18446744073709551615']);

@@ -372,13 +372,12 @@ describe('export and import', () => {
     expect(world.dbAdmin.calls).toContainEqual({ method: 'importFromAs', args: [staged, 'wp_alpha', 'wp_alpha', 'pw-alpha'] });
     expect(world.db.select().from(backups).all().map((b) => [b.type, b.note])).toEqual([['pre_restore', 'Before importing into wp_alpha']]);
     expect(fs.existsSync(staged)).toBe(false);
-    // The site was stopped for it, started again, and asked whether WordPress still finds itself.
+    // The site was stopped for it, its database asked whether WordPress finds itself there, and
+    // only then was the site started again.
     const docker = world.docker.calls.map((c) => c.method);
     expect(docker.lastIndexOf('stopContainer')).toBeGreaterThan(-1);
     expect(docker.lastIndexOf('startContainer')).toBeGreaterThan(docker.lastIndexOf('stopContainer'));
-    expect(
-      world.docker.calls.some((c) => c.method === 'exec' && (c.args[1] as string[]).join(' ').startsWith('wp core is-installed')),
-    ).toBe(true);
+    expect(world.dbBrowser.calls.some((c) => c.method === 'rows' && c.args[0] === 'wp_options')).toBe(true);
     expect(world.docker.containers.get('wp-alpha')).toBe('running');
   });
 
@@ -429,12 +428,62 @@ describe('export and import', () => {
     expect(world.docker.calls.some((c) => c.method === 'stopContainer')).toBe(false);
   });
 
-  it('stops the site again when WordPress finds no installation after the import', async () => {
+  /** Whether the site was started at any point after it was stopped for the import. */
+  const startedAfterStop = (world: TestWorld) => {
+    const calls = world.docker.calls.map((c) => c.method);
+    return calls.lastIndexOf('startContainer') > calls.lastIndexOf('stopContainer');
+  };
+
+  it('keeps the site stopped when the imported database holds no installation, never starting it', async () => {
     const { app, headers, world } = await signedIn({ exec: hostExec });
     addSite(world, 'alpha');
-    world.servers.handleFor(1).wp.isInstalled = async () => false;
+    // The dump's tables have another prefix: no wp_options after it.
+    world.dbBrowser.dropTable('wp_alpha', 'wp_options');
     const res = await importInto(app, headers, 'wp_alpha', {
       uploadId: staged(world, 'CREATE TABLE `other_options` (a int);\n'),
+      backupFirst: false,
+    });
+    const done = await runJob(world, jobId(res));
+    expect(done.status).toBe('failed');
+    expect(done.error).toMatch(/finds no installation.*The site stays stopped.*Restore a backup/);
+    expect(startedAfterStop(world)).toBe(false);
+    expect(world.docker.containers.get('wp-alpha')).not.toBe('running');
+  });
+
+  it('keeps the site stopped when a failed import left no installation', async () => {
+    const { app, headers, world } = await signedIn({ exec: hostExec });
+    addSite(world, 'alpha');
+    // Emptied first, then the load failed before the options table came back.
+    world.dbBrowser.dropTable('wp_alpha', 'wp_options');
+    world.dbAdmin.failOn.set('importFromAs', 'ERROR 1064 (42000) at line 9: You have an error in your SQL syntax');
+    const res = await importInto(app, headers, 'wp_alpha', {
+      uploadId: staged(world, 'CREATE TABLE `wp_options` (a int);\n'),
+      empty: true,
+    });
+    const done = await runJob(world, jobId(res));
+    expect(done.status).toBe('failed');
+    expect(done.error).toMatch(/The import failed, and left no WordPress installation.*Restore the backup taken before the import/);
+    expect(startedAfterStop(world)).toBe(false);
+  });
+
+  it('starts the site again after a failed import that left its installation alone', async () => {
+    const { app, headers, world } = await signedIn({ exec: hostExec });
+    addSite(world, 'alpha');
+    world.dbAdmin.failOn.set('importFromAs', 'ERROR 1064 (42000) at line 1: You have an error in your SQL syntax');
+    const res = await importInto(app, headers, 'wp_alpha', { uploadId: staged(world, 'CREATE TABLE `wp_options` (a int);\n') });
+    const done = await runJob(world, jobId(res));
+    expect(done.status).toBe('failed');
+    expect(done.error).toMatch(/ERROR 1064/);
+    expect(world.docker.containers.get('wp-alpha')).toBe('running');
+  });
+
+  it('asks WordPress, and stops the site again, when the database cannot be asked', async () => {
+    const { app, headers, world } = await signedIn({ exec: hostExec });
+    addSite(world, 'alpha');
+    world.dbBrowser.failOn.set('rows', Object.assign(new Error('relay down'), { statusCode: 502 }));
+    world.servers.handleFor(1).wp.isInstalled = async () => false;
+    const res = await importInto(app, headers, 'wp_alpha', {
+      uploadId: staged(world, 'CREATE TABLE `wp_options` (a int);\n'),
       backupFirst: false,
     });
     const done = await runJob(world, jobId(res));

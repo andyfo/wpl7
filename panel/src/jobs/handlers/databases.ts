@@ -5,6 +5,9 @@ import { z } from 'zod';
 import { siteDatabases, type SiteRow } from '../../db/schema.js';
 import { extraDbNameSchema, DB_OBJECT_NAME_RE } from '../../../shared/databases.js';
 import { generateSecret } from '../../lib/crypto.js';
+import { AppError } from '../../lib/errors.js';
+import type { ServerHandle } from '../../servers/registry.js';
+import type { DbTarget } from '../../services/dbBrowser.js';
 import type { CoreServices } from '../../services/index.js';
 import { sitePaths, siteRuntimeFrom } from '../../services/siteSpec.js';
 import type { JobContext } from '../context.js';
@@ -305,6 +308,7 @@ export async function databaseImport(ctx: JobContext<z.infer<typeof databaseImpo
       ctx.info('Stopping the site for the import…');
       await server.docker.stopContainer(site.containerName);
     }
+    let failure: unknown = null;
     try {
       // Again, now that the backup has run: nothing is emptied for a dump that has gone meanwhile.
       if (!(await server.files.stat(file))) throw gone();
@@ -314,16 +318,15 @@ export async function databaseImport(ctx: JobContext<z.infer<typeof databaseImpo
       }
       ctx.info(`Importing into ${p.database} as ${target.user}…`);
       await server.dbAdmin.importFromAs(file, p.database, target.user, target.password, { timeoutMs: 2 * 3600_000 });
+    } catch (err) {
+      failure = err;
+      ctx.error(`The import failed: ${errMsg(err)}`);
     } finally {
-      if (stopped) {
-        ctx.info('Starting the site again…');
-        await startSiteContainer(server, s, loadSite(s.db, site.id), ctx).catch((err: unknown) => {
-          ctx.error(`Could not start the site again: ${errMsg(err)}. Start it on the site page.`);
-        });
-      }
       s.databases.kick(site.serverId);
     }
-    if (stopped) await assertStillInstalled(ctx, s, site);
+    // Failed or not: a failed import may have emptied the database as surely as a wrong dump.
+    if (stopped) await restartIfInstalled(ctx, s, site, target, { failed: failure !== null, backedUp: p.backupFirst });
+    if (failure !== null) throw failure;
   } finally {
     if (ownDb) s.monitor.busySlugs.delete(site.slug);
   }
@@ -334,10 +337,68 @@ export async function databaseImport(ctx: JobContext<z.infer<typeof databaseImpo
 }
 
 /**
- * After an import into the site's own database: WordPress must still find its installation, or
- * it hands its installer, and the site, to the first visitor. Such a site is stopped again.
+ * After an import into the site's own database, failed or not, the site is started again only on
+ * a database WordPress finds its installation in: one without hands its installer, and the site,
+ * to whoever asks first. The database is asked while the site is still stopped, so there is no
+ * moment in which the installer is served.
  */
-async function assertStillInstalled(ctx: JobContext<unknown>, s: CoreServices, site: SiteRow): Promise<void> {
+async function restartIfInstalled(
+  ctx: JobContext<unknown>,
+  s: CoreServices,
+  site: SiteRow,
+  target: DbTarget,
+  opts: { failed: boolean; backedUp: boolean },
+): Promise<void> {
+  const server = s.servers.handleFor(site.serverId);
+  const installed = await hasInstallation(server, site, target);
+  if (installed === false) {
+    const restore = opts.backedUp ? 'Restore the backup taken before the import' : 'Restore a backup';
+    throw new Error(
+      (opts.failed
+        ? 'The import failed, and left no WordPress installation in the database. '
+        : `WordPress finds no installation in the imported database: its tables may not start with ${site.tablePrefix}. `) +
+        `The site stays stopped, so no one can run the installer. ${restore}, or import a dump whose tables start with ` +
+        `${site.tablePrefix}, then start the site.`,
+    );
+  }
+  ctx.info('Starting the site again…');
+  try {
+    await startSiteContainer(server, s, loadSite(s.db, site.id), ctx);
+  } catch (err) {
+    ctx.error(`Could not start the site again: ${errMsg(err)}. Start it on the site page.`);
+    return;
+  }
+  // The database could not be asked: WordPress is, now that it runs.
+  if (installed === null) await assertStillInstalled(ctx, s, site, opts.backedUp);
+}
+
+/**
+ * Whether the site's database holds a WordPress installation, as WordPress decides it
+ * (is_blog_installed: a siteurl in its options table). Asked as the site's own user, through the
+ * database browser, so the site need not run. `null` when the database could not be asked.
+ */
+async function hasInstallation(server: ServerHandle, site: SiteRow, target: DbTarget): Promise<boolean | null> {
+  try {
+    const page = await server.dbBrowser.rows(target, `${site.tablePrefix}options`, {
+      offset: 0,
+      limit: 1,
+      dir: 'asc',
+      filters: [{ column: 'option_name', op: 'eq', value: 'siteurl' }],
+    });
+    const at = page.columns.findIndex((c) => c.name === 'option_value');
+    const value = at === -1 ? undefined : page.rows[0]?.[at];
+    return value !== undefined && value !== null && value !== '';
+  } catch (err) {
+    // No options table: no installation. Anything else says nothing either way.
+    return err instanceof AppError && err.statusCode === 404 ? false : null;
+  }
+}
+
+/**
+ * WordPress itself asked, in a site that runs: one that finds no installation is stopped again.
+ * For when the database could not be asked first.
+ */
+async function assertStillInstalled(ctx: JobContext<unknown>, s: CoreServices, site: SiteRow, backedUp: boolean): Promise<void> {
   const server = s.servers.handleFor(site.serverId);
   let installed: boolean | null = null;
   // wp-cli may need a moment in a container that has just started.
@@ -353,7 +414,7 @@ async function assertStillInstalled(ctx: JobContext<unknown>, s: CoreServices, s
   await server.docker.stopContainer(site.containerName).catch(() => undefined);
   throw new Error(
     `WordPress finds no installation in the imported database: its tables may not start with ${site.tablePrefix}. ` +
-      'The site is stopped, so no one can run the installer. Restore the backup taken before the import, ' +
+      `The site is stopped, so no one can run the installer. ${backedUp ? 'Restore the backup taken before the import' : 'Restore a backup'}, ` +
       `or import a dump whose tables start with ${site.tablePrefix}, then start the site.`,
   );
 }

@@ -245,8 +245,13 @@ export class DbBrowserService implements DbBrowserPort {
       const names = new Set(meta.columns.map((c) => c.name));
       const where = buildWhere(q.filters, names);
       if (q.sort !== undefined && !names.has(q.sort)) throw badRequest(`The table has no column "${q.sort}"`);
+      // Ties in the sorted column are broken by the key, or without one by every other column:
+      // otherwise MariaDB may order them differently from one page to the next, and paging shows
+      // some rows twice and others never.
+      const dir = q.dir === 'desc' ? 'DESC' : 'ASC';
+      const tieBreak = (meta.key ?? meta.columns.map((c) => c.name)).filter((c) => c !== q.sort);
       const order = q.sort
-        ? `ORDER BY ${quoteIdent(q.sort)} ${q.dir === 'desc' ? 'DESC' : 'ASC'}`
+        ? `ORDER BY ${[q.sort, ...tieBreak].map((c) => `${quoteIdent(c)} ${dir}`).join(', ')}`
         : meta.key
           ? `ORDER BY ${meta.key.map(quoteIdent).join(', ')}`
           : '';

@@ -62,10 +62,10 @@ keeps what you ran, in this browser.
   **Back up the site first** off.
 - **Delete every table in** the database first makes it hold exactly what the dump makes.
 
-The site is stopped while a dump goes into its own database, and started again after. If
-WordPress then finds no installation, for example because the dump's tables have another
-prefix, the site stays stopped so no one can run the installer. Restore the backup taken before
-the import to undo it.
+The site is stopped while a dump goes into its own database. It is started again only if the
+database then holds a WordPress installation, whether the import worked or failed: without one,
+anyone could run WordPress's installer. A dump whose tables have another prefix leaves none, for
+example. Restore the backup taken before the import to undo it.
 
 The panel reads the dump before it changes anything. It refuses a file that is not a dump, a
 dump that switches to another database with `USE` or `CREATE DATABASE`, and, with every table

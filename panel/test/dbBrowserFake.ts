@@ -76,6 +76,11 @@ export class FakeDbBrowser implements DbBrowserPort {
     return t;
   }
 
+  /** What an import that emptied the database, or loaded other tables, leaves behind. */
+  dropTable(database: string, name: string): void {
+    this.dbs.get(database)?.delete(name);
+  }
+
   addTable(database: string, name: string, table: FakeTable): void {
     let db = this.dbs.get(database);
     if (!db) {
