@@ -33,7 +33,8 @@ The job checks the backup's checksums, then takes a **Before a restore** backup 
 is now. If either step fails, nothing has changed and the site keeps running.
 
 Then it stops the site and pauses the site's FTP and SFTP logins. It replaces the database with the
-backup's and swaps in the files. The previous files stay next to the new ones, in
+backup's and swaps in the files. A database added to the site is replaced too, and one deleted since
+the backup is made again, unless another site has taken its name. One added since the backup stays as it is. The previous files stay next to the new ones, in
 `wordpress.pre-restore-<time>`, for at least a day. A backup taken on another PHP version moves the
 site back to that version, if the panel still offers it. A backup whose tables have another prefix
 gives the site that prefix: that happens when a site restores a backup of a deleted site that had
@@ -63,7 +64,7 @@ and the backup's time, and streams from the server that keeps the backup.
 |---|---|
 | **Everything** | One `.tar` file that holds the four backup files. |
 | **Files** | The site's files, as `files.tar.gz`. They are its `wordpress` folder. |
-| **Database** | The database, as one `.sql.gz` file that phpMyAdmin imports as it is. |
+| **Database** | The site's own database, as one `.sql.gz` file. **Import** on a site's **Database** tab takes it as it is. |
 
 To restore a hosted site without the panel, follow [Manual recovery without the
 panel](/docs/reference/manual-recovery/).
@@ -89,6 +90,8 @@ settings are in the database, so the site stays connected after a restore.
 ## Limits
 
 - A restore replaces everything that changed since the backup: posts, orders, comments and uploads.
+- A restore stops before it changes anything when a database in the backup is now another site's,
+  or sits on the server unused.
 - A backup restores only onto the site of the same name, on the server that holds the backup.
   From another server, fetch it back from an offsite copy, or move the site back first.
 - A deleted site's backup has no **Restore**. Create a site with the same name first.

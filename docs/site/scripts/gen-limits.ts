@@ -13,6 +13,7 @@ const FROM = ['the Limits section of every page'];
 const GROUPS: [dir: string, label: string][] = [
   ['get-started', 'Get started'],
   ['sites', 'Sites'],
+  ['databases', 'Databases'],
   ['servers', 'Servers'],
   ['plugins', 'Plugins'],
   ['backups', 'Backups'],

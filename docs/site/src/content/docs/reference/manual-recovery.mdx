@@ -30,7 +30,8 @@ root is `/srv/backups` unless the server's location was moved on **Backups → S
 | `db.sql.gz` | A `mariadb-dump --single-transaction` of the site's database |
 | `files.tar.gz` | The site's `wordpress/` folder, its `config/` folder and `site.json` |
 | `manifest.json` | The slug, title, domains, dev address, PHP and WordPress versions, locale, database name and user, and the table prefix: `wp_`, unless the site was imported |
-| `sha256sums` | The SHA-256 checksums of the two archives |
+| `sha256sums` | The SHA-256 checksums of the archive and every dump |
+| `databases/<name>.sql.gz` | A dump of each database added to the site, imported the same way as `db.sql.gz` |
 
 The names on the server follow from the slug. For Northwind Bakery, slug `northwind-bakery`:
 
@@ -72,6 +73,9 @@ Run these as root on the server that holds the site.
    ```bash
    zcat db.sql.gz | docker exec -i wpl7-mariadb sh -c 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" wp_northwind_bakery'
    ```
+
+   A site with added databases has one dump each in `databases/`. Empty and import each the same
+   way, under its own name.
 
 5. Move the current files aside and unpack the backup's:
 

@@ -50,7 +50,7 @@ import { isExternal } from '../../lib/siteKind.js';
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /** What buildSiteContainerSpec needs to know about a site (a row, or a row with in-memory edits). */
-type SpecSite = Parameters<typeof buildSiteContainerSpec>[1];
+export type SpecSite = Parameters<typeof buildSiteContainerSpec>[1];
 
 // ---------------------------------------------------------------------------
 
@@ -436,6 +436,10 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
 
     ctx.info(`Dropping database ${site.dbName}…`);
     await server.dbAdmin.dropSiteDb(site.dbName, site.dbUser);
+    for (const name of s.databases.extraNames(site.id)) {
+      ctx.info(`Dropping database ${name}…`);
+      await server.dbAdmin.dropDb(name);
+    }
 
     ctx.info('Removing site files…');
     await server.files.rm(safeJoin(s.config.paths.sites, site.slug));
@@ -614,7 +618,7 @@ export async function siteRestart(ctx: JobContext<z.infer<typeof siteIdPayload>>
  * has to happen before the create and not after: see ensureSiteMountSources for what a
  * missing one costs.
  */
-async function replaceContainer(
+export async function replaceContainer(
   ctx: JobContext<unknown>,
   server: ServerHandle,
   s: CoreServices,

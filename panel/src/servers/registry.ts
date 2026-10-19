@@ -11,6 +11,7 @@ import { hostExec, type ExecPort } from '../lib/exec.js';
 import { ExecFiles, LocalFiles, type FilesPort } from '../lib/files.js';
 import { DockerService, type DockerPort } from '../services/docker.js';
 import { DbAdminService, type DbAdminPort } from '../services/dbAdmin.js';
+import { DbBrowserService, type DbBrowserPort } from '../services/dbBrowser.js';
 import { RemoteDbAdminService } from './remoteDbAdmin.js';
 import { WpService } from '../services/wp.js';
 import { SiteFilesService } from '../services/siteFiles.js';
@@ -40,6 +41,8 @@ export interface ServerHandle {
   wp: WpService;
   /** Web FTP: a site's files, always worked on inside its own container (services/siteFiles.ts). */
   siteFiles: SiteFilesService;
+  /** The database browser: a site's tables, rows and SQL, as the site's own user (services/dbBrowser.ts). */
+  dbBrowser: DbBrowserPort;
   /** Base URL for HTTP probes of a site container on this server. */
   probeUrlFor(containerName: string): string;
 }
@@ -49,6 +52,8 @@ export interface HandlePorts {
   exec: ExecPort;
   files: FilesPort;
   dbAdmin: DbAdminPort;
+  /** Left out, the real browser over `docker`; tests and the demo hand in an in-memory one. */
+  dbBrowser?: DbBrowserPort;
 }
 
 /** Injectable factories so tests can register fake servers without touching ssh2. */
@@ -124,6 +129,7 @@ export class ServerRegistry {
       ...ports,
       wp: new WpService(ports.docker),
       siteFiles: new SiteFilesService(ports.docker),
+      dbBrowser: ports.dbBrowser ?? new DbBrowserService(ports.docker, () => `"${handle.name}"`),
       probeUrlFor(_containerName: string): string {
         if (probeUrl) return probeUrl(this.row);
         // Probes go through Traefik, never straight at the container. Site containers are
@@ -227,6 +233,7 @@ export class ServerRegistry {
   }
 
   private closeEntry(entry: CacheEntry): void {
+    entry.handle.dbBrowser.closeIdle();
     entry.conn?.close();
   }
 

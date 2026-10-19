@@ -70,6 +70,7 @@ export default defineConfig({
       sidebar: [
         { label: 'Get started', items: ['index', { autogenerate: { directory: 'get-started' } }] },
         group('Sites', 'sites'),
+        group('Databases', 'databases'),
         group('Servers', 'servers'),
         group('Plugins', 'plugins'),
         group('Backups', 'backups'),

@@ -36,6 +36,7 @@ import type { ConnectionsService } from './connections.js';
 import type { ExternalBackupService } from './externalBackup.js';
 import type { ReminderService } from './reminders.js';
 import type { AlertService } from './alerts.js';
+import type { DatabasesService } from './databases.js';
 
 export interface Logger {
   info(msg: string): void;
@@ -71,6 +72,8 @@ export interface CoreServices {
   geoip: GeoIpService;
   /** Per-site WordPress snapshot (plugins, themes, core) and the fleet view over it. */
   wpInventory: WpInventoryService;
+  /** A site's databases - its own and the others it was given - and every server's, as last read. */
+  databases: DatabasesService;
   /** Cached wpvulnerability.net answers plus the version-range matcher. */
   vulnerabilities: VulnerabilityFeedService;
   updates: UpdateService;

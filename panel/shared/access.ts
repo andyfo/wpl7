@@ -32,7 +32,7 @@ export const ACCESS_SUMMARIES: Record<AccessLevel, string> = {
     'Never a file’s contents, a command’s output or a password.',
   manage:
     'Also work inside every site as its WordPress admin could: create sites; plugins, themes and core; WP-CLI, ' +
-    'shell and REST calls; files; WordPress and FTP logins; backups and restores; each site\'s protection, malware scans ' +
+    'shell and REST calls; files; databases; WordPress and FTP logins; backups and restores; each site\'s protection, malware scans ' +
     'and quarantine; custom schedules. It can read ' +
     'whatever a site holds, licence keys included, and what it sets up in a site stays when you revoke it.',
   full:

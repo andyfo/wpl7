@@ -54,6 +54,7 @@ const NAV: NavItem[] = [
       { to: '/sites/security', label: 'Security' },
     ],
   },
+  { to: '/databases', label: 'Databases', icon: 'database' },
   {
     to: '/servers',
     label: 'Servers',

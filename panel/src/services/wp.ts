@@ -294,6 +294,15 @@ export class WpService {
     return { rows, exitCode: res.exitCode, output };
   }
 
+  /**
+   * Whether WordPress finds its installation in its database (`wp core is-installed`): one that does
+   * not serves its installer to whoever asks first. `null` when wp-cli could not tell.
+   */
+  async isInstalled(container: string): Promise<boolean | null> {
+    const res = await this.run(container, ['core', 'is-installed', '--skip-plugins', '--skip-themes'], 60_000);
+    return res.exitCode === 0 ? true : res.exitCode === 1 ? false : null;
+  }
+
   async coreVersion(container: string, opts: { skipExtensions?: boolean } = {}): Promise<string | null> {
     const res = await this.run(
       container,

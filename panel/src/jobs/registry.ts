@@ -67,6 +67,18 @@ import { siteImport, siteImportFinish, siteImportFinishPayload, siteImportPayloa
 import { siteImportRefresh, siteImportRefreshPayload } from './handlers/importRefresh.js';
 import { systemPostUpdate, systemPostUpdatePayload } from './handlers/systemUpdate.js';
 import { filesCompress, filesCompressPayload, filesExtract, filesExtractPayload } from './handlers/files.js';
+import {
+  databaseCreate,
+  databaseCreatePayload,
+  databaseDelete,
+  databaseDeletePayload,
+  databaseDeleteUnused,
+  databaseDeleteUnusedPayload,
+  databaseImport,
+  databaseImportPayload,
+  databasePassword,
+  databasePasswordPayload,
+} from './handlers/databases.js';
 import { siteShell, siteShellPayload, wpCli, wpCliPayload, wpRest, wpRestPayload } from './handlers/exec.js';
 import { housekeepingPayload, systemHousekeeping } from './handlers/housekeeping.js';
 import { pluginZipCheck, pluginZipCheckPayload, siteMalwareScan, siteMalwareScanPayload, wpReinstall, wpReinstallPayload } from './handlers/security.js';
@@ -160,6 +172,12 @@ const registry: Partial<Record<JobType, RegistryEntry>> = {
   // A big archive is minutes of work; the exec inside has its own 30-minute deadline.
   'files.extract': entry(filesExtractPayload, filesExtract, 35 * 60_000) as RegistryEntry,
   'files.compress': entry(filesCompressPayload, filesCompress, 35 * 60_000) as RegistryEntry,
+  'database.create': entry(databaseCreatePayload, databaseCreate),
+  'database.delete': entry(databaseDeletePayload, databaseDelete),
+  'database.password': entry(databasePasswordPayload, databasePassword),
+  // Two hours for the dump itself (a gigabyte loads in minutes, not hours), and a backup's time when one goes first.
+  'database.import': entry(databaseImportPayload, databaseImport, plusBackup(2 * 3600_000)),
+  'database.deleteUnused': entry(databaseDeleteUnusedPayload, databaseDeleteUnused),
   'server.syncPlugins': entry(serverSyncPluginsPayload, serverSyncPlugins, 10 * 60_000) as RegistryEntry,
   'server.provision': entry(serverProvisionPayload, serverProvision, 30 * 60_000, serverProvisionQueuedCancel) as RegistryEntry,
   'server.relocateBackups': entry(serverRelocateBackupsPayload, serverRelocateBackups, 12 * 3600_000) as RegistryEntry,
@@ -228,6 +246,10 @@ export const SITE_INTERRUPTING_JOBS: ReadonlySet<JobType> = new Set<JobType>([
   'site.importFinish',
   'site.importRefresh',
   'backup.restore',
+  // The container is recreated with the new password.
+  'database.password',
+  // The site's own database is behind the maintenance page while a dump loads.
+  'database.import',
   'wp.coreUpdate',
   'wp.pluginTask',
   'wp.themeTask',

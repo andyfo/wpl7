@@ -1,7 +1,20 @@
+// @docs databases/overview
 import { randomBytes } from 'node:crypto';
-import { Readable } from 'node:stream';
+import { Readable, type Writable } from 'node:stream';
 import type { ExecPort } from '../lib/exec.js';
-import { assertDbIdentifier, DUMP_ARGS, grantPattern, packetLimitFor, type DbAdminPort } from '../services/dbAdmin.js';
+import {
+  INVENTORY_SQL,
+  assertDbIdentifier,
+  DUMP_ARGS,
+  FORGET_GRANTS_SQL,
+  IMPORT_CLIENT_ARGS,
+  grantPattern,
+  packetLimitFor,
+  parseInventory,
+  quoteDbObject,
+  type DbAdminPort,
+  type DbInventoryRow,
+} from '../services/dbAdmin.js';
 
 /** MySQL string literal escaping (backslash escapes are active in MariaDB's default sql_mode). */
 const sqlQuote = (v: string) => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`;
@@ -18,15 +31,25 @@ export class RemoteDbAdminService implements DbAdminPort {
   ) {}
 
   private async sql(statements: string): Promise<void> {
+    await this.run(statements, 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD"');
+  }
+
+  /** As sql(), with the client's batch output (`-N -B`: no headers, tab-separated) handed back. */
+  private async sqlOutput(statements: string): Promise<string> {
+    return this.run(statements, 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" -N -B');
+  }
+
+  private async run(statements: string, client: string): Promise<string> {
     const res = await this.exec.runWithInput(
       'docker',
-      ['exec', '-i', this.container, 'sh', '-c', 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD"'],
+      ['exec', '-i', this.container, 'sh', '-c', client],
       Readable.from([statements]),
       { timeoutMs: 5 * 60_000 },
     );
     if (res.exitCode !== 0) {
       throw new Error(`mariadb admin command failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
     }
+    return res.stdout;
   }
 
   async createSiteDb(dbName: string, dbUser: string, dbPassword: string): Promise<void> {
@@ -91,8 +114,8 @@ export class RemoteDbAdminService implements DbAdminPort {
   async importFrom(srcGzPath: string, dbName: string): Promise<void> {
     assertDbIdentifier(dbName);
     const script =
-      `set -o pipefail; zcat ${q(srcGzPath)} | docker exec -i ${this.container} sh -c ` +
-      `'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD" ${dbName}'`;
+      `set -o pipefail; gzip -dc ${q(srcGzPath)} | docker exec -i ${this.container} sh -c ` +
+      `'exec mariadb ${IMPORT_CLIENT_ARGS} -uroot -p"$MARIADB_ROOT_PASSWORD" ${dbName}'`;
     const res = await this.exec.run('bash', ['-c', script], { timeoutMs: 60 * 60_000 });
     if (res.exitCode !== 0) {
       throw new Error(`Database import failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
@@ -104,7 +127,7 @@ export class RemoteDbAdminService implements DbAdminPort {
    * over stdin into an option file inside the MariaDB container (mode 600, removed afterwards), and
    * the client reads it from there.
    */
-  async importFromAs(srcGzPath: string, dbName: string, dbUser: string, dbPassword: string): Promise<void> {
+  async importFromAs(srcGzPath: string, dbName: string, dbUser: string, dbPassword: string, opts: { timeoutMs?: number } = {}): Promise<void> {
     assertDbIdentifier(dbName);
     assertDbIdentifier(dbUser);
     const cnf = `/run/wpl7-import-${randomBytes(8).toString('hex')}.cnf`;
@@ -119,9 +142,9 @@ export class RemoteDbAdminService implements DbAdminPort {
     }
     try {
       const script =
-        `set -o pipefail; zcat ${q(srcGzPath)} | docker exec -i ${this.container} ` +
-        `mariadb --defaults-extra-file=${cnf} --max-allowed-packet=1G ${dbName}`;
-      const res = await this.exec.run('bash', ['-c', script], { timeoutMs: 60 * 60_000 });
+        `set -o pipefail; gzip -dc ${q(srcGzPath)} | docker exec -i ${this.container} ` +
+        `mariadb --defaults-extra-file=${cnf} ${IMPORT_CLIENT_ARGS} --max-allowed-packet=1G ${dbName}`;
+      const res = await this.exec.run('bash', ['-c', script], { timeoutMs: opts.timeoutMs ?? 60 * 60_000 });
       if (res.exitCode !== 0) {
         throw new Error(`Database import failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
       }
@@ -143,9 +166,78 @@ export class RemoteDbAdminService implements DbAdminPort {
     await this.sql(`SET GLOBAL max_allowed_packet = ${wanted};`);
     return wanted;
   }
+
+  async inventory(): Promise<DbInventoryRow[]> {
+    return parseInventory(await this.sqlOutput(`${INVENTORY_SQL};\n`));
+  }
+
+  async createExtraDb(dbName: string, dbUser: string): Promise<void> {
+    assertDbIdentifier(dbName);
+    assertDbIdentifier(dbUser);
+    await this.sql(`CREATE DATABASE \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;`);
+    try {
+      await this.sql(
+        [
+          // The new database is this site's alone, whatever grants an earlier one of that name left.
+          `${forgetGrants(dbName)};`,
+          `GRANT ALL PRIVILEGES ON \`${grantPattern(dbName)}\`.* TO '${dbUser}'@'%';`,
+          `FLUSH PRIVILEGES;`,
+        ].join('\n'),
+      );
+    } catch (err) {
+      // Made here, so undone here: a caller that gets the error owns nothing on the server, and
+      // never drops a database of that name that was there before.
+      await this.sql(`DROP DATABASE IF EXISTS \`${dbName}\`;`).catch(() => undefined);
+      throw err;
+    }
+  }
+
+  async dropDb(dbName: string): Promise<void> {
+    await this.sql([`DROP DATABASE IF EXISTS ${quoteDbObject(dbName)};`, `${forgetGrants(dbName)};`, 'FLUSH PRIVILEGES;'].join('\n'));
+  }
+
+  async dropUser(dbUser: string): Promise<void> {
+    assertDbIdentifier(dbUser);
+    const hosts = (await this.sqlOutput(`SELECT Host FROM mysql.user WHERE User = ${sqlQuote(dbUser)};\n`))
+      .split('\n')
+      .filter(Boolean);
+    if (hosts.length === 0) return;
+    await this.sql(hosts.map((host) => `DROP USER IF EXISTS ${sqlQuote(dbUser)}@${sqlQuote(host)};`).join('\n'));
+  }
+
+  async userExists(dbUser: string): Promise<boolean> {
+    const out = await this.sqlOutput(`SELECT COUNT(*) FROM mysql.user WHERE User = ${sqlQuote(dbUser)};\n`);
+    return Number(out.trim()) > 0;
+  }
+
+  async setUserPassword(dbUser: string, password: string): Promise<void> {
+    assertDbIdentifier(dbUser);
+    // Over stdin, like every statement here: the password appears in no argv on either side.
+    await this.sql(`ALTER USER '${dbUser}'@'%' IDENTIFIED BY ${sqlQuote(password)};`);
+  }
+
+  /** A reader that goes away errors `out`, and an errored destination closes the SSH channel (sshConnection.ts). */
+  async dumpToStream(dbName: string, out: Writable): Promise<void> {
+    assertDbIdentifier(dbName);
+    const res = await this.exec.runToStream(
+      'docker',
+      ['exec', this.container, 'sh', '-c', `exec mariadb-dump ${DUMP_ARGS} -uroot -p"$MARIADB_ROOT_PASSWORD" ${dbName}`],
+      out,
+      { timeoutMs: 6 * 3600_000 },
+    );
+    if (res.exitCode !== 0) {
+      throw new Error(`mariadb-dump failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
+    }
+  }
 }
 
 const q = (p: string) => `'${p.replace(/'/g, `'\\''`)}'`;
+
+/** FORGET_GRANTS_SQL with its two names in place, for the client over stdin. */
+const forgetGrants = (dbName: string) => {
+  const names = [grantPattern(dbName), dbName];
+  return FORGET_GRANTS_SQL.replace(/\?/g, () => sqlQuote(names.shift()!));
+};
 
 /** A value in a MySQL option file: double-quoted, with the two characters that need it escaped. */
 const optionQuote = (v: string) => `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;

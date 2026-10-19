@@ -31,6 +31,7 @@ import type { AccessLevel } from '../../shared/access.js';
 import { currentActor, runAs, type JobActor } from './actor.js';
 import { checkTarget, fireAction, publicParams, withStoredSecrets } from './actions.js';
 import { externalSites } from '../lib/siteKind.js';
+import { INVENTORY_EVERY_MS } from '../services/databases.js';
 
 /** How long a maintenance flag is left alone before it is treated as possibly stale. */
 const MAINTENANCE_GRACE_MS = 60_000;
@@ -158,6 +159,8 @@ export class Schedulers {
     // Offsite uploads are kicked by events (a backup finished, a destination was added) as
     // well as by the minute timer; through the runner, a pause holds for both.
     s.offsite.attachKicker(() => void this.run('offsite', 'kick'));
+    // A job that adds, drops or replaces a database has its server read again at once.
+    s.databases.attachKicker(() => void this.run('database-sizes', 'kick'));
   }
 
   // ------------------------------------------------------------------ the registry
@@ -352,6 +355,26 @@ export class Schedulers {
         tick: () => s.monitor.tickDiskUsage(),
       },
       {
+        key: 'database-sizes',
+        group: 'background',
+        name: 'Database sizes',
+        description: "Reads every server's databases and how big they are, for the Databases page and each site's Database tab.",
+        pausable: true,
+        pauseWarning: 'Database sizes stop updating until you resume.',
+        cadence: () => ({
+          everyMs: INVENTORY_EVERY_MS,
+          text: 'Every hour, and after a database is added, deleted or replaced',
+        }),
+        tick: async (how) => {
+          const { scanned, failed } = await s.databases.tick(how);
+          if (scanned === 0 && failed === 0) return { idle: true };
+          if (failed > 0) {
+            return { outcome: 'failed', error: `${plural(failed, 'server')} could not be read; the Databases page says which` };
+          }
+          return { message: `${plural(scanned, 'server')} read` };
+        },
+      },
+      {
         key: 'traffic-ingest',
         group: 'background',
         name: 'Visitor statistics',
@@ -514,6 +537,9 @@ export class Schedulers {
       every('site-stats', this.statsMs),
       every('server-stats', this.statsMs),
       every('disk-usage', this.duSliceMs),
+      // Every server's databases and their sizes. Jobs that change a database kick its server at
+      // once; the hour is for what changed without the panel (a plugin's tables growing).
+      every('database-sizes', INVENTORY_EVERY_MS),
       every('wp-cron', 5 * MIN),
       // Traffic is reconstructed from each relay's log, so the view is only ever as fresh
       // as this tick; a minute keeps the abuse counters useful without hammering the
@@ -571,6 +597,8 @@ export class Schedulers {
       after(FIRST_CHECK_DELAY_MS, () => void this.run('update-check', 'boot')),
       // Custom schedules missed while the panel was down: once the stack has settled.
       after(CUSTOM_TICK_MS, () => void this.runDueCustom()),
+      // A minute in, when the servers' MariaDBs are up, rather than an hour.
+      after(MIN, () => void this.run('database-sizes', 'boot')),
     ];
     // Half a minute after boot rather than now: a panel that just came up has a stack still
     // settling around it and a network that may not be there yet; and a failed fetch is

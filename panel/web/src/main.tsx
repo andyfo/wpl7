@@ -11,6 +11,7 @@ import { ConfirmEmail } from './pages/ConfirmEmail';
 import { Dashboard } from './pages/Dashboard';
 import { Sites } from './pages/Sites';
 import { Servers } from './pages/Servers';
+import { Databases } from './pages/Databases';
 import { ServerDetail } from './pages/ServerDetail';
 import { NewSite } from './pages/NewSite';
 import { ImportSite } from './pages/ImportSite';
@@ -49,6 +50,7 @@ const pages: RouteObject[] = [
   { index: true, element: <Dashboard /> },
   { path: 'reminders', element: <Reminders /> },
   { path: 'sites', element: <Sites /> },
+  { path: 'databases', element: <Databases /> },
   { path: 'servers', element: <Servers /> },
   // Before 'servers/:id', like 'sites/security' before 'sites/:slug'.
   { path: 'servers/security', element: <ServersSecurity /> },

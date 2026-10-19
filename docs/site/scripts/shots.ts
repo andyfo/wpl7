@@ -104,6 +104,32 @@ export const SHOTS: Shot[] = [
   },
   { name: 'site-ftp', what: 'A site’s FTP tab: one login and how to connect', path: '/sites/harbor-yoga', theme: 'light', prepare: tab('FTP') },
   {
+    name: 'site-database',
+    what: 'A site’s Database tab: how to connect, its two databases, and wp_options open in the browser',
+    path: '/sites/northwind-bakery?tab=database&table=wp_options',
+    theme: 'both',
+  },
+  {
+    name: 'site-database-row',
+    what: 'One row of wp_options open, its serialized plugin list edited as PHP data',
+    path: '/sites/northwind-bakery?tab=database&table=wp_options',
+    theme: 'light',
+    prepare: steps(
+      async (page) => {
+        await page.getByRole('cell', { name: 'active_plugins', exact: true }).click();
+      },
+      button('Edit as PHP data'),
+    ),
+  },
+  {
+    name: 'site-database-sql',
+    what: 'The SQL view with a query and its result',
+    path: '/sites/northwind-bakery?tab=database&view=sql',
+    theme: 'light',
+    prepare: button('Run'),
+  },
+  { name: 'databases', what: 'Databases: every server’s databases, and one no site uses', path: '/databases', theme: 'light' },
+  {
     name: 'site-visitors',
     what: 'A site’s Visitors tab over seven days',
     path: '/sites/pixel-press',

@@ -1,0 +1,64 @@
+---
+title: Databases
+description: "See every database on every server, add a database to a site, and clear away the ones no site uses."
+sidebar:
+  order: 1
+sources:
+  - panel/web/src/pages/Databases.tsx
+  - panel/web/src/components/database/DatabaseDialogs.tsx
+  - panel/src/routes/databases.ts
+  - panel/src/services/databases.ts
+  - panel/src/services/dbAdmin.ts
+  - panel/src/servers/remoteDbAdmin.ts
+  - panel/src/jobs/handlers/databases.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+**Databases** lists every database on every server, with the site it belongs to, its size and its
+number of tables. Each server runs one MariaDB, and each site has a database of its own there.
+
+<Screenshot name="databases" alt="The Databases page listing every site's database, and one no site uses" />
+
+## Add a database to a site
+
+Some sites need a second database, for an order history or an app beside WordPress.
+
+1. Choose **Add database**, here or on the site's **Database** tab.
+2. Pick the **Site**, and type a **Name** of lowercase letters, digits and `_`. Names that start
+   with `wp_` are kept for the sites' own databases.
+3. Choose **Add database**.
+
+The new database uses the site's database login, so the site's code connects with what WordPress
+already has. It is part of the site from then on. Its backups hold it, a move takes it along, and
+deleting the site deletes it.
+
+## Delete a database
+
+- An added database is deleted on its site's **Database** tab. Backups taken before keep a copy.
+- A site's own database goes only with the site.
+- **Not used by any site** lists the databases nothing claims: one left behind by a deleted or
+  moved site, or one made by hand. **Delete** drops it from its server, once you type its name.
+
+## Sizes
+
+The panel reads every server's databases once an hour, and after every job that adds, deletes or
+replaces one. **Refresh** reads them now. **Missing** marks a site's database that its server does
+not have. **Old copy (move)** marks the copy a move leaves on the old server until the move is
+finalized.
+
+## Limits
+
+- A database belongs to one site. There are no databases outside a site, and no other database
+  users.
+- MariaDB has no port open to the internet. Only sites on the same server reach a database.
+- Sizes are InnoDB's estimates.
+- A move stops when the new server already has a database with the name of one of the site's.
+- Deleting a database no site uses needs Full access.
+
+## Related
+
+- [A site's database](/docs/sites/database/)
+- [How backups work](/docs/backups/overview/)
+- [Move a site to another server](/docs/sites/move/)
+- [How WPL7 works](/docs/get-started/how-it-works/)

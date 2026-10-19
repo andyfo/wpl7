@@ -1,0 +1,101 @@
+---
+title: A site's database
+description: "See how a site connects to its database, browse and edit its tables, run SQL, and export or import a dump."
+sidebar:
+  order: 9
+sources:
+  - panel/web/src/components/database/DatabaseTab.tsx
+  - panel/web/src/components/database/TablesView.tsx
+  - panel/web/src/components/database/RowSheet.tsx
+  - panel/web/src/components/database/SqlView.tsx
+  - panel/web/src/components/database/cells.tsx
+  - panel/web/src/api/databases.ts
+  - panel/src/services/dbBrowser.ts
+  - panel/src/lib/sqlText.ts
+  - panel/shared/phpSerialize.ts
+  - panel/shared/databases.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A site keeps its WordPress data in a MariaDB database on its server. The site's **Database** tab
+shows how to connect to it, and a browser for its tables and rows.
+
+<Screenshot name="site-database" alt="A site's Database tab with its connection, two databases and the wp_options table open" />
+
+## Connect from the site's code
+
+The **Connection** card names the **Database**, the **User**, the **Host** and the **Table
+prefix**. **Show** reveals the password, and the panel logs who asked. Only the sites on the same
+server can connect. MariaDB has no port open to the internet.
+
+## Browse and edit rows
+
+1. Under **Browse**, pick a table on the left.
+2. Choose a column's name to sort by it. **Filter** keeps the rows that match.
+3. Choose a row to open it. Change its values, then choose **Save**. **Delete row** removes it.
+4. **Insert row** adds a row. Columns left empty take their default.
+
+The panel finds a row by its primary key. A table without one, and a view, are read only here.
+**Structure** shows a table's columns and indexes.
+
+## Edit WordPress's serialized values
+
+WordPress stores lists as PHP serialized text, such as the active plugins in `wp_options`. Such a
+value offers **Edit as PHP data**. Change its entries there, and the panel writes it back with
+every length counted again. A length that is off by one byte would empty the whole option.
+
+<Screenshot name="site-database-row" alt="The active_plugins option open, its two plugins edited as PHP data" />
+
+## Run SQL
+
+**SQL** opens an editor. **Run**, or Ctrl+Enter, runs the statements one after another and stops at
+the first error. Each statement shows its rows, or how many rows it changed. **Recent queries**
+keeps what you ran, in this browser.
+
+<Screenshot name="site-database-sql" alt="The SQL view with a query and its result" />
+
+## Export and import
+
+- **Export** downloads a dump of the database as a `.sql.gz` file.
+- **Import** loads a `.sql` or `.sql.gz` file. It backs the site up first, unless you switch
+  **Back up the site first** off.
+- **Delete every table in** the database first makes it hold exactly what the dump makes.
+
+The site is stopped while a dump goes into its own database, and started again after. If
+WordPress then finds no installation, for example because the dump's tables have another
+prefix, the site stays stopped so no one can run the installer. Restore the backup taken before
+the import to undo it.
+
+The panel reads the dump before it changes anything. It refuses a file that is not a dump, a
+dump that switches to another database with `USE` or `CREATE DATABASE`, and, with every table
+deleted first, a dump without the site's options table, such as `wp_options`.
+
+## Change the password
+
+**Change password** gives the database user a new password. WordPress restarts with it, so the site
+is offline for a few seconds. The panel refuses when `wp-config.php` sets the password itself, or
+cannot be read. If the site stops answering with the new password, the old one is put back.
+
+## What the browser can reach
+
+Every query runs as the site's own database user. MariaDB keeps it to that site's databases, so it
+cannot see another site's data or MariaDB's own users. An import runs as that user too, and a
+dump cannot run commands or read files on the server.
+
+## Limits
+
+- A statement runs for at most 50 seconds from the SQL editor, and 20 seconds while browsing.
+- The SQL editor shows the first 1,000 rows of a result, then stops the statement.
+- A value over 1 MiB, and binary data, can only be changed with SQL.
+- An import takes up to 4 GB, compressed, and up to two hours to load.
+- A view, trigger or routine in a dump whose `DEFINER` is another database user does not load.
+  Remove the `DEFINER` clauses first.
+- Changes wait while a restore, import or move runs on the site. A backup does not block them.
+
+## Related
+
+- [Databases](/docs/databases/overview/)
+- [How backups work](/docs/backups/overview/)
+- [Restore and download](/docs/backups/restore/)
+- [Files](/docs/sites/files/)

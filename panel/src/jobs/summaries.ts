@@ -236,6 +236,19 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
         if (paths.length === 0 || !str(p.to)) return null;
         return `${paths.length === 1 ? paths[0] : plural(paths.length, 'item')} → ${str(p.to)}`;
       }
+      case 'database.create':
+      case 'database.delete':
+        return str(p.name);
+      case 'database.import': {
+        const db = str(p.database);
+        if (!db) return null;
+        const extras = [p.empty === true ? 'emptied first' : null, p.backupFirst === false ? 'without a backup' : null].filter(Boolean);
+        return extras.length > 0 ? `Into ${db}, ${extras.join(', ')}` : `Into ${db}`;
+      }
+      case 'database.deleteUnused': {
+        const server = num(p.serverId);
+        return str(p.name) ? `${str(p.name)}${server !== null ? ` on ${names.server?.(server) ?? `server #${server}`}` : ''}` : null;
+      }
       case 'server.relocateBackups':
         return str(p.to) ? `To ${str(p.to)}` : null;
       case 'system.postUpdate':

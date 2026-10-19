@@ -23,6 +23,24 @@ const STOP_GRACE_MS = 20_000;
  */
 const MAX_SITE_HOLD_MS = 15 * 60_000;
 
+/**
+ * Jobs that make, drop or replace a database: their servers are read again when they end, failed
+ * or not, since one that failed half-way may have changed one all the same.
+ */
+const DATABASE_CHANGING_JOBS: ReadonlySet<JobType> = new Set<JobType>([
+  'database.create',
+  'database.delete',
+  'database.import',
+  'database.deleteUnused',
+  'site.create',
+  'site.delete',
+  'site.move',
+  'site.moveFinalize',
+  'site.importFinish',
+  'site.importRefresh',
+  'backup.restore',
+]);
+
 export { execLane, laneServerId } from './lanes.js';
 import { externalLane } from './lanes.js';
 
@@ -504,6 +522,28 @@ export class JobWorker {
     });
   }
 
+  /**
+   * Have the servers a job made, dropped or replaced databases on read again (Database sizes), so the
+   * Databases page and the site's Database tab show what it left rather than what was there an hour ago.
+   * The database jobs of their own kick it themselves.
+   */
+  private rereadDatabases(job: JobRow): void {
+    if (!DATABASE_CHANGING_JOBS.has(job.type as JobType)) return;
+    const ids = new Set<number>();
+    if (job.serverId !== null) ids.add(job.serverId);
+    if (job.siteId !== null) {
+      const site = this.db.select({ serverId: sites.serverId }).from(sites).where(eq(sites.id, job.siteId)).get();
+      if (site) ids.add(site.serverId);
+    }
+    try {
+      const payload = JSON.parse(job.payload) as { sourceServerId?: unknown; targetServerId?: unknown };
+      for (const id of [payload.sourceServerId, payload.targetServerId]) if (typeof id === 'number') ids.add(id);
+    } catch {
+      // A payload that does not parse names no server.
+    }
+    for (const id of ids) this.services.databases.kick(id);
+  }
+
   private async execute(job: JobRow, ctx: JobContext): Promise<void> {
     const registry = getRegistry();
     const entry = registry[job.type as JobType];
@@ -552,6 +592,7 @@ export class JobWorker {
       }
 
       await this.releaseChecks(job, release);
+      this.rereadDatabases(job);
       this.db
         .update(jobs)
         .set({
@@ -564,6 +605,8 @@ export class JobWorker {
       this.forgetSecrets(job);
     } catch (err) {
       await this.releaseChecks(job, release);
+      // A job that failed half-way may have made or dropped a database all the same.
+      this.rereadDatabases(job);
       const canceled = err instanceof JobCanceledError;
       const message = err instanceof Error ? err.message : String(err);
       if (!canceled) {

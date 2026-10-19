@@ -190,6 +190,32 @@ export const JOB_TYPE_INFO = {
     description: "Packs files and folders of the site into a zip archive.",
     category: 'files',
   },
+  'database.create': {
+    label: 'Add database',
+    description: "Creates another database for the site, on its server, for the site's own database user.",
+    category: 'databases',
+  },
+  'database.delete': {
+    label: 'Delete database',
+    description: 'Drops one of the databases added to a site. Backups made before keep a copy of it.',
+    category: 'databases',
+  },
+  'database.password': {
+    label: 'Change database password',
+    description: "Gives the site's database user a new password and restarts the site with it.",
+    category: 'databases',
+  },
+  'database.import': {
+    label: 'Import database',
+    description:
+      "Backs the site up, then loads an uploaded SQL dump into one of its databases as the site's own database user.",
+    category: 'databases',
+  },
+  'database.deleteUnused': {
+    label: 'Delete unused database',
+    description: 'Drops a database that no site uses from its server.',
+    category: 'databases',
+  },
   'server.provision': {
     label: 'Set up server',
     description: "Installs or updates the server's stack: Docker services, Traefik, MariaDB and the mail relay.",
@@ -247,6 +273,7 @@ export const JOB_CATEGORY_LABELS: Record<JobCategory, string> = {
   backups: 'Backups',
   wordpress: 'WordPress',
   files: 'Files',
+  databases: 'Databases',
   security: 'Security',
   servers: 'Servers',
   system: 'Panel',

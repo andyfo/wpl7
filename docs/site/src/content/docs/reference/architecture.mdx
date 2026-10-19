@@ -9,6 +9,7 @@ sources:
   - panel/src/services/siteNetwork.ts
   - panel/src/services/labels.ts
   - panel/src/services/docker.ts
+  - panel/src/services/dbBrowser.ts
   - panel/src/services/ftpConfig.ts
   - panel/src/lib/slug.ts
   - panel/src/jobs/lanes.ts
@@ -26,7 +27,7 @@ map: what runs, what it is called, where it keeps its files, and what can reach 
 | Container | Image | What it does |
 |---|---|---|
 | `wpl7-traefik` | `traefik:v3.7` | Takes ports 80 and 443, gets certificates, routes each hostname to its site, applies [site protection](/docs/reference/glossary/#site-protection) and writes the access log |
-| `wpl7-mariadb` | `mariadb:11.4` | The database server, with one database and one user per site |
+| `wpl7-mariadb` | `mariadb:11.4` | The database server, with one user per site and that site's databases |
 | `wpl7-mail` | `boky/postfix` | The mail [relay](/docs/reference/glossary/#relay): takes every site's mail, queues it and delivers it |
 | `wpl7-dkim` | `instrumentisto/opendkim` | Signs outgoing mail for the relay |
 | `wpl7-panel` | `ghcr.io/andyfo/wpl7/panel` | The API, the web interface and the job queue. On the panel's server only |
@@ -70,6 +71,7 @@ letters, digits and dashes.
 |---|---|---|
 | Container | `wp-<slug>` | `wp-northwind-bakery` |
 | Database and database user | `wp_` and the slug with dashes turned into underscores | `wp_northwind_bakery` |
+| A database added to the site | Its own name, which never starts with `wp_` | `northwind_orders` |
 | Site network | `wpl7_site_<slug>` | `wpl7_site_northwind-bakery` |
 | Traefik router and service | `wp-<slug>` | `wp-northwind-bakery` |
 | Redirect from extra domains | `wp-<slug>-canonical` | `wp-northwind-bakery-canonical` |
@@ -94,6 +96,7 @@ at the same path, so every path the panel hands to Docker is valid on the host.
 | `/srv/sites/<slug>/config/` | The site's PHP limits in `uploads.ini`, its relay login and its protection settings |
 | `/srv/sites/<slug>/quarantine/` | Files a malware scan moved out of the site. Mounted into no site |
 | `/srv/sites/<slug>/site.json` | A description of the site, for recovery by hand |
+| `/srv/sites/<slug>/db-uploads/` | A dump uploaded for an import, until the import is done. Mounted into no site |
 | `/srv/backups/<slug>/<timestamp>/` | Backups, unless the server's backup location was moved |
 | `/srv/backups/panel/<timestamp>/` | Nightly copies of the panel's database, on the panel's server |
 | `/srv/external/<slug>/wordpress/` | The copy of a [site hosted elsewhere](/docs/sites/external/) that its next backup builds on, on the server that keeps its backups |
@@ -179,6 +182,9 @@ server, and the panel restarts Traefik when the token changes.
   run beside that server's site work.
 - Everything recurring runs through one scheduler, listed on **Automations → Schedules**.
 - Mail traffic and visitor statistics are read from the relay's and Traefik's logs every minute.
+- A site's **Database** tab reaches MariaDB through `docker exec`: a relay in the `wpl7-mariadb`
+  container joins the command's input and output to MariaDB's port. It logs in as the site's own
+  database user. No database port is published, and none is forwarded over SSH.
 - AI apps use the same API through `/mcp`.
 
 | Lane | What runs in it |

@@ -11,6 +11,8 @@ import { removeSiteNetwork } from '../../services/siteNetwork.js';
 import { loadSite, siteDomains, siteUrl, startSiteContainer, updateSiteRow, writeSiteJson } from './shared.js';
 import { ensureSiteImage, wildcardCovers } from './sites.js';
 import { pipeBetweenServers, proxyConfigPathFor, proxyConfigYaml, rmOn } from './moveHelpers.js';
+import { extraDbFile } from '../../services/backup.js';
+import { parseNames } from '../../services/databases.js';
 import { restoreSiteOnServer, type ProtectionHold } from './restoreSite.js';
 
 export const siteMovePayload = z.object({
@@ -92,6 +94,20 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
       await rmOn(target, s.config.paths.sites, site.slug);
     }
     await target.dbAdmin.dropSiteDb(site.dbName, site.dbUser);
+    // The site's other databases must land on names that are free there. Unlike its own (named for
+    // its unique slug), one of those names on the target is not provably a leftover of this move:
+    // it may hold someone's data, so the move stops rather than drop it.
+    const extraNames = s.databases.extraNames(site.id);
+    if (extraNames.length > 0) {
+      const onTarget = new Set((await target.dbAdmin.inventory()).map((r) => r.name));
+      const taken = extraNames.filter((n) => onTarget.has(n));
+      if (taken.length > 0) {
+        throw new Error(
+          `"${target.name}" already has a database called ${taken.join(', ')}; ` +
+            'delete it under Databases if no site needs it, then move again',
+        );
+      }
+    }
     // Everything the transfer stages goes under the TARGET's backup location, which is not
     // necessarily the source's or the panel's default - that is the whole point of the
     // per-server setting, and a preflight that checked the wrong disk would clear a move
@@ -226,7 +242,12 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
       target,
       site,
       domains,
-      { kind: 'archive', filesTarGz: path.join(finalDir, 'files.tar.gz'), dbSqlGz: path.join(finalDir, 'db.sql.gz') },
+      {
+        kind: 'archive',
+        filesTarGz: path.join(finalDir, 'files.tar.gz'),
+        dbSqlGz: path.join(finalDir, 'db.sql.gz'),
+        extraDbs: extraNames.map((name) => ({ name, sqlGz: path.join(finalDir, extraDbFile(name)) })),
+      },
       {
         routing: true,
         requireWpConfig: true,
@@ -287,6 +308,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
           containerName: site.containerName,
           dbName: site.dbName,
           dbUser: site.dbUser,
+          extraDbs: extraNames.length > 0 ? JSON.stringify(extraNames) : null,
           filesPath: paths.root,
           // Every hostname must resolve to the target before the source copy goes - the dev
           // alias too, or a dev URL whose record was never updated died with the source.
@@ -520,6 +542,15 @@ export async function finalizeCleanup(ctx: JobContext<unknown>, s: CoreServices,
   ctx.info(`Removing the old copy of "${cleanup.siteSlug}" from "${source.name}"…`);
   await source.docker.removeContainer(cleanup.containerName);
   await source.dbAdmin.dropSiteDb(cleanup.dbName, cleanup.dbUser);
+  for (const name of parseNames(cleanup.extraDbs)) {
+    // Its name may since belong to a database of a site on the source server: then it is not ours.
+    const claim = s.databases.claimOf(cleanup.sourceServerId, name);
+    if (claim && claim.kind !== 'moveCopy') {
+      ctx.warn(`Keeping database ${name} on "${source.name}": it belongs to ${claim.slug} now.`);
+      continue;
+    }
+    await source.dbAdmin.dropDb(name);
+  }
   await rmOn(source, s.config.paths.sites, cleanup.siteSlug);
   // The network outlives the container it was made for; left behind, every stack redeploy
   // would keep re-attaching Traefik, the relay and MariaDB to a bridge with nothing on it.

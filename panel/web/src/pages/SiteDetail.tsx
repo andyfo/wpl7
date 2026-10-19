@@ -51,6 +51,7 @@ import { Sparkline } from '../components/Sparkline';
 import { WordPressTab } from '../components/wp/WordPressTab';
 import { FilesTab } from '../components/files/FilesTab';
 import { FtpTab } from '../components/ftp/FtpTab';
+import { DatabaseTab } from '../components/database/DatabaseTab';
 import { SiteSecurityTab } from '../components/security/SiteSecurityTab';
 import { BlockDialog } from '../components/security/BlockDialog';
 import {
@@ -70,6 +71,7 @@ const SITE_TABS = [
   { id: 'wordpress', label: 'WordPress' },
   { id: 'files', label: 'Files' },
   { id: 'ftp', label: 'FTP' },
+  { id: 'database', label: 'Database' },
   { id: 'security', label: 'Security' },
   { id: 'settings', label: 'Settings' },
 ];
@@ -145,6 +147,7 @@ export function SiteDetail() {
       {/* Keyed: another site's page is a fresh tab, never this one's selection or dialogs. */}
       {tab === 'files' && <FilesTab key={slug} slug={slug} />}
       {tab === 'ftp' && <FtpTab key={slug} slug={slug} />}
+      {tab === 'database' && <DatabaseTab key={slug} slug={slug} />}
       {tab === 'settings' && (external ? <ExternalSettings slug={slug} /> : <SettingsTab slug={slug} />)}
     </div>
   );
@@ -193,7 +196,18 @@ function SiteFacts({ site: s, creating = false }: { site: SiteDetailDto; creatin
         <FactRow label="PHP" value={s.phpVersion} />
         <FactRow label="Language" value={localeName(meta.data?.locales, s.locale)} />
         {!creating && <FactRow label="Container" value={s.containerState} />}
-        <FactRow label="Database" value={s.dbName} />
+        {creating ? (
+          <FactRow label="Database" value={s.dbName} />
+        ) : (
+          <div className="flex gap-3">
+            <dt className="w-28 shrink-0 text-neutral-500">Database</dt>
+            <dd className="break-all font-medium">
+              <Link to={`/sites/${s.slug}?tab=database`} className="hover:underline">
+                {s.dbName}
+              </Link>
+            </dd>
+          </div>
+        )}
         {s.tablePrefix !== 'wp_' && <FactRow label="Table prefix" value={s.tablePrefix} />}
         <FactRow label="WP admin" value={`${s.adminUser ?? '–'} <${s.adminEmail ?? '–'}>`} />
         {!creating && <FactRow label="Disk" value={formatBytes(s.diskBytes)} />}

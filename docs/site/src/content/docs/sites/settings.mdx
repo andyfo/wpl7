@@ -2,7 +2,7 @@
 title: Site settings
 description: "Switch PHP, set CPU, memory and process limits, stop, recreate or delete a site."
 sidebar:
-  order: 10
+  order: 11
 sources:
   - panel/web/src/pages/SiteDetail.tsx
   - panel/web/src/pages/Settings.tsx
@@ -66,7 +66,7 @@ exception: it restarts each site once.
 4. Type the site's slug and choose **Delete site**.
 
 The job takes the final backup and releases licensed plugins at their vendors. It then removes
-the container, the FTP logins, the database, the files and the site's network. Backups outlive
+the container, the FTP logins, the databases, the files and the site's network. Backups outlive
 the site, under **Backups → All backups**. If a step fails, the site is left as **Error**, and
 deleting it again finishes the job.
 

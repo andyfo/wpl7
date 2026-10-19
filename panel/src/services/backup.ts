@@ -6,6 +6,7 @@ import {
   backupCopies,
   backups,
   jobs,
+  siteDatabases,
   sites,
   type BackupCopyRow,
   type BackupRow,
@@ -73,6 +74,16 @@ function idsToDelete(payload: string): number[] {
   } catch {
     return [];
   }
+}
+
+/** Where a backup keeps the site's other databases: databases/<name>.sql.gz. */
+export const EXTRA_DB_DIR = 'databases';
+export const extraDbFile = (name: string) => `${EXTRA_DB_DIR}/${name}.sql.gz`;
+
+/** The other databases a backup's manifest lists; none for one from before sites had any. */
+export function manifestDatabases(manifest: { databases?: unknown } | null): string[] {
+  const list = manifest?.databases;
+  return Array.isArray(list) ? list.filter((n): n is string => typeof n === 'string' && /^[a-z0-9_]{1,64}$/.test(n)) : [];
 }
 
 export const tsStamp = (d: Date) =>
@@ -210,6 +221,27 @@ export class BackupService {
     try {
       log('info', `Dumping database ${site.dbName}…`);
       await h.dbAdmin.dumpTo(site.dbName, path.join(dir, 'db.sql.gz'));
+      // The site's other databases ride along, each a dump of its own beside the site's. One that
+      // is not on the server (the site's user may drop its own) is left out, with a warning:
+      // failing every backup of the site over it would be worse.
+      let extras = this.extraDatabases(site.id);
+      if (extras.length > 0) {
+        const present = await h.dbAdmin.inventory().then(
+          (rows) => new Set(rows.map((r) => r.name)),
+          () => null,
+        );
+        if (present) {
+          for (const name of extras.filter((n) => !present.has(n))) {
+            log('warn', `Database ${name} is not on the server; this backup leaves it out.`);
+          }
+          extras = extras.filter((n) => present.has(n));
+        }
+      }
+      if (extras.length > 0) await h.files.mkdirp(path.join(dir, EXTRA_DB_DIR), { mode: 0o700 });
+      for (const name of extras) {
+        log('info', `Dumping database ${name}…`);
+        await h.dbAdmin.dumpTo(name, path.join(dir, extraDbFile(name)));
+      }
 
       const p = sitePaths(this.config, site.slug);
       const candidates = ['wordpress', 'config', 'site.json'];
@@ -242,6 +274,8 @@ export class BackupService {
         dbName: site.dbName,
         dbUser: site.dbUser,
         tablePrefix: site.tablePrefix,
+        /** The site's other databases, each in databases/<name>.sql.gz. */
+        databases: extras,
         serverId: h.id,
         serverName: h.name,
       };
@@ -249,14 +283,14 @@ export class BackupService {
 
       log('info', 'Writing checksums…');
       const sums: string[] = [];
-      for (const f of ['db.sql.gz', 'files.tar.gz']) {
+      for (const f of ['db.sql.gz', 'files.tar.gz', ...extras.map(extraDbFile)]) {
         sums.push(`${await h.files.sha256(path.join(dir, f))}  ${f}`);
       }
       await h.files.writeFile(path.join(dir, 'sha256sums'), sums.join('\n') + '\n');
 
       // A size that could not be read is counted as 0 rather than failing a finished backup.
       let sizeBytes = 0;
-      for (const f of await h.files.readdir(dir)) {
+      for (const f of [...(await h.files.readdir(dir)).filter((f) => f !== EXTRA_DB_DIR), ...extras.map(extraDbFile)]) {
         sizeBytes += (await h.files.stat(path.join(dir, f)).catch(() => null))?.sizeBytes ?? 0;
       }
 
@@ -275,6 +309,23 @@ export class BackupService {
     }
   }
 
+  /** The site's other databases (site_databases), by name: what a backup of it dumps besides its own. */
+  extraDatabases(siteId: number): string[] {
+    return this.db
+      .select({ name: siteDatabases.name })
+      .from(siteDatabases)
+      .where(eq(siteDatabases.siteId, siteId))
+      .orderBy(asc(siteDatabases.name))
+      .all()
+      .map((r) => r.name);
+  }
+
+  /** Import one of a backup's other databases into a (recreated or new) database of that name, on its server. */
+  async importExtraDatabase(backup: BackupRow, name: string): Promise<void> {
+    const h = this.handleForBackup(backup);
+    await h.dbAdmin.importFrom(path.join(backup.path, extraDbFile(name)), name);
+  }
+
   private async assertFreeSpace(h: ServerHandle, site: SiteRow): Promise<void> {
     const stat = await h.files.statvfs(this.rootFor(h)).catch(() => null);
     if (!stat) return; // statfs unsupported -> skip the preflight rather than block backups
@@ -287,7 +338,9 @@ export class BackupService {
   }
 
   /** A backup's manifest.json, or null when it cannot be read. */
-  async readManifest(backup: BackupRow): Promise<{ kind?: string; tablePrefix?: string; phpVersion?: string } | null> {
+  async readManifest(
+    backup: BackupRow,
+  ): Promise<{ kind?: string; tablePrefix?: string; phpVersion?: string; databases?: string[] } | null> {
     try {
       return JSON.parse(await this.handleForBackup(backup).files.readFile(path.join(backup.path, 'manifest.json'))) as {
         kind?: string;

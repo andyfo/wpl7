@@ -46,6 +46,7 @@ The docs' screenshots are taken from it: `npm run shoot` in `docs/site`.
 | `security.ts` | protection settings, blocked requests and addresses, malware scans, quarantine |
 | `accounts.ts` | admins, API keys and their activity, MCP connections, settings |
 | `recipes.ts`, `ftp.ts`, `terminal.ts` | license keys, an FTP login, the terminal's session |
+| `databases.ts` | each site's tables for the database browser, a database added to one site, one no site uses, and each server's sizes |
 
 A page shows something wrong or empty: find the endpoint it calls (`web/src/api/hooks.ts`) and
 seed what that reads. `DEMO_DEBUG=1` logs every container command nothing answers.

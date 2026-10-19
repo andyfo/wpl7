@@ -182,6 +182,13 @@ export const jobTypes = [
   'wp.recipes',
   'files.extract',
   'files.compress',
+  // A site's databases: another one made or dropped, its password changed, a dump loaded in.
+  'database.create',
+  'database.delete',
+  'database.password',
+  'database.import',
+  // A database on a server that no site uses, dropped (the Databases page).
+  'database.deleteUnused',
   'server.provision',
   'server.syncPlugins',
   'server.relocateBackups',
@@ -213,7 +220,7 @@ export const jobOrigins = ['user', 'api', 'mcp', 'schedule', 'system'] as const;
 export type JobOrigin = (typeof jobOrigins)[number];
 
 /** How the Jobs page groups job types; see shared/jobTypes.ts. */
-export const jobCategories = ['sites', 'backups', 'wordpress', 'files', 'security', 'servers', 'system'] as const;
+export const jobCategories = ['sites', 'backups', 'wordpress', 'files', 'databases', 'security', 'servers', 'system'] as const;
 export type JobCategory = (typeof jobCategories)[number];
 
 /** `import`: the first backup of an imported site, taken once it is up. */

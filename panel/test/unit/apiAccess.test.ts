@@ -39,6 +39,12 @@ const EXCEPTIONS: Record<string, string> = {
   'GET /api/sites/:slug/godmode/agents': 'manage',
   'GET /api/sites/:slug/godmode/chats/:chatId': 'manage',
   'GET /api/backups/:id/download': 'manage',
+  // What a database holds: its rows, one row whole, a dump of it.
+  'GET /api/sites/:slug/databases/:db/tables/:table/rows': 'manage',
+  'GET /api/sites/:slug/databases/:db/tables/:table/row': 'manage',
+  'GET /api/sites/:slug/databases/:db/export': 'manage',
+  // A database no site uses is the panel's to clear.
+  'DELETE /api/databases/:serverId/:name': 'full',
   'GET /api/servers/:id/terminal': 'full',
   // An import's settings quote the old wp-config.php; its plugin zip carries its token.
   'GET /api/imports/:id': 'manage',
@@ -66,6 +72,7 @@ const DESTRUCTIVE = [
   'DELETE /api/backup-destinations/:id',
   'DELETE /api/backups/:id',
   'DELETE /api/connections/:id',
+  'DELETE /api/databases/:serverId/:name',
   'DELETE /api/dns/token',
   'DELETE /api/imports/:id',
   'DELETE /api/mail/dkim/:domain',
@@ -81,6 +88,7 @@ const DESTRUCTIVE = [
   'DELETE /api/security/never-block/:id',
   'DELETE /api/servers/:id',
   'DELETE /api/sites/:slug',
+  'DELETE /api/sites/:slug/databases/:db',
   'DELETE /api/sites/:slug/ftp/users/:id',
   'DELETE /api/sites/:slug/security/quarantine/:id',
   'DELETE /api/sites/:slug/wp/plugins/:name',
@@ -92,6 +100,7 @@ const DESTRUCTIVE = [
   'PATCH /api/backup-destinations/:id',
   'PATCH /api/schedules/:id',
   'PATCH /api/servers/:id',
+  'PATCH /api/sites/:slug/databases/:db/tables/:table/rows',
   'POST /api/auth/logout-all',
   'POST /api/backup-destinations/:id/passphrase',
   'POST /api/backups/:id/restore',
@@ -110,6 +119,12 @@ const DESTRUCTIVE = [
   'POST /api/servers/:id/backups/relocate',
   'POST /api/servers/:id/update',
   'POST /api/sites/:slug/connection/disconnect',
+  'POST /api/sites/:slug/database-password',
+  'POST /api/sites/:slug/database-password/reveal',
+  'POST /api/sites/:slug/databases/:db/import',
+  'POST /api/sites/:slug/databases/:db/query',
+  'POST /api/sites/:slug/databases/:db/tables/:table/rows',
+  'POST /api/sites/:slug/databases/:db/tables/:table/rows/delete',
   'POST /api/sites/:slug/files/compress',
   'POST /api/sites/:slug/files/delete',
   'POST /api/sites/:slug/files/extract',
@@ -183,6 +198,9 @@ const NOT_THROUGH_MCP = [
   'PUT /api/sites/:slug/files/uploads/:id',
   'DELETE /api/sites/:slug/files/uploads/:id',
   'GET /api/backups/:id/download',
+  'GET /api/sites/:slug/databases/:db/export',
+  'PUT /api/sites/:slug/database-uploads/:id',
+  'DELETE /api/sites/:slug/database-uploads/:id',
   'GET /api/servers/:id/terminal',
   'POST /api/plugins/upload',
   'GET /api/imports/:id/plugin',
@@ -228,6 +246,8 @@ describe('access levels in the API catalog', () => {
       wp: 'manage',
       files: 'manage',
       ftp: 'manage',
+      // A site's databases are the site's; dropping one no site uses says Full on its own.
+      databases: 'manage',
       fleet: 'manage',
       // A site's protection, scans and quarantine are the site's; the fleet-wide list of
       // blocked addresses is the panel's.

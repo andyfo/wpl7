@@ -72,6 +72,8 @@ export interface FilesPort {
   /** mkdir WITHOUT parents; 'exists' on EEXIST. Atomic claim primitive for backup dirs. */
   mkdirExclusive(path: string): Promise<'created' | 'exists'>;
   writeFile(path: string, content: string | Buffer, opts?: WriteOpts): Promise<void>;
+  /** Add `content` to the end of a file, creating it if it is not there (an upload, chunk by chunk). */
+  appendFile(path: string, content: Buffer): Promise<void>;
   readFile(path: string): Promise<string>;
   /** The file's contents, or null when it is not there; something there that cannot be read throws. */
   readOptional(path: string): Promise<string | null>;
@@ -160,6 +162,10 @@ export class LocalFiles implements FilesPort {
       await fsp.rm(tmp, { force: true }).catch(() => undefined);
       throw err;
     }
+  }
+
+  async appendFile(path: string, content: Buffer): Promise<void> {
+    await fsp.appendFile(path, content);
   }
 
   async readFile(path: string): Promise<string> {
@@ -341,6 +347,11 @@ export class ExecFiles implements FilesPort {
     if (mode === undefined) return;
     const res = await this.exec.run('chmod', [mode.toString(8).padStart(3, '0'), '--', path]);
     if (res.exitCode !== 0) throw new Error(`chmod ${path} failed: ${res.stderr.trim()}`);
+  }
+
+  async appendFile(path: string, content: Buffer): Promise<void> {
+    const res = await this.exec.runWithInput('sh', ['-c', 'cat >> "$1"', 'sh', path], Readable.from([content]));
+    if (res.exitCode !== 0) throw new Error(`append to ${path} failed: ${res.stderr.trim()}`);
   }
 
   async readFile(path: string): Promise<string> {

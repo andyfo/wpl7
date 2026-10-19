@@ -119,7 +119,8 @@ default configuration starts by deleting every rule, Docker's and UFW's included
 
 ## Limits
 
-- A site's disk figure counts its files, not its database.
+- A site's disk figure counts its files, not its database. [Databases](/docs/databases/overview/)
+  shows the databases' sizes.
 - A backup needs free disk of one and a half times the site's size. With less, it fails.
 - Docker publishes its ports past UFW. A UFW rule does not close 80, 443 or the FTP ports.
 - The FTP ports are published on IPv4 only.
