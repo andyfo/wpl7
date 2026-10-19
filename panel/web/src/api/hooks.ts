@@ -403,12 +403,14 @@ export const useWpMaintenance = (slug: string, enabled: boolean) =>
     retry: false,
   });
 
-export const usePluginCatalog = () =>
+/** The plugin catalog. `refetchOnWindowFocus` is for a page that has to see what another tab changed. */
+export const usePluginCatalog = ({ refetchOnWindowFocus = false } = {}) =>
   useQuery({
     queryKey: ['plugin-catalog'],
     queryFn: () => api<{ items: PluginDto[] }>('/api/plugins').then((r) => r.items),
     // A zip's malware check takes a minute or two: follow it while one runs.
     refetchInterval: (q) => (q.state.data?.some((p) => p.check?.checking) ? 4000 : false),
+    refetchOnWindowFocus,
   });
 
 /**

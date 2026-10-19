@@ -1,7 +1,7 @@
 // @docs get-started/first-site, get-started/quick-start, sites/create
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import type { RecipeDto, WporgPluginDto } from '../../../shared/types';
+import type { PluginDto, RecipeDto, WporgPluginDto } from '../../../shared/types';
 import { useMeta, usePluginCatalog, useRecipes, useRunJob, isTerminal } from '../api/hooks';
 import {
   Button,
@@ -38,7 +38,8 @@ const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/;
 
 export function NewSite() {
   const meta = useMeta();
-  const catalog = usePluginCatalog();
+  // Refetched on focus: a plugin made a default in another tab is ticked here too.
+  const catalog = usePluginCatalog({ refetchOnWindowFocus: true });
   // Refetched on focus: the review sends a recipe that is not set up to the Recipes page, in a new tab.
   const recipes = useRecipes({ refetchOnWindowFocus: true });
   const run = useRunJob([['sites']]);
@@ -56,9 +57,9 @@ export function NewSite() {
   const [locale, setLocale] = useState<string | null>(null);
   const [phpVersion, setPhpVersion] = useState<string | null>(null);
   const [discourageSearch, setDiscourageSearch] = useState(true);
-  const [selectedCatalog, setSelectedCatalog] = useState<Set<number>>(new Set());
+  /** Catalog plugins ticked or unticked by hand. The others follow the catalog's defaults. */
+  const [catalogTicks, setCatalogTicks] = useState<ReadonlyMap<number, boolean>>(new Map());
   const [extraPlugins, setExtraPlugins] = useState<WporgPluginDto[]>([]);
-  const [defaultsApplied, setDefaultsApplied] = useState(false);
 
   const slug = slugEdited || slugPreview(title);
   const servers = meta.data?.servers ?? [];
@@ -74,19 +75,16 @@ export function NewSite() {
     [domainsText],
   );
 
+  // Worked out from the catalog as it is now. Taking the defaults once, when the list first
+  // loaded, left out a plugin made a default after that - in another tab, or while its switch
+  // was still saving - though the list labelled it "default".
+  const ticked = (p: PluginDto) => catalogTicks.get(p.id) ?? p.isDefault;
+  const selectedCatalog = (catalog.data ?? []).filter(ticked);
+
   // What the job's recipe run will find once the plugins are in: the enabled recipes whose
   // plugin folder is among them. A zip goes by the folder inside it, as WordPress does.
-  const pluginDirs = new Set([
-    ...[...selectedCatalog].map((id) => catalog.data?.find((p) => p.id === id)?.pluginDir),
-    ...extraPlugins.map((p) => p.slug),
-  ]);
+  const pluginDirs = new Set([...selectedCatalog.map((p) => p.pluginDir), ...extraPlugins.map((p) => p.slug)]);
   const siteRecipes = (recipes.data ?? []).filter((r) => r.enabled && pluginDirs.has(r.plugin));
-
-  // Preselect catalog defaults once loaded.
-  if (!defaultsApplied && catalog.data) {
-    setSelectedCatalog(new Set(catalog.data.filter((p) => p.isDefault).map((p) => p.id)));
-    setDefaultsApplied(true);
-  }
 
   const canNext = [
     title.trim().length > 0 && SLUG_RE.test(slug) && (!customDomain || domains.length > 0),
@@ -111,7 +109,7 @@ export function NewSite() {
         adminPassword: generatePw ? undefined : adminPassword,
         discourageSearchEngines: discourageSearch,
         plugins: {
-          catalogIds: [...selectedCatalog],
+          catalogIds: selectedCatalog.map((p) => p.id),
           extraWporgSlugs: extraPlugins.map((p) => p.slug),
         },
       },
@@ -295,13 +293,8 @@ export function NewSite() {
                     <label key={p.id} className="flex items-center gap-2 text-sm">
                       <input
                         type="checkbox"
-                        checked={selectedCatalog.has(p.id)}
-                        onChange={(e) => {
-                          const next = new Set(selectedCatalog);
-                          if (e.target.checked) next.add(p.id);
-                          else next.delete(p.id);
-                          setSelectedCatalog(next);
-                        }}
+                        checked={ticked(p)}
+                        onChange={(e) => setCatalogTicks((prev) => new Map(prev).set(p.id, e.target.checked))}
                       />
                       {p.name}
                       <span className="text-xs text-neutral-400">{p.kind === 'zip' ? 'uploaded zip' : `wp.org/${p.slug}`}</span>
@@ -317,10 +310,7 @@ export function NewSite() {
                 onSelect={(p) => setExtraPlugins((prev) => (prev.some((x) => x.slug === p.slug) ? prev : [...prev, p]))}
                 addedSlugs={[
                   ...extraPlugins.map((p) => p.slug),
-                  ...[...selectedCatalog].flatMap((id) => {
-                    const row = catalog.data?.find((p) => p.id === id);
-                    return row && row.kind === 'wporg' ? [row.slug] : [];
-                  }),
+                  ...selectedCatalog.filter((p) => p.kind === 'wporg').map((p) => p.slug),
                 ]}
                 addedLabel="selected"
                 keepOpenOnSelect
@@ -363,10 +353,7 @@ export function NewSite() {
             <ReviewRow
               label="Plugins"
               value={
-                [
-                  ...[...selectedCatalog].map((id) => catalog.data?.find((p) => p.id === id)?.name ?? `#${id}`),
-                  ...extraPlugins.map((p) => p.name),
-                ].join(', ') || 'none'
+                [...selectedCatalog.map((p) => p.name), ...extraPlugins.map((p) => p.name)].join(', ') || 'none'
               }
             />
             {recipes.data && <ReviewRow label="Recipes" value={<ReviewRecipes recipes={siteRecipes} />} />}
