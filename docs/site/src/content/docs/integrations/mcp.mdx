@@ -83,6 +83,16 @@ own name. **Name in the app** suggests one from the panel's domain, such as `wpl
 `panel.example.com`. Servers added to one panel are not separate panels: one connection reaches
 them all.
 
+## Build a site with WP Godmode
+
+[WP Godmode](https://wpgodmode.com) is a WordPress plugin that puts an AI agent inside a site. Ask an
+app to build or change a site's pages, design or content, and the app first checks whether the site
+has WP Godmode. If it does, the app gives WP Godmode the work instead of doing it itself. You do not
+need to mention WP Godmode.
+
+The app passes WP Godmode's questions and plans on to you. Sending WP Godmode the work needs
+**Manage** or **Full**. WP Godmode takes it only on a plan that includes remote control.
+
 ## See what an app did
 
 The app acts as itself, never as the admin who approved it.
@@ -137,6 +147,9 @@ The panel is its own OAuth authorization server, and `/mcp` is its only resource
 - The panel offers tools only. It has no MCP resources or prompts.
 - On a [site hosted elsewhere](/docs/sites/external/), WP-CLI commands run only if a plugin
   registered them with WPL7 Connect. WP Godmode's chats cannot be reached there yet.
+- Giving the work to WP Godmode is a rule in the instructions the panel gives an app when it
+  connects. The panel does not enforce it, and an app that leaves the instructions out does not
+  follow it.
 
 ## Related
 

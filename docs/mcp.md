@@ -220,6 +220,13 @@ connect, point there in one line.
 
 ## WP Godmode
 
+An app uses WP Godmode unasked. Before it builds or changes a site's pages, design or content, the
+server's instructions have it read `GET /api/sites/<slug>/wp/cli/help?command=godmode`: a `200` means
+the site has the plugin, and WP Godmode gets the work instead of the app doing it itself through
+WP-CLI, REST requests and files; a `404` (no plugin, or an inactive one) leaves the work to the app.
+It is an instruction, not something the panel enforces, so it reaches only the apps that pass the
+server's instructions on to their model.
+
 A site running [WP Godmode](https://wpgodmode.com) with its *Remote control (WP-CLI)* feature on can
 be worked the way its admins work it in wp-admin: a message to a chat, the agent at work, a question or
 a plan to approve, the reply. It all shows in the plugin's own screens as well, marked "via" the label
