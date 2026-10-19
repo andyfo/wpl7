@@ -1,5 +1,5 @@
 import type { DbRowFilter, DbRowKey } from '../shared/databases.js';
-import { DB_LIMITS } from '../shared/databases.js';
+import { DB_ANY_COLUMN, DB_LIMITS } from '../shared/databases.js';
 import type {
   DbCell,
   DbColumnDto,
@@ -8,10 +8,12 @@ import type {
   DbRowsPageDto,
   DbTableDto,
   DbTableStructureDto,
+  DbForeignKeyDto,
+  DbIndexDto,
   DbWriteResultDto,
 } from '../shared/types.js';
 import { badRequest, conflict, notFound } from '../src/lib/errors.js';
-import type { DbBrowserPort, DbTarget, DbValues, RowsQuery } from '../src/services/dbBrowser.js';
+import type { DbBrowserPort, DbTarget, DbValues, DdlAttempt, ExecuteOpts, RowsQuery } from '../src/services/dbBrowser.js';
 
 /** A table the fake holds: its columns, which of them find a row, and the rows as text. */
 export interface FakeTable {
@@ -19,6 +21,9 @@ export interface FakeTable {
   key: string[] | null;
   rows: (string | null)[][];
   type?: 'table' | 'view';
+  /** Indexes besides the primary key. */
+  indexes?: DbIndexDto[];
+  foreignKeys?: DbForeignKeyDto[];
 }
 
 /** A column for a FakeTable, with the defaults most columns have. */
@@ -41,6 +46,8 @@ export function fakeColumn(name: string, type: string, extra: Partial<DbColumnDt
     extra: '',
     comment: '',
     charset: kind === 'text' ? 'utf8mb4' : null,
+    collation: kind === 'text' ? 'utf8mb4_unicode_ci' : null,
+    check: null,
     ...extra,
   };
 }
@@ -112,9 +119,13 @@ export class FakeDbBrowser implements DbBrowserPort {
       table: name,
       type: table.type ?? 'table',
       columns: table.columns,
-      indexes: table.key ? [{ name: 'PRIMARY', unique: true, columns: table.key, type: 'BTREE' }] : [],
+      indexes: [
+        ...(table.key ? [{ name: 'PRIMARY', unique: true, columns: table.key, lengths: table.key.map(() => null), type: 'BTREE' }] : []),
+        ...(table.indexes ?? []),
+      ],
       key: table.key,
       rows: table.rows.length,
+      foreignKeys: table.foreignKeys ?? [],
     };
   }
 
@@ -126,7 +137,17 @@ export class FakeDbBrowser implements DbBrowserPort {
       if (i < 0) throw badRequest(`The table has no column "${col}"`);
       return i;
     };
-    let rows = table.rows.filter((row) => q.filters.every((f) => matches(row[index(f.column)] ?? null, f, table.columns[index(f.column)]!)));
+    const keep = (row: (string | null)[], f: DbRowFilter): boolean => {
+      if (f.column !== DB_ANY_COLUMN) return matches(row[index(f.column)] ?? null, f, table.columns[index(f.column)]!);
+      const positive = ({ ne: 'eq', notContains: 'contains', notIn: 'in' } as Partial<Record<string, DbRowFilter['op']>>)[f.op];
+      // As text, as the panel compares any column; NULL matches nothing.
+      const textual = (c: DbColumnDto) => ({ ...c, kind: 'text' as const });
+      const each = table.columns.flatMap((c, i) => (c.kind === 'binary' ? [] : [matches(row[i] ?? null, positive ? { ...f, op: positive } : f, textual(c))]));
+      return positive ? !each.some(Boolean) : each.some(Boolean);
+    };
+    let rows = table.rows.filter((row) =>
+      q.match === 'any' && q.filters.length > 0 ? q.filters.some((f) => keep(row, f)) : q.filters.every((f) => keep(row, f)),
+    );
     if (q.sort) {
       const i = index(q.sort);
       const numeric = table.columns[i]!.kind === 'number';
@@ -208,6 +229,22 @@ export class FakeDbBrowser implements DbBrowserPort {
     return this.runAnswer(sql);
   }
 
+  /** Statements a job ran, in order: the fake changes no table for them. */
+  executed: string[] = [];
+  async execute(t: DbTarget, sql: string, opts: ExecuteOpts): Promise<DbWriteResultDto> {
+    this.record('execute', t, [sql, opts]);
+    this.executed.push(sql);
+    return { affected: 0, insertId: null };
+  }
+
+  /** What MariaDB says to a structure change tried first: nothing (taken) unless a test says otherwise. */
+  tryAnswer: (statement: string) => boolean = () => true;
+  async tryDdl(t: DbTarget, attempt: DdlAttempt): Promise<boolean> {
+    const statement = attempt.statement('wpl7_try_fake');
+    this.record('tryDdl', t, [attempt.copyOf ?? null, statement]);
+    return this.tryAnswer(statement);
+  }
+
   closeIdle(): void {
     this.calls.push({ method: 'closeIdle', target: { database: '', user: '', password: '' }, args: [] });
   }
@@ -251,6 +288,10 @@ function matches(value: string | null, f: DbRowFilter, column: DbColumnDto): boo
       return value.toLowerCase().startsWith(v.toLowerCase());
     case 'endsWith':
       return value.toLowerCase().endsWith(v.toLowerCase());
+    case 'in':
+      return v.split(',').some((x) => x.trim() === value);
+    case 'notIn':
+      return !v.split(',').some((x) => x.trim() === value);
   }
 }
 

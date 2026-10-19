@@ -1,0 +1,91 @@
+---
+title: Adminer
+description: "Open a site's database in Adminer, signed in as the site's own database user."
+sidebar:
+  order: 2
+sources:
+  - panel/src/adminer/index.ts
+  - panel/src/adminer/frontDoor.ts
+  - panel/src/adminer/containers.ts
+  - panel/src/adminer/relay.ts
+  - panel/src/adminer/sessions.ts
+  - panel/src/adminer/tickets.ts
+  - panel/src/adminer/cookieJar.ts
+  - panel/web/src/components/database/DatabaseTab.tsx
+  - deploy/adminer-image/Dockerfile
+  - deploy/adminer-image/router.php
+  - deploy/adminer-image/wpl7.php
+---
+
+import UiPath from '~/components/UiPath.astro';
+
+The site's **Database** tab browses tables, changes their structure and runs SQL. For the rest,
+such as triggers, routines or a search through every table, a database opens in
+[Adminer](https://www.adminer.org/), a database manager in one PHP file.
+
+## Open a database in Adminer
+
+1. Open the site, then its **Database** tab.
+2. Choose **Adminer** beside the database.
+
+Adminer opens in a new tab, signed in to that database. The link the panel makes works once,
+within a minute. The first open on a server takes a moment longer, while its Adminer starts.
+
+## What it can reach
+
+Adminer signs in as the site's own database user, never as root. MariaDB keeps it to that site's
+databases, so it shows no other site's data and no MariaDB users.
+
+## How long a session lasts
+
+A session ends:
+
+- when you sign out of the panel
+- after 30 minutes without a click in Adminer
+- after 12 hours in all
+- when the site moves to another server
+- when Adminer is turned off
+- when the panel restarts or is updated
+
+Open the database again from the panel to carry on.
+
+## How it is kept apart
+
+- Adminer has an address of its own, `db.dev.example.com`. The panel's sign-in never reaches
+  it, so a fault in Adminer cannot act in the panel.
+- Each server runs its own Adminer, in a container whose only network is the one it shares
+  with MariaDB. Nothing on the internet connects to it. The panel passes the requests on.
+- Only the panel can sign Adminer in. A page on another site, a dev site included, cannot use
+  an open session.
+- It is Adminer's MySQL-only build. The other database drivers, where most of Adminer's security
+  bugs were found, are left out.
+
+## When it runs
+
+A server's Adminer starts with the first open, and stops once nobody has used it for 30 minutes.
+The **Adminer** schedule looks every minute.
+
+## Turn it off
+
+In <UiPath href="/docs/panel/settings/">Settings → Security → Adminer</UiPath>, switch off
+**Let admins open a site's database in Adminer**. The **Adminer** buttons go, and sessions
+already open end. Turn it off while a security advisory for Adminer is open.
+
+## Limits
+
+- Adminer opens the databases of sites on your servers, not of sites hosted elsewhere.
+- It needs an admin signed in to the panel in a browser. An API key or an AI app cannot open it.
+- An import through Adminer takes up to 32 MB. Import bigger dumps on the site's **Database**
+  tab.
+- While a job other than a backup runs on the site, such as a restore or a move, Adminer can
+  browse but not run SQL or save changes.
+- Adminer looks like Adminer, with its own design and its own dark mode.
+- On a server installed from source, the first open builds the Adminer image, which takes about
+  a minute.
+
+## Related
+
+- [A site's database](/docs/sites/database/)
+- [Databases](/docs/databases/overview/)
+- [Security in WPL7](/docs/security/overview/)
+- [Third-party software](/docs/reference/third-party/)

@@ -58,6 +58,7 @@ working, so they cannot be paused:
 | Background task | Runs | Why it is always on |
 |---|---|---|
 | Mail log | Every minute | It enforces the sending limits that suspend a site sending spam |
+| Adminer | Every minute | It stops each server's [Adminer](/docs/databases/adminer/) once nobody uses it, so it never runs unwatched |
 | Site network repair | Every minute | A redeployed stack can leave sites unreachable without it |
 | Site protection | Every minute, and right after each change | It puts protection back on a server that lost it |
 | Blocked addresses | Every minute, and right after each change | It ends blocks on time and restores them after a reboot |

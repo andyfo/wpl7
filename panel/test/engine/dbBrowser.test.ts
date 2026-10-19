@@ -7,7 +7,7 @@
  *
  *   WPL7_ENGINE_TESTS=1 npx vitest run test/engine/dbBrowser.test.ts
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,6 +20,8 @@ import { DbAdminService } from '../../src/services/dbAdmin.js';
 import { RemoteDbAdminService } from '../../src/servers/remoteDbAdmin.js';
 import { hostExec } from '../../src/lib/exec.js';
 import { AppError } from '../../src/lib/errors.js';
+import { alterTableSql, createTableSql, dropTableSql } from '../../src/lib/sqlDdl.js';
+import { dbAlterChange, dbColumnDef } from '../../shared/databases.js';
 import type { Config } from '../../src/config.js';
 
 const ENABLED = process.env.WPL7_ENGINE_TESTS === '1';
@@ -129,6 +131,27 @@ CREATE TABLE wp_other.secret (s text);
       filters: [{ column: 'option_value', op: 'contains', value: '%_d' }],
     });
     expect(pct.rows.map((r) => r[1])).toEqual(['pct']);
+    // Any column, a list, and one-of-them.
+    const anyCol = await service.rows(site, 'wp_options', {
+      offset: 0,
+      limit: 50,
+      dir: 'asc',
+      sort: 'option_name',
+      filters: [{ column: '*', op: 'contains', value: 'shop.example' }],
+    });
+    expect(anyCol.rows.map((r) => r[1])).toEqual(['siteurl']);
+    const either = await service.rows(site, 'wp_options', {
+      offset: 0,
+      limit: 50,
+      dir: 'asc',
+      sort: 'option_name',
+      match: 'any',
+      filters: [
+        { column: 'option_name', op: 'in', value: 'pct, long' },
+        { column: '*', op: 'startsWith', value: 'a:1:' },
+      ],
+    });
+    expect(either.rows.map((r) => r[1])).toEqual(['active_plugins', 'long', 'pct']);
     await expect(
       service.rows(site, 'wp_options', { offset: 0, limit: 5, dir: 'asc', filters: [{ column: 'nope', op: 'eq', value: '' }] }),
     ).rejects.toMatchObject({ statusCode: 400 });
@@ -198,9 +221,128 @@ CREATE TABLE wp_other.secret (s text);
     expect(around.results.at(-1)).toMatchObject({ kind: 'error', code: 'ER_STATEMENT_TIMEOUT' });
     expect(Date.now() - started).toBeLessThan(15_000);
     // Killed on the server too, not just given up on.
-    await new Promise((r) => setTimeout(r, 1000));
-    expect(rootSql("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER = 'wp_shop' AND INFO LIKE '%SLEEP(60)%'").trim()).toBe('0');
+    const sleeping = () => rootSql("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER = 'wp_shop' AND INFO LIKE '%SLEEP(60)%'").trim();
+    for (let i = 0; i < 20 && sleeping() !== '0'; i++) await new Promise((r) => setTimeout(r, 250));
+    expect(sleeping()).toBe('0');
     quick.closeIdle();
+  }, 60_000);
+
+  it("changes a table's structure as the site user, and gives up on a table another session holds", async () => {
+    const run = (sql: string, lockWaitSeconds = 10) => service.execute(site, sql, { lockWaitSeconds, relayMs: 120_000 });
+    const col = (c: object) => dbColumnDef.parse({ nullable: false, default: { kind: 'none' }, ...c });
+    try {
+      await run(createTableSql({ name: 't_parent', columns: [col({ name: 'id', type: 'int unsigned' })], primaryKey: ['id'] }));
+      await run(
+        createTableSql({
+          name: 't_ddl',
+          columns: [
+            col({ name: 'id', type: 'bigint unsigned', autoIncrement: true }),
+            col({ name: 'title', type: 'varchar(191)', default: { kind: 'value', value: "it's" } }),
+            col({ name: 'seen', type: 'datetime(6)', nullable: true, default: { kind: 'currentTimestamp' }, onUpdateCurrentTimestamp: true }),
+          ],
+          primaryKey: ['id'],
+        }),
+      );
+      await run(
+        alterTableSql(await service.structure(site, 't_ddl'), [
+          dbAlterChange.parse({ op: 'addColumn', column: col({ name: 'parent_id', type: 'int unsigned', nullable: true }), position: { after: 'id' } }),
+          // The index names the column by the name the statement gives it.
+          dbAlterChange.parse({ op: 'addIndex', index: { kind: 'index', name: 'title_start', columns: [{ name: 'headline', length: 10 }] } }),
+          dbAlterChange.parse({
+            op: 'addForeignKey',
+            foreignKey: { name: 'fk_parent', columns: ['parent_id'], refTable: 't_parent', refColumns: ['id'], onDelete: 'SET NULL' },
+          }),
+          dbAlterChange.parse({ op: 'modifyColumn', name: 'title', column: col({ name: 'headline', type: 'varchar(191)', default: { kind: 'keep' } }), position: null }),
+        ]),
+      );
+      const s = await service.structure(site, 't_ddl');
+      expect(s.columns.map((c) => c.name)).toEqual(['id', 'parent_id', 'headline', 'seen']);
+      expect(s.columns[2]!.default).toBe("'it''s'");
+      expect(s.indexes.find((i) => i.name === 'title_start')).toMatchObject({ columns: ['headline'], lengths: [10] });
+      expect(s.foreignKeys).toEqual([
+        { name: 'fk_parent', columns: ['parent_id'], refTable: 't_parent', refColumns: ['id'], onDelete: 'SET NULL', onUpdate: 'RESTRICT' },
+      ]);
+
+      // Another session in the middle of a transaction on the table: the change gives up, it does not queue.
+      const holder = spawn('docker', ['exec', '-i', CONTAINER, 'sh', '-c', 'exec mariadb -uroot -p"$MARIADB_ROOT_PASSWORD"'], { stdio: ['pipe', 'ignore', 'ignore'] });
+      holder.stdin.end('START TRANSACTION; SELECT * FROM wp_shop.t_ddl; DO SLEEP(4); COMMIT;\n');
+      await new Promise((r) => setTimeout(r, 1500));
+      const err = await run('ALTER TABLE `t_ddl` ADD COLUMN `x` int', 1).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AppError);
+      expect((err as AppError).statusCode).toBe(409);
+      await new Promise((r) => holder.on('close', r));
+      expect((await service.structure(site, 't_ddl')).columns.map((c) => c.name)).not.toContain('x');
+
+    } finally {
+      rootSql('DROP TABLE IF EXISTS wp_shop.t_ddl; DROP TABLE IF EXISTS wp_shop.t_parent;');
+    }
+  }, 60_000);
+
+  it('reads JSON, CHECK, generated and invisible columns, and tries a change on an empty copy first', async () => {
+    const col = (c: object) => dbColumnDef.parse({ nullable: false, default: { kind: 'none' }, ...c });
+    rootSql(
+      'CREATE TABLE wp_shop.t_kinds (id int PRIMARY KEY, data json, qty int CHECK (qty > 0), total int AS (id * 2) STORED, ' +
+        'secret int INVISIBLE, body text, FULLTEXT KEY ft (body));',
+    );
+    try {
+      const kinds = await service.structure(site, 't_kinds');
+      const byName = new Map(kinds.columns.map((c) => [c.name, c]));
+      expect(byName.get('data')).toMatchObject({ type: 'json', check: null, collation: 'utf8mb4_bin' });
+      expect(byName.get('qty')).toMatchObject({ check: '`qty` > 0' });
+      expect(byName.get('total')!.extra).toMatch(/STORED GENERATED/);
+      expect(byName.get('secret')!.extra).toMatch(/INVISIBLE/);
+
+      const tryOn = (table: string, changes: unknown[]) =>
+        service.structure(site, table).then((st) =>
+          service.tryDdl(site, {
+            table,
+            copyOf: table,
+            statement: (tmp) => alterTableSql({ ...st, table: tmp }, changes.map((c) => dbAlterChange.parse(c))),
+          }),
+        );
+      await expect(tryOn('wp_options', [{ op: 'addColumn', column: col({ name: 'n', type: 'int', nullable: true }), position: null }])).resolves.toBe(true);
+      // What MariaDB refuses comes back as a 400 in its words: a default the type cannot hold, a counter left without a key.
+      await expect(
+        tryOn('wp_options', [{ op: 'addColumn', column: col({ name: 'n', type: 'int', default: { kind: 'value', value: 'abc' } }), position: null }]),
+      ).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/^MariaDB would refuse this: Invalid default value for 'n'/) });
+      await expect(tryOn('wp_options', [{ op: 'dropIndex', name: 'PRIMARY' }])).rejects.toMatchObject({ statusCode: 400 });
+      // What a temporary InnoDB table cannot have is not tried, rather than refused.
+      await expect(tryOn('wp_options', [{ op: 'addIndex', index: { kind: 'fulltext', name: 'ft', columns: [{ name: 'option_value' }] } }])).resolves.toBe(false);
+      await expect(tryOn('t_kinds', [{ op: 'dropColumn', name: 'qty' }])).resolves.toBe(false);
+      // A new table, tried as a temporary one.
+      await expect(
+        service.tryDdl(site, {
+          table: 't_new',
+          statement: (tmp) => createTableSql({ name: tmp, columns: [col({ name: 'a', type: 'varchar(70000)' })], primaryKey: [] }, { temporary: true }),
+        }),
+      ).rejects.toMatchObject({ statusCode: 400, message: expect.stringMatching(/too big/) });
+      // Nothing changed for real.
+      expect((await service.structure(site, 'wp_options')).columns.map((c) => c.name)).toEqual(['option_id', 'option_name', 'option_value', 'autoload']);
+      expect((await service.tables(site)).map((t) => t.name)).not.toContain('t_new');
+    } finally {
+      rootSql('DROP TABLE IF EXISTS wp_shop.t_kinds;');
+    }
+  }, 60_000);
+
+  it('stops a job statement at its limit on the server, and fails rather than hangs when the relay dies', async () => {
+    const sleeping = () => rootSql("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER = 'wp_shop' AND INFO LIKE '%SLEEP(%'").trim();
+    let started = Date.now();
+    await expect(service.execute(site, 'DO SLEEP(30)', { lockWaitSeconds: 5, relayMs: 120_000, killAfterMs: 1500 })).rejects.toMatchObject({
+      statusCode: 504,
+    });
+    expect(Date.now() - started).toBeLessThan(10_000);
+    for (let i = 0; i < 20 && sleeping() !== '0'; i++) await new Promise((r) => setTimeout(r, 250));
+    expect(sleeping()).toBe('0');
+    let canceled = false;
+    setTimeout(() => (canceled = true), 1000);
+    await expect(service.execute(site, 'DO SLEEP(31)', { lockWaitSeconds: 5, relayMs: 120_000, canceled: () => canceled })).rejects.toThrow(/Canceled/);
+    // The relay killed under a running statement (its own deadline): an error, not a wait for
+    // ever, and the statement stopped on the server rather than left to finish.
+    started = Date.now();
+    await expect(service.execute(site, 'DO SLEEP(32)', { lockWaitSeconds: 5, relayMs: 2000 })).rejects.toThrow(/stopped there/);
+    expect(Date.now() - started).toBeLessThan(15_000);
+    for (let i = 0; i < 20 && sleeping() !== '0'; i++) await new Promise((r) => setTimeout(r, 250));
+    expect(sleeping()).toBe('0');
   }, 60_000);
 
   it('stops a big result at the row limit', async () => {

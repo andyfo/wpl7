@@ -1,4 +1,4 @@
-// @docs databases/overview, sites/database
+// @docs databases/overview, sites/database, sites/database-structure
 import zlib from 'node:zlib';
 import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -7,7 +7,10 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   DB_LIMITS,
+  dbAlterBody,
   dbCreateBody,
+  dbCreateTableBody,
+  dbPreviewQuery,
   dbImportBody,
   dbParams,
   dbRowDeleteBody,
@@ -24,12 +27,15 @@ import {
   unusedDbParams,
 } from '../../shared/databases.js';
 import { siteSlugParam } from '../../shared/schemas.js';
+import type { DbDdlPreviewDto } from '../../shared/types.js';
 import { serverDatabases, type SiteRow } from '../db/schema.js';
 import { AppError, badRequest, conflict, forbidden, notFound, tooManyRequests } from '../lib/errors.js';
 import { actorName, audit as auditLog } from '../lib/audit.js';
 import { attachmentDisposition } from '../lib/contentDisposition.js';
 import { jobToDto, viewerOf } from '../lib/dto.js';
+import { alterTableSql, createTableSql, describeChanges, dropTableSql, truncateTableSql } from '../lib/sqlDdl.js';
 import { tsStamp } from '../services/backup.js';
+import type { DbTarget, DdlAttempt } from '../services/dbBrowser.js';
 import type { AppDeps } from './deps.js';
 
 /**
@@ -158,9 +164,22 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   // ------------------------------------------------------------------ a site's databases
 
-  r.get('/api/sites/:slug/databases', { schema: { params: slugParams } }, async (req) =>
-    deps.databases.siteInfo(siteOf(req.params.slug)),
-  );
+  r.get('/api/sites/:slug/databases', { schema: { params: slugParams } }, async (req) => ({
+    ...deps.databases.siteInfo(siteOf(req.params.slug)),
+    adminer: deps.adminer.unavailable(),
+  }));
+
+  // A link that hands over a database session is for a person in a browser: not an API key, not MCP.
+  r.post('/api/sites/:slug/databases/:db/adminer', { schema: { params: dbParams } }, async (req) => {
+    if (req.authVia !== 'session' || !req.user) throw forbidden('Only an admin signed in to the panel can open Adminer');
+    const site = usableSite(req.params.slug);
+    const { database } = deps.databases.targetFor(site, req.params.db);
+    const off = deps.adminer.unavailable();
+    if (off) throw conflict(off);
+    const url = deps.adminer.open({ userId: req.user.id, panelSid: req.session.sessionId, siteId: site.id, database });
+    audit(req, site, 'open in adminer', { db: database });
+    return { url };
+  });
 
   r.post('/api/sites/:slug/databases', { schema: { params: slugParams, body: dbCreateBody } }, async (req, reply) => {
     const site = usableSite(req.params.slug);
@@ -321,6 +340,7 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
         sort: q.sort,
         dir: q.dir,
         filters: parseJson(q.filters, dbRowFilters, 'filters', []),
+        match: q.match,
       });
     },
   );
@@ -395,6 +415,97 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
         audit(req, site, 'sql', { db: target.database, chars: req.body.sql.length });
         return browser(site).run(target, req.body.sql);
       });
+    },
+  );
+
+  // ------------------------------------------------------------------ table structure
+
+  /**
+   * A structure change, built and checked here against the table as it is (lib/sqlDdl.ts): its SQL
+   * for a preview, or a job that runs it. A job, because an ALTER on a big table outlives a request.
+   */
+  const structureChange = async (
+    req: FastifyRequest,
+    reply: FastifyReply,
+    site: SiteRow,
+    target: DbTarget,
+    statements: string[],
+    summary: string,
+    preview: boolean,
+    attempt?: DdlAttempt,
+  ) => {
+    for (const sql of statements) {
+      if (sql.length > DB_LIMITS.ddlChars) {
+        throw badRequest(`That makes a statement of ${sql.length.toLocaleString('en')} characters; a change takes at most ${DB_LIMITS.ddlChars.toLocaleString('en')}`);
+      }
+    }
+    if (attempt) await browser(site).tryDdl(target, attempt);
+    if (preview) return reply.send({ statements } satisfies DbDdlPreviewDto);
+    const { database } = target;
+    const job = deps.worker.enqueue('database.alter', { siteId: site.id, database, summary, statements }, site);
+    audit(req, site, 'structure', { db: database, summary });
+    return accepted(reply, req, job);
+  };
+
+  /** A temporary copy cannot tell whether a table's new name is taken: the list of tables can. */
+  const nameFree = async (site: SiteRow, target: DbTarget, name: string) => {
+    if ((await browser(site).tables(target)).some((t) => t.name === name)) throw badRequest(`There is a table called "${name}" already`);
+  };
+
+  r.post(
+    '/api/sites/:slug/databases/:db/tables/:table/alter',
+    { schema: { params: dbTableParams, body: dbAlterBody }, bodyLimit: BIG_JSON },
+    async (req, reply) => {
+      const site = usableSite(req.params.slug);
+      const target = deps.databases.targetFor(site, req.params.db);
+      const structure = await browser(site).structure(target, req.params.table);
+      const sql = alterTableSql(structure, req.body.changes);
+      const renamed = req.body.changes.find((c) => c.op === 'rename');
+      if (renamed) await nameFree(site, target, renamed.name);
+      // Tried without what a temporary table cannot take: foreign keys, and a new name.
+      const tried = req.body.changes.filter((c) => c.op !== 'addForeignKey' && c.op !== 'dropForeignKey' && c.op !== 'rename');
+      const attempt: DdlAttempt | undefined =
+        tried.length > 0 ? { table: structure.table, copyOf: structure.table, statement: (tmp) => alterTableSql({ ...structure, table: tmp }, tried) } : undefined;
+      return structureChange(req, reply, site, target, [sql], describeChanges(structure.table, req.body.changes), req.body.preview, attempt);
+    },
+  );
+
+  r.post(
+    '/api/sites/:slug/databases/:db/tables',
+    { schema: { params: dbParams, body: dbCreateTableBody }, bodyLimit: BIG_JSON },
+    async (req, reply) => {
+      const site = usableSite(req.params.slug);
+      const target = deps.databases.targetFor(site, req.params.db);
+      const sql = createTableSql(req.body);
+      await nameFree(site, target, req.body.name);
+      return structureChange(req, reply, site, target, [sql], `Create table ${req.body.name}`, req.body.preview, {
+        table: req.body.name,
+        statement: (tmp) => createTableSql({ ...req.body, name: tmp }, { temporary: true }),
+      });
+    },
+  );
+
+  r.delete(
+    '/api/sites/:slug/databases/:db/tables/:table',
+    { schema: { params: dbTableParams, querystring: dbPreviewQuery } },
+    async (req, reply) => {
+      const site = usableSite(req.params.slug);
+      const target = deps.databases.targetFor(site, req.params.db);
+      const structure = await browser(site).structure(target, req.params.table);
+      const summary = `Drop ${structure.type === 'view' ? 'view' : 'table'} ${structure.table}`;
+      return structureChange(req, reply, site, target, [dropTableSql(structure)], summary, req.query.preview === 'true');
+    },
+  );
+
+  r.post(
+    '/api/sites/:slug/databases/:db/tables/:table/truncate',
+    { schema: { params: dbTableParams, querystring: dbPreviewQuery } },
+    async (req, reply) => {
+      const site = usableSite(req.params.slug);
+      const target = deps.databases.targetFor(site, req.params.db);
+      const structure = await browser(site).structure(target, req.params.table);
+      const sql = truncateTableSql(structure);
+      return structureChange(req, reply, site, target, [sql], `Empty table ${structure.table}`, req.query.preview === 'true');
     },
   );
 

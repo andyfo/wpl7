@@ -6,6 +6,7 @@ sidebar:
 sources:
   - "deploy/docker-compose*.yml"
   - "deploy/sftpgo-image/**"
+  - "deploy/adminer-image/**"
   - "deploy/wordpress-image/**"
   - panel/src/services/scanEngines.ts
   - panel/src/config.ts
@@ -26,6 +27,7 @@ when these pages were built, read from the files in the last column.
 | Postfix, in the `boky/postfix` image | The mail [relay](/docs/reference/glossary/#relay) on each server | `boky/postfix:latest`, not pinned | Postfix: EPL-2.0 or IPL-1.0. The image: MIT | `deploy/docker-compose.yml` |
 | OpenDKIM, in the `instrumentisto/opendkim` image | Signs outgoing mail with [DKIM](/docs/reference/glossary/#dkim) | `instrumentisto/opendkim:latest`, not pinned | OpenDKIM: BSD-3-Clause. The image: Blue Oak Model License 1.0.0 | `deploy/docker-compose.yml` |
 | SFTPGo | FTP and SFTP logins | 2.7.6 with one WPL7 patch, as `wpl7-sftpgo:2.7.6-wpl7.1` | AGPL-3.0 | `deploy/sftpgo-image/Dockerfile`, `deploy/sftpgo-image/VERSION` |
+| Adminer | Opens a site's database in [Adminer](/docs/databases/adminer/) | 6.1.2, the MySQL-only English build, checked by SHA-256, on `php:8.4-cli-alpine`, as `wpl7-adminer:6.1.2-wpl7.1` | Apache-2.0 or GPL-2.0 | `deploy/adminer-image/Dockerfile`, `deploy/adminer-image/VERSION` |
 | AMWScan, the PHP Antimalware Scanner | Malware scans | 0.21.12, pinned by digest | GPL-3.0 | `panel/src/services/scanEngines.ts` |
 | rclone | Offsite copies of backups | `rclone/rclone:1.71` | MIT | `panel/src/config.ts` |
 | The official WordPress image | The base of every site image, with PHP and Apache | `wordpress:php8.2-apache` to `wordpress:php8.5-apache` | WordPress: GPL-2.0-or-later. The image: GPL-2.0 | `deploy/wordpress-image/Dockerfile` |
@@ -41,6 +43,8 @@ when these pages were built, read from the files in the last column.
 - SFTPGo is the one modified component. WPL7 builds it from a fixed upstream commit with one
   patch: an overwrite keeps the old file until the new one is complete. The patch ships inside
   the image, in `/usr/share/doc/wpl7-sftpgo/`.
+- Adminer runs unmodified. Its image adds a front script and a plugin beside it: they let only
+  the panel sign it in, tie it to the server's MariaDB, and turn off its calls to adminer.org.
 - AMWScan runs unmodified. Each server pulls the official image, pinned by digest, and runs it
   as a separate process in a throwaway container. WPL7 adjusts what it reports through the
   scanner's own rules folder and by filtering its report.

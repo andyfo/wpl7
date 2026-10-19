@@ -5,6 +5,7 @@ import type { BackupService } from './backup.js';
 import type { OffsiteService } from './offsite.js';
 import type { StorageService } from './storage.js';
 import type { DnsService } from './dns.js';
+import type { AdminerService } from '../adminer/index.js';
 import type { DnsAccount } from './dnsAccount.js';
 import type { TraefikDnsSync } from './traefikDns.js';
 import type { MailService } from './mail.js';
@@ -74,6 +75,8 @@ export interface CoreServices {
   wpInventory: WpInventoryService;
   /** A site's databases - its own and the others it was given - and every server's, as last read. */
   databases: DatabasesService;
+  /** "Open in Adminer": the tickets, the front door's sessions, each server's Adminer. */
+  adminer: AdminerService;
   /** Cached wpvulnerability.net answers plus the version-range matcher. */
   vulnerabilities: VulnerabilityFeedService;
   updates: UpdateService;

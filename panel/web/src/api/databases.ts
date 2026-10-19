@@ -3,6 +3,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { DB_LIMITS, type DbRowFilter, type DbRowKey } from '../../../shared/databases';
 import type {
   DatabaseListDto,
+  DbDdlPreviewDto,
   DbQueryDto,
   DbRowDto,
   DbRowsPageDto,
@@ -45,6 +46,8 @@ export interface RowsQuery {
   sort: string | null;
   dir: 'asc' | 'desc';
   filters: DbRowFilter[];
+  /** Every filter must match, or one is enough. */
+  match: 'all' | 'any';
 }
 
 export const useDbRows = (slug: string, db: string | null, table: string | null, q: RowsQuery) =>
@@ -54,6 +57,7 @@ export const useDbRows = (slug: string, db: string | null, table: string | null,
       const params = new URLSearchParams({ offset: String(q.offset), limit: String(q.limit), dir: q.dir });
       if (q.sort) params.set('sort', q.sort);
       if (q.filters.length > 0) params.set('filters', JSON.stringify(q.filters));
+      if (q.match === 'any' && q.filters.length > 1) params.set('match', 'any');
       return api<DbRowsPageDto>(`${tableBase(slug, db!, table!)}/rows?${params}`);
     },
     enabled: !!db && !!table,
@@ -74,6 +78,20 @@ export const insertDbRow = (slug: string, db: string, table: string, values: Rec
 
 export const deleteDbRows = (slug: string, db: string, table: string, keys: DbRowKey[]) =>
   api<DbWriteResultDto>(`${tableBase(slug, db, table)}/rows/delete`, { method: 'POST', body: { keys } });
+
+/** Where a structure change goes, and what it sends: one request answers its SQL (preview) or runs it. */
+export const structurePaths = {
+  alter: (slug: string, db: string, table: string) => `${tableBase(slug, db, table)}/alter`,
+  create: (slug: string, db: string) => `${base(slug, db)}/tables`,
+  drop: (slug: string, db: string, table: string) => tableBase(slug, db, table),
+  truncate: (slug: string, db: string, table: string) => `${tableBase(slug, db, table)}/truncate`,
+};
+
+/** The SQL a structure change would run, and nothing run. */
+export const previewStructure = (path: string, method: 'POST' | 'DELETE', body?: Record<string, unknown>) =>
+  method === 'DELETE' || body === undefined
+    ? api<DbDdlPreviewDto>(`${path}?preview=true`, { method })
+    : api<DbDdlPreviewDto>(path, { method, body: { ...body, preview: true } });
 
 export const runDbSql = (slug: string, db: string, sql: string) =>
   api<DbQueryDto>(`${base(slug, db)}/query`, { method: 'POST', body: { sql } });

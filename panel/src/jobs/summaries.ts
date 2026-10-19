@@ -245,6 +245,8 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
         const extras = [p.empty === true ? 'emptied first' : null, p.backupFirst === false ? 'without a backup' : null].filter(Boolean);
         return extras.length > 0 ? `Into ${db}, ${extras.join(', ')}` : `Into ${db}`;
       }
+      case 'database.alter':
+        return str(p.summary);
       case 'database.deleteUnused': {
         const server = num(p.serverId);
         return str(p.name) ? `${str(p.name)}${server !== null ? ` on ${names.server?.(server) ?? `server #${server}`}` : ''}` : null;

@@ -32,6 +32,7 @@ const DATABASE_CHANGING_JOBS: ReadonlySet<JobType> = new Set<JobType>([
   'database.delete',
   'database.import',
   'database.deleteUnused',
+  'database.alter',
   'site.create',
   'site.delete',
   'site.move',
