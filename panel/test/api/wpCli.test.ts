@@ -374,11 +374,12 @@ describe('WP-CLI help', () => {
     expect((await help(app, headers, '?command=shop')).json().help).toBe(guide.trimEnd());
   });
 
+  // The MCP instructions check for WP Godmode this way before building a site.
   it('answers 404 for a command the site does not have', async () => {
     const { app, world, headers } = await authedApp();
     addRunningSite(world, 'alpha');
-    world.docker.execQueue.push({ stdout: '', stderr: "Error: 'nope' is not a registered wp command. See 'wp help' for available commands.\n", exitCode: 1 });
-    const res = await help(app, headers, '?command=nope');
+    world.docker.execQueue.push({ stdout: '', stderr: "Error: 'godmode' is not a registered wp command. See 'wp help' for available commands.\n", exitCode: 1 });
+    const res = await help(app, headers, '?command=godmode');
     expect(res.statusCode).toBe(404);
     expect(res.json().error.message).toContain('GET /api/sites/alpha/wp/cli/help lists what does exist');
   });

@@ -157,12 +157,16 @@ describe('the MCP endpoint', () => {
   });
 
   // Read on connect, and kept short: Claude Code cuts them at 2 KB, ChatGPT reads the start first.
-  it("points an app at a plugin's own WP-CLI help, and at WP Godmode's waits that ask nothing", async () => {
+  it("points an app at a plugin's own WP-CLI help, and hands building a site to its WP Godmode unasked", async () => {
     const { app, bearer } = await panel();
     const { instructions } = (await mcpClient(app, bearer()).send('initialize', initialize)).message!.result! as { instructions: string };
-    expect(instructions).toContain('wpl7_api_get /api/sites/{site}/wp/cli/help?command=<command>');
-    expect(instructions).toContain('send and answer with wpl7_api_dangerous');
-    expect(instructions).toContain('wpl7_api_get /api/sites/{site}/godmode/chats/{chatId}?wait=40, which needs no approval');
+    // As a model reads them: where a line breaks says nothing.
+    const said = instructions.replace(/\s+/g, ' ');
+    expect(said).toContain('wpl7_api_get /api/sites/{site}/wp/cli/help?command=<command>');
+    expect(said).toContain("Before building or changing a site's pages, design or content, read the help for command=godmode");
+    expect(said).toContain('give it the work instead of doing it yourself');
+    expect(said).toContain('Send and answer with wpl7_api_dangerous');
+    expect(said).toContain('wpl7_api_get /api/sites/{site}/godmode/chats/{chatId}?wait=40, which needs no approval');
   });
 
   // The address and the caller's name are the parts that grow. Counted in bytes, never fewer than the

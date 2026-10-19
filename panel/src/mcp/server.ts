@@ -67,24 +67,28 @@ function buildServer(c: ToolContext): McpServer {
  */
 function instructionsFor(principal: McpPrincipal, origin: string): string {
   return [
-    `This is the WPL7 panel at ${origin}. WPL7 is a self-hosted WordPress hosting panel: every site it hosts runs in its`,
-    "own container on one of the panel's servers, with backups, mail, visitor statistics and a job queue for anything slow.",
+    `This is the WPL7 panel at ${origin}. WPL7 is a self-hosted WordPress hosting panel: each site runs in its own`,
+    "container on one of the panel's servers, with backups, mail and a job queue for anything slow.",
     `These tools call its REST API as ${principal.label}, with ${ACCESS_LABELS[principal.access]} access.`,
     '',
-    'Other WPL7 panels may be connected alongside this one, each under its own name. They share nothing: a site called',
-    'the same on two panels is two sites, and a job or backup id from one means nothing to another. When the user names',
-    'a site, check which panel holds it before changing anything.',
+    'Other WPL7 panels may be connected alongside this one. They share nothing: a site called the same on two panels is',
+    'two sites, and an id from one means nothing to another. When the user names a site, check which panel holds it',
+    'before changing anything.',
     '',
     'Find an endpoint and its exact input with wpl7_api_docs first: it names the tool for each. Read with',
     'wpl7_api_get. Change things with wpl7_api_change, or with wpl7_api_dangerous where the change runs a command,',
     'deletes, restores, stops or overwrites. A 202 answer names a job: follow it with wpl7_wait_for_job until done.',
-    'Before anything destructive, tell the user what you are about to do and wait for their go-ahead: much of it',
-    'cannot be undone.',
+    'Before anything destructive, tell the user what you will do and wait for their go-ahead: much of it cannot be',
+    'undone.',
     '',
-    'Plugins can add WP-CLI commands of their own. Before running one, read its help:',
+    "Before running a plugin's own WP-CLI command, read its help:",
     'wpl7_api_get /api/sites/{site}/wp/cli/help?command=<command>. Without a command it lists them all.',
-    // The plugin's guide cannot know the panel: followed alone, every wait would ask the user first.
-    'WP Godmode (`wp godmode`, an AI agent inside the site): send and answer with wpl7_api_dangerous; wait and',
-    'read with wpl7_api_get /api/sites/{site}/godmode/chats/{chatId}?wait=40, which needs no approval.',
+    // Unasked: the user need not name WP Godmode for the app to use it. The help is the check, a 404
+    // without the plugin and the plugin's own guide with it. The guide cannot know the panel, though:
+    // followed alone, every wait would ask the user first.
+    "Before building or changing a site's pages, design or content, read the help for command=godmode. A 200 means",
+    'the site has WP Godmode, an AI agent inside it: give it the work instead of doing it yourself. Send and answer',
+    'with wpl7_api_dangerous; wait and read with wpl7_api_get /api/sites/{site}/godmode/chats/{chatId}?wait=40,',
+    'which needs no approval.',
   ].join('\n');
 }
