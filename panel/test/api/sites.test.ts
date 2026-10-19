@@ -125,6 +125,23 @@ describe('sites API', () => {
     expect(jobRes.json().lastSeq).toBe(0);
   });
 
+  it("names the job a site is busy with: a new site's create until it is over", async () => {
+    const { app, world, headers } = await authedApp();
+    const created = await app.inject({ method: 'POST', url: '/api/sites', headers, payload: createBody });
+    const { job } = created.json();
+
+    const creating = await app.inject({ method: 'GET', url: '/api/sites/my-blog', headers });
+    expect(creating.json()).toMatchObject({ status: 'provisioning', activeJob: { id: job.id, type: 'site.create' } });
+
+    settleCreate(world);
+    const running = await app.inject({ method: 'GET', url: '/api/sites/my-blog', headers });
+    expect(running.json()).toMatchObject({ status: 'running', activeJob: null });
+
+    const restart = await app.inject({ method: 'POST', url: '/api/sites/my-blog/restart', headers });
+    const busy = await app.inject({ method: 'GET', url: '/api/sites/my-blog', headers });
+    expect(busy.json().activeJob).toEqual({ id: restart.json().job.id, type: 'site.restart' });
+  });
+
   it('409s a second job for the same site and a duplicate slug', async () => {
     const { app, headers } = await authedApp();
     await app.inject({ method: 'POST', url: '/api/sites', headers, payload: createBody });

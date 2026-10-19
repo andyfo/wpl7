@@ -1,24 +1,13 @@
 // @docs get-started/first-site, get-started/quick-start, sites/create
 import { useMemo, useState, type ReactNode } from 'react';
-import { Link } from 'react-router';
+import { Link, useLocation, useNavigate } from 'react-router';
 import type { RecipeDto, WporgPluginDto } from '../../../shared/types';
-import { useMeta, usePluginCatalog, useRecipes, useRunJob, isTerminal } from '../api/hooks';
-import {
-  Button,
-  Card,
-  CopyField,
-  ErrorNote,
-  ExternalLinkIcon,
-  Field,
-  JobStatusBadge,
-  OutLink,
-  Spinner,
-  Toggle,
-  inputClass,
-} from '../components/ui';
+import { useMeta, usePluginCatalog, useRecipes, useRunJob } from '../api/hooks';
+import { Button, Card, ErrorNote, Field, OutLink, Toggle, inputClass } from '../components/ui';
 import { WporgPluginSearch } from '../components/WporgPluginSearch';
 import { LocaleSelect } from '../components/LocaleSelect';
 import { localeName } from '../lib/format';
+import { draftOf, keepDraft, type NewSiteDraft } from '../lib/siteCreation';
 
 const STEPS = ['Name & domain', 'WordPress', 'Plugins', 'Review'];
 
@@ -42,23 +31,31 @@ export function NewSite() {
   // Refetched on focus: the review sends a recipe that is not set up to the Recipes page, in a new tab.
   const recipes = useRecipes({ refetchOnWindowFocus: true });
   const run = useRunJob([['sites']]);
+  const navigate = useNavigate();
+  const location = useLocation();
 
-  const [step, setStep] = useState(0);
-  const [title, setTitle] = useState('');
-  const [slugEdited, setSlugEdited] = useState('');
-  const [serverId, setServerId] = useState<number | null>(null);
-  const [customDomain, setCustomDomain] = useState(false);
-  const [domainsText, setDomainsText] = useState('');
-  const [adminUser, setAdminUser] = useState('admin');
-  const [adminEmail, setAdminEmail] = useState<string | null>(null);
-  const [generatePw, setGeneratePw] = useState(true);
-  const [adminPassword, setAdminPassword] = useState('');
-  const [locale, setLocale] = useState<string | null>(null);
-  const [phpVersion, setPhpVersion] = useState<string | null>(null);
-  const [discourageSearch, setDiscourageSearch] = useState(true);
-  const [selectedCatalog, setSelectedCatalog] = useState<Set<number>>(new Set());
-  const [extraPlugins, setExtraPlugins] = useState<WporgPluginDto[]>([]);
-  const [defaultsApplied, setDefaultsApplied] = useState(false);
+  // Back to the form, from the page of a site that was not made: the form as it was sent, at its
+  // review. Nothing to bring back after a reload, which forgets it.
+  const [draft] = useState(() => {
+    const jobId = (location.state as { draftOf?: unknown } | null)?.draftOf;
+    return typeof jobId === 'number' ? draftOf(jobId) : null;
+  });
+  const [step, setStep] = useState(draft ? STEPS.length - 1 : 0);
+  const [title, setTitle] = useState(draft?.title ?? '');
+  const [slugEdited, setSlugEdited] = useState(draft?.slugEdited ?? '');
+  const [serverId, setServerId] = useState<number | null>(draft?.serverId ?? null);
+  const [customDomain, setCustomDomain] = useState(draft?.customDomain ?? false);
+  const [domainsText, setDomainsText] = useState(draft?.domainsText ?? '');
+  const [adminUser, setAdminUser] = useState(draft?.adminUser ?? 'admin');
+  const [adminEmail, setAdminEmail] = useState<string | null>(draft?.adminEmail ?? null);
+  const [generatePw, setGeneratePw] = useState(draft?.generatePw ?? true);
+  const [adminPassword, setAdminPassword] = useState(draft?.adminPassword ?? '');
+  const [locale, setLocale] = useState<string | null>(draft?.locale ?? null);
+  const [phpVersion, setPhpVersion] = useState<string | null>(draft?.phpVersion ?? null);
+  const [discourageSearch, setDiscourageSearch] = useState(draft?.discourageSearch ?? true);
+  const [selectedCatalog, setSelectedCatalog] = useState<Set<number>>(new Set(draft?.selectedCatalog));
+  const [extraPlugins, setExtraPlugins] = useState<WporgPluginDto[]>(draft?.extraPlugins ?? []);
+  const [defaultsApplied, setDefaultsApplied] = useState(draft !== null);
 
   const slug = slugEdited || slugPreview(title);
   const servers = meta.data?.servers ?? [];
@@ -96,83 +93,52 @@ export function NewSite() {
   ][step];
 
   const create = () => {
-    run.mutate({
-      path: '/api/sites',
-      body: {
-        title: title.trim(),
-        slug: slug || undefined,
-        serverId: multiServer ? effServerId : undefined,
-        domainMode: customDomain ? 'custom' : 'dev',
-        domains: customDomain ? domains : undefined,
-        phpVersion: effPhp,
-        locale: effLocale,
-        adminUser,
-        adminEmail: effAdminEmail,
-        adminPassword: generatePw ? undefined : adminPassword,
-        discourageSearchEngines: discourageSearch,
-        plugins: {
-          catalogIds: [...selectedCatalog],
-          extraWporgSlugs: extraPlugins.map((p) => p.slug),
+    const sent: NewSiteDraft = {
+      title,
+      slugEdited,
+      serverId,
+      customDomain,
+      domainsText,
+      adminUser,
+      adminEmail,
+      generatePw,
+      adminPassword,
+      locale,
+      phpVersion,
+      discourageSearch,
+      selectedCatalog: [...selectedCatalog],
+      extraPlugins,
+    };
+    run.mutate(
+      {
+        path: '/api/sites',
+        body: {
+          title: title.trim(),
+          slug: slug || undefined,
+          serverId: multiServer ? effServerId : undefined,
+          domainMode: customDomain ? 'custom' : 'dev',
+          domains: customDomain ? domains : undefined,
+          phpVersion: effPhp,
+          locale: effLocale,
+          adminUser,
+          adminEmail: effAdminEmail,
+          adminPassword: generatePw ? undefined : adminPassword,
+          discourageSearchEngines: discourageSearch,
+          plugins: {
+            catalogIds: [...selectedCatalog],
+            extraWporgSlugs: extraPlugins.map((p) => p.slug),
+          },
         },
       },
-    });
-  };
-
-  const oneTimePassword = (run.job?.result as { adminPassword?: string } | null)?.adminPassword;
-  const done = isTerminal(run.job?.status);
-  /** The job can no longer be read; `run.error` says why. */
-  const lost = run.jobId !== null && run.error !== null;
-
-  if (run.jobId !== null) {
-    return (
-      <div className="space-y-6">
-        <h1 className="page-title">Creating “{title}”</h1>
-        <Card>
-          <div className="space-y-4">
-            {/* How it is going. Its log is in the job console. */}
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              {!done && !lost && <Spinner />}
-              {run.job && <JobStatusBadge status={run.job.status} stopping={run.job.cancelRequested} />}
-              {run.job?.status === 'failed' && run.job.error && <span className="text-red-700">{run.job.error}</span>}
-            </div>
-            <ErrorNote error={lost ? run.error : null} />
-            {done && run.job?.status === 'succeeded' && (
-              <div className="space-y-3">
-                <p className="text-sm text-emerald-700">
-                  Site created:{' '}
-                  <a
-                    className="inline-flex items-center gap-1 underline"
-                    href={(run.job.result as { url?: string })?.url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {(run.job.result as { url?: string })?.url}
-                    <ExternalLinkIcon />
-                  </a>
-                </p>
-                {oneTimePassword && (
-                  <div>
-                    <p className="mb-1 text-sm font-medium">
-                      WordPress admin password for “{adminUser}” — shown only here:
-                    </p>
-                    <CopyField value={oneTimePassword} />
-                  </div>
-                )}
-                <Link to={`/sites/${slug}`}>
-                  <Button>Open site page</Button>
-                </Link>
-              </div>
-            )}
-            {((done && run.job?.status !== 'succeeded') || lost) && (
-              <Button variant="secondary" onClick={() => run.reset()}>
-                Back to the form
-              </Button>
-            )}
-          </div>
-        </Card>
-      </div>
+      {
+        // The site's own page shows it being made, then the password; the form is done with.
+        onSuccess: (job) => {
+          keepDraft(job.id, sent);
+          void navigate(`/sites/${job.siteSlug ?? slug}`, { replace: true });
+        },
+      },
     );
-  }
+  };
 
   return (
     <div className="space-y-6">

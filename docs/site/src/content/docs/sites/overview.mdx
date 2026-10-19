@@ -7,6 +7,7 @@ sources:
   - panel/web/src/pages/Sites.tsx
   - panel/web/src/pages/sitesLayout.ts
   - panel/web/src/pages/SiteDetail.tsx
+  - panel/web/src/components/SiteCreation.tsx
   - panel/web/src/lib/siteHealth.ts
   - panel/src/lib/httpProbe.ts
   - panel/src/services/sites.ts
@@ -108,6 +109,10 @@ outgoing mail is suspended, with **Resume mail**, and after a move, with **Final
 
 A site hosted elsewhere has four of these tabs: **Overview**, **Backups**, **WordPress** and
 **Settings**. See [Sites hosted elsewhere](/docs/sites/external/).
+
+A site that is still being created has no tabs yet. Its page shows the job's log and the site's
+facts, and the tabs appear once the site runs. A site that an
+[import](/docs/sites/import/) is making links to the import instead.
 
 ## Limits
 

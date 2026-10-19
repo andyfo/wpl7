@@ -6,6 +6,7 @@ sidebar:
 sources:
   - panel/web/src/pages/NewSite.tsx
   - panel/web/src/pages/SiteDetail.tsx
+  - panel/web/src/components/SiteCreation.tsx
   - panel/src/jobs/handlers/sites.ts
   - panel/src/services/adminLogin.ts
   - panel/src/services/labels.ts
@@ -35,15 +36,14 @@ This tutorial creates a site for a customer, Northwind Bakery, and takes it live
 
 ## Watch the job
 
-The [job console](/docs/automations/jobs/#watch-the-jobs-you-start) in the bottom right corner
-follows the job. Choose **Show log** to read its log. The panel creates the site's network, database
+The site's page opens and shows the job's log. The panel creates the site's network, database
 and container, installs WordPress and the plugins, and runs their
 [recipes](/docs/reference/glossary/#recipe). Only then can visitors reach the site. A yellow
 line is a warning, such as a plugin that would not install. The site is created anyway.
 
-When the job is done, the page shows the site's address and the WordPress admin password.
-Copy the password now: the panel shows it only here. The job stays listed under
-**Automations → All jobs**.
+When the job is done, the site's tabs appear, with the WordPress admin password above them.
+Copy the password, then choose **Done**. The job stays listed under **Automations → All jobs**,
+and its page keeps the password behind **Show**.
 
 ## Open the site
 
@@ -53,7 +53,7 @@ engines not to index it.
 
 ## Sign in to WordPress
 
-Choose **Open site page**, then **Log in to WordPress** on the **Overview** tab. A new tab opens
+Choose **Log in to WordPress** on the site's **Overview** tab. A new tab opens
 the WordPress dashboard, signed in as the site's administrator. The link behind it works
 once, within two minutes. If the browser blocks the new tab, the panel shows the link instead.
 

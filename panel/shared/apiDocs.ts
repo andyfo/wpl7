@@ -126,7 +126,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       {
         method: 'GET',
         path: '/api/sites/:slug',
-        summary: 'One site in full, including its container state and monitoring snapshot',
+        summary: 'One site in full, including its container state, monitoring snapshot and the job it is busy with',
         returns: 'SiteDetail',
         level: 'read',
       },

@@ -192,7 +192,7 @@ Dolly — removed right after the install, before the requested plugins go on.
 search engines from indexing this site" (Settings → Reading) switched on. Pass `false` for a site
 that should be indexed from the start. Going live turns it off unless its `allowSearchEngines` is
 `false`.
-| `GET /sites/:slug` | – | `SiteDetail` (incl. `containerState` — `unknown` when the hosting server cannot be reached; the rest is served from the registry — `url`, monitoring snapshot) |
+| `GET /sites/:slug` | – | `SiteDetail` (incl. `containerState` — `unknown` when the hosting server cannot be reached; the rest is served from the registry — `url`, monitoring snapshot, `activeJob` — `{id, type}` of the queued or running job holding the site, such as a new site's `site.create`, else `null`) |
 | `DELETE /sites/:slug` | `?finalBackup=true\|false` (default true; `false` skips the final backup) `&deleteBackups=true\|false` (default false) | `202 {job}` — `deleteBackups=true` also deletes the backups the site already has, offsite copies included: once the site is gone, its job queues a `backup.delete` for them (`result.backupDeleteJobId`). The final backup is not among them, so with both the site leaves exactly one backup behind (`result.finalBackupId`); when a final backup was asked for but the files were already gone, its newest complete backup stays instead |
 | `POST /sites/:slug/start` · `/stop` · `/restart` | – | `202 {job}` |
 | `PUT /sites/:slug/php` | `{phpVersion}` | `202 {job}` — auto-rollback if the site stops responding |
