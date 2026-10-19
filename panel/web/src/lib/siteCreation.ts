@@ -48,7 +48,8 @@ export interface NewSiteDraft {
   locale: string | null;
   phpVersion: string | null;
   discourageSearch: boolean;
-  selectedCatalog: number[];
+  /** The catalog plugins ticked or unticked by hand; the others follow the catalog's defaults. */
+  catalogTicks: [number, boolean][];
   extraPlugins: WporgPluginDto[];
 }
 

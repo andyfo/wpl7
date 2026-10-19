@@ -75,7 +75,10 @@ describe('the form a create was sent with', () => {
       locale: 'de_DE',
       phpVersion: null,
       discourageSearch: false,
-      selectedCatalog: [2, 5],
+      catalogTicks: [
+        [2, true],
+        [5, false],
+      ],
       extraPlugins: [],
     };
     keepDraft(41, draft);
