@@ -1,6 +1,7 @@
 // @docs get-started/first-site, get-started/quick-start, sites/create
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
+import { useQueryClient } from '@tanstack/react-query';
 import type { RecipeDto, WporgPluginDto } from '../../../shared/types';
 import { useMeta, usePluginCatalog, useRecipes, useRunJob } from '../api/hooks';
 import { Button, Card, ErrorNote, Field, OutLink, Toggle, inputClass } from '../components/ui';
@@ -33,6 +34,7 @@ export function NewSite() {
   const run = useRunJob([['sites']]);
   const navigate = useNavigate();
   const location = useLocation();
+  const qc = useQueryClient();
 
   // Back to the form, from the page of a site that was not made: the form as it was sent, at its
   // review. Nothing to bring back after a reload, which forgets it.
@@ -134,7 +136,10 @@ export function NewSite() {
         // The site's own page shows it being made, then the password; the form is done with.
         onSuccess: (job) => {
           keepDraft(job.id, sent);
-          void navigate(`/sites/${job.siteSlug ?? slug}`, { replace: true });
+          const created = job.siteSlug ?? slug;
+          // A read kept from an earlier site of this name, one that rolled back, is not this one.
+          qc.removeQueries({ queryKey: ['site', created], exact: true });
+          void navigate(`/sites/${created}`, { replace: true });
         },
       },
     );

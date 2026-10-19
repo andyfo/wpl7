@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { JobDto } from '../../shared/types.js';
-import { createJobFor, draftOf, keepDraft, type NewSiteDraft } from '../../web/src/lib/siteCreation.js';
+import { createJobFor, draftOf, keepDraft, newestJob, type NewSiteDraft } from '../../web/src/lib/siteCreation.js';
 
 /**
  * New site sends its form, then opens the site's own page, which shows the create it started.
@@ -47,6 +47,16 @@ describe("a site's create, among the jobs this tab started", () => {
     expect(createJobFor(jobs, 'shop', 1_000)?.id).toBe(3);
     expect(createJobFor(jobs, 'shop', 999)?.id).toBe(3);
     expect(createJobFor(jobs, 'shop', 1_001)).toBeNull();
+  });
+});
+
+describe('the create a site page shows, of those it knows', () => {
+  it('is the newest, over a cached read of the site that names one that rolled back', () => {
+    // The site's own activeJob and the job the page saw are both from the first attempt, kept
+    // from before its rollback; the retry this tab started is a later job.
+    expect(newestJob(35, 35, 36)).toBe(36);
+    expect(newestJob(40, null, 36)).toBe(40);
+    expect(newestJob(null, null, undefined)).toBeNull();
   });
 });
 

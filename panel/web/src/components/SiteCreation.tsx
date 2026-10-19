@@ -5,7 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { JobDto, JobLogLine, SiteDetail } from '../../../shared/types';
 import { isTerminal, useJob } from '../api/hooks';
 import { IMPORT_STATUS_LABEL, importPath } from '../lib/imports';
-import { createJobFor, draftOf, markPasswordSeen, passwordSeen } from '../lib/siteCreation';
+import { createJobFor, draftOf, markPasswordSeen, newestJob, passwordSeen } from '../lib/siteCreation';
 import { JobLogViewer } from './JobProgress';
 import { useJobSnapshots } from './jobConsole/context';
 import { Button, Card, CopyField, ErrorNote, JobStatusBadge } from './ui';
@@ -46,7 +46,7 @@ export function useSiteCreation(slug: string, site: SiteDetail | undefined): Sit
     slug,
     site?.createdAt ?? null,
   );
-  const id = active ?? seenId ?? started?.id ?? null;
+  const id = newestJob(active, seenId, started?.id);
   const read = useJob(id !== null && (id !== started?.id || started.status !== 'succeeded') ? id : null, 'site');
   const job = read.job ?? (started?.id === id ? started : null);
 

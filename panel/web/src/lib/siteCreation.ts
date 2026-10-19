@@ -24,6 +24,16 @@ export function createJobFor(
   return found;
 }
 
+/**
+ * Which of the creates a site's page knows of it shows: the newest, as job ids only grow. A read
+ * of the site kept from before a rollback still names the create that rolled back, while a retry
+ * of the same name is a later job.
+ */
+export function newestJob(...ids: (number | null | undefined)[]): number | null {
+  const known = ids.filter((id): id is number => typeof id === 'number');
+  return known.length > 0 ? Math.max(...known) : null;
+}
+
 /** The New site form, as it was sent. */
 export interface NewSiteDraft {
   title: string;
