@@ -184,6 +184,11 @@ export interface SiteDetail extends SiteSummary {
   } | null;
   /** Set for an external site. */
   external: ExternalSiteDto | null;
+  /**
+   * The site's queued or running job, while it has one: a site takes one at a time. A site still
+   * `provisioning` is being made by its `site.create`, whose log its page shows.
+   */
+  activeJob: { id: number; type: JobType } | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ import {
   useSiteTraffic,
 } from '../api/hooks';
 import type { BackupDto, SiteDetail as SiteDetailDto } from '../../../shared/types';
-import { api } from '../api/client';
+import { ApiError, api } from '../api/client';
 import {
   Button,
   Card,
@@ -53,6 +53,13 @@ import { FilesTab } from '../components/files/FilesTab';
 import { FtpTab } from '../components/ftp/FtpTab';
 import { SiteSecurityTab } from '../components/security/SiteSecurityTab';
 import { BlockDialog } from '../components/security/BlockDialog';
+import {
+  SiteCreatedNote,
+  SiteCreationCard,
+  SiteImportingCard,
+  createFailed,
+  useSiteCreation,
+} from '../components/SiteCreation';
 import { countryName, flagOf, formatBytes, formatDate, localeName, timeAgo } from '../lib/format';
 import { siteHealth } from '../lib/siteHealth';
 
@@ -73,8 +80,21 @@ const EXTERNAL_TABS = SITE_TABS.filter((t) => ['overview', 'backups', 'wordpress
 export function SiteDetail() {
   const { slug = '' } = useParams();
   const site = useSite(slug);
+  const creation = useSiteCreation(slug, site.data);
   const tabs = site.data?.kind === 'external' ? EXTERNAL_TABS : SITE_TABS;
   const [tab, setTab] = useTabParam(tabs);
+
+  // A create that failed removes the site it was making, unless its clean-up failed too. The site
+  // being gone is then how the create ended, not an error of this page.
+  const gone = isNotFound(site.failureReason ?? site.error);
+  if (createFailed(creation.job) && (gone || site.data?.status === 'provisioning')) {
+    return (
+      <div className="space-y-6">
+        <SiteHeading title={site.data?.title ?? slug} />
+        <SiteCreationCard creation={creation} left={gone ? 'gone' : undefined} />
+      </div>
+    );
+  }
 
   // Only a site that never loaded is an error page. A refresh that fails - the 15-second
   // poll, a network blip, an expired session - keeps the page as it was, with the error above
@@ -91,31 +111,29 @@ export function SiteDetail() {
   const s = site.data;
   const external = s.kind === 'external';
 
+  // Still being made, by a create or an import: how that goes, and what the site will be. The
+  // tabs come once it runs; nothing in them works before.
+  if (s.status === 'provisioning' && !external) {
+    return (
+      <div className="space-y-6">
+        <SiteHeading title={s.title} site={s} />
+        {site.isError && <ErrorNote error={site.error} />}
+        {s.importSource ? <SiteImportingCard source={s.importSource} /> : <SiteCreationCard creation={creation} />}
+        <div className="grid gap-4 lg:grid-cols-2">
+          <SiteFacts site={s} creating />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="page-title">{s.title}</h1>
-            <SiteHealthBadge health={siteHealth(s)} />
-            {external ? <StatusBadge status="external" /> : <StatusBadge status={s.isLive ? 'live' : 'dev'} />}
-          </div>
-          <a
-            href={s.url}
-            target="_blank"
-            rel="noreferrer"
-            title={`Open ${s.url} in a new tab`}
-            className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-700 hover:underline"
-          >
-            {s.url}
-            <ExternalLinkIcon />
-          </a>
-        </div>
-        <Link to="/sites" className="text-sm text-neutral-500 hover:underline">← sites</Link>
-      </div>
+      <SiteHeading title={s.title} site={s} />
 
       {site.isError && <ErrorNote error={site.error} />}
 
+      {createFailed(creation.job) && s.status === 'error' && <SiteCreationCard creation={creation} left="kept" />}
+      <SiteCreatedNote creation={creation} adminUser={s.adminUser} />
       <ReminderCard siteId={s.id} />
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
@@ -129,6 +147,59 @@ export function SiteDetail() {
       {tab === 'ftp' && <FtpTab key={slug} slug={slug} />}
       {tab === 'settings' && (external ? <ExternalSettings slug={slug} /> : <SettingsTab slug={slug} />)}
     </div>
+  );
+}
+
+const isNotFound = (error: unknown): boolean => error instanceof ApiError && error.status === 404;
+
+/** The site's name, how it stands and its address; only the name for a site that is gone. */
+function SiteHeading({ title, site }: { title: string; site?: SiteDetailDto }) {
+  return (
+    <div className="flex items-start justify-between">
+      <div>
+        <div className="flex items-center gap-3">
+          <h1 className="page-title">{title}</h1>
+          {site && <SiteHealthBadge health={siteHealth(site)} />}
+          {site && <StatusBadge status={site.kind === 'external' ? 'external' : site.isLive ? 'live' : 'dev'} />}
+        </div>
+        {site && (
+          <a
+            href={site.url}
+            target="_blank"
+            rel="noreferrer"
+            title={`Open ${site.url} in a new tab`}
+            className="inline-flex items-center gap-1 text-sm text-neutral-500 hover:text-neutral-700 hover:underline"
+          >
+            {site.url}
+            <ExternalLinkIcon />
+          </a>
+        )}
+      </div>
+      <Link to="/sites" className="text-sm text-neutral-500 hover:underline">← sites</Link>
+    </div>
+  );
+}
+
+/** What the site is. `creating`: without its container and disk use, which it has none of yet. */
+function SiteFacts({ site: s, creating = false }: { site: SiteDetailDto; creating?: boolean }) {
+  const meta = useMeta();
+  const multiServer = meta.data?.multiServer ?? false;
+  return (
+    <Card title="Facts">
+      <dl className="space-y-2 text-sm">
+        <FactRow label="Domains" value={s.domains.join(', ')} />
+        {s.devHostname && <FactRow label="Dev hostname" value={s.devHostname} />}
+        {multiServer && <FactRow label="Server" value={s.serverName} />}
+        <FactRow label="PHP" value={s.phpVersion} />
+        <FactRow label="Language" value={localeName(meta.data?.locales, s.locale)} />
+        {!creating && <FactRow label="Container" value={s.containerState} />}
+        <FactRow label="Database" value={s.dbName} />
+        {s.tablePrefix !== 'wp_' && <FactRow label="Table prefix" value={s.tablePrefix} />}
+        <FactRow label="WP admin" value={`${s.adminUser ?? '–'} <${s.adminEmail ?? '–'}>`} />
+        {!creating && <FactRow label="Disk" value={formatBytes(s.diskBytes)} />}
+        <FactRow label="Created" value={formatDate(s.createdAt)} />
+      </dl>
+    </Card>
   );
 }
 
@@ -271,21 +342,7 @@ function OverviewTab({ slug }: { slug: string }) {
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card title="Facts">
-          <dl className="space-y-2 text-sm">
-            <FactRow label="Domains" value={s.domains.join(', ')} />
-            {s.devHostname && <FactRow label="Dev hostname" value={s.devHostname} />}
-            {multiServer && <FactRow label="Server" value={s.serverName} />}
-            <FactRow label="PHP" value={s.phpVersion} />
-            <FactRow label="Language" value={localeName(meta.data?.locales, s.locale)} />
-            <FactRow label="Container" value={s.containerState} />
-            <FactRow label="Database" value={s.dbName} />
-            {s.tablePrefix !== 'wp_' && <FactRow label="Table prefix" value={s.tablePrefix} />}
-            <FactRow label="WP admin" value={`${s.adminUser ?? '–'} <${s.adminEmail ?? '–'}>`} />
-            <FactRow label="Disk" value={formatBytes(s.diskBytes)} />
-            <FactRow label="Created" value={formatDate(s.createdAt)} />
-          </dl>
-        </Card>
+        <SiteFacts site={s} />
         <Card title="Last 24h">
           <div className="space-y-4 text-sm">
             <div>

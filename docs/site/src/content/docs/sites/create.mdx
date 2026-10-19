@@ -5,6 +5,8 @@ sidebar:
   order: 2
 sources:
   - panel/web/src/pages/NewSite.tsx
+  - panel/web/src/components/SiteCreation.tsx
+  - panel/web/src/lib/siteCreation.ts
   - panel/src/routes/sites.ts
   - panel/src/services/sites.ts
   - panel/src/jobs/handlers/sites.ts
@@ -48,8 +50,9 @@ address at all. Point their DNS at the server first. Until then, the site has no
 
 ## What happens
 
-The wizard starts a `site.create` job, and the
-[job console](/docs/automations/jobs/#watch-the-jobs-you-start) shows its log. In order:
+The wizard starts a `site.create` job and opens the site's page, which shows the job's log
+until the site is made. The [job console](/docs/automations/jobs/#watch-the-jobs-you-start)
+follows the job too. In order:
 
 - It creates the site's folder, network and database.
 - It starts the container with no route to it, so no visitor can reach the WordPress installer.
@@ -59,9 +62,12 @@ The wizard starts a `site.create` job, and the
   [recipes](/docs/reference/glossary/#recipe).
 - It makes the site reachable and checks that it answers.
 
-If a step fails, the job removes everything it created, and the slug is free again. A plugin
-that fails to install is a warning, and so is a recipe the vendor refuses. The site is created
-anyway. When the job is done, it shows the generated admin password once.
+A plugin that fails to install is a warning, and so is a recipe the vendor refuses. The site is
+created anyway. When the job is done, the site's tabs appear. A generated admin password shows
+above them until you choose **Done**, only in the browser tab you created the site from.
+
+If a step fails, the job removes everything it created, and the slug is free again. The page
+then shows the error and the log. **Back to the form** opens the wizard as you filled it in.
 
 ## Limits
 
@@ -72,6 +78,8 @@ anyway. When the job is done, it shows the generated admin password once.
   WordPress. Going live allows them unless you untick **Allow search engines** there.
 - If the cleanup after a failure fails too, the site stays as **Error**. **Delete site** on its
   **Settings** tab removes it.
+- The browser keeps what you entered only until the page is reloaded. After a reload, a failed
+  site offers **New site**, which starts with an empty form.
 
 ## Related
 

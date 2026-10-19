@@ -1,6 +1,6 @@
 // @docs sites/create, sites/move, sites/overview, sites/settings
 import { and, asc, eq, isNotNull } from 'drizzle-orm';
-import type { BackupBeforeUpdates, SiteCreateBody } from '../../shared/schemas.js';
+import type { BackupBeforeUpdates, JobType, SiteCreateBody } from '../../shared/schemas.js';
 import { isBackupBeforeUpdates } from '../../shared/updateBackups.js';
 import type { SiteDetail, SiteSummary, SiteWpSummary } from '../../shared/types.js';
 import { jobs as jobsTable, moveCleanups, plugins, sites, type JobRow, type ServerRow, type SiteRow } from '../db/schema.js';
@@ -503,7 +503,14 @@ export class SitesService {
         : null,
       importSource: this.s.imports.sourceForSite(site.id),
       external: null,
+      activeJob: this.activeJob(site),
     };
+  }
+
+  /** The job holding the site, for its page to show: a new site's `site.create`, among others. */
+  private activeJob(site: SiteRow): SiteDetail['activeJob'] {
+    const job = this.worker.activeSiteJob(site.id);
+    return job ? { id: job.id, type: job.type as JobType } : null;
   }
 
   /** An external site's page: no container to ask about, and its connection instead. */
@@ -524,6 +531,7 @@ export class SitesService {
       pendingMoveCleanup: null,
       importSource: null,
       external: this.s.connections.externalDto(site, { wpVersion: this.s.wpInventory.coreVersionOf(site.id) }),
+      activeJob: this.activeJob(site),
     };
   }
 }
