@@ -44,7 +44,10 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     wpScanNextDue: both('connected external sites are scanned too'),
     dtoContext: NAMES,
   },
-  'jobs/worker.ts': { enqueue: both("reads the kind, to put an external site's jobs in the external lanes") },
+  'jobs/worker.ts': {
+    enqueue: both("reads the kind, to put an external site's jobs in the external lanes"),
+    rereadDatabases: both("reads the server of a site whose job changed a database; an external site's kick reads its backup server, which harms nothing"),
+  },
   'routes/backups.ts': {
     'GET /api/backups': both('backups of either kind'),
     'POST /api/backups/:id/fetch': both('a fetch lands on the server that keeps the site now, of either kind'),
@@ -68,6 +71,12 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     update: both('an external site'),
     heartbeat: both('external sites only (externalSites)'),
     toSummary: NAMES,
+  },
+  'services/databases.ts': {
+    assertNameFree: both("joins site_databases, which only hosted sites have rows in"),
+    claims: hosted('hostedSites()'),
+    userClaimed: hosted('hostedSites()'),
+    pruneUploads: hosted('hostedSites()'),
   },
   'services/domainGuard.ts': { assertDomainsFree: both('a domain belongs to one site, of either kind') },
   'services/externalBackup.ts': { pruneOrphans: both('external sites only (externalSites)') },

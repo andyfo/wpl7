@@ -66,6 +66,8 @@ docker inspect --format '{{.State.Health.Status}}' wpl7-mariadb
 
 It should say `healthy`. The site's database settings are in its container's environment, shown
 by `docker exec wp-<slug> env`. A site started while MariaDB was down recovers once MariaDB is up.
+The site's **Database** tab shows whether its database is there: **Missing** means its server does
+not have it, and a backup brings it back.
 
 ### The site shows Offline or No container
 

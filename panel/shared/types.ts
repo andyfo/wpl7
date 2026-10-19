@@ -2299,3 +2299,166 @@ export interface SecurityOverviewDto {
   recentBlocked: BlockedRequestDto[];
   scansInFlight: number;
 }
+
+// ---------------------------------------------------------------------------
+// Databases (shared/databases.ts, services/databases.ts, services/dbBrowser.ts)
+
+/** One database's size, as the last inventory of its server found it. */
+export interface DbSizeDto {
+  tables: number;
+  /** Data and indexes, as InnoDB estimates them. */
+  bytes: number;
+}
+
+/** One of a site's databases on its Database tab: its own, or another one it was given. */
+export interface SiteDatabaseEntryDto {
+  name: string;
+  /** `site`: the site's own (the one WordPress uses). `extra`: one added to the site. */
+  kind: 'site' | 'extra';
+  /** Null until its server's databases have been read, and while it is missing. */
+  size: DbSizeDto | null;
+  /** The server's databases were read and this one was not among them. */
+  missing: boolean;
+  /** When it was added; null for the site's own. */
+  createdAt: number | null;
+}
+
+export interface SiteDatabaseDto {
+  /** The site's own database, its user (also the user of every other one) and where code reaches them. */
+  name: string;
+  user: string;
+  host: string;
+  port: number;
+  tablePrefix: string;
+  /** The site's own first, then the others by name. */
+  databases: SiteDatabaseEntryDto[];
+  serverName: string;
+  /** The last time the server's databases were read; null when never. */
+  scannedAt: number | null;
+  /** Why the last attempt to read them failed, when it did. */
+  scanError: string | null;
+}
+
+/** Who a database on a server belongs to, worked out from the sites and the moves in progress. */
+export type DatabaseUseDto =
+  | { kind: 'site'; siteId: number; slug: string; title: string }
+  | { kind: 'extra'; siteId: number; slug: string; title: string }
+  /** The copy a moved site left on its old server, until the move's clean-up drops it. */
+  | { kind: 'moveCopy'; slug: string }
+  | { kind: 'unused' };
+
+export interface DatabaseListItemDto {
+  serverId: number;
+  serverName: string;
+  name: string;
+  /** Null when it is missing. */
+  size: DbSizeDto | null;
+  collation: string | null;
+  use: DatabaseUseDto;
+  /** A site's record says it should be on this server, and the last inventory did not find it. */
+  missing: boolean;
+}
+
+export interface DatabaseListDto {
+  databases: DatabaseListItemDto[];
+  servers: { id: number; name: string; scannedAt: number | null; error: string | null }[];
+}
+
+/** How the browser shows a value: lined up as a number, a date, JSON, text, or bytes it cannot show as text. */
+export type DbValueKind = 'number' | 'date' | 'text' | 'json' | 'binary' | 'other';
+
+export interface DbTableDto {
+  name: string;
+  type: 'table' | 'view';
+  engine: string | null;
+  /** InnoDB's estimate; null for a view. */
+  rows: number | null;
+  /** Data and indexes; null for a view. */
+  bytes: number | null;
+  collation: string | null;
+  comment: string;
+}
+
+export interface DbColumnDto {
+  name: string;
+  /** As MariaDB names it: `bigint(20) unsigned`, `varchar(191)`, `longtext`. */
+  type: string;
+  kind: DbValueKind;
+  nullable: boolean;
+  /** The column's default as MariaDB reports it: a literal, an expression, or null for none. */
+  default: string | null;
+  key: '' | 'PRI' | 'UNI' | 'MUL';
+  /** `auto_increment`, `on update current_timestamp()`, … */
+  extra: string;
+  comment: string;
+  /** A text column's character set (`utf8mb4`, `latin1`); null for the rest. */
+  charset: string | null;
+}
+
+export interface DbIndexDto {
+  name: string;
+  unique: boolean;
+  columns: string[];
+  type: string;
+}
+
+export interface DbTableStructureDto {
+  table: string;
+  type: 'table' | 'view';
+  columns: DbColumnDto[];
+  indexes: DbIndexDto[];
+  /** The columns a row is found by - the primary key, or a unique key without NULLs - or null: then rows are read only. */
+  key: string[] | null;
+  rows: number | null;
+}
+
+/**
+ * A value as the API carries it. Text - numbers too, so a BIGINT keeps every digit - or null for
+ * NULL; a value that is not text is described rather than sent, and a long one comes cut short.
+ */
+export type DbCell = string | null | { binary: number; hex: string } | { cut: string; length: number };
+
+export interface DbRowsPageDto {
+  columns: DbColumnDto[];
+  key: string[] | null;
+  rows: DbCell[][];
+  offset: number;
+  limit: number;
+  /** There is at least one row after this page. */
+  hasMore: boolean;
+  /** The table's estimated row count when nothing filters it; null when filtered or a view. */
+  estimate: number | null;
+  /** The SELECT that read the page, to open in the SQL editor. */
+  sql: string;
+}
+
+export interface DbRowDto {
+  columns: DbColumnDto[];
+  key: string[] | null;
+  /** In column order; whole up to DB_LIMITS.fullValueBytes, cut beyond. */
+  values: DbCell[];
+}
+
+export interface DbWriteResultDto {
+  affected: number;
+  /** The new row's AUTO_INCREMENT value, when it got one. */
+  insertId: string | null;
+}
+
+export type DbQueryResultDto =
+  | {
+      kind: 'rows';
+      columns: { name: string; type: string; kind: DbValueKind }[];
+      rows: DbCell[][];
+      /** More rows came than DB_LIMITS.resultRows; the statement was stopped there. */
+      truncated: boolean;
+      ms: number;
+    }
+  | { kind: 'ok'; affected: number; insertId: string | null; info: string; warnings: number; ms: number }
+  | { kind: 'error'; message: string; code: string | null };
+
+export interface DbQueryDto {
+  /** One per statement that ran, in order: rows, or what a statement changed, or the error that stopped the run. */
+  results: DbQueryResultDto[];
+  ms: number;
+}

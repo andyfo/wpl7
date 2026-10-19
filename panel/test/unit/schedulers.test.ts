@@ -51,6 +51,7 @@ describe('built-in schedules', () => {
       'site-stats',
       'server-stats',
       'disk-usage',
+      'database-sizes',
       'traffic-ingest',
       'update-check',
       'catalog',

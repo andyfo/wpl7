@@ -48,11 +48,12 @@ describe('RemoteDbAdminService', () => {
     expect(pipeline.args[1]).toContain(`| gzip > '/srv/backups/demo/x/db.sql.gz'`);
   });
 
-  it('imports via zcat | docker exec -i', async () => {
+  it('imports via gzip -dc | docker exec -i, with the client commands and local files off', async () => {
     const exec = new FakeExec();
     await new RemoteDbAdminService(exec).importFrom('/srv/backups/demo/x/db.sql.gz', 'wp_demo');
     const call = exec.calls[0]!;
-    expect(call.args[1]).toContain(`zcat '/srv/backups/demo/x/db.sql.gz' | docker exec -i wpl7-mariadb`);
+    expect(call.args[1]).toContain(`set -o pipefail; gzip -dc '/srv/backups/demo/x/db.sql.gz' | docker exec -i wpl7-mariadb`);
+    expect(call.args[1]).toContain('exec mariadb --binary-mode --sandbox --local-infile=0 -uroot');
     expect(call.args[1]).toContain('wp_demo');
   });
 
@@ -67,7 +68,7 @@ describe('RemoteDbAdminService', () => {
     expect(login!.input).toBe('[client]\nuser=wp_demo\npassword="p\\"w\\\\d"\n');
     const cnf = /\/run\/wpl7-import-[0-9a-f]{16}\.cnf/.exec(login!.args[5]!)![0];
     expect(pipeline!.args[1]).toBe(
-      `set -o pipefail; zcat '/srv/wpl7-import/3/db.sql.gz' | docker exec -i wpl7-mariadb mariadb --defaults-extra-file=${cnf} --max-allowed-packet=1G wp_demo`,
+      `set -o pipefail; gzip -dc '/srv/wpl7-import/3/db.sql.gz' | docker exec -i wpl7-mariadb mariadb --defaults-extra-file=${cnf} --binary-mode --sandbox --local-infile=0 --max-allowed-packet=1G wp_demo`,
     );
     expect(cleanup!.args).toEqual(['exec', 'wpl7-mariadb', 'rm', '-f', cnf]);
     for (const call of exec.calls) {
@@ -96,6 +97,44 @@ describe('RemoteDbAdminService', () => {
     exec.results = [{ stdout: '67108864\n', stderr: '', exitCode: 0 }];
     expect(await db.raisePacketLimit(20 * 1024 * 1024)).toBeNull();
     expect(exec.calls).toHaveLength(3);
+  });
+
+  it("grants another database to the site's own user, its name escaped in the grant only", async () => {
+    const exec = new FakeExec();
+    await new RemoteDbAdminService(exec).createExtraDb('shop_crm', 'wp_shop');
+    expect(exec.calls[0]!.input).toBe('CREATE DATABASE `shop_crm` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;');
+    const grant = exec.calls[1]!.input!;
+    // Grants an earlier database of that name left go first, then the site's own.
+    expect(grant).toContain("DELETE FROM mysql.db WHERE Db IN ('shop\\\\_crm', 'shop_crm');");
+    expect(grant).toContain("GRANT ALL PRIVILEGES ON `shop\\_crm`.* TO 'wp_shop'@'%';");
+    await expect(new RemoteDbAdminService(exec).createExtraDb('bad name', 'wp_shop')).rejects.toThrow(/Unsafe/);
+  });
+
+  it('drops any name a server can hold, quoted, and every grant on it', async () => {
+    const exec = new FakeExec();
+    await new RemoteDbAdminService(exec).dropDb('old-shop`x');
+    expect(exec.calls[0]!.input).toBe(
+      "DROP DATABASE IF EXISTS `old-shop``x`;\nDELETE FROM mysql.db WHERE Db IN ('old-shop`x', 'old-shop`x');\nFLUSH PRIVILEGES;",
+    );
+  });
+
+  it('changes a password over stdin only', async () => {
+    const exec = new FakeExec();
+    await new RemoteDbAdminService(exec).setUserPassword('wp_shop', "n3w'pw\\");
+    const call = exec.calls[0]!;
+    expect(call.args.join(' ')).not.toContain('n3w');
+    expect(call.input).toBe("ALTER USER 'wp_shop'@'%' IDENTIFIED BY 'n3w''pw\\\\';");
+  });
+
+  it('reads the inventory and the users from batch output', async () => {
+    const exec = new FakeExec();
+    exec.results = [{ stdout: 'wp_shop\tutf8mb4_unicode_ci\t3\t49152\n', stderr: '', exitCode: 0 }];
+    const db = new RemoteDbAdminService(exec);
+    expect(await db.inventory()).toEqual([{ name: 'wp_shop', collation: 'utf8mb4_unicode_ci', tables: 3, bytes: 49152 }]);
+    expect(exec.calls[0]!.args.at(-1)).toContain('-N -B');
+    exec.results = [{ stdout: '%\nlocalhost\n', stderr: '', exitCode: 0 }, { stdout: '', stderr: '', exitCode: 0 }];
+    await db.dropUser('wp_gone');
+    expect(exec.calls.at(-1)!.input).toBe("DROP USER IF EXISTS 'wp_gone'@'%';\nDROP USER IF EXISTS 'wp_gone'@'localhost';");
   });
 
   it('fails loudly with stderr context', async () => {

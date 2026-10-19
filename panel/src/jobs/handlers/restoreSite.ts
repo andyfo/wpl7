@@ -19,7 +19,13 @@ import { rmOn } from './moveHelpers.js';
  *   another host, so it is imported as the site's own database user.
  */
 export type StagedSiteSource =
-  | { kind: 'archive'; filesTarGz: string; dbSqlGz: string }
+  | {
+      kind: 'archive';
+      filesTarGz: string;
+      dbSqlGz: string;
+      /** The site's other databases (site_databases), each with its dump in the archive. */
+      extraDbs?: { name: string; sqlGz: string }[];
+    }
   | { kind: 'tree'; wordpressDir: string; dbSqlGz: string };
 
 /**
@@ -101,6 +107,16 @@ export async function restoreSiteOnServer(
   ctx.info('Importing the database…');
   if (source.kind === 'archive') await target.dbAdmin.importFrom(source.dbSqlGz, site.dbName);
   else await target.dbAdmin.importFromAs(source.dbSqlGz, site.dbName, site.dbUser, site.dbPassword);
+  for (const extra of source.kind === 'archive' ? (source.extraDbs ?? []) : []) {
+    ctx.info(`Creating and importing database ${extra.name} on the target…`);
+    // Armed after the create, unlike the rest: createExtraDb undoes its own half-way failure, and
+    // a create that failed because the name is taken there must not drop what it found.
+    await target.dbAdmin.createExtraDb(extra.name, site.dbUser);
+    ctx.pushCompensation(`drop database ${extra.name} on target`, async () => {
+      await target.dbAdmin.dropDb(extra.name);
+    });
+    await target.dbAdmin.importFrom(extra.sqlGz, extra.name);
+  }
   ctx.checkCanceled();
 
   ctx.info('Creating the site network on the target…');

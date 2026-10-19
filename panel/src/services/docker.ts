@@ -1,8 +1,8 @@
 // @docs get-started/how-it-works, reference/architecture, security/overview
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { Writable } from 'node:stream';
-import type { Duplex, Readable } from 'node:stream';
+import { Duplex, PassThrough, Writable } from 'node:stream';
+import type { Readable } from 'node:stream';
 import Docker from 'dockerode';
 import { collectDemuxed, demuxBuffer, demuxToStreams } from '../lib/demux.js';
 import { badGateway, timedOut } from '../lib/errors.js';
@@ -169,6 +169,12 @@ export interface ExecOpts {
   onOutput?: (line: string) => void;
 }
 
+export interface ExecDuplexOpts {
+  /** The longest the command may run; it is killed inside the container after that. */
+  timeoutMs?: number;
+  user?: string;
+}
+
 export interface EphemeralOpts {
   image: string;
   cmd: string[];
@@ -294,6 +300,13 @@ export interface DockerPort {
   /** `exec` with `input` as the command's stdin, followed by end-of-file. */
   execWithInput(name: string, cmd: string[], input: Buffer, opts?: ExecOpts): Promise<RunResult>;
   execToStream(name: string, cmd: string[], stdout: Writable, opts?: ExecOpts): Promise<{ exitCode: number; stderr: string }>;
+  /**
+   * A command whose stdin and stdout are one stream, like a socket: written bytes are its input,
+   * its output is what is read, and the stream ends when the command does. For a command that
+   * joins the stream to a port inside its container (the database browser's relay,
+   * services/dbBrowser.ts). `stderr()` is what it wrote there, up to 64 KiB, for an error message.
+   */
+  execDuplex(name: string, cmd: string[], opts?: ExecDuplexOpts): Promise<{ stream: Duplex; stderr: () => string }>;
   runEphemeral(opts: EphemeralOpts): Promise<RunResult>;
   imageExists(tag: string): Promise<boolean>;
   /** Builds from every file in `contextDir` (a flat folder), on this server's daemon. */
@@ -726,6 +739,58 @@ export class DockerService implements DockerPort {
         ? `${what} and is STILL RUNNING inside the container - do not retry until it has exited`
         : `${what} (process terminated)`,
     );
+  }
+
+  async execDuplex(name: string, cmd: string[], opts: ExecDuplexOpts = {}): Promise<{ stream: Duplex; stderr: () => string }> {
+    const timeoutMs = opts.timeoutMs ?? 15 * 60_000;
+    const exec = await this.docker.getContainer(name).exec({
+      Cmd: withDeadline(cmd, timeoutMs),
+      AttachStdin: true,
+      AttachStdout: true,
+      AttachStderr: true,
+      Tty: false,
+      User: opts.user,
+    });
+    const sock = (await exec.start({ hijack: true, stdin: true })) as unknown as Duplex;
+    // A command that exits under our write makes it fail with EPIPE; unheard, that takes the panel down.
+    sock.on('error', () => undefined);
+    const out = new PassThrough();
+    let stderrText = '';
+    const stderr = new Writable({
+      write(chunk: Buffer, _enc, cb) {
+        if (stderrText.length < 64 * 1024) stderrText += chunk.toString('utf8');
+        cb();
+      },
+    });
+    demuxToStreams(sock as unknown as Readable, out, stderr).then(
+      () => out.end(),
+      (err: Error) => out.destroy(err),
+    );
+    // Tty:false is what keeps the bytes as they are - a TTY would echo the input and turn every
+    // \n into \r\n - and it is also why the output arrives in frames, undone above.
+    const stream = new Duplex({
+      read() {
+        out.resume();
+      },
+      write(chunk: Buffer, _enc, cb) {
+        sock.write(chunk, cb);
+      },
+      final(cb) {
+        sock.end();
+        cb();
+      },
+      destroy(err, cb) {
+        sock.destroy();
+        out.destroy();
+        cb(err);
+      },
+    });
+    out.on('data', (chunk: Buffer) => {
+      if (!stream.push(chunk)) out.pause();
+    });
+    out.on('end', () => stream.push(null));
+    out.on('error', (err) => stream.destroy(err));
+    return { stream, stderr: () => stderrText };
   }
 
   async execToStream(

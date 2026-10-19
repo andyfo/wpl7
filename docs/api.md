@@ -466,6 +466,37 @@ the site (a backup blocks nothing). A job queued while a change is under way sta
 | `POST /sites/:slug/files/extract` | `{path, to?: "", overwrite?: false}` | `202 {job}` (`files.extract`) — refuses unsafe archives whole, skips symlinks, lists what is in the way unless `overwrite` |
 | `POST /sites/:slug/files/compress` | `{paths: [...], to: "dir/name.zip", overwrite?: false}` | `202 {job}` (`files.compress`) — entries of one folder, into a `.zip` in that folder |
 
+### Databases
+A site's databases - its own (`wp_<slug>`) and the ones added to it - and every server's. The browser's
+reads and writes, and SQL, run as the site's own database user, so they reach that site's databases and
+nothing else: a database the site does not have is `404`. Changes answer `409 job_conflict` while a
+restore, import, move, re-creation or delete runs on the site (a backup blocks nothing), and `409` while
+the site is being created or deleted. Values come back as text (`null` for NULL); a binary value as
+`{binary: <bytes>, hex}`, a long one cut as `{cut, length}`.
+
+| Method & path | Body / query | Returns |
+|---|---|---|
+| `GET /databases` | – | `{databases[], servers[]}` — per database: `serverId`, `name`, `size: {tables, bytes}`, `use` (`site`\|`extra`\|`moveCopy`\|`unused`), `missing`; per server: `scannedAt`, `error`. Sizes are as last read: hourly, and after every job that changes a database |
+| `POST /databases/scan` | – | the same, after reading every server now |
+| `DELETE /databases/:serverId/:name` | – | `202 {job}` (`database.deleteUnused`) — only a database no site or move claims; Full |
+| `GET /sites/:slug/databases` | – | `{name, user, host, port, tablePrefix, databases[], serverName, scannedAt, scanError}` |
+| `POST /sites/:slug/databases` | `{name}` (`a-z0-9_`, not `wp_…`) | `202 {job}` (`database.create`) — granted to the site's user; unique across the panel |
+| `DELETE /sites/:slug/databases/:db` | – | `202 {job}` (`database.delete`) — an added one; the site's own goes only with the site |
+| `POST /sites/:slug/database-password/reveal` | – | `{password}` — logged |
+| `POST /sites/:slug/database-password` | – | `202 {job}` (`database.password`) — a new password, and the container recreated with it. Refused when `wp-config.php` sets the password itself |
+| `GET /sites/:slug/databases/:db/export` | – | the dump, gzipped (`.sql.gz`), streamed |
+| `PUT /sites/:slug/database-uploads/:id` | `?offset=&size=`; body: one chunk ≤ 8 MiB of a gzipped dump | `{received, complete}` — `409` with `details.received` when `offset` is not what the server has |
+| `DELETE /sites/:slug/database-uploads/:id` | – | `204` |
+| `POST /sites/:slug/databases/:db/import` | `{uploadId, empty?: false, backupFirst?: true}` | `202 {job}` (`database.import`) — as the site's own user; WordPress shows its maintenance page meanwhile when the site's own database is the one |
+| `GET /sites/:slug/databases/:db/tables` | – | `{items[]}` — `name`, `type` (`table`\|`view`), `rows` (estimate), `bytes` |
+| `GET /sites/:slug/databases/:db/tables/:table` | – | `{columns[], indexes[], key}` — `key` is the primary key, or a unique key without NULLs; `null` means read only |
+| `GET /sites/:slug/databases/:db/tables/:table/rows` | `?offset=&limit=(≤500)&sort=&dir=&filters=[{column, op, value?}]` | `{columns, key, rows, hasMore, estimate, sql}` — `op` is `eq`\|`ne`\|`lt`\|`gt`\|`le`\|`ge`\|`contains`\|`notContains`\|`startsWith`\|`endsWith`\|`isNull`\|`notNull`; Manage |
+| `GET /sites/:slug/databases/:db/tables/:table/row` | `?key={"<column>":"<value>"}` | `{columns, key, values}` — values whole up to 1 MiB; Manage |
+| `POST /sites/:slug/databases/:db/tables/:table/rows` | `{values: {<column>: text\|null}}` | `{affected, insertId}` |
+| `PATCH /sites/:slug/databases/:db/tables/:table/rows` | `{key, values}` | `{affected}` — `404` when no row has that key |
+| `POST /sites/:slug/databases/:db/tables/:table/rows/delete` | `{keys: [...]}` (≤ 500) | `{affected}` — all or none |
+| `POST /sites/:slug/databases/:db/query` | `{sql}` | `{results[], ms}` — one per statement, stopping at the first error: `rows` (≤ 1,000, then stopped), `ok` (`affected`, `insertId`) or `error`. 50 s per statement |
+
 ### FTP & SFTP logins (see docs/ftp.md)
 A site's logins for desktop FTP and SFTP clients. Each reaches its own site's files and nothing else;
 none exist by default. Usernames are unique across the panel (`409` when taken - the answer does not say

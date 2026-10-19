@@ -19,6 +19,7 @@ export const SITE_URL = 'https://wpl7.com/docs/';
 /** Sidebar groups whose pages document a feature, and so must name the code they document. */
 export const FEATURE_GROUPS = [
   'sites',
+  'databases',
   'servers',
   'plugins',
   'backups',

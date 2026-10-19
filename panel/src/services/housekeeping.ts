@@ -109,6 +109,14 @@ export async function runHousekeeping(
   result.movesFinalized = await autoFinalizeMoves(s, s.worker, log, resolvers);
   checkCanceled();
 
+  // Dumps uploaded for an import that never ran, or one that failed and was not run again.
+  result.databaseUploadsRemoved = await s.databases.pruneUploads().catch((err: unknown) => {
+    log.warn(`Clearing old database uploads failed: ${errorText(err)}`);
+    return 0;
+  });
+  if (result.databaseUploadsRemoved > 0) log.info(`Database uploads: removed ${result.databaseUploadsRemoved} older than a day`);
+  checkCanceled();
+
   const statsCutoff = Date.now() - (s.settings.get('monitorRetentionDays') || 7) * 24 * 3600_000;
   s.db.delete(siteStats).where(lt(siteStats.ts, statsCutoff)).run();
   s.db.delete(serverStats).where(lt(serverStats.ts, statsCutoff)).run();

@@ -49,6 +49,7 @@ const ALL_IN_CATEGORY: Record<JobCategory, string> = {
   backups: 'All backup jobs',
   wordpress: 'All WordPress jobs',
   files: 'All file jobs',
+  databases: 'All database jobs',
   security: 'All security jobs',
   servers: 'All server jobs',
   system: 'All panel jobs',

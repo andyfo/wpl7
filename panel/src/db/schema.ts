@@ -698,6 +698,11 @@ export const moveCleanups = sqliteTable(
     targetIp: text('target_ip').notNull(),
     /** Traefik file-provider proxy config written on the source (live sites), if any. */
     proxyConfigPath: text('proxy_config_path'),
+    /**
+     * JSON string[]: the site's other databases (site_databases) at the move, left on the source
+     * like the main one and dropped with it. NULL on rows from before sites had any.
+     */
+    extraDbs: text('extra_dbs'),
     status: text('status').notNull(), // 'pending' | 'done'
     createdAt: integer('created_at').notNull(),
     finalizedAt: integer('finalized_at'),
@@ -1728,3 +1733,68 @@ export const domainLookups = sqliteTable('domain_lookups', {
   domain: text('domain').primaryKey(),
   data: text('data').notNull(), // DomainDto
 });
+
+// ---------------------------------------------------------------------------
+// Databases (docs/site/src/content/docs/databases/overview.mdx)
+
+/**
+ * A site's databases beyond its own (`sites.db_name`). Each is made for the site, on the server
+ * the site runs on, and granted to the site's own database user - so the site's code reaches it
+ * with the login WordPress already has - and goes wherever the site goes: into its backups, along
+ * on a move, and away when the site is deleted.
+ *
+ * Names are unique across the panel, not per server: a site moves, and its databases have to be
+ * free to land on whichever server it goes to. They never start with `wp_`, which is the prefix
+ * of the sites' own databases (lib/slug.ts dbIdentifier), so the two can never collide.
+ */
+export const siteDatabases = sqliteTable(
+  'site_databases',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    siteId: integer('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    name: text('name').notNull().unique(),
+    /** Who added it: an admin's username, or an API key's name. NULL when a restore put it back. */
+    createdBy: text('created_by'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [index('site_databases_site_idx').on(t.siteId)],
+);
+
+/**
+ * Every database on each server's MariaDB, as the last inventory found it (services/databases.ts):
+ * its tables and their size. A snapshot, like site_wp_status: reading sizes means a query on every
+ * server, so a timer and the jobs that change databases write here, and pages read SQLite only.
+ * Which site a database belongs to is not stored - it is worked out on reading, from the sites,
+ * their other databases and the moves still waiting for clean-up, so it is never out of date.
+ */
+export const serverDatabases = sqliteTable(
+  'server_databases',
+  {
+    serverId: integer('server_id')
+      .notNull()
+      .references(() => servers.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    tables: integer('tables').notNull(),
+    /** Data and indexes, as information_schema reports them: InnoDB's own estimate. */
+    bytes: integer('bytes').notNull(),
+    collation: text('collation'),
+  },
+  (t) => [primaryKey({ columns: [t.serverId, t.name] })],
+);
+
+/** When each server's databases were last read, and why the last attempt failed, if it did. */
+export const serverDatabaseScans = sqliteTable('server_database_scans', {
+  serverId: integer('server_id')
+    .primaryKey()
+    .references(() => servers.id, { onDelete: 'cascade' }),
+  /** The last inventory that worked; NULL until one has. */
+  scannedAt: integer('scanned_at'),
+  attemptedAt: integer('attempted_at').notNull(),
+  error: text('error'),
+});
+
+export type SiteDatabaseRow = typeof siteDatabases.$inferSelect;
+export type ServerDatabaseRow = typeof serverDatabases.$inferSelect;
+export type ServerDatabaseScanRow = typeof serverDatabaseScans.$inferSelect;

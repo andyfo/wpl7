@@ -27,16 +27,19 @@ scheduled run also backs up the panel's own database.
 ## What a backup holds
 
 Each backup is a folder under `<backup location>/<slug>/`, named after the time it was taken, in
-UTC. It holds four files:
+UTC. It holds four files, and a `databases` folder when the site has
+[databases added to it](/docs/databases/overview/):
 
 | File | Holds |
 |---|---|
 | `db.sql.gz` | The site's database, dumped in one consistent transaction |
 | `files.tar.gz` | The site's `wordpress/` folder, its `config/` folder and `site.json` |
-| `manifest.json` | The site's name, domains, PHP and WordPress versions, language and database |
-| `sha256sums` | Checksums of both archives, checked before every restore |
+| `manifest.json` | The site's name, domains, PHP and WordPress versions, language and databases |
+| `sha256sums` | Checksums of the archive and every dump, checked before every restore |
+| `databases/<name>.sql.gz` | Each database added to the site, dumped the same way |
 
-The panel archives the files while the site keeps running. The four files are enough to rebuild
+An added database that is not on the server, because someone dropped it, is left out of the
+backup with a warning in its log. The panel archives the files while the site keeps running. The four files are enough to rebuild
 the site without the panel, as [Manual recovery](/docs/reference/manual-recovery/) shows.
 
 ## Kinds, and how long each is kept

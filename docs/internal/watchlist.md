@@ -48,6 +48,7 @@ for a reason; remove one once there is nothing left to watch.
 | [WordPress's answer to a fatal error](#wordpresss-answer-to-a-fatal-error) | Low | 2026-10-09 15:55 UTC | 500, as relied on |
 | [WordPress's default From address](#wordpresss-default-from-address) | Medium | 2026-10-14 16:28 UTC | `wordpress@` and the home URL's host without `www.`, on 7.1.3 and trunk |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
+| [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 14:17 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -690,3 +691,35 @@ for a reason; remove one once there is nothing left to watch.
   Check response fields, required permissions and supported token formats.
 - **When it changes:** Update `ReminderSources`, its failure-handling tests and Reminders docs.
   Never expose the token in a reminder, a response, an error or a calendar feed.
+
+## The MariaDB image's bash and client, as the database browser and imports rely on them
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-19 14:17 UTC. `mariadb:11.4`, rebuilt 2026-10-17, is MariaDB
+  11.4.13 on Ubuntu 24.04.5. Its bash is 5.2.21 and opens `/dev/tcp`. Its client, 15.2, refuses
+  `\!`, `system`, `source` and `LOAD DATA LOCAL INFILE` with the import flags. The engine test
+  `panel/test/engine/dbBrowser.test.ts` passes on it: 15 of 15.
+- **The problem:** two things lean on the image.
+  - A site's **Database** tab reaches MariaDB through `docker exec`. The relay (`RELAY_CMD` in
+    `panel/src/services/dbBrowser.ts`) is `bash -c 'exec 3<>/dev/tcp/127.0.0.1/3306 …'` inside
+    `wpl7-mariadb`, and logs in as the site's own user, which only works while the image creates
+    no anonymous users. An image without bash, with a bash built without network redirections,
+    or with an anonymous `''@'localhost'` user, would break the browser on every server. It
+    would show at once: the tab answers 502 with the relay's own error.
+  - Every dump is loaded by the image's `mariadb` client with `IMPORT_CLIENT_ARGS`
+    (`panel/src/services/dbAdmin.ts`): `--binary-mode --sandbox --local-infile=0`. Without them
+    a dump runs shell commands and reads local files inside the client's container, and on a
+    remote server that is `wpl7-mariadb`, root password and all. A client that drops one of
+    these options fails every import, which shows. One that keeps the option but stops
+    refusing would not show: only the engine test catches it.
+- **Check:** `docker pull mariadb:11.4`, then
+  `docker run --rm --entrypoint bash mariadb:11.4 -c 'echo $BASH_VERSION; (exec 3<>/dev/tcp/127.0.0.1/1) 2>&1 | head -1'`
+  answers a version and `Connection refused`. Then run the engine test:
+  `WPL7_ENGINE_TESTS=1 npx vitest run test/engine/dbBrowser.test.ts` in `panel/`. It imports a
+  dump with each of the four commands on both import paths, and expects each refused.
+- **When it changes:** tell the user.
+  - The relay: replace it with a command the image has, such as `perl -MIO::Socket::INET` or the
+    `mariadb` client in a container of its own on `wpl7_db`.
+  - The client: find the option that now refuses those commands, put it in
+    `IMPORT_CLIENT_ARGS`, and keep imports off the new image until the engine test passes.
+  - Either way, run the engine test on the new image before it reaches a server.

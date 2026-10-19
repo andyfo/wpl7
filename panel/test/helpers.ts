@@ -27,7 +27,8 @@ import type {
   SiteContainerSpec,
 } from '../src/services/docker.js';
 import { SPEC_LABEL, serviceSpecHash } from '../src/services/docker.js';
-import { packetLimitFor, type DbAdminPort } from '../src/services/dbAdmin.js';
+import { packetLimitFor, type DbAdminPort, type DbInventoryRow } from '../src/services/dbAdmin.js';
+import { FakeDbBrowser } from './dbBrowserFake.js';
 import { hostExec, type ExecPort, type ExecResult } from '../src/lib/exec.js';
 import { LocalFiles, type FilesPort } from '../src/lib/files.js';
 import { servers as serversTable } from '../src/db/schema.js';
@@ -81,6 +82,7 @@ import { QuarantineService } from '../src/services/quarantine.js';
 import { ImportService } from '../src/services/imports.js';
 import { ConnectionsService } from '../src/services/connections.js';
 import { ExternalBackupService } from '../src/services/externalBackup.js';
+import { DatabasesService } from '../src/services/databases.js';
 import { AlertService } from '../src/services/alerts.js';
 import type { HostPort } from '../src/servers/hostPort.js';
 import { ApiKeysService } from '../src/services/apiKeys.js';
@@ -476,6 +478,10 @@ export class FakeDocker implements DockerPort {
   }
   /** Answers runEphemeral itself when set (a scan engine, a quarantine move); otherwise the queue does. */
   ephemeral: ((opts: EphemeralOpts) => RunResult | Promise<RunResult>) | null = null;
+  async execDuplex(name: string, cmd: string[]): Promise<{ stream: Duplex; stderr: () => string }> {
+    this.record('execDuplex', [name, cmd]);
+    throw new Error('FakeDocker has no relay: tests reach databases through a FakeDbBrowser');
+  }
   async runEphemeral(opts: EphemeralOpts): Promise<RunResult> {
     this.record('runEphemeral', [opts]);
     // A refresh's changed files into the site's folder (importRefresh.ts), done on the fake's disk.
@@ -658,6 +664,10 @@ export class FakeDbAdmin implements DbAdminPort {
   calls: { method: string; args: unknown[] }[] = [];
   failOn = new Map<string, string>();
   databases = new Set<string>();
+  /** What inventory() reports for a database; one without an entry has no tables. */
+  sizes = new Map<string, { tables: number; bytes: number }>();
+  /** The server's users and their passwords. */
+  users = new Map<string, string>();
 
   private record(method: string, args: unknown[]): void {
     this.calls.push({ method, args });
@@ -668,10 +678,12 @@ export class FakeDbAdmin implements DbAdminPort {
   async createSiteDb(dbName: string, dbUser: string, dbPassword: string): Promise<void> {
     this.record('createSiteDb', [dbName, dbUser, dbPassword]);
     this.databases.add(dbName);
+    this.users.set(dbUser, dbPassword);
   }
   async dropSiteDb(dbName: string, dbUser: string): Promise<void> {
     this.record('dropSiteDb', [dbName, dbUser]);
     this.databases.delete(dbName);
+    this.users.delete(dbUser);
   }
   async recreateDb(dbName: string): Promise<void> {
     this.record('recreateDb', [dbName]);
@@ -697,6 +709,44 @@ export class FakeDbAdmin implements DbAdminPort {
     if (this.maxAllowedPacket >= wanted) return null;
     this.maxAllowedPacket = wanted;
     return wanted;
+  }
+  /** How often the inventory read this server; not in `calls`, which tests pin to the operations they run. */
+  inventoryReads = 0;
+  async inventory(): Promise<DbInventoryRow[]> {
+    this.inventoryReads++;
+    const fail = this.failOn.get('inventory');
+    if (fail) throw new Error(fail);
+    return [...this.databases].sort().map((name) => ({
+      name,
+      collation: 'utf8mb4_unicode_ci',
+      tables: this.sizes.get(name)?.tables ?? 0,
+      bytes: this.sizes.get(name)?.bytes ?? 0,
+    }));
+  }
+  async createExtraDb(dbName: string, dbUser: string): Promise<void> {
+    this.record('createExtraDb', [dbName, dbUser]);
+    if (this.databases.has(dbName)) throw new Error(`Can't create database '${dbName}'; database exists`);
+    this.databases.add(dbName);
+  }
+  async dropDb(dbName: string): Promise<void> {
+    this.record('dropDb', [dbName]);
+    this.databases.delete(dbName);
+  }
+  async dropUser(dbUser: string): Promise<void> {
+    this.record('dropUser', [dbUser]);
+    this.users.delete(dbUser);
+  }
+  async userExists(dbUser: string): Promise<boolean> {
+    this.record('userExists', [dbUser]);
+    return this.users.has(dbUser);
+  }
+  async setUserPassword(dbUser: string, password: string): Promise<void> {
+    this.record('setUserPassword', [dbUser, password]);
+    this.users.set(dbUser, password);
+  }
+  async dumpToStream(dbName: string, out: Writable): Promise<void> {
+    this.record('dumpToStream', [dbName]);
+    out.write(`-- fake dump of ${dbName}\nCREATE TABLE wp_options (option_id INT);\n`);
   }
 }
 
@@ -743,6 +793,7 @@ export class FakeExec implements ExecPort {
 export interface FakeServerPorts {
   docker: FakeDocker;
   dbAdmin: FakeDbAdmin;
+  dbBrowser: FakeDbBrowser;
   exec: ExecPort;
   files: FilesPort;
   /** Set when the fake server has a real filesystem root (addSshServer real:true). */
@@ -779,6 +830,9 @@ export class MappedFiles implements FilesPort {
   }
   writeFile(p: string, c: string | Buffer, opts?: Parameters<FilesPort['writeFile']>[2]) {
     return this.inner.writeFile(this.m(p), c, opts);
+  }
+  appendFile(p: string, c: Buffer) {
+    return this.inner.appendFile(this.m(p), c);
   }
   readFile(p: string) {
     return this.inner.readFile(this.m(p));
@@ -1044,6 +1098,8 @@ export interface TestWorld {
   /** Server 1's fakes (existing tests assert against these directly). */
   docker: FakeDocker;
   dbAdmin: FakeDbAdmin;
+  /** Server 1's database browser, in memory. */
+  dbBrowser: FakeDbBrowser;
   servers: ServerRegistry;
   core: CoreServices;
   geoip: GeoIpService;
@@ -1266,19 +1322,26 @@ export async function makeWorld(
   // Site networks are only attachable once Traefik, the relay and MariaDB exist.
   for (const c of ['wpl7-mariadb', 'wpl7-traefik', 'wpl7-mail', 'wpl7-dkim']) docker.containers.set(c, 'running');
   const dbAdmin = new FakeDbAdmin();
+  const dbBrowser = new FakeDbBrowser();
   const exec = opts.exec ?? fakeExecOk;
   const remoteFakes = new Map<number, FakeServerPorts>();
   const remote = (serverId: number): FakeServerPorts => {
     let ports = remoteFakes.get(serverId);
     if (!ports) {
-      ports = { docker: new FakeDocker(), dbAdmin: new FakeDbAdmin(), exec: fakeExecOk, files: new LocalFiles() };
+      ports = {
+        docker: new FakeDocker(),
+        dbAdmin: new FakeDbAdmin(),
+        dbBrowser: new FakeDbBrowser(),
+        exec: fakeExecOk,
+        files: new LocalFiles(),
+      };
       remoteFakes.set(serverId, ports);
     }
     return ports;
   };
   const log = { info: () => undefined, warn: () => undefined, error: () => undefined };
   const servers = new ServerRegistry(db, config, log, {
-    makeLocal: () => ({ docker, exec, files: new LocalFiles(), dbAdmin }),
+    makeLocal: () => ({ docker, exec, files: new LocalFiles(), dbAdmin, dbBrowser }),
     makeSsh: (row): HandlePorts => remote(row.id),
     // No Traefik in tests: a probe is refused at once, as on a server with nothing listening.
     // Without this one went to the server's documentation-range address and waited out its
@@ -1308,12 +1371,19 @@ export async function makeWorld(
       ports = {
         docker: new FakeDocker(),
         dbAdmin: new MappedDbAdmin(config.srvRoot, root),
+        dbBrowser: new FakeDbBrowser(),
         exec: new MappedExec(hostExec, config.srvRoot, root),
         files: new MappedFiles(new LocalFiles(), config.srvRoot, root),
         root,
       };
     } else {
-      ports = { docker: new FakeDocker(), dbAdmin: new FakeDbAdmin(), exec: fakeExecOk, files: new LocalFiles() };
+      ports = {
+        docker: new FakeDocker(),
+        dbAdmin: new FakeDbAdmin(),
+        dbBrowser: new FakeDbBrowser(),
+        exec: fakeExecOk,
+        files: new LocalFiles(),
+      };
     }
     // A provisioned server has its stack running.
     for (const c of ['wpl7-mariadb', 'wpl7-traefik', 'wpl7-mail', 'wpl7-dkim']) ports.docker.containers.set(c, 'running');
@@ -1449,6 +1519,7 @@ export async function makeWorld(
     log,
   } as unknown as CoreServices;
   core.wpInventory = new WpInventoryService(core, vulnerabilities);
+  core.databases = new DatabasesService(db, config, servers, log);
   core.externalBackups = new ExternalBackupService(core);
   core.alerts = new AlertService(core);
   const serverInfo = new SystemInfoService(servers, log, null, opts.resolver);
@@ -1484,7 +1555,7 @@ export async function makeWorld(
     // Never started: no timer runs in a test unless it calls `run()` / `runDueCustom()`.
     schedulers: new Schedulers(core, worker),
   };
-  return { db, config, docker, dbAdmin, servers, core, geoip, offsite, worker, deps, shell, wporg, github, host, system, remote, addSshServer, firewallHost, checksums };
+  return { db, config, docker, dbAdmin, dbBrowser, servers, core, geoip, offsite, worker, deps, shell, wporg, github, host, system, remote, addSshServer, firewallHost, checksums };
 }
 
 export async function makeApp(world?: TestWorld, opts: { webDist?: string } = {}) {

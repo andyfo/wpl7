@@ -2,7 +2,8 @@
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { backups, type BackupRow, type SiteRow } from '../../db/schema.js';
+import { backups, siteDatabases, type BackupRow, type SiteRow } from '../../db/schema.js';
+import { manifestDatabases } from '../../services/backup.js';
 import { JobCanceledError } from '../../lib/errors.js';
 import { TABLE_PREFIX_RE, backupTypes } from '../../../shared/schemas.js';
 import type { CoreServices } from '../../services/index.js';
@@ -93,6 +94,7 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
   try {
     ctx.info('Verifying backup checksums…');
     await s.backup.verifyChecksums(backup);
+    const extras = await planExtraDatabases(ctx, s, site, backup);
 
     if (!ctx.payload.skipPreRestoreBackup) {
       ctx.info('Taking pre-restore safety backup…');
@@ -113,6 +115,30 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
     ctx.info(`Restoring database ${site.dbName}…`);
     await server.dbAdmin.recreateDb(site.dbName);
     await s.backup.importDatabase(backup, site.dbName);
+    for (const { name, linked } of extras) {
+      ctx.info(`Restoring database ${name}…`);
+      if (linked) {
+        await server.dbAdmin.recreateDb(name);
+      } else {
+        // Deleted since the backup: made again, for the site, before its dump goes in. The name is
+        // taken in the panel first, so a site that took it meanwhile keeps it; that, or a server
+        // that refuses it, leaves this one database out rather than the restore half done.
+        const row = s.databases.reserve(site.id, name, null);
+        if (!row) {
+          ctx.warn(`Database ${name} was not made again: another site has taken the name since. Its dump stays in this backup.`);
+          continue;
+        }
+        try {
+          await server.dbAdmin.createExtraDb(name, site.dbUser);
+        } catch (err) {
+          s.db.delete(siteDatabases).where(eq(siteDatabases.id, row)).run();
+          ctx.warn(`Database ${name} could not be made again (${errMsg(err)}). Its dump stays in this backup.`);
+          continue;
+        }
+      }
+      await s.backup.importExtraDatabase(backup, name);
+    }
+    if (extras.length > 0) s.databases.kick(site.serverId);
 
     ctx.info('Restoring files…');
     safetyCopy = await s.backup.restoreFiles(backup, site, (l, m) => ctx.log(l, m));
@@ -201,11 +227,44 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
   }
 }
 
+/**
+ * What the backup's other databases need before anything is changed: each one the site still has
+ * is replaced, one deleted since is made again - unless its name has gone to another site, or a
+ * database of that name sits on the server unclaimed, and then the restore stops untouched.
+ * Ones the site has that the backup lacks stay as they are.
+ */
+async function planExtraDatabases(
+  ctx: JobContext<unknown>,
+  s: CoreServices,
+  site: SiteRow,
+  backup: BackupRow,
+): Promise<{ name: string; linked: boolean }[]> {
+  const inBackup = manifestDatabases(await readManifest(s, backup.serverId, backup.path));
+  const current = new Set(s.databases.extraNames(site.id));
+  for (const name of current) {
+    if (!inBackup.includes(name)) ctx.warn(`Database ${name} is not in this backup; it stays as it is.`);
+  }
+  const missing = inBackup.filter((n) => !current.has(n));
+  if (missing.length > 0) {
+    const onServer = new Set((await s.servers.handleFor(site.serverId).dbAdmin.inventory()).map((r) => r.name));
+    for (const name of missing) {
+      const owner = s.db.select().from(siteDatabases).where(eq(siteDatabases.name, name)).get();
+      if (owner) throw new Error(`The backup's database ${name} is another site's now; nothing was changed`);
+      if (onServer.has(name)) {
+        throw new Error(
+          `A database called ${name} is on the server and no site uses it; delete it under Databases, then restore again. Nothing was changed.`,
+        );
+      }
+    }
+  }
+  return inBackup.map((name) => ({ name, linked: current.has(name) }));
+}
+
 async function readManifest(
   s: CoreServices,
   serverId: number,
   dir: string,
-): Promise<{ phpVersion?: string; domains?: string[]; tablePrefix?: string; kind?: string } | null> {
+): Promise<{ phpVersion?: string; domains?: string[]; tablePrefix?: string; kind?: string; databases?: unknown } | null> {
   try {
     const files = s.servers.handleFor(serverId).files;
     return JSON.parse(await files.readFile(path.join(dir, 'manifest.json')));

@@ -252,7 +252,7 @@ Two ways tie a page to the code it documents:
 | `npm run docs:check-flags` | Every flag of `install.sh` and `provision/setup.sh` is on the Installer and scripts page. |
 | `npm run docs:check-ui-paths` | Every `<UiPath>` step and bold UI label exists as text in the panel. Labels of other software go in its `IGNORE` list. |
 
-The feature groups are Sites, Servers, Plugins, Backups, Mail, Security, Automations,
+The feature groups are Sites, Databases, Servers, Plugins, Backups, Mail, Security, Automations,
 Integrations and Panel. Markers are not added for the sources of generated pages: the `check`
 job already holds those pages to their code.
 

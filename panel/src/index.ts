@@ -57,6 +57,7 @@ import { QuarantineService } from './services/quarantine.js';
 import { ImportService } from './services/imports.js';
 import { ConnectionsService } from './services/connections.js';
 import { ExternalBackupService } from './services/externalBackup.js';
+import { DatabasesService } from './services/databases.js';
 import { AlertService } from './services/alerts.js';
 import { hostPortFor } from './servers/hostPort.js';
 import type { CoreServices, Logger } from './services/index.js';
@@ -224,6 +225,7 @@ async function main(): Promise<void> {
     log,
   } as CoreServices;
   core.wpInventory = new WpInventoryService(core, vulnerabilities);
+  core.databases = new DatabasesService(db, config, servers, log);
   core.externalBackups = new ExternalBackupService(core);
   core.alerts = new AlertService(core);
   const serverInfo = new SystemInfoService(servers, log, hostExec);

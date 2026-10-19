@@ -2,7 +2,7 @@
 title: Move a site to another server
 description: Move a site between your servers while the old one forwards visitors until DNS catches up.
 sidebar:
-  order: 11
+  order: 12
 sources:
   - panel/web/src/pages/SiteDetail.tsx
   - panel/src/services/sites.ts
@@ -13,7 +13,7 @@ sources:
 ---
 
 On a [fleet](/docs/reference/glossary/#fleet), a site can move to another of your servers. The
-panel copies its files and database, starts it there and switches the traffic over. The old
+panel copies its files and databases, starts it there and switches the traffic over. The old
 server forwards visitors to the new one until DNS has caught up.
 
 ## Before you start
@@ -21,6 +21,7 @@ server forwards visitors to the new one until DNS has caught up.
 - A second, healthy server. **Move server** only appears on a fleet.
 - A site that is running or stopped, with no earlier move waiting to be finalized.
 - Free disk on the target, about 2.5 times the site's size.
+- No database on the target with the name of a database added to the site.
 - DNS access for customer domains outside the panel's Cloudflare account, with their TTL
   lowered to 300 seconds.
 
@@ -72,6 +73,7 @@ target, and the job log names the step that failed.
 - Older backups stay on the old server. Restoring one needs its offsite copy, fetched back
   first.
 - The old server cannot be removed while a cleanup is pending.
+- The site's added databases stay on the old server until the move is finalized, as its own does.
 
 ## Related
 
