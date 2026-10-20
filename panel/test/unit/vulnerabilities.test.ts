@@ -80,26 +80,29 @@ const closedOnWporg = (reason: string) =>
 interface Scripted {
   /** Path (or `wporg/<kind>/<slug>`) -> response body, a Reply, or an Error to throw. */
   answers: Map<string, unknown | Error>;
+  /** The feed's URLs, asked in order. */
   calls: string[];
+  /** wordpress.org's directory, asked in order, as `wporg/<kind>/<slug>`. */
+  wporg: string[];
   /** Highest number of requests in flight at once. */
   peak: number;
 }
 
 function scriptedFetch(answers: Map<string, unknown | Error>, opts: { holdMs?: number } = {}) {
-  const state: Scripted = { answers, calls: [], peak: 0 };
+  const state: Scripted = { answers, calls: [], wporg: [], peak: 0 };
   let inFlight = 0;
   const fetchImpl = (async (input: string | URL) => {
     const url = String(input);
-    state.calls.push(url);
+    const parsed = new URL(url);
+    const key =
+      parsed.hostname === 'api.wordpress.org'
+        ? wporgKey(parsed.pathname.startsWith('/plugins/') ? 'plugin' : 'theme', parsed.searchParams.get('request[slug]') ?? '')
+        : url.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '');
+    (parsed.hostname === 'api.wordpress.org' ? state.wporg : state.calls).push(parsed.hostname === 'api.wordpress.org' ? key : url);
     inFlight++;
     state.peak = Math.max(state.peak, inFlight);
     try {
       if (opts.holdMs) await new Promise((r) => setTimeout(r, opts.holdMs));
-      const parsed = new URL(url);
-      const key =
-        parsed.hostname === 'api.wordpress.org'
-          ? wporgKey(parsed.pathname.startsWith('/plugins/') ? 'plugin' : 'theme', parsed.searchParams.get('request[slug]') ?? '')
-          : url.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '');
       const answer = answers.get(key);
       if (answer instanceof Error) throw answer;
       if (answer === undefined) return new Response('nope', { status: 404 });
@@ -121,12 +124,13 @@ async function makeFeed(
   await seed(db, config);
   const settings = new SettingsService(db);
   const { fetchImpl, state } = scriptedFetch(answers, { holdMs: opts.holdMs });
-  const feed = new VulnerabilityFeedService(db, settings, log, {
+  const warnings: string[] = [];
+  const feed = new VulnerabilityFeedService(db, settings, { ...log, warn: (m: string) => void warnings.push(m) }, {
     fetchImpl,
     now: opts.now,
     concurrency: opts.concurrency,
   });
-  return { db, feed, settings, state };
+  return { db, feed, settings, state, warnings };
 }
 
 describe('VulnerabilityFeedService', () => {
@@ -238,8 +242,51 @@ describe('VulnerabilityFeedService', () => {
     expect(verdict.closedOnWporg).toBe(false);
     expect(verdict.closedReason).toBeNull();
     expect(verdict.coverage).toBe('known');
-    // Only a slug the feed calls closed is asked about.
-    expect(state.calls.filter((c) => c.includes('api.wordpress.org'))).toHaveLength(1);
+    expect(state.wporg.sort()).toEqual([wporgKey('plugin', 'akismet'), wporgKey('plugin', 'bbpress')]);
+  });
+
+  it('shows a plugin wordpress.org closed that the feed does not flag', async () => {
+    const answers = new Map<string, unknown | Error>([
+      ['/plugin/captcha', pluginBody('captcha', { name: 'Captcha', closed: null })],
+      [wporgKey('plugin', 'captcha'), closedOnWporg('security-issue')],
+    ]);
+    const { feed } = await makeFeed(answers);
+    await feed.refresh([{ kind: 'plugin', slug: 'captcha' }]);
+
+    expect(feed.verdictFor('plugin', 'captcha', '4.4.5')).toMatchObject({ closedOnWporg: true, closedReason: 'security-issue' });
+  });
+
+  it('asks about a theme only when the feed calls it closed', async () => {
+    const answers = new Map<string, unknown | Error>([
+      ['/theme/open-theme', pluginBody('open-theme', { name: 'Open Theme' })],
+      ['/theme/flagged-theme', pluginBody('flagged-theme', { name: 'Flagged Theme', closed: 1 })],
+      [wporgKey('theme', 'flagged-theme'), listed('flagged-theme')],
+    ]);
+    const { feed, state } = await makeFeed(answers);
+    await feed.refresh([
+      { kind: 'theme', slug: 'open-theme' },
+      { kind: 'theme', slug: 'flagged-theme' },
+    ]);
+
+    // The themes directory never says closed, so asking about an open theme could change nothing.
+    expect(state.wporg).toEqual([wporgKey('theme', 'flagged-theme')]);
+    expect(feed.verdictFor('theme', 'flagged-theme', '1.0').closedOnWporg).toBe(false);
+  });
+
+  it('says once, not once per plugin, that wordpress.org did not answer', async () => {
+    const answers = new Map<string, unknown | Error>();
+    const refs = Array.from({ length: 5 }, (_, i) => {
+      answers.set(`/plugin/p${i}`, pluginBody(`p${i}`, { name: `P${i}` }));
+      answers.set(wporgKey('plugin', `p${i}`), new Error('getaddrinfo ENOTFOUND api.wordpress.org'));
+      return { kind: 'plugin' as const, slug: `p${i}` };
+    });
+    const { feed, warnings } = await makeFeed(answers);
+    const res = await feed.refresh(refs);
+
+    expect(res).toMatchObject({ fetched: 5, failed: 0 });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/wordpress\.org did not say whether plugin "p\d", plugin "p\d", plugin "p\d" and 2 more are closed/);
+    expect(warnings[0]).toContain('ENOTFOUND');
   });
 
   it('keeps a theme the directory does not have as closed, and clears one it lists', async () => {
@@ -301,8 +348,10 @@ describe('VulnerabilityFeedService', () => {
     now += 2 * 3600_000;
     const second = await feed.refresh(refs);
     expect(second.refreshed).toEqual([{ kind: 'plugin', slug: 'closed-one' }]);
-    // The feed and the directory, twice each for the closed one.
-    expect(state.calls.filter((c) => c.includes('closed-one'))).toHaveLength(4);
+    // The feed and the directory, twice each for the closed one and once for the open one.
+    expect(state.calls.filter((c) => c.includes('closed-one'))).toHaveLength(2);
+    expect(state.wporg.filter((c) => c.endsWith('/closed-one'))).toHaveLength(2);
+    expect(state.wporg.filter((c) => c.endsWith('/open-one'))).toHaveLength(1);
 
     // Reopened since: the next pass clears it.
     answers.set(wporgKey('plugin', 'closed-one'), listed('closed-one'));

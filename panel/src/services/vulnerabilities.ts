@@ -221,10 +221,10 @@ export interface VulnerabilityFeedOptions {
  * for an installed version.
  *
  * What leaves the box: a plugin/theme slug or a WordPress version, once per slug per day.
- * A slug the feed calls closed also goes to wordpress.org's directory, which has the last
- * word on that. Never a site name, a domain or an address - and not at all when
- * `wp.vulnerabilityFeed` is off, which is why that switch exists (docs/updates.md says so
- * in the UI too).
+ * Every plugin's slug also goes to wordpress.org's directory, which has the last word on
+ * whether it is closed, and so does a theme's when the feed calls it closed. Never a site
+ * name, a domain or an address - and not at all when `wp.vulnerabilityFeed` is off, which is
+ * why that switch exists (docs/updates.md says so in the UI too).
  */
 export class VulnerabilityFeedService {
   private readonly fetchImpl: typeof fetch;
@@ -381,13 +381,23 @@ export class VulnerabilityFeedService {
     );
     let failed = 0;
     const refreshed: VulnRef[] = [];
+    // Slugs wordpress.org gave no answer about, told once: an outage would be one line per plugin.
+    const unanswered: string[] = [];
+    let lastError = '';
     const queue = [...due];
     const workers = Array.from({ length: Math.min(this.concurrency, queue.length) }, async () => {
       for (let ref = queue.shift(); ref !== undefined; ref = queue.shift()) {
         try {
           let data = await this.fetchSlug(ref);
-          if (data.closed && ref.kind !== 'core') {
-            data = await this.checkClosed(ref.kind, ref.slug, data, existing.get(refKey(ref.kind, ref.slug)));
+          // Every plugin, for the closures the feed misses. A theme only when the feed calls it
+          // closed: the themes directory never says closed, so all it can do is clear the flag.
+          if (ref.kind === 'plugin' || (ref.kind === 'theme' && data.closed)) {
+            const checked = await this.checkClosed(ref.kind, ref.slug, data, existing.get(refKey(ref.kind, ref.slug)));
+            data = checked.data;
+            if (checked.error !== null) {
+              unanswered.push(`${ref.kind} "${ref.slug}"`);
+              lastError = checked.error;
+            }
           }
           this.upsertSuccess(ref, data);
           refreshed.push(ref);
@@ -400,6 +410,13 @@ export class VulnerabilityFeedService {
       }
     });
     await Promise.all(workers);
+    if (unanswered.length > 0) {
+      const named = unanswered.length > 3 ? `${unanswered.slice(0, 3).join(', ')} and ${unanswered.length - 3} more` : unanswered.join(', ');
+      this.log.warn(
+        `Vulnerability feed: wordpress.org did not say whether ${named} ${unanswered.length === 1 ? 'is' : 'are'} closed, ` +
+          `so the panel kept what it said before (${lastError})`,
+      );
+    }
     return { fetched: refreshed.length, failed, skipped: unique.size - due.length, refreshed };
   }
 
@@ -415,32 +432,31 @@ export class VulnerabilityFeedService {
   }
 
   /**
-   * The feed's word that a plugin or theme is closed, checked with wordpress.org. The feed has
-   * called plugins closed that the directory still lists, and "closed" tells the operator to
-   * replace one. Listed means open, whatever the feed says. A closed plugin takes the
-   * directory's reason. A slug the directory does not have leaves the feed's word standing,
-   * which is all a closed theme ever gets. With no answer, the panel keeps what it said before:
-   * a flag that came and went with wordpress.org's outages would mail a new alert each time it
-   * came back. Only a slug with nothing before goes by the feed alone.
+   * Whether a plugin or theme is closed, by wordpress.org's directory. The feed's flag is wrong
+   * both ways: it has called plugins closed that the directory lists, and missed plugins the
+   * directory closed, and "closed" tells the operator to replace one. Listed means open. Closed
+   * means closed, with the directory's reason. A slug the directory does not have leaves the
+   * feed's flag standing, which is all a closed theme ever gets. With no answer, the panel keeps
+   * what it said before: a flag that came and went with wordpress.org's outages would mail a
+   * new alert each time it came back. Only a slug with nothing before goes by the feed alone.
    */
   private async checkClosed(
     kind: 'plugin' | 'theme',
     slug: string,
     data: FetchedSlug,
     previous: VulnFeedRow | undefined,
-  ): Promise<FetchedSlug> {
+  ): Promise<{ data: FetchedSlug; error: string | null }> {
     let listing: WporgListing;
     try {
       listing = await wporgListing(kind, slug, this.fetchImpl, this.timeoutMs);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.log.warn(`Vulnerability feed: wordpress.org did not say whether ${kind} "${slug}" is closed (${message})`);
-      if (!previous || previous.fetchedAt === null) return data;
-      return { ...data, closed: previous.closed === 1, closedReason: previous.closedReason };
+      const error = err instanceof Error ? err.message : String(err);
+      if (!previous || previous.fetchedAt === null) return { data, error };
+      return { data: { ...data, closed: previous.closed === 1, closedReason: previous.closedReason }, error };
     }
-    if (listing.state === 'listed') return { ...data, closed: false, closedReason: null };
-    if (listing.state === 'closed') return { ...data, closedReason: listing.reason };
-    return data;
+    if (listing.state === 'listed') return { data: { ...data, closed: false, closedReason: null }, error: null };
+    if (listing.state === 'closed') return { data: { ...data, closed: true, closedReason: listing.reason }, error: null };
+    return { data, error: null };
   }
 
   private upsertSuccess(ref: VulnRef, data: FetchedSlug): void {
