@@ -37,6 +37,10 @@ number. It asks from the panel's own server, at most once a day per slug, and ke
 Whether an installed version is affected is worked out on the panel, so one answer serves every
 site. No site name, domain or visitor address is part of a request.
 
+Each plugin's slug also goes to wordpress.org's directory, at the same time, to learn whether the
+plugin is closed. So does a theme's, when the feed calls it closed. A closed one is asked about
+again after an hour.
+
 ## Switch the ratings off
 
 In **Settings → Security**, under **WordPress updates & security**, switch off **Rate installed
@@ -51,12 +55,17 @@ severity. Each advisory names the release that fixes it, or says **no fix availa
 
 | Shown | Means |
 |---|---|
-| **closed** | wordpress.org removed the plugin. It gets no more updates, so replace it. |
+| **closed** | wordpress.org closed the plugin or theme. It gets no updates from there, so replace it. |
 | **no data** | The feed has no record of this slug, as with most premium plugins. That is not the same as safe. |
 | **not checked** | The slug has not been looked up yet. The next scan does it. |
 | **check overdue** | The saved answer is more than a day old. |
 | **check failed** | The last lookup failed, and the previous answer is shown. |
 | **range unclear** | The advisory names no version range the panel can evaluate. It may not apply. |
+
+For a plugin, **closed** is wordpress.org's word: the notice on a closed plugin's page. The themes
+directory does not say which themes it closed, so a theme is shown as closed when the feed says so
+and the directory does not list it. If the directory does not answer, the panel keeps what it
+showed before.
 
 ## Update one site
 
@@ -137,6 +146,8 @@ backups count as scheduled backups, so retention removes the old ones.
 ## Limits
 
 - A new advisory shows once the panel next refreshes that slug, up to a day later.
+- A theme wordpress.org closed shows as closed only if the feed flags it.
+- A temporary closure, pending wordpress.org's review, shows like a permanent one.
 - On a hosted site, a failed update is not undone automatically. Restoring the backup also undoes
   every other change made to the site since.
 - Where no fixed release exists, **Fix vulnerable** leaves the plugin as it is. Deactivating it is

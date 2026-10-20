@@ -3,6 +3,7 @@ import type { WporgPluginDto } from '../../shared/types.js';
 import { badGateway } from '../lib/errors.js';
 
 const API_BASE = 'https://api.wordpress.org/plugins/info/1.2/';
+const THEMES_API_BASE = 'https://api.wordpress.org/themes/info/1.2/';
 const TIMEOUT_MS = 8000;
 
 /**
@@ -223,4 +224,55 @@ export class WporgDirectoryService implements WporgDirectory {
     this.infoCache.set(key, result);
     return result;
   }
+}
+
+/**
+ * Whether the directory still lists a plugin or theme. A theme is never `closed`: the themes
+ * API answers "Theme not found" for one it took down and for one it never had alike.
+ */
+export type WporgListing = { state: 'listed' } | { state: 'closed'; reason: string | null } | { state: 'absent' };
+
+/** A closure's reason slug ("security-issue"), or null. "unknown" is null too: it says nothing. */
+export function closureReason(raw: unknown): string | null {
+  return typeof raw === 'string' && raw !== '' && raw !== 'unknown' ? raw : null;
+}
+
+/**
+ * Ask the directory whether it lists one slug. Throws when it gives no answer to go by: no
+ * connection, an error status, or a body of another shape. A closed plugin must never read
+ * as listed, so listed takes this slug, a version and no word of an error or a closure.
+ */
+export async function wporgListing(
+  kind: 'plugin' | 'theme',
+  slug: string,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = TIMEOUT_MS,
+): Promise<WporgListing> {
+  const params = new URLSearchParams({
+    action: kind === 'plugin' ? 'plugin_information' : 'theme_information',
+    'request[slug]': slug,
+  });
+  // A plugin's answer carries its whole readme by default. A theme's is small as it comes.
+  if (kind === 'plugin') for (const f of FIELDS_OFF) params.set(`request[fields][${f}]`, '0');
+  const res = await fetchImpl(`${kind === 'plugin' ? API_BASE : THEMES_API_BASE}?${params}`, {
+    headers: { accept: 'application/json', 'user-agent': 'wpl7-panel' },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const body = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+  if (body && (body.error === 'closed' || body.closed === true)) {
+    return { state: 'closed', reason: closureReason(body.reason) };
+  }
+  if (
+    res.status === 200 &&
+    body &&
+    !body.error &&
+    typeof body.version === 'string' &&
+    body.version !== '' &&
+    typeof body.slug === 'string' &&
+    body.slug.toLowerCase() === slug.toLowerCase()
+  ) {
+    return { state: 'listed' };
+  }
+  if (res.status === 404 && body && typeof body.error === 'string') return { state: 'absent' };
+  throw new Error(`wordpress.org answered HTTP ${res.status} with nothing to go by`);
 }
