@@ -63,8 +63,22 @@ const advisory = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+/** An answer with a status other than 200, as wordpress.org gives for a closed plugin. */
+class Reply {
+  constructor(
+    readonly status: number,
+    readonly body: unknown,
+  ) {}
+}
+
+/** wordpress.org's directory answers for one plugin or theme, as the tests script them. */
+const wporgKey = (kind: 'plugin' | 'theme', slug: string) => `wporg/${kind}/${slug}`;
+const listed = (slug: string) => ({ name: slug, slug, version: '2.6.20' });
+const closedOnWporg = (reason: string) =>
+  new Reply(404, { error: 'closed', closed: true, closed_date: '2021-01-30', reason, reason_text: reason });
+
 interface Scripted {
-  /** slug -> response body, or an Error to throw. */
+  /** Path (or `wporg/<kind>/<slug>`) -> response body, a Reply, or an Error to throw. */
   answers: Map<string, unknown | Error>;
   calls: string[];
   /** Highest number of requests in flight at once. */
@@ -81,11 +95,16 @@ function scriptedFetch(answers: Map<string, unknown | Error>, opts: { holdMs?: n
     state.peak = Math.max(state.peak, inFlight);
     try {
       if (opts.holdMs) await new Promise((r) => setTimeout(r, opts.holdMs));
-      const key = url.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '');
+      const parsed = new URL(url);
+      const key =
+        parsed.hostname === 'api.wordpress.org'
+          ? wporgKey(parsed.pathname.startsWith('/plugins/') ? 'plugin' : 'theme', parsed.searchParams.get('request[slug]') ?? '')
+          : url.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '');
       const answer = answers.get(key);
       if (answer instanceof Error) throw answer;
       if (answer === undefined) return new Response('nope', { status: 404 });
-      return new Response(JSON.stringify(answer), { status: 200, headers: { 'content-type': 'application/json' } });
+      const reply = answer instanceof Reply ? answer : new Reply(200, answer);
+      return new Response(JSON.stringify(reply.body), { status: reply.status, headers: { 'content-type': 'application/json' } });
     } finally {
       inFlight--;
     }
@@ -189,12 +208,10 @@ describe('VulnerabilityFeedService', () => {
     expect(feed.verdictFor('plugin', 'akismet', '5.0').coverage).toBe('known');
   });
 
-  it('surfaces a plugin closed on wordpress.org', async () => {
+  it("surfaces a plugin closed on wordpress.org, with the directory's reason", async () => {
     const answers = new Map<string, unknown | Error>([
-      [
-        '/plugin/total-donations',
-        pluginBody('total-donations', { name: 'Total Donations', closed: 1, closedReason: 'security-issue' }),
-      ],
+      ['/plugin/total-donations', pluginBody('total-donations', { name: 'Total Donations', closed: 1, closedReason: 'unknown' })],
+      [wporgKey('plugin', 'total-donations'), closedOnWporg('security-issue')],
     ]);
     const { feed } = await makeFeed(answers);
     await feed.refresh([{ kind: 'plugin', slug: 'total-donations' }]);
@@ -202,6 +219,96 @@ describe('VulnerabilityFeedService', () => {
     const verdict = feed.verdictFor('plugin', 'total-donations', '2.0');
     expect(verdict.closedOnWporg).toBe(true);
     expect(verdict.closedReason).toBe('security-issue');
+  });
+
+  it('does not call a plugin closed while wordpress.org lists it', async () => {
+    const answers = new Map<string, unknown | Error>([
+      // The feed's answer for a plugin the directory had open and up to date.
+      ['/plugin/bbpress', pluginBody('bbpress', { name: 'bbPress', closed: 1, closedReason: 'unknown' })],
+      [wporgKey('plugin', 'bbpress'), listed('bbpress')],
+      ['/plugin/akismet', pluginBody('akismet', { name: 'Akismet' })],
+    ]);
+    const { feed, state } = await makeFeed(answers);
+    await feed.refresh([
+      { kind: 'plugin', slug: 'bbpress' },
+      { kind: 'plugin', slug: 'akismet' },
+    ]);
+
+    const verdict = feed.verdictFor('plugin', 'bbpress', '2.6.20');
+    expect(verdict.closedOnWporg).toBe(false);
+    expect(verdict.closedReason).toBeNull();
+    expect(verdict.coverage).toBe('known');
+    // Only a slug the feed calls closed is asked about.
+    expect(state.calls.filter((c) => c.includes('api.wordpress.org'))).toHaveLength(1);
+  });
+
+  it('keeps a theme the directory does not have as closed, and clears one it lists', async () => {
+    const answers = new Map<string, unknown | Error>([
+      ['/theme/gone', pluginBody('gone', { name: 'Gone', closed: 1, closedReason: 'guideline-violation' })],
+      [wporgKey('theme', 'gone'), new Reply(404, { error: 'Theme not found' })],
+      ['/theme/back', pluginBody('back', { name: 'Back', closed: 1 })],
+      [wporgKey('theme', 'back'), listed('back')],
+    ]);
+    const { feed } = await makeFeed(answers);
+    await feed.refresh([
+      { kind: 'theme', slug: 'gone' },
+      { kind: 'theme', slug: 'back' },
+    ]);
+
+    expect(feed.verdictFor('theme', 'gone', '1.0')).toMatchObject({ closedOnWporg: true, closedReason: 'guideline-violation' });
+    expect(feed.verdictFor('theme', 'back', '1.0').closedOnWporg).toBe(false);
+  });
+
+  it('keeps what it said before while wordpress.org does not answer', async () => {
+    const answers = new Map<string, unknown | Error>([
+      ['/plugin/reopened', pluginBody('reopened', { name: 'Reopened', closed: 1 })],
+      [wporgKey('plugin', 'reopened'), listed('reopened')],
+      ['/plugin/fresh', pluginBody('fresh', { name: 'Fresh', closed: 1, closedReason: 'author-request' })],
+      [wporgKey('plugin', 'fresh'), new Error('network down')],
+    ]);
+    let now = 1_000_000;
+    const { feed } = await makeFeed(answers, { now: () => now });
+    await feed.refresh([
+      { kind: 'plugin', slug: 'reopened' },
+      { kind: 'plugin', slug: 'fresh' },
+    ]);
+    // Nothing said before: the feed's word stands.
+    expect(feed.verdictFor('plugin', 'fresh', '1.0')).toMatchObject({ closedOnWporg: true, closedReason: 'author-request' });
+    expect(feed.verdictFor('plugin', 'reopened', '1.0').closedOnWporg).toBe(false);
+
+    // A day on, the directory is out of reach: the open verdict stays, so no new alert goes out.
+    answers.set(wporgKey('plugin', 'reopened'), new Reply(503, null));
+    now += 25 * 3600_000;
+    const res = await feed.refresh([{ kind: 'plugin', slug: 'reopened' }]);
+    expect(res.failed).toBe(0);
+    expect(feed.verdictFor('plugin', 'reopened', '1.0')).toMatchObject({ closedOnWporg: false, coverage: 'known' });
+  });
+
+  it('asks about a closed plugin again after an hour, an open one after a day', async () => {
+    const answers = new Map<string, unknown | Error>([
+      ['/plugin/closed-one', pluginBody('closed-one', { name: 'Closed', closed: 1 })],
+      [wporgKey('plugin', 'closed-one'), closedOnWporg('security-issue')],
+      ['/plugin/open-one', pluginBody('open-one', { name: 'Open' })],
+    ]);
+    let now = 1_000_000;
+    const { feed, state } = await makeFeed(answers, { now: () => now });
+    const refs = [
+      { kind: 'plugin' as const, slug: 'closed-one' },
+      { kind: 'plugin' as const, slug: 'open-one' },
+    ];
+    await feed.refresh(refs);
+
+    now += 2 * 3600_000;
+    const second = await feed.refresh(refs);
+    expect(second.refreshed).toEqual([{ kind: 'plugin', slug: 'closed-one' }]);
+    // The feed and the directory, twice each for the closed one.
+    expect(state.calls.filter((c) => c.includes('closed-one'))).toHaveLength(4);
+
+    // Reopened since: the next pass clears it.
+    answers.set(wporgKey('plugin', 'closed-one'), listed('closed-one'));
+    now += 2 * 3600_000;
+    await feed.refresh(refs);
+    expect(feed.verdictFor('plugin', 'closed-one', '1.0').closedOnWporg).toBe(false);
   });
 
   it('keeps the previous answer when a lookup fails, and isolates the failure', async () => {
