@@ -4,9 +4,9 @@ import { isFlagged } from '../../../shared/reminders';
 import { useReminders } from '../api/reminders';
 import { Card, ErrorNote } from './ui';
 
-export function ReminderCard({ siteId, serverId }: { siteId?: number; serverId?: number }) {
-  const query = useReminders(siteId, serverId);
-  const items = (query.data ?? []).filter((r) => (siteId || serverId ? r.state !== 'done' : isFlagged(r)));
+export function ReminderCard() {
+  const query = useReminders();
+  const items = (query.data ?? []).filter(isFlagged);
   if (!items.length && !query.error) return null;
   return (
     <Card
@@ -24,13 +24,7 @@ export function ReminderCard({ siteId, serverId }: { siteId?: number; serverId?:
             <Link to={`/reminders?reminder=${r.id}`} className="hover:underline">
               {r.title}
             </Link>
-            <span
-              className={
-                r.state === 'overdue' || r.state === 'due' ? 'text-red-600' : r.state === 'warning' ? 'text-amber-600' : 'text-neutral-500'
-              }
-            >
-              {r.dueDate}
-            </span>
+            <span className={r.state === 'warning' ? 'text-amber-600' : 'text-red-600'}>{r.dueDate}</span>
           </li>
         ))}
       </ul>
