@@ -1,16 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
 import type { ReminderDto, ReminderOptions, DomainDto } from '../../../shared/reminders';
-export function useReminders(siteId?: number, serverId?: number) {
-  const params = new URLSearchParams();
-  if (siteId) params.set('siteId', String(siteId));
-  if (serverId) params.set('serverId', String(serverId));
-  return useQuery({
-    queryKey: ['reminders', 'list', siteId, serverId],
-    queryFn: async () => (await api<{ items: ReminderDto[] }>(`/api/reminders?${params}`)).items,
+export const useReminders = () =>
+  useQuery({
+    queryKey: ['reminders', 'list'],
+    queryFn: async () => (await api<{ items: ReminderDto[] }>('/api/reminders')).items,
     refetchInterval: 60_000,
   });
-}
 export const useReminderSummary = (enabled = true) =>
   useQuery({
     queryKey: ['reminders', 'summary'],

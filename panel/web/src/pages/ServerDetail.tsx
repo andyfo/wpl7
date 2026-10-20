@@ -1,4 +1,3 @@
-import { ReminderCard } from '../components/ReminderCard';
 // @docs servers/overview
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
@@ -132,8 +131,6 @@ export function ServerDetail() {
           ← servers
         </Link>
       </div>
-
-      <ReminderCard serverId={server.id} />
 
       {server.lastError && (
         <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-900">
