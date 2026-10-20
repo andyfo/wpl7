@@ -97,6 +97,12 @@ export interface DbBrowserPort {
    * when it could not be tried; the change is then checked only when it runs.
    */
   tryDdl(t: DbTarget, attempt: DdlAttempt): Promise<boolean>;
+  /**
+   * The user's connection that holds a named lock (IS_USED_LOCK), or null when none does; with
+   * `kill`, that connection is killed too. How a change made in Adminer is found and stopped
+   * (src/adminer): its connection holds a lock named after the request.
+   */
+  lockHolder(t: DbTarget, name: string, opts?: { kill?: boolean }): Promise<number | null>;
   /** Hang up the connections kept idle for the next request. */
   closeIdle(): void;
 }
@@ -463,6 +469,18 @@ export class DbBrowserService implements DbBrowserPort {
     if (!outcome.errno || outcome.fatal || outcome.errno === 1205 || outcome.errno === 1969 || /temporary/i.test(message)) return false;
     throw new AppError('validation_error', 400, `MariaDB would refuse this: ${message.split(temporary).join(attempt.table)}`, {
       code: outcome.code ?? null,
+    });
+  }
+
+  async lockHolder(t: DbTarget, name: string, opts: { kill?: boolean } = {}): Promise<number | null> {
+    return this.withSession(t, DB_LIMITS.browseSeconds, true, async (conn) => {
+      const [row] = await select<[number | string | null]>(conn, 'SELECT IS_USED_LOCK(?)', [name]);
+      const holder = row?.[0] === null || row?.[0] === undefined ? null : Number(row[0]);
+      if (holder !== null && opts.kill) {
+        // A user may kill its own connections. Gone in the meantime is as good as killed.
+        await write(conn, `KILL ${holder}`, []).catch(() => undefined);
+      }
+      return holder;
     });
   }
 

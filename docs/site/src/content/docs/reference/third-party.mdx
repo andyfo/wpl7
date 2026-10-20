@@ -45,6 +45,7 @@ when these pages were built, read from the files in the last column.
   the image, in `/usr/share/doc/wpl7-sftpgo/`.
 - Adminer runs unmodified. Its image adds a front script and a plugin beside it: they let only
   the panel sign it in, tie it to the server's MariaDB, and turn off its calls to adminer.org.
+  It adds Alpine's `tini` and `coreutils` packages too, for the processes each request starts.
 - AMWScan runs unmodified. Each server pulls the official image, pinned by digest, and runs it
   as a separate process in a throwaway container. WPL7 adjusts what it reports through the
   scanner's own rules folder and by filtering its report.

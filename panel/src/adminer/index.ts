@@ -7,8 +7,9 @@ import type { Db } from '../db/index.js';
 import { sessions as panelSessions, sites } from '../db/schema.js';
 import type { ServerRegistry } from '../servers/registry.js';
 import type { DatabasesService } from '../services/databases.js';
+import type { DbTarget } from '../services/dbBrowser.js';
 import type { DnsService } from '../services/dns.js';
-import type { JobWorker } from '../jobs/worker.js';
+import type { JobWorker, SiteHold } from '../jobs/worker.js';
 import type { Logger } from '../services/index.js';
 import type { SettingsService } from '../services/settings.js';
 import type { UsersService } from '../services/users.js';
@@ -28,6 +29,17 @@ const BESIDE_JOBS = new Set(['backup.create']);
 
 /** The session's site is gone, or on another server: the session ends with it. */
 export class AdminerSessionEndedError extends Error {}
+
+/**
+ * The lock a change's Adminer connection takes, named after the tag the front door gives the
+ * request (deploy/adminer-image/wpl7.php): MariaDB then says whether the change still runs.
+ */
+export const adminerLockName = (tag: string) => `wpl7_adminer_${tag}`;
+
+/** What a read takes of a site: nothing. */
+const NO_HOLD: SiteHold = Object.assign(() => undefined, { renew: () => undefined });
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * "Open in Adminer": a database of a site opened in Adminer, signed in as the site's own
@@ -72,7 +84,10 @@ export class AdminerService {
     return `${this.config.adminer.url}/open?ticket=${encodeURIComponent(this.tickets.issue(ticket))}`;
   }
 
-  /** A session from a spent ticket; its server's Adminer is started and signed in behind it. */
+  /**
+   * A session from a spent ticket; its server's Adminer is started and signed in behind it while
+   * the tab that opened it comes to claim it (AdminerSessions.claim).
+   */
   begin(ticket: AdminerTicket): AdminerSession {
     const site = this.siteOf(ticket.siteId);
     if (!site) throw new Error('That site is not there any more');
@@ -88,20 +103,74 @@ export class AdminerService {
    * (`change`) holds the site as the panel's own changes do: refused while a job but a backup has
    * it, and no job starts until it is answered. Returns what lets go.
    */
-  hold(s: AdminerSession, change: boolean): () => void {
+  hold(s: AdminerSession, change: boolean): SiteHold {
     const site = this.siteOf(s.siteId);
     if (!site || site.serverId !== s.serverId || site.status === 'deleting') {
       this.sessions.end(s.id);
       throw new AdminerSessionEndedError('The site has moved or is gone. Open its database again from the panel.');
     }
-    if (!change || !this.worker) return () => undefined;
+    if (!change || !this.worker) return NO_HOLD;
     return this.worker.holdSite(site, BESIDE_JOBS);
   }
 
-  /** Switched off: every session ends now, and every Adminer stops, rather than once idle. */
+  /**
+   * Wait, after a change made in Adminer has ended for the front door, until it has ended in
+   * MariaDB too: PHP and the statement it runs go on after a browser or a relay goes. Its
+   * connection holds the lock named after the request's tag (adminerLockName), so MariaDB says
+   * whether it still runs. One that was cut off (`cut`: its relay failed, or the browser went
+   * before Adminer had the request whole) is killed. After a clean end its connection closes with
+   * the request; one still there after a few seconds is killed all the same. `renew` keeps the
+   * site's hold while this waits.
+   */
+  async settle(s: AdminerSession, tag: string, opts: { cut: boolean; renew: () => void }): Promise<void> {
+    const site = this.siteOf(s.siteId);
+    // Gone, or moved: its database is no longer where this Adminer was.
+    if (!site || site.serverId !== s.serverId) return;
+    let target: DbTarget;
+    try {
+      target = this.databases.targetFor(site, s.database);
+    } catch {
+      return;
+    }
+    const browser = this.servers.handleFor(s.serverId).dbBrowser;
+    const name = adminerLockName(tag);
+    const t = this.settleTiming;
+    const started = Date.now();
+    let failures = 0;
+    for (;;) {
+      const waited = Date.now() - started;
+      let holder: number | null | undefined;
+      try {
+        holder = await browser.lockHolder(target, name, { kill: opts.cut || waited >= t.graceMs });
+        failures = 0;
+      } catch (err) {
+        if (++failures >= 5) {
+          this.log.warn(`Adminer for ${s.database}: could not tell whether a change still runs (${errorText(err)}); letting the site go`);
+          return;
+        }
+        holder = undefined;
+      }
+      // Cut off, Adminer may have had the request whole yet not connected: a few looks first.
+      if (holder === null && (!opts.cut || waited >= t.lookMs)) return;
+      if (waited >= t.maxMs) {
+        this.log.warn(`Adminer for ${s.database}: a change still runs after ${Math.round(t.maxMs / 60_000)} minutes; letting the site go`);
+        return;
+      }
+      opts.renew();
+      await sleep(holder === null ? t.pollMs / 2 : t.pollMs);
+    }
+  }
+
+  /** How settle() waits; shorter in the tests. */
+  settleTiming = { lookMs: 3_000, graceMs: 5_000, pollMs: 1_000, maxMs: 15 * 60_000 };
+
+  /**
+   * Switched off: every session ends now, and every Adminer stops, rather than once idle - one
+   * still starting once it has started.
+   */
   turnedOff(): Promise<number> {
     this.sessions.endAll();
-    return this.containers.stopIdle(0, () => false);
+    return this.containers.stopAll();
   }
 
   /** Where Adminer opens on the session's database. */
@@ -184,6 +253,12 @@ export class AdminerService {
       await this.containers.ensure(session.serverId, (message) => {
         session.message = message;
       });
+      // Switched off while it started: it stops again, signed in as nobody.
+      const off = this.unavailable();
+      if (off) {
+        await this.containers.stop(session.serverId);
+        throw new Error(off);
+      }
       const { docker } = this.servers.handleFor(session.serverId);
       session.jar.set('adminer_key', randomBytes(16).toString('hex'));
       const form = new URLSearchParams({

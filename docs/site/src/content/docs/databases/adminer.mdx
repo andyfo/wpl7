@@ -30,6 +30,7 @@ such as triggers, routines or a search through every table, a database opens in
 
 Adminer opens in a new tab, signed in to that database. The link the panel makes works once,
 within a minute. The first open on a server takes a moment longer, while its Adminer starts.
+Each site you open gets a tab of its own, and the tabs stay signed in side by side.
 
 ## What it can reach
 
@@ -79,6 +80,8 @@ already open end. Turn it off while a security advisory for Adminer is open.
   tab.
 - While a job other than a backup runs on the site, such as a restore or a move, Adminer can
   browse but not run SQL or save changes.
+- A change made in Adminer, such as a query or an import, runs to its end even if you close the
+  tab. The site's jobs wait until it has finished. One that runs past 30 minutes is stopped.
 - Adminer looks like Adminer, with its own design and its own dark mode.
 - On a server installed from source, the first open builds the Adminer image, which takes about
   a minute.

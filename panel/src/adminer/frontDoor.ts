@@ -2,6 +2,7 @@
 import { randomBytes } from 'node:crypto';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { PassThrough, pipeline } from 'node:stream';
+import type { SiteHold } from '../jobs/worker.js';
 import { AdminerSessionEndedError, type AdminerService } from './index.js';
 import { adminerRequest, BodyTooLargeError } from './relay.js';
 import type { AdminerSession } from './sessions.js';
@@ -13,6 +14,8 @@ import type { AdminerSession } from './sessions.js';
 export const ADMINER_MAX_BODY = 32 * 1024 * 1024;
 /** Requests at once to one server's Adminer: each holds a Docker exec there, and jobs need theirs. */
 const IN_FLIGHT_PER_SERVER = 4;
+/** How often a running change renews its hold on the site: well inside the queue's limit for holds. */
+const HOLD_RENEW_MS = 60_000;
 
 /** Headers a browser's request does not pass on: hop-by-hop ones, and ones that claim things. */
 const DROPPED_REQUEST_HEADERS = new Set([
@@ -35,8 +38,9 @@ const DROPPED_RESPONSE_HEADERS = new Set(['set-cookie', 'connection', 'keep-aliv
 /**
  * Adminer's front door: an HTTP server of its own in the panel's process, on its own port and
  * address (`db.<dev domain>`). It serves Adminer and nothing of the panel, and:
- *  - starts a session only from a ticket the panel minted (`/open`), and holds it in a
- *    `__Host-` cookie that dev sites, which share the domain, cannot set;
+ *  - starts a session only from a ticket the panel minted (`/open`), and keeps the browser's
+ *    sessions - a tab per site - under one key in a `__Host-` cookie that dev sites, which share
+ *    the domain, cannot set;
  *  - takes a request only from Adminer's own pages or an address typed in (Sec-Fetch-Site), so
  *    a dev site cannot drive it either;
  *  - takes a change (POST and the like) only from its own origin: a browser too old for
@@ -50,7 +54,9 @@ export function createFrontDoor(service: AdminerService, opts: { host: string; s
   const origin = `${opts.secure ? 'https' : 'http'}://${opts.host}`.toLowerCase();
   const inFlight = new Map<number, number>();
 
-  const sessionOf = (req: IncomingMessage): AdminerSession | null => service.sessions.get(readCookie(req, cookieName));
+  /** The browser's session for a request: the one for the database user its address names. */
+  const sessionOf = (req: IncomingMessage, url: URL): AdminerSession | null =>
+    service.sessions.forRequest(readCookie(req, cookieName), url.searchParams.get('username'));
 
   async function open(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     if (req.method !== 'GET') return page(res, 405, 'Not here', 'Open the database again from the panel.', opts.panelUrl);
@@ -64,28 +70,43 @@ export function createFrontDoor(service: AdminerService, opts: { host: string; s
     } catch (err) {
       return page(res, 404, 'Not there any more', err instanceof Error ? err.message : String(err), opts.panelUrl);
     }
-    res.setHeader('set-cookie', `${cookieName}=${session.id}; Path=/; HttpOnly; SameSite=Strict${opts.secure ? '; Secure' : ''}`);
-    // A page, not a redirect: right after a navigation from another site the browser leaves a
-    // Strict cookie out, so the page moves on by itself once Adminer is ready.
-    return startingPage(res);
+    // A page, not a redirect, and no cookie yet: right after a navigation from another site the
+    // browser leaves a Strict cookie out, so this request cannot tell which key the browser
+    // holds. The page's own first request claims the session (state()).
+    return startingPage(res, session.id);
   }
 
-  function state(req: IncomingMessage, res: ServerResponse): void {
-    const s = sessionOf(req);
-    send(res, 200, 'application/json', JSON.stringify(s ? { state: s.state, message: s.message, location: service.adminerPath(s) } : { state: 'ended' }));
+  /**
+   * How the tab's session is coming along. The first ask claims it for the browser's key - the
+   * one its cookie holds when that belongs to the same panel session, or a new one it is given:
+   * other tabs' sessions stay. A session already claimed answers only to its own browser's key,
+   * or moves to another key of the same panel session (two tabs opened at once).
+   */
+  function state(req: IncomingMessage, res: ServerResponse, url: URL): void {
+    const s = service.sessions.get(url.searchParams.get('s') ?? '');
+    const cookie = readCookie(req, cookieName);
+    const ended = () => send(res, 200, 'application/json', JSON.stringify({ state: 'ended' }));
+    if (!s) return ended();
+    if (s.browser === '' || (s.browser !== cookie && service.sessions.ownedBy(cookie, s.userId, s.panelSid))) {
+      const { browser, isNew } = service.sessions.claim(s, cookie);
+      if (isNew) res.setHeader('set-cookie', `${cookieName}=${browser}; Path=/; HttpOnly; SameSite=Strict${opts.secure ? '; Secure' : ''}`);
+    } else if (s.browser !== cookie) {
+      return ended();
+    }
+    send(res, 200, 'application/json', JSON.stringify({ state: s.state, message: s.message, location: service.adminerPath(s) }));
   }
 
   async function proxy(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-    const s = sessionOf(req);
+    const s = sessionOf(req, url);
     if (!s) return page(res, 401, 'This Adminer session has ended', 'Open the database again from the panel.', opts.panelUrl);
-    if (s.state !== 'ready') return startingPage(res);
+    if (s.state !== 'ready') return startingPage(res, s.id);
     const tooLarge = () =>
       page(res, 413, 'Too large', `Adminer takes at most ${ADMINER_MAX_BODY / 1024 / 1024} MB at once. Import bigger dumps on the site's Database tab.`);
     if (Number(req.headers['content-length'] ?? 0) > ADMINER_MAX_BODY) return tooLarge();
     const change = req.method !== 'GET' && req.method !== 'HEAD';
-    let release: () => void;
+    let hold: SiteHold;
     try {
-      release = service.hold(s, change);
+      hold = service.hold(s, change);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (err instanceof AdminerSessionEndedError) return page(res, 401, 'This Adminer session has ended', message, opts.panelUrl);
@@ -94,11 +115,22 @@ export function createFrontDoor(service: AdminerService, opts: { host: string; s
     // In use from the moment a request starts: a long upload is use too.
     service.sessions.touch(s);
     service.containers.used(s.serverId);
-    // The browser gone, whenever: the request to Adminer goes too, and with it its slot.
+    // A change is tagged: its Adminer connection takes a lock named after the tag (wpl7.php), by
+    // which MariaDB says whether the change still runs once the front door is done with it.
+    const tag = change ? randomBytes(16).toString('base64url') : null;
+    /** Whether Adminer was asked at all, and if so whether its answer came whole. */
+    let sent = false;
+    let whole = false;
+    // A read goes with its browser, and so does a change not yet sent, or whose body has not all
+    // come: Adminer runs nothing it does not have whole. A change Adminer has may be running: it
+    // runs to its end.
     const abort = new AbortController();
     res.on('close', () => {
-      if (!res.writableFinished) abort.abort();
+      if (!res.writableFinished && (!change || !sent || !req.complete)) abort.abort();
     });
+    // The site stays held as long as the change runs, past the queue's limit for holds.
+    const renewal = change ? setInterval(() => hold.renew(), HOLD_RENEW_MS) : null;
+    renewal?.unref();
     try {
       if (!(await slot(s.serverId))) return page(res, 503, 'Busy', 'Adminer is answering other requests on this server. Try again in a moment.');
       try {
@@ -111,6 +143,8 @@ export function createFrontDoor(service: AdminerService, opts: { host: string; s
         }
         const jar = s.jar.header();
         if (jar) headers.cookie = jar;
+        if (tag) headers['x-wpl7-request'] = tag;
+        sent = true;
         const upstream = await adminerRequest(service.servers.handleFor(s.serverId).docker, {
           method: req.method ?? 'GET',
           path: url.pathname + url.search,
@@ -128,7 +162,8 @@ export function createFrontDoor(service: AdminerService, opts: { host: string; s
           if (value !== undefined && !DROPPED_RESPONSE_HEADERS.has(name)) out[name] = value;
         }
         res.writeHead(upstream.statusCode ?? 502, out);
-        await new Promise<void>((resolve) => pipeline(upstream, res, () => resolve()));
+        if (change) whole = await toTheEnd(upstream, res);
+        else await new Promise<void>((resolve) => pipeline(upstream, res, () => resolve()));
       } catch (err) {
         if (res.headersSent || res.destroyed) res.destroy();
         else if (err instanceof BodyTooLargeError) {
@@ -142,8 +177,11 @@ export function createFrontDoor(service: AdminerService, opts: { host: string; s
       } finally {
         inFlight.set(s.serverId, (inFlight.get(s.serverId) ?? 1) - 1);
       }
+      // Done for the front door, a change lets go of the site once it is done in MariaDB too.
+      if (tag && sent) await service.settle(s, tag, { cut: !whole, renew: () => hold.renew() });
     } finally {
-      release();
+      if (renewal) clearInterval(renewal);
+      hold();
     }
   }
 
@@ -179,12 +217,40 @@ export function createFrontDoor(service: AdminerService, opts: { host: string; s
       // Turned off: sessions already open end too. It is the switch for when an advisory is out.
       const off = service.unavailable();
       if (off) return page(res, 409, 'Adminer is off', off, opts.panelUrl);
-      if (url.pathname === '/.wpl7/state') return state(req, res);
+      if (url.pathname === '/.wpl7/state') return state(req, res, url);
       return proxy(req, res, url);
     };
     handle().catch((err: unknown) => {
       if (!res.headersSent) page(res, 500, 'Something went wrong', err instanceof Error ? err.message : String(err));
       else res.destroy();
+    });
+  });
+}
+
+/**
+ * A change's answer: to the browser while it is there, and on into nothing once it has gone, so
+ * Adminer finishes rather than stopping half-way. True when the answer came whole: Adminer is done.
+ */
+function toTheEnd(upstream: IncomingMessage, res: ServerResponse): Promise<boolean> {
+  return new Promise((resolve) => {
+    let listening = !res.destroyed;
+    res.on('close', () => {
+      listening = false;
+      upstream.resume();
+    });
+    upstream.on('data', (chunk: Buffer) => {
+      if (listening && !res.write(chunk)) {
+        upstream.pause();
+        res.once('drain', () => upstream.resume());
+      }
+    });
+    upstream.on('error', () => undefined);
+    upstream.on('close', () => {
+      if (listening) {
+        if (upstream.complete) res.end();
+        else res.destroy();
+      }
+      resolve(upstream.complete);
     });
   });
 }
@@ -228,12 +294,12 @@ function page(res: ServerResponse, status: number, title: string, text: string, 
   );
 }
 
-/** "Starting Adminer…": asks how the session is coming along, and moves on once it is ready. */
-function startingPage(res: ServerResponse): void {
+/** "Starting Adminer…": asks how its session is coming along, and moves on once it is ready. */
+function startingPage(res: ServerResponse, sessionId: string): void {
   const nonce = randomBytes(16).toString('base64');
   const script =
     'const m=document.getElementById("m");' +
-    'async function tick(){try{const r=await fetch("/.wpl7/state",{credentials:"same-origin",cache:"no-store"});const s=await r.json();' +
+    `async function tick(){try{const r=await fetch("/.wpl7/state?s=${encodeURIComponent(sessionId)}",{credentials:"same-origin",cache:"no-store"});const s=await r.json();` +
     'if(s.state==="ready"){location.replace(s.location);return}' +
     'if(s.state==="failed"){m.textContent=s.message||"Adminer could not start.";return}' +
     'if(s.state==="ended"){m.textContent="This Adminer session has ended. Open the database again from the panel.";return}' +

@@ -245,6 +245,19 @@ export class FakeDbBrowser implements DbBrowserPort {
     return this.tryAnswer(statement);
   }
 
+  /** Named locks and the connection holding each (IS_USED_LOCK); a killed one lets go of its locks. */
+  locks = new Map<string, number>();
+  killed: number[] = [];
+  async lockHolder(t: DbTarget, name: string, opts: { kill?: boolean } = {}): Promise<number | null> {
+    this.record('lockHolder', t, [name, opts]);
+    const holder = this.locks.get(name) ?? null;
+    if (holder !== null && opts.kill) {
+      this.killed.push(holder);
+      for (const [lock, thread] of this.locks) if (thread === holder) this.locks.delete(lock);
+    }
+    return holder;
+  }
+
   closeIdle(): void {
     this.calls.push({ method: 'closeIdle', target: { database: '', user: '', password: '' }, args: [] });
   }

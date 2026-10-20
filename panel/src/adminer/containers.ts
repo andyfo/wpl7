@@ -19,8 +19,13 @@ const MARIADB = { container: 'wpl7-mariadb', alias: 'mariadb' };
 export class AdminerContainers {
   /** When each server's Adminer was last used, for those the panel started or used since it started. */
   private readonly lastUsed = new Map<number, number>();
-  /** Whether a stop has looked at every server once: an Adminer may outlive a panel restart. */
-  private swept = false;
+  /**
+   * Servers whose Adminer the panel knows to be stopped since it started. Any other may run one
+   * left from before a restart: it is looked at until a look succeeds.
+   */
+  private readonly stopped = new Set<number>();
+  /** Servers whose last look failed, so a failure is logged once rather than every minute. */
+  private readonly failing = new Set<number>();
   /** One start per server at a time: two tabs opening at once wait for the same one. */
   private readonly starting = new Map<number, Promise<void>>();
 
@@ -41,6 +46,7 @@ export class AdminerContainers {
 
   used(serverId: number): void {
     this.lastUsed.set(serverId, this.now());
+    this.stopped.delete(serverId);
   }
 
   /** Running and answering on this server, started if need be. `status` hears what takes long. */
@@ -112,30 +118,51 @@ export class AdminerContainers {
   }
 
   /**
-   * Stop each server's Adminer that nobody has used for `idleMs` and that no session needs. Only
-   * servers the panel started one on are asked - except the first time, which asks every server:
-   * one the panel has no record of (it restarted since) counts as idle.
+   * Stop each server's Adminer that nobody has used for `idleMs` and that no session needs. A
+   * server the panel has not seen stopped since it started - one it may have left running before
+   * a restart - is looked at too, every time until a look succeeds. Servers that are not reachable
+   * now wait for the next time.
    */
   async stopIdle(idleMs: number, inUse: (serverId: number) => boolean): Promise<number> {
-    const everywhere = !this.swept;
-    this.swept = true;
     let stopped = 0;
     for (const row of this.servers.listRows()) {
-      const last = this.lastUsed.get(row.id);
-      if (last === undefined && !everywhere) continue;
+      if (row.status !== 'ok' || this.stopped.has(row.id)) continue;
       if (inUse(row.id) || this.starting.has(row.id)) continue;
+      const last = this.lastUsed.get(row.id);
       if (last !== undefined && this.now() - last < idleMs) continue;
-      try {
-        const { docker } = this.servers.handleFor(row.id);
-        if ((await docker.containerState(ADMINER_CONTAINER)) === 'running') {
-          await docker.stopContainer(ADMINER_CONTAINER);
-          stopped++;
-        }
-        this.lastUsed.delete(row.id);
-      } catch (err) {
-        this.log.warn(`Adminer on server #${row.id}: could not stop it: ${errorText(err)}`);
-      }
+      if (await this.stopOn(row.id)) stopped++;
     }
     return stopped;
+  }
+
+  /** Stop this server's Adminer now, whoever uses it (Adminer switched off while it started). */
+  async stop(serverId: number): Promise<void> {
+    await this.stopOn(serverId);
+  }
+
+  /** Stop every Adminer now: one still starting once it has started (Adminer switched off). */
+  async stopAll(): Promise<number> {
+    await Promise.allSettled([...this.starting.values()]);
+    return this.stopIdle(0, () => false);
+  }
+
+  /** Stop the server's Adminer if it runs; true when one was stopped. A failure is logged once. */
+  private async stopOn(serverId: number): Promise<boolean> {
+    try {
+      const { docker } = this.servers.handleFor(serverId);
+      let stopped = false;
+      if ((await docker.containerState(ADMINER_CONTAINER)) === 'running') {
+        await docker.stopContainer(ADMINER_CONTAINER);
+        stopped = true;
+      }
+      this.lastUsed.delete(serverId);
+      this.stopped.add(serverId);
+      this.failing.delete(serverId);
+      return stopped;
+    } catch (err) {
+      if (!this.failing.has(serverId)) this.log.warn(`Adminer on server #${serverId}: could not stop it: ${errorText(err)}`);
+      this.failing.add(serverId);
+      return false;
+    }
   }
 }

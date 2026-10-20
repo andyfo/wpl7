@@ -19,7 +19,9 @@ FROM php:8.4-cli-alpine
 ARG ADMINER_VERSION=6.1.2
 ARG ADMINER_SHA256=7526b56dc5ecee5b5cc88206ac8f3a757392c1b991838efa71bf9f7abbb8172e
 
-RUN docker-php-ext-install mysqli \
+# tini and coreutils: see the ENTRYPOINT below.
+RUN apk add --no-cache coreutils tini \
+  && docker-php-ext-install mysqli \
   && mkdir -p /srv/adminer/empty \
   && wget -q -O /srv/adminer/adminer.php \
     "https://github.com/vrana/adminer/releases/download/v${ADMINER_VERSION}/adminer-${ADMINER_VERSION}-mysql-en.php" \
@@ -35,8 +37,13 @@ COPY router.php relay.php wpl7.php /srv/adminer/
 USER 65534:65534
 WORKDIR /srv/adminer
 ENV PHP_CLI_SERVER_WORKERS=4
-# PHP's server, as process 1, ignores SIGTERM, and holds nothing to save (its sessions are in a
-# tmpfs that goes with it): a stop need not wait out Docker's grace period.
+# Every request is a `docker exec`, which the panel wraps in `timeout`. tini, as process 1, reaps
+# what an exec leaves behind: PHP's server would not, and each one would count against the
+# container's process limit for good. coreutils' timeout stays the parent of its command, where
+# busybox's leaves a watcher that holds the exec's output open after the command has ended.
+ENTRYPOINT ["/sbin/tini", "--"]
+# PHP's server holds nothing to save (its sessions are in a tmpfs that goes with it): a stop
+# need not wait out Docker's grace period.
 STOPSIGNAL SIGKILL
 # The document root is an empty folder: router.php answers every request itself.
 CMD ["php", "-S", "127.0.0.1:8080", "-t", "/srv/adminer/empty", "/srv/adminer/router.php"]

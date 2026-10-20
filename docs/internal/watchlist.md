@@ -49,7 +49,7 @@ for a reason; remove one once there is nothing left to watch.
 | [WordPress's default From address](#wordpresss-default-from-address) | Medium | 2026-10-14 16:28 UTC | `wordpress@` and the home URL's host without `www.`, on 7.1.3 and trunk |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
 | [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 22:05 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
-| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-10-19 22:05 UTC | 6.1.2 is the latest; 22 advisories, the newest (2026-09-25) in the SQLite driver, which the MySQL-only build leaves out; `php:8.4-cli-alpine` is PHP 8.4.26 |
+| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-10-20 11:05 UTC | 6.1.2 is the latest; 22 advisories, the newest (2026-09-25) in the SQLite driver, which the MySQL-only build leaves out; `php:8.4-cli-alpine` is PHP 8.4.26 |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -728,11 +728,11 @@ for a reason; remove one once there is nothing left to watch.
 ## Adminer: the pinned build and its advisories
 
 - **Priority:** High
-- **Last checked:** 2026-10-19 22:05 UTC. Adminer 6.1.2 (2026-10-10) is the latest release.
+- **Last checked:** 2026-10-20 11:05 UTC. Adminer 6.1.2 (2026-10-10) is the latest release.
   There are 22 advisories, 17 of them since July 2026. The newest, GHSA-r9r5-j5q8-8c59
   (2026-09-25), is in the SQLite driver, which the MySQL-only build leaves out. The image's base,
   `php:8.4-cli-alpine`, is PHP 8.4.26. The engine test `panel/test/engine/adminer.test.ts`
-  passes: 3 of 3.
+  passes: 4 of 4.
 - **The problem:** "Open in Adminer" runs Adminer's MySQL-only English build on every server
   that uses it, pinned in `deploy/adminer-image/Dockerfile` by `ADMINER_VERSION` and
   `ADMINER_SHA256`. It sits behind the panel's front door, signs in as a site's own database
@@ -746,8 +746,9 @@ for a reason; remove one once there is nothing left to watch.
 - **When it changes:** tell the user.
   - A new release: set `ADMINER_VERSION` and `ADMINER_SHA256` in the Dockerfile and
     `deploy/adminer-image/VERSION` to `<release>-wpl7.1`. Read the release notes for the plugin
-    hooks `wpl7.php` uses (`credentials`, `login`, `verifyLoginToken`, `loginForm`,
-    `bruteForceKey`, `verifyVersion`, `serviceWorker`, `manifest`, `importServerPath`) and for `adminer_object()`
+    hooks `wpl7.php` uses (`credentials`, `login`, `afterConnect`, `verifyLoginToken`, `loginForm`,
+    `bruteForceKey`, `verifyVersion`, `serviceWorker`, `manifest`, `importServerPath`), for
+    `connection()`, which `afterConnect` takes the request's lock with, and for `adminer_object()`
     and `X-Forwarded-Prefix`, which `router.php` relies on. Run the engine test, then merge: CI
     publishes the image.
   - An advisory that reaches the MySQL build before a fix is out: ask the user to switch Adminer
