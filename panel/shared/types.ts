@@ -189,6 +189,20 @@ export interface SiteDetail extends SiteSummary {
    * `provisioning` is being made by its `site.create`, whose log its page shows.
    */
   activeJob: { id: number; type: JobType } | null;
+  /** Its container's CPU, memory and process limits; null for a site hosted elsewhere. */
+  limits: {
+    /** The site's own; null = the default. */
+    own: SiteLimits<number | null>;
+    /** Settings' (`siteCpuLimit`, `siteMemoryLimitMb`, `sitePidsLimit`), for each limit the site has none of its own. */
+    defaults: SiteLimits<number>;
+  } | null;
+}
+
+/** A site container's limits. CPU in cores; 0 = uncapped, for CPU and processes. */
+export interface SiteLimits<T> {
+  cpuLimit: T;
+  memoryLimitMb: T;
+  pidsLimit: T;
 }
 
 // ---------------------------------------------------------------------------

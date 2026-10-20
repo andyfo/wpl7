@@ -25,6 +25,7 @@ for a reason; remove one once there is nothing left to watch.
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-10-02 05:12 UTC | Both overrides apply to 0.21.12; signatures named |
 | [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-14 11:05 UTC | 2.7.6 is the latest; patch still needed |
 | [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
+| [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
 | [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-10-04 18:10 UTC | `latest` is v5.1.0; hostname logic as relied on |
 | [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-09-30 07:23 UTC | Both answer as expected |
 | [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-09-30 09:51 UTC | All six as listed |
@@ -175,6 +176,26 @@ for a reason; remove one once there is nothing left to watch.
      `wpl7-firewall apply`. A blocked client must time out on 80 and 443 and still reach 22.
   5. Repeat after `ufw reload`, `systemctl restart docker`, a restart of the whole container (a
      reboot: the boot unit loads the table), and `wpl7-firewall off` / `on`.
+
+## Docker: a CPU cap stays on a running container
+
+- **Priority:** Low
+- **Last checked:** 2026-10-19 16:22 UTC. [docker/for-linux#558](https://github.com/docker/for-linux/issues/558)
+  is open, with nothing since 2019. On Docker 28.1.1, `docker update --cpus 0` on a container
+  capped at 2 cores still exits 0 and leaves `NanoCpus` at 2000000000.
+- **The problem:** an update with a CPU limit of 0 means "leave it as it is" to Docker, so a cap
+  cannot be lifted from an existing container. `CpuQuota: -1` lifts it, but stays in the
+  container's config: a cap set later holds only until the next restart (checked on 28.1.1).
+- **What we do about it:** `limitsChange` in `panel/src/services/siteSpec.ts` answers `recreate`
+  for a site losing its CPU cap. `server.applySiteLimits` then queues a `site.reconcile`, which
+  builds a new container, and the site does not answer for a few seconds. That happens when the
+  CPU limit in Settings, or a site's own, is set to 0.
+- **Check:** `gh issue view 558 -R docker/for-linux --comments`, and the Docker Engine release
+  notes since the last check for `docker update` and `NanoCpus`.
+- **When it changes:** on a Docker release we install, confirm that an update with `NanoCpus: 0`
+  lifts the cap. Then `updateContainerLimits` can send it, `limitsChange` loses `recreate`, and
+  the "restarts each site once" sentences go from Settings, the site's Container limits card and
+  `docs/site/src/content/docs/sites/settings.mdx`.
 
 ## boky/postfix: how the relay picks its hostname
 

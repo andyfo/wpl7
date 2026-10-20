@@ -146,7 +146,7 @@ with msmtp, so PHP's `mail()` reaches the relay, and WP-CLI. PHP 8.2 to 8.5 are 
 | Networks | Its own network and the way out, nothing else |
 | Capabilities | Docker's defaults without `NET_RAW`, `MKNOD`, `SYS_CHROOT`, `AUDIT_WRITE`, `SETFCAP` and `SETPCAP` |
 | `no-new-privileges` | Set, so setuid programs cannot raise privileges |
-| CPU, memory and processes | Per-site ceilings from **Settings**, by default 2 cores, 512 MB and 512 processes |
+| CPU, memory and processes | Per-site ceilings from **Settings**, by default 2 cores, 512 MB and 512 processes, or the site's own |
 | Mail | Its own relay login, which may only send from the site's own domains |
 
 The ceilings change on running containers when you save them. Removing a CPU ceiling is the one

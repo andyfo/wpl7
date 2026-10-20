@@ -229,9 +229,9 @@ refusing to create or start the replacement.
 Run it per site (**Recreate container** on the site page) or across the fleet
 (`POST /api/sites/reconcile-all`, one job per site, serialized per server). It is idempotent, so
 running it on an already-current site costs one container restart and changes nothing else. A
-changed CPU/memory/process limit in Settings does not need it: saving one changes every existing
-container in place (`server.applySiteLimits`), and queues this job only for the sites losing a CPU
-cap, which Docker cannot lift from a live container. A site that already has a job queued cannot be
+changed CPU/memory/process limit, in Settings or as a site's own, does not need it: saving one
+changes the existing containers in place (`server.applySiteLimits`), and queues this job only for
+the sites losing a CPU cap, which Docker cannot lift from a live container. A site that already has a job queued cannot be
 given a second, so it is recreated by a later pass, which the scheduler queues once that job has run.
 
 ## Manual disaster recovery (no panel needed)

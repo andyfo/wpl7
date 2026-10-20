@@ -5,7 +5,7 @@ import { jobs, siteWpStatus, sites, type JobRow, type ScheduleRow } from '../db/
 import type { CoreServices } from '../services/index.js';
 import type { JobWorker } from './worker.js';
 import { reconcileSiteNetworks } from '../services/siteNetwork.js';
-import { siteRuntimeFrom } from '../services/siteSpec.js';
+import { defaultSiteLimits } from '../services/siteSpec.js';
 import { sweepLegacyRename } from '../services/legacyRename.js';
 import { sweepHardening } from '../services/siteHardening.js';
 import { sweepWildcardSites } from '../services/wildcardSites.js';
@@ -769,8 +769,10 @@ export class Schedulers {
    * record, so a restart of the panel in between loses nothing.
    */
   siteLimitsTick(): TaskResult {
-    // Lifting a CPU cap is the one change that needs a job of the site's own.
-    if (siteRuntimeFrom(this.s.settings).nanoCpus) return { idle: true };
+    // Lifting a CPU cap is the one change that needs a job of the site's own. With Settings'
+    // cap in force, only a site with a CPU limit of 0 of its own can be waiting for one.
+    const uncapped = this.s.db.select({ id: sites.id }).from(sites).where(eq(sites.cpuLimit, 0)).limit(1).get();
+    if (defaultSiteLimits(this.s.settings).cpuLimit > 0 && !uncapped) return { idle: true };
     let queued = 0;
     for (const server of this.s.servers.listRows()) {
       if (server.status === 'unreachable') continue; // next tick

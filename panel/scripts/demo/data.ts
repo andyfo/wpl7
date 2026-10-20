@@ -42,15 +42,17 @@ export interface DemoSite {
   diskMb: number;
   /** Visitors over the last 24 hours, roughly; drives the traffic seed. */
   dailyVisitors: number;
+  /** Container limits of its own, where it has any; the rest follow Settings. */
+  limits?: { cpuLimit?: number; memoryLimitMb?: number; pidsLimit?: number };
 }
 
 export const SITES: DemoSite[] = [
-  { slug: 'northwind-bakery', title: 'Northwind Bakery', domain: 'northwindbakery.example', php: '8.4', server: 1, state: 'live', ageDays: 214, diskMb: 1840, dailyVisitors: 612 },
+  { slug: 'northwind-bakery', title: 'Northwind Bakery', domain: 'northwindbakery.example', php: '8.4', server: 1, state: 'live', ageDays: 214, diskMb: 1840, dailyVisitors: 612, limits: { memoryLimitMb: 1024 } },
   { slug: 'alpine-dental', title: 'Alpine Dental Clinic', domain: 'alpinedental.example', php: '8.3', server: 1, state: 'live', ageDays: 180, diskMb: 960, dailyVisitors: 238 },
   { slug: 'harbor-yoga', title: 'Harbor Yoga Studio', domain: 'harboryoga.example', php: '8.4', server: 2, state: 'live', ageDays: 151, diskMb: 1320, dailyVisitors: 341 },
   { slug: 'cedar-stone', title: 'Cedar & Stone Architects', domain: 'cedarstone.example', php: '8.3', server: 2, state: 'live', ageDays: 133, diskMb: 2410, dailyVisitors: 97 },
   { slug: 'blue-fern', title: 'Blue Fern Florist', domain: 'bluefern.example', php: '8.2', server: 1, state: 'live', ageDays: 120, diskMb: 780, dailyVisitors: 184 },
-  { slug: 'pixel-press', title: 'Pixel Press Magazine', domain: 'pixelpress.example', php: '8.5', server: 3, state: 'live', ageDays: 98, diskMb: 6230, dailyVisitors: 2875 },
+  { slug: 'pixel-press', title: 'Pixel Press Magazine', domain: 'pixelpress.example', php: '8.5', server: 3, state: 'live', ageDays: 98, diskMb: 6230, dailyVisitors: 2875, limits: { memoryLimitMb: 1024, pidsLimit: 1024 } },
   { slug: 'ridge-outfitters', title: 'Ridge Outfitters', domain: 'ridgeoutfitters.example', php: '8.4', server: 3, state: 'live', ageDays: 87, diskMb: 18420, dailyVisitors: 1290 },
   { slug: 'lumen-law', title: 'Lumen Law Partners', domain: 'lumenlaw.example', php: '8.3', server: 1, state: 'live', ageDays: 64, diskMb: 1150, dailyVisitors: 156 },
   { slug: 'summit-coffee', title: 'Summit Coffee Roasters', domain: null, php: '8.4', server: 2, state: 'dev', ageDays: 9, diskMb: 410, dailyVisitors: 6 },
