@@ -89,7 +89,7 @@ export class DatabasesService {
     if (taken) throw conflict(`"${name}" is taken: it is a database of ${taken.slug}`);
   }
 
-  siteInfo(site: SiteRow): SiteDatabaseDto {
+  siteInfo(site: SiteRow): Omit<SiteDatabaseDto, 'adminer'> {
     const scan = this.scanOf(site.serverId);
     const sizes = this.sizesOn(site.serverId);
     const entry = (name: string, kind: 'site' | 'extra', createdAt: number | null) => {

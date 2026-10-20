@@ -43,6 +43,8 @@ COPY panel/connect-plugin/wpl7-connect /app/connect-plugin/wpl7-connect
 COPY deploy/wordpress-image /app/wordpress-image
 # The FTP image's recipe, for servers that build it rather than pull it (services/ftp.ts).
 COPY deploy/sftpgo-image /app/sftpgo-image
+# Adminer's, the same way (src/adminer/containers.ts).
+COPY deploy/adminer-image /app/adminer-image
 # Provisioning bundle: the panel pushes this to blank VPSes and runs setup.sh over SSH
 # ("Add server" with provisioning). Baked from the same revision as the panel itself,
 # so worker stacks always match the panel's version.

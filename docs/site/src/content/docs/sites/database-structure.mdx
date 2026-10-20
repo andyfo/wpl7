@@ -1,0 +1,78 @@
+---
+title: Change a table's structure
+description: "Add, change and drop a table's columns, indexes and foreign keys, and create, rename, empty or drop tables."
+sidebar:
+  order: 10
+sources:
+  - panel/web/src/components/database/StructureEditor.tsx
+  - panel/src/lib/sqlDdl.ts
+  - panel/src/jobs/handlers/databases.ts
+  - panel/src/routes/databases.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+On a site's **Database** tab, **Structure** above a table's rows lists its columns, indexes and
+foreign keys, with the forms that change them.
+
+<Screenshot name="site-database-structure" alt="The Structure view of wp_options, with its columns, its primary key and the buttons that change them" />
+
+## Change a column
+
+1. Choose **Add column**, or **Edit** beside a column.
+2. Fill in its **Name**, **Type**, whether it may be NULL, its **Default**, a **Comment** and its
+   **Position**. A whole-number column can count up by itself. A date-and-time column can take
+   the current time.
+3. Check the SQL under the form, then apply it.
+
+A new type converts every row. A value that does not fit stops the change, but decimals and
+fractions of a second are rounded without asking.
+
+**Drop** beside a column removes it, with everything in it.
+
+A generated column, an invisible one, and one with a CHECK constraint of its own have no
+**Edit**: the form would lose what makes them so. Change them with SQL. A JSON column stays
+JSON.
+
+## Change the indexes and keys
+
+- **Add index** makes an index, a unique index or a full-text index on one or more columns. A
+  length indexes only the start of a long text column.
+- A **Primary key** there takes the place of the one the table has.
+- **Add foreign key** points columns at another table's, and says what happens when the row
+  they point at is deleted or its key changes.
+- **Drop** beside an index or a foreign key removes it.
+
+## Create, rename, empty or drop a table
+
+- **New** beside the table filter makes a table: its name, its columns and its primary key.
+  Defaults, comments and indexes come after, in **Structure**.
+- **Rename** gives the table a new name. Code that uses the old one stops finding it.
+- **Empty** deletes every row and keeps the table. **Drop** deletes the table. Both ask you to
+  type the table's name.
+
+## What happens
+
+Each form asks the panel for the SQL it would run, and shows it before you apply it. The panel
+checks the change against the table as it is, and tries it on an empty copy of the table, so
+most mistakes are named before anything runs. One that depends on the rows, such as a unique
+index on values that repeat, fails in the job and changes nothing. The change itself runs as a
+job, as the site's own database user, one `ALTER TABLE` per form.
+
+## Limits
+
+- A change waits at most 10 seconds for a table the site is working in. Then it gives up and
+  changes nothing. Try again when the site is quieter.
+- The forms take MariaDB's usual column types. Change other types, triggers, routines and a
+  view's query with SQL or in [Adminer](/docs/databases/adminer/).
+- MariaDB shows some characters of a default, such as an emoji, as `?`. Such a default cannot be
+  kept as it is: the form asks for it again.
+- A table with a full-text index cannot be copied for the try, and a foreign key is not tried:
+  those changes are checked when they run.
+- A change cannot be undone, except from a backup.
+
+## Related
+
+- [A site's database](/docs/sites/database/)
+- [Adminer](/docs/databases/adminer/)
+- [How backups work](/docs/backups/overview/)

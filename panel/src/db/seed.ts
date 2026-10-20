@@ -157,6 +157,7 @@ export async function seed(db: Db, config: Config): Promise<SeedResult> {
   s.seedRaw('scan.quarantineKeepDays', 0);
   // Off until someone switches it on: an AI app that can reach the panel is a decision.
   s.seedRaw('mcp.enabled', false);
+  s.seedRaw('adminer.enabled', true);
 
   // Guarded by a marker rather than by "is the table empty": emptying the catalog on
   // purpose is a normal thing to do, and the emptiness test silently re-seeded it from

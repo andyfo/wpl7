@@ -2337,6 +2337,8 @@ export interface SiteDatabaseDto {
   scannedAt: number | null;
   /** Why the last attempt to read them failed, when it did. */
   scanError: string | null;
+  /** Why "Open in Adminer" is not offered (turned off in Settings); null when it is. */
+  adminer: string | null;
 }
 
 /** Who a database on a server belongs to, worked out from the sites and the moves in progress. */
@@ -2381,7 +2383,10 @@ export interface DbTableDto {
 
 export interface DbColumnDto {
   name: string;
-  /** As MariaDB names it: `bigint(20) unsigned`, `varchar(191)`, `longtext`. */
+  /**
+   * As MariaDB names it: `bigint(20) unsigned`, `varchar(191)`, `longtext`. A JSON column is
+   * `json`, which MariaDB keeps as longtext with a json_valid check.
+   */
   type: string;
   kind: DbValueKind;
   nullable: boolean;
@@ -2393,13 +2398,28 @@ export interface DbColumnDto {
   comment: string;
   /** A text column's character set (`utf8mb4`, `latin1`); null for the rest. */
   charset: string | null;
+  /** A text column's collation; null for the rest. Sent back with a change, so a change keeps it. */
+  collation: string | null;
+  /** The column's own CHECK constraint, as MariaDB prints it; null for none (a JSON column's is its type). */
+  check: string | null;
 }
 
 export interface DbIndexDto {
   name: string;
   unique: boolean;
   columns: string[];
+  /** How many characters of each column it indexes; null for the whole value. */
+  lengths: (number | null)[];
   type: string;
+}
+
+export interface DbForeignKeyDto {
+  name: string;
+  columns: string[];
+  refTable: string;
+  refColumns: string[];
+  onDelete: string;
+  onUpdate: string;
 }
 
 export interface DbTableStructureDto {
@@ -2410,6 +2430,12 @@ export interface DbTableStructureDto {
   /** The columns a row is found by - the primary key, or a unique key without NULLs - or null: then rows are read only. */
   key: string[] | null;
   rows: number | null;
+  foreignKeys: DbForeignKeyDto[];
+}
+
+/** What a structure change would run, statement by statement: `preview` answers this. */
+export interface DbDdlPreviewDto {
+  statements: string[];
 }
 
 /**
@@ -2443,6 +2469,8 @@ export interface DbWriteResultDto {
   affected: number;
   /** The new row's AUTO_INCREMENT value, when it got one. */
   insertId: string | null;
+  /** What MariaDB noted about the statement (a value rounded, a default changed), when it did. */
+  warnings?: string[];
 }
 
 export type DbQueryResultDto =

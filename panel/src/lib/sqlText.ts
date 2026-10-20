@@ -1,7 +1,7 @@
 // @docs sites/database
 import mysql from 'mysql2';
 import type { DbFilterOp, DbRowFilter, DbRowKey } from '../../shared/databases.js';
-import { DB_FILTER_UNARY } from '../../shared/databases.js';
+import { DB_ANY_COLUMN, DB_ANY_COLUMN_OPS, DB_FILTER_LIST, DB_FILTER_UNARY, DB_LIMITS } from '../../shared/databases.js';
 import { badRequest } from './errors.js';
 
 /**
@@ -35,33 +35,72 @@ export interface SqlPart {
 
 const COMPARE: Partial<Record<DbFilterOp, string>> = { eq: '=', ne: '<>', lt: '<', gt: '>', le: '<=', ge: '>=' };
 
+/** The values of an `in` filter: apart by commas, each trimmed, empty ones left out. */
+export function listValues(value: string): string[] {
+  const values = value
+    .split(',')
+    .map((v) => v.trim())
+    .filter((v) => v !== '');
+  if (values.length === 0) throw badRequest('A list needs at least one value');
+  if (values.length > DB_LIMITS.listValues) throw badRequest(`A list takes at most ${DB_LIMITS.listValues} values`);
+  return values;
+}
+
+/** The negative comparisons, and the positive one each is the opposite of. */
+const POSITIVE_OF: Partial<Record<DbFilterOp, DbFilterOp>> = { ne: 'eq', notContains: 'contains', notIn: 'in' };
+
+/** One filter on one column, as SQL. */
+function condition(col: string, f: DbRowFilter): SqlPart {
+  if (DB_FILTER_UNARY.includes(f.op)) return { sql: `${col} IS ${f.op === 'isNull' ? '' : 'NOT '}NULL`, values: [] };
+  const value = f.value ?? '';
+  const compare = COMPARE[f.op];
+  if (compare) return { sql: `${col} ${compare} ?`, values: [value] };
+  if (DB_FILTER_LIST.includes(f.op)) {
+    const values = listValues(value);
+    return { sql: `${col} ${f.op === 'notIn' ? 'NOT IN' : 'IN'} (${values.map(() => '?').join(', ')})`, values };
+  }
+  const pattern =
+    f.op === 'startsWith' ? `${escapeLike(value)}%` : f.op === 'endsWith' ? `%${escapeLike(value)}` : `%${escapeLike(value)}%`;
+  return { sql: `${col} ${f.op === 'notContains' ? 'NOT LIKE' : 'LIKE'} ?`, values: [pattern] };
+}
+
 /**
  * The WHERE clause of a filtered view. Every column must be one of the table's own: a name the
- * table does not have is a 400, not a query error, so a stale link says what is wrong.
+ * table does not have is a 400, not a query error, so a stale link says what is wrong. A filter on
+ * DB_ANY_COLUMN looks in each of `anyColumns`: one match keeps the row, or for a negative
+ * comparison, no match. `match: 'any'` keeps a row that one filter keeps.
  */
-export function buildWhere(filters: readonly DbRowFilter[], columns: ReadonlySet<string>): SqlPart {
+export function buildWhere(
+  filters: readonly DbRowFilter[],
+  columns: ReadonlySet<string>,
+  opts: { match?: 'all' | 'any'; anyColumns?: readonly string[] } = {},
+): SqlPart {
   const parts: string[] = [];
   const values: SqlValue[] = [];
   for (const f of filters) {
+    if (f.column === DB_ANY_COLUMN && !columns.has(DB_ANY_COLUMN)) {
+      if (!DB_ANY_COLUMN_OPS.includes(f.op)) throw badRequest('Pick a column to compare with <, > or to look for NULL');
+      // As text, every column: a number column compared with text would read it as a number,
+      // and 'abc' as 0. A negative comparison is "no column matches", NULL counting as no match.
+      const positive = POSITIVE_OF[f.op];
+      const each = (opts.anyColumns ?? []).map((c) => condition(`CAST(${quoteIdent(c)} AS CHAR)`, positive ? { ...f, op: positive } : f));
+      if (each.length === 0) throw badRequest('The table has no column to look in');
+      parts.push(
+        positive
+          ? `NOT (${each.map((e) => `COALESCE(${e.sql}, 0)`).join(' OR ')})`
+          : `(${each.map((e) => e.sql).join(' OR ')})`,
+      );
+      for (const e of each) values.push(...e.values);
+      continue;
+    }
     if (!columns.has(f.column)) throw badRequest(`The table has no column "${f.column}"`);
-    const col = quoteIdent(f.column);
-    if (DB_FILTER_UNARY.includes(f.op)) {
-      parts.push(`${col} IS ${f.op === 'isNull' ? '' : 'NOT '}NULL`);
-      continue;
-    }
-    const value = f.value ?? '';
-    const compare = COMPARE[f.op];
-    if (compare) {
-      parts.push(`${col} ${compare} ?`);
-      values.push(value);
-      continue;
-    }
-    const pattern =
-      f.op === 'startsWith' ? `${escapeLike(value)}%` : f.op === 'endsWith' ? `%${escapeLike(value)}` : `%${escapeLike(value)}%`;
-    parts.push(`${col} ${f.op === 'notContains' ? 'NOT LIKE' : 'LIKE'} ?`);
-    values.push(pattern);
+    const one = condition(quoteIdent(f.column), f);
+    parts.push(one.sql);
+    values.push(...one.values);
   }
-  return parts.length === 0 ? { sql: '', values } : { sql: `WHERE ${parts.join(' AND ')}`, values };
+  if (parts.length === 0) return { sql: '', values };
+  const any = opts.match === 'any' && parts.length > 1;
+  return { sql: `WHERE ${any ? parts.map((p) => `(${p})`).join(' OR ') : parts.join(' AND ')}`, values };
 }
 
 /**

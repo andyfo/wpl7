@@ -48,7 +48,8 @@ for a reason; remove one once there is nothing left to watch.
 | [WordPress's answer to a fatal error](#wordpresss-answer-to-a-fatal-error) | Low | 2026-10-09 15:55 UTC | 500, as relied on |
 | [WordPress's default From address](#wordpresss-default-from-address) | Medium | 2026-10-14 16:28 UTC | `wordpress@` and the home URL's host without `www.`, on 7.1.3 and trunk |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
-| [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 14:17 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
+| [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 22:05 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
+| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-10-20 11:05 UTC | 6.1.2 is the latest; 22 advisories, the newest (2026-09-25) in the SQLite driver, which the MySQL-only build leaves out; `php:8.4-cli-alpine` is PHP 8.4.26 |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -695,10 +696,10 @@ for a reason; remove one once there is nothing left to watch.
 ## The MariaDB image's bash and client, as the database browser and imports rely on them
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-19 14:17 UTC. `mariadb:11.4`, rebuilt 2026-10-17, is MariaDB
+- **Last checked:** 2026-10-19 22:05 UTC. `mariadb:11.4`, rebuilt 2026-10-17, is MariaDB
   11.4.13 on Ubuntu 24.04.5. Its bash is 5.2.21 and opens `/dev/tcp`. Its client, 15.2, refuses
   `\!`, `system`, `source` and `LOAD DATA LOCAL INFILE` with the import flags. The engine test
-  `panel/test/engine/dbBrowser.test.ts` passes on it: 15 of 15.
+  `panel/test/engine/dbBrowser.test.ts` passes on it: 19 of 19.
 - **The problem:** two things lean on the image.
   - A site's **Database** tab reaches MariaDB through `docker exec`. The relay (`RELAY_CMD` in
     `panel/src/services/dbBrowser.ts`) is `bash -c 'exec 3<>/dev/tcp/127.0.0.1/3306 …'` inside
@@ -723,3 +724,33 @@ for a reason; remove one once there is nothing left to watch.
   - The client: find the option that now refuses those commands, put it in
     `IMPORT_CLIENT_ARGS`, and keep imports off the new image until the engine test passes.
   - Either way, run the engine test on the new image before it reaches a server.
+
+## Adminer: the pinned build and its advisories
+
+- **Priority:** High
+- **Last checked:** 2026-10-20 11:05 UTC. Adminer 6.1.2 (2026-10-10) is the latest release.
+  There are 22 advisories, 17 of them since July 2026. The newest, GHSA-r9r5-j5q8-8c59
+  (2026-09-25), is in the SQLite driver, which the MySQL-only build leaves out. The image's base,
+  `php:8.4-cli-alpine`, is PHP 8.4.26. The engine test `panel/test/engine/adminer.test.ts`
+  passes: 4 of 4.
+- **The problem:** "Open in Adminer" runs Adminer's MySQL-only English build on every server
+  that uses it, pinned in `deploy/adminer-image/Dockerfile` by `ADMINER_VERSION` and
+  `ADMINER_SHA256`. It sits behind the panel's front door, signs in as a site's own database
+  user and listens on no network, but a bug in Adminer's core or its MySQL code still reaches
+  whoever opens it. Adminer fixed several such bugs this year, some within days of each other.
+- **Check:** releases and advisories since the last check:
+  `gh api repos/vrana/adminer/releases --jq '.[0:3][] | "\(.tag_name) \(.published_at)"'` and
+  `gh api repos/vrana/adminer/security-advisories --jq 'sort_by(.published_at) | reverse | .[0:5][] | "\(.published_at) \(.severity) \(.summary)"'`.
+  Then the base image:
+  `docker pull php:8.4-cli-alpine && docker run --rm php:8.4-cli-alpine php -v`.
+- **When it changes:** tell the user.
+  - A new release: set `ADMINER_VERSION` and `ADMINER_SHA256` in the Dockerfile and
+    `deploy/adminer-image/VERSION` to `<release>-wpl7.1`. Read the release notes for the plugin
+    hooks `wpl7.php` uses (`credentials`, `login`, `afterConnect`, `verifyLoginToken`, `loginForm`,
+    `bruteForceKey`, `verifyVersion`, `serviceWorker`, `manifest`, `importServerPath`), for
+    `connection()`, which `afterConnect` takes the request's lock with, and for `adminer_object()`
+    and `X-Forwarded-Prefix`, which `router.php` relies on. Run the engine test, then merge: CI
+    publishes the image.
+  - An advisory that reaches the MySQL build before a fix is out: ask the user to switch Adminer
+    off in **Settings → Security** until it is.
+  - A new PHP patch release: bump `VERSION` (`-wpl7.2`) so servers take the new base.

@@ -56,6 +56,15 @@ const envSchema = z.object({
   WPL7_WORDPRESS_IMAGE: z.string().default(''),
   /** An SFTPGo image to run as it is - a mirror, a test build - instead of the one this version builds. */
   WPL7_SFTPGO_IMAGE: z.string().default(''),
+  /** An Adminer image to run as it is, instead of the one this version builds (deploy/adminer-image). */
+  WPL7_ADMINER_IMAGE: z.string().default(''),
+  /**
+   * Where the Adminer front door listens (panel/src/adminer): its own port, so none of the
+   * panel's pages or API answer there. 0 = the panel's port + 1.
+   */
+  PANEL_ADMINER_PORT: z.coerce.number().int().default(0),
+  /** The address browsers open Adminer at; empty = db.<DEV_DOMAIN>, through Traefik. */
+  PANEL_ADMINER_URL: z.string().default(''),
   /** Read-only, optional. Only needed while the repository is private - and it is what
    *  makes the hourly check free of GitHub's per-address rate limit. */
   WPL7_GITHUB_TOKEN: z.string().default(''),
@@ -113,6 +122,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     : path.resolve(process.cwd(), '../deploy/sftpgo-image');
   // `<SFTPGo release>-wpl7.<n>`; empty when the build context is missing, which the FTP sync reports.
   const sftpgoVersion = readTrimmed(path.join(sftpgoImageContext, 'VERSION'));
+  const adminerImageContext = fsExistsSync('/app/adminer-image')
+    ? '/app/adminer-image'
+    : path.resolve(process.cwd(), '../deploy/adminer-image');
+  const adminerVersion = readTrimmed(path.join(adminerImageContext, 'VERSION'));
+  const devDomain = e.DEV_DOMAIN || 'dev.localtest.me';
+  const adminerUrl = (e.PANEL_ADMINER_URL || `${e.TLS_MODE === 'none' ? 'http' : 'https'}://db.${devDomain}`).replace(/\/+$/, '');
   return {
     nodeEnv: e.NODE_ENV,
     port: e.PANEL_PORT,
@@ -120,7 +135,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     tlsMode: e.TLS_MODE,
     acmeResolver: e.ACME_RESOLVER,
     panelDomain: e.PANEL_DOMAIN,
-    devDomain: e.DEV_DOMAIN || 'dev.localtest.me',
+    devDomain,
     /** The provider Traefik's DNS-01 resolver uses on this server; empty means Cloudflare (deploy/docker-compose.yml). */
     dnsProvider: e.DNS_PROVIDER,
     /**
@@ -173,6 +188,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     sftpgoImagePinned: e.WPL7_SFTPGO_IMAGE !== '',
     sftpgoPublishedImage: `ghcr.io/${e.WPL7_REPO.toLowerCase()}/sftpgo:${sftpgoVersion}`,
     sftpgoImageContext,
+    /**
+     * Adminer, for "Open in Adminer" (panel/src/adminer): built from deploy/adminer-image and
+     * kept on each server under a local name, like SFTPGo (`adminerPublishedImage` is what CI
+     * pushes once per VERSION).
+     */
+    adminer: {
+      image: e.WPL7_ADMINER_IMAGE || `wpl7-adminer:${adminerVersion}`,
+      /** WPL7_ADMINER_IMAGE is set: that image is pulled if missing, and never built. */
+      imagePinned: e.WPL7_ADMINER_IMAGE !== '',
+      publishedImage: `ghcr.io/${e.WPL7_REPO.toLowerCase()}/adminer:${adminerVersion}`,
+      imageContext: adminerImageContext,
+      version: adminerVersion,
+      port: e.PANEL_ADMINER_PORT || e.PANEL_PORT + 1,
+      /** Its own origin: the panel's session cookie never reaches it, nor a script of Adminer's the panel. */
+      url: adminerUrl,
+      host: new URL(adminerUrl).host,
+    },
     // Ephemeral fallback keeps `npm run dev` bootable without a .env; production requires the real secret.
     sessionSecret: e.PANEL_SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
     adminUser: e.PANEL_ADMIN_USER,

@@ -24,6 +24,12 @@ const STOP_GRACE_MS = 20_000;
 const MAX_SITE_HOLD_MS = 15 * 60_000;
 
 /**
+ * What holdSite returns: called, it lets the site go. `renew()` restarts the clock
+ * MAX_SITE_HOLD_MS counts against, for a change that is still under way when it nears.
+ */
+export type SiteHold = (() => void) & { renew(): void };
+
+/**
  * Jobs that make, drop or replace a database: their servers are read again when they end, failed
  * or not, since one that failed half-way may have changed one all the same.
  */
@@ -32,6 +38,7 @@ const DATABASE_CHANGING_JOBS: ReadonlySet<JobType> = new Set<JobType>([
   'database.delete',
   'database.import',
   'database.deleteUnused',
+  'database.alter',
   'site.create',
   'site.delete',
   'site.move',
@@ -99,9 +106,9 @@ export class JobWorker {
    * site starts. One queued meanwhile waits for the change rather than running beside it: a
    * restore would otherwise replace the folder under a save that then reports success.
    * Synchronous, like enqueue() and claimNext(), so nothing can come between the check and
-   * the hold.
+   * the hold. A change that may outlast MAX_SITE_HOLD_MS renews the hold while it runs.
    */
-  holdSite(site: { id: number; slug: string }, beside: ReadonlySet<string> = new Set()): () => void {
+  holdSite(site: { id: number; slug: string }, beside: ReadonlySet<string> = new Set()): SiteHold {
     const job = this.activeSiteJob(site.id);
     if (job && !beside.has(job.type)) {
       throw jobConflict(`Site "${site.slug}" is busy with job #${job.id} (${job.type}); try again once it has finished`);
@@ -111,7 +118,7 @@ export class JobWorker {
     holds.add(hold);
     this.siteHolds.set(site.id, holds);
     let released = false;
-    return () => {
+    const release = () => {
       if (released) return;
       released = true;
       holds.delete(hold);
@@ -119,6 +126,11 @@ export class JobWorker {
       // A job that waited for this site may start now rather than at the next idle poll.
       this.emitter.emit('job');
     };
+    return Object.assign(release, {
+      renew: () => {
+        if (!released) hold.since = Date.now();
+      },
+    });
   }
 
   /** Sites with a change under way. A hold past MAX_SITE_HOLD_MS is let go, loudly. */

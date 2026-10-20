@@ -25,6 +25,7 @@ const FTP_ROWS = both('keyed by FTP logins, which only hosted sites have');
 const NAMES = both('reads names and ids only');
 
 const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
+  'adminer/index.ts': { siteOf: hosted('hostedSites()') },
   'jobs/actions.ts': {
     checkTarget: both('checks that named sites exist, of either kind'),
     resolveSites: both('`all` and `server` filter by kind (hostedSites, externalSites); `sites` is checked by ineligible()'),

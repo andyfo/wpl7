@@ -26,6 +26,8 @@ export const DB_OBJECT_NAME_RE = /^[^\u0000/\\.]{1,64}$/;
 export const DB_COLUMN_NAME_RE = /^[^\u0000]{1,64}$/;
 
 export const DB_LIMITS = {
+  /** Values one `in` filter may list. */
+  listValues: 100,
   /** Rows a page of the table browser may ask for. */
   pageRows: 500,
   /** Rows kept of each result of the SQL editor; the statement is stopped after them. */
@@ -36,6 +38,8 @@ export const DB_LIMITS = {
   fullValueBytes: 1024 * 1024,
   /** Characters of SQL one run takes. */
   sqlChars: 1_000_000,
+  /** Characters of one statement a structure change runs. */
+  ddlChars: 200_000,
   /** Filters on one table view. */
   filters: 10,
   /** Rows one delete may name. */
@@ -79,6 +83,8 @@ export const dbFilterOps = [
   'notContains',
   'startsWith',
   'endsWith',
+  'in',
+  'notIn',
   'isNull',
   'notNull',
 ] as const;
@@ -95,12 +101,25 @@ export const DB_FILTER_LABELS: Record<DbFilterOp, string> = {
   notContains: 'does not contain',
   startsWith: 'starts with',
   endsWith: 'ends with',
+  in: 'is one of',
+  notIn: 'is none of',
   isNull: 'is NULL',
   notNull: 'is not NULL',
 };
 
 /** The ops that take no value. */
 export const DB_FILTER_UNARY: readonly DbFilterOp[] = ['isNull', 'notNull'];
+
+/** `in` and `notIn` take a list: values apart by commas. */
+export const DB_FILTER_LIST: readonly DbFilterOp[] = ['in', 'notIn'];
+
+/**
+ * A filter's column for "any column": the row is kept when one of its columns matches (for a
+ * negative comparison, when none does). Binary columns are left out. Only the comparisons that
+ * read as a search take it: not `<`, `>` or NULL, which need one column.
+ */
+export const DB_ANY_COLUMN = '*';
+export const DB_ANY_COLUMN_OPS: readonly DbFilterOp[] = ['contains', 'notContains', 'eq', 'ne', 'startsWith', 'endsWith', 'in', 'notIn'];
 
 export const dbRowFilter = z
   .object({
@@ -124,6 +143,8 @@ export const dbRowsQuery = z
     dir: z.enum(['asc', 'desc']).default('asc'),
     /** JSON: DbRowFilter[] - one query value, so a filtered view is one link. */
     filters: z.string().max(64 * 1024).optional(),
+    /** Whether a row must match every filter, or one is enough. */
+    match: z.enum(['all', 'any']).default('all'),
   })
   .strict();
 
@@ -180,3 +201,132 @@ export const unusedDbParams = z.object({
   serverId: z.coerce.number().int().min(1),
   name: z.string().regex(DB_OBJECT_NAME_RE, 'not a database name'),
 });
+
+// ---------------------------------------------------------------- table structure
+
+/** A new table or column name: no NUL, `/`, `\` or `.`, and no space at the end (MariaDB refuses one). */
+const noTrailingSpace = (s: string) => !/\s$/.test(s);
+export const dbNewTableName = z
+  .string()
+  .regex(DB_OBJECT_NAME_RE, 'a table name is 1-64 characters, without / \\ or .')
+  .refine(noTrailingSpace, 'a name cannot end with a space');
+export const dbNewColumnName = dbColumnName.refine(noTrailingSpace, 'a name cannot end with a space');
+
+const QUOTED = String.raw`'(?:[^'\\\u0000]|''|\\[^\u0000])*'`;
+/**
+ * The column types a structure change takes, as MariaDB writes them (`bigint(20) unsigned`,
+ * `varchar(191)`, `enum('a','b')`). A type outside it is refused, unless it is the column's own
+ * as it is: an exotic type survives a change of name or default.
+ */
+export const DB_COLUMN_TYPE_RE = new RegExp(
+  '^(?:' +
+    [
+      String.raw`(?:tinyint|smallint|mediumint|int|integer|bigint)(?:\(\d{1,3}\))?(?: unsigned)?(?: zerofill)?`,
+      String.raw`(?:decimal|numeric|dec|fixed)(?:\(\d{1,2}(?:,\d{1,2})?\))?(?: unsigned)?(?: zerofill)?`,
+      String.raw`(?:float|double|real|double precision)(?:\(\d{1,3}(?:,\d{1,2})?\))?(?: unsigned)?(?: zerofill)?`,
+      String.raw`bit(?:\(\d{1,2}\))?`,
+      String.raw`(?:varchar|varbinary)\(\d{1,5}\)`,
+      String.raw`(?:char|binary)(?:\(\d{1,3}\))?`,
+      String.raw`tinytext|text|mediumtext|longtext|tinyblob|blob|mediumblob|longblob|json`,
+      String.raw`date|year(?:\(4\))?|(?:datetime|timestamp|time)(?:\([0-6]\))?`,
+      String.raw`boolean|bool|uuid|inet4|inet6`,
+      String.raw`geometry|point|linestring|polygon|multipoint|multilinestring|multipolygon|geometrycollection`,
+      String.raw`(?:enum|set)\(${QUOTED}(?:,\s*${QUOTED})*\)`,
+    ].join('|') +
+    ')$',
+  'i',
+);
+
+/** What a column defaults to. `keep`: as it is now (a change of an existing column only). */
+export const dbColumnDefault = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('none') }).strict(),
+  z.object({ kind: z.literal('null') }).strict(),
+  z.object({ kind: z.literal('value'), value: z.string().max(65_535) }).strict(),
+  z.object({ kind: z.literal('currentTimestamp') }).strict(),
+  z.object({ kind: z.literal('keep') }).strict(),
+]);
+export type DbColumnDefault = z.infer<typeof dbColumnDefault>;
+
+export const dbColumnDef = z
+  .object({
+    name: dbNewColumnName,
+    type: z.string().min(1).max(4096),
+    nullable: z.boolean(),
+    default: dbColumnDefault,
+    onUpdateCurrentTimestamp: z.boolean().default(false),
+    autoIncrement: z.boolean().default(false),
+    comment: z.string().max(1024).default(''),
+    /** A collation of the column's own; null keeps the table's. */
+    collation: z.string().regex(/^[a-z0-9_]{1,64}$/, 'not a collation').nullable().default(null),
+  })
+  .strict();
+export type DbColumnDef = z.infer<typeof dbColumnDef>;
+
+/** Where a column goes: first, after another, or (null) where it is, or at the end for a new one. */
+export const dbColumnPosition = z.union([z.literal('first'), z.object({ after: dbColumnName }).strict()]).nullable().default(null);
+
+export const dbIndexKinds = ['primary', 'unique', 'index', 'fulltext'] as const;
+export type DbIndexKind = (typeof dbIndexKinds)[number];
+
+export const dbIndexDef = z
+  .object({
+    kind: z.enum(dbIndexKinds),
+    /** null: MariaDB names it after its first column. A primary key has no name. */
+    name: dbNewColumnName.nullable().default(null),
+    columns: z
+      .array(
+        z
+          .object({
+            name: dbColumnName,
+            /** Index only the first characters (bytes, for binary) of a long column. */
+            length: z.number().int().min(1).max(3072).nullable().default(null),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(16),
+  })
+  .strict();
+export type DbIndexDef = z.infer<typeof dbIndexDef>;
+
+export const dbForeignKeyActions = ['RESTRICT', 'CASCADE', 'SET NULL', 'NO ACTION'] as const;
+
+export const dbForeignKeyDef = z
+  .object({
+    name: dbNewColumnName.nullable().default(null),
+    columns: z.array(dbColumnName).min(1).max(16),
+    refTable: dbTableParam,
+    refColumns: z.array(dbColumnName).min(1).max(16),
+    onDelete: z.enum(dbForeignKeyActions).default('RESTRICT'),
+    onUpdate: z.enum(dbForeignKeyActions).default('RESTRICT'),
+  })
+  .strict()
+  .refine((fk) => fk.columns.length === fk.refColumns.length, 'a foreign key names as many columns on each side');
+export type DbForeignKeyDef = z.infer<typeof dbForeignKeyDef>;
+
+/** One change to a table; a request's changes become one ALTER TABLE. */
+export const dbAlterChange = z.discriminatedUnion('op', [
+  z.object({ op: z.literal('addColumn'), column: dbColumnDef, position: dbColumnPosition }).strict(),
+  z.object({ op: z.literal('modifyColumn'), name: dbColumnName, column: dbColumnDef, position: dbColumnPosition }).strict(),
+  z.object({ op: z.literal('dropColumn'), name: dbColumnName }).strict(),
+  z.object({ op: z.literal('addIndex'), index: dbIndexDef }).strict(),
+  z.object({ op: z.literal('dropIndex'), name: dbColumnName }).strict(),
+  z.object({ op: z.literal('addForeignKey'), foreignKey: dbForeignKeyDef }).strict(),
+  z.object({ op: z.literal('dropForeignKey'), name: dbColumnName }).strict(),
+  z.object({ op: z.literal('rename'), name: dbNewTableName }).strict(),
+]);
+export type DbAlterChange = z.infer<typeof dbAlterChange>;
+
+/** `preview`: answer the SQL it would run, and run nothing. */
+export const dbAlterBody = z.object({ changes: z.array(dbAlterChange).min(1).max(50), preview: z.boolean().default(false) }).strict();
+
+export const dbCreateTableBody = z
+  .object({
+    name: dbNewTableName,
+    columns: z.array(dbColumnDef).min(1).max(256),
+    primaryKey: z.array(dbColumnName).max(16).default([]),
+    preview: z.boolean().default(false),
+  })
+  .strict();
+
+export const dbPreviewQuery = z.object({ preview: z.enum(['true', 'false']).optional() }).strict();

@@ -68,6 +68,8 @@ import { siteImportRefresh, siteImportRefreshPayload } from './handlers/importRe
 import { systemPostUpdate, systemPostUpdatePayload } from './handlers/systemUpdate.js';
 import { filesCompress, filesCompressPayload, filesExtract, filesExtractPayload } from './handlers/files.js';
 import {
+  databaseAlter,
+  databaseAlterPayload,
   databaseCreate,
   databaseCreatePayload,
   databaseDelete,
@@ -177,6 +179,8 @@ const registry: Partial<Record<JobType, RegistryEntry>> = {
   'database.password': entry(databasePasswordPayload, databasePassword),
   // Two hours for the dump itself (a gigabyte loads in minutes, not hours), and a backup's time when one goes first.
   'database.import': entry(databaseImportPayload, databaseImport, plusBackup(2 * 3600_000)),
+  // An ALTER copies a big table row by row: it can take a while, and MariaDB is not hurried.
+  'database.alter': entry(databaseAlterPayload, databaseAlter, 2 * 3600_000),
   'database.deleteUnused': entry(databaseDeleteUnusedPayload, databaseDeleteUnused),
   'server.syncPlugins': entry(serverSyncPluginsPayload, serverSyncPlugins, 10 * 60_000) as RegistryEntry,
   'server.provision': entry(serverProvisionPayload, serverProvision, 30 * 60_000, serverProvisionQueuedCancel) as RegistryEntry,
@@ -248,7 +252,7 @@ export const SITE_INTERRUPTING_JOBS: ReadonlySet<JobType> = new Set<JobType>([
   'backup.restore',
   // The container is recreated with the new password.
   'database.password',
-  // The site's own database is behind the maintenance page while a dump loads.
+  // The site is stopped while a dump goes into its own database.
   'database.import',
   'wp.coreUpdate',
   'wp.pluginTask',

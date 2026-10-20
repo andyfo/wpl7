@@ -187,6 +187,11 @@ export function registerMiscRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (ftpChanged) void deps.ftp.kickAll();
     // Switching address collection off has to mean the stored ones go, not just that no
     // more are added - otherwise the setting reads as a promise it does not keep.
+    // Adminer switched off ends the sessions open now and stops it everywhere, rather than once
+    // idle: it is the switch for when an advisory is out.
+    if (req.body.adminerEnabled === false && current.adminerEnabled !== false) {
+      void deps.adminer.turnedOff().catch((err: unknown) => deps.log.warn(`Adminer: could not stop it everywhere: ${String(err)}`));
+    }
     if (req.body.trafficStoreIps === false) {
       const forgotten = deps.traffic.forgetIps() + deps.securityEvents.forgetIps();
       if (forgotten > 0) deps.log.info(`Visitor statistics: forgot ${forgotten} stored address rows`);
