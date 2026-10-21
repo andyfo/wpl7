@@ -113,6 +113,24 @@ describe('SystemInfoService', () => {
     expect(dto.os).toBeNull();
   });
 
+  it('names the PHP release in each of the server\'s site images, and does without them when Docker does not answer', async () => {
+    const exec = new FakeExec();
+    exec.resultDefault = { stdout: UBUNTU, stderr: '', exitCode: 0 };
+    const w = await makeWorld({ exec });
+    w.docker.images.add('wpl7-wordpress:php8.4');
+    w.docker.phpOf('wpl7-wordpress:php8.3', '8.3.36');
+    w.docker.phpOf('wpl7-wordpress:php8.4', '8.4.27');
+    const service = new SystemInfoService(w.servers, log);
+    expect((await service.describe(1)).php).toEqual([
+      { version: '8.3', release: '8.3.36' },
+      { version: '8.4', release: '8.4.27' },
+    ]);
+
+    w.docker.imageTags = () => Promise.reject(new Error('connect ENOENT /var/run/docker.sock'));
+    const dto = await service.describe(1, { refresh: true });
+    expect(dto).toMatchObject({ reachable: true, os: 'Ubuntu 24.04.1 LTS', php: [] });
+  });
+
   it('refuses an id that is not a server', async () => {
     const w = await makeWorld();
     await expect(new SystemInfoService(w.servers, log).describe(404)).rejects.toThrow(/not found/);

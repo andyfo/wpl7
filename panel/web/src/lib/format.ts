@@ -84,6 +84,11 @@ export function formatUptime(seconds: number | null | undefined): string {
   return `${m}m`;
 }
 
+/** The PHP a site runs, such as 8.4.27; its branch, such as 8.4, until the release has been read. */
+export function sitePhp(site: { phpVersion: string; phpRelease: string | null }): string {
+  return site.phpRelease ?? site.phpVersion;
+}
+
 /**
  * How a WordPress language reads in a picker: native name the way WordPress labels it,
  * the English name when it differs (so the list can be scanned either way), and the code

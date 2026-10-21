@@ -7,6 +7,7 @@ import type { JobType } from '../../shared/schemas.js';
 import { jobConflict } from '../lib/errors.js';
 import { JobCanceledError } from '../lib/errors.js';
 import type { CoreServices } from '../services/index.js';
+import { readSitePhp } from '../services/phpReleases.js';
 import { currentActor, withoutActor } from './actor.js';
 import { JobContext } from './context.js';
 import { SECRET_PAYLOAD_KEYS, SITE_INTERRUPTING_JOBS, getRegistry, jobDeadline } from './registry.js';
@@ -523,6 +524,20 @@ export class JobWorker {
   }
 
   /**
+   * Read the PHP release of the container a job left its site with (services/phpReleases.ts), so
+   * the pages show the new one as the job ends. A failed reading keeps the old one until the
+   * hourly sweep.
+   */
+  private async rereadPhp(job: JobRow): Promise<void> {
+    if (job.siteId === null || !SITE_INTERRUPTING_JOBS.has(job.type as JobType)) return;
+    await readSitePhp(this.services, job.siteId).catch((err: unknown) => {
+      this.services.log.warn(
+        `Job #${job.id}: could not read site #${job.siteId}'s PHP release: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
+  }
+
+  /**
    * Have the servers a job made, dropped or replaced databases on read again (Database sizes), so the
    * Databases page and the site's Database tab show what it left rather than what was there an hour ago.
    * The database jobs of their own kick it themselves.
@@ -592,6 +607,7 @@ export class JobWorker {
       }
 
       await this.releaseChecks(job, release);
+      await this.rereadPhp(job);
       this.rereadDatabases(job);
       this.db
         .update(jobs)
@@ -605,6 +621,8 @@ export class JobWorker {
       this.forgetSecrets(job);
     } catch (err) {
       await this.releaseChecks(job, release);
+      // A rollback puts the old container back, and a half-done job may have left a new one.
+      await this.rereadPhp(job);
       // A job that failed half-way may have made or dropped a database all the same.
       this.rereadDatabases(job);
       const canceled = err instanceof JobCanceledError;

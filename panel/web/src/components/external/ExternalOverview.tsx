@@ -4,7 +4,7 @@ import { Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { useMeta, useRunJob, useSite, useSiteHistory } from '../../api/hooks';
-import { formatDate, timeAgo } from '../../lib/format';
+import { formatDate, sitePhp, timeAgo } from '../../lib/format';
 import { siteHealth } from '../../lib/siteHealth';
 import { Sparkline } from '../Sparkline';
 import { Button, Card, ConfirmDialog, ErrorNote, Spinner } from '../ui';
@@ -153,7 +153,7 @@ export function ExternalOverview({ slug }: { slug: string }) {
           <dl className="space-y-2 text-sm">
             <Fact label="Address" value={ext.home} />
             <Fact label="WordPress" value={ext.wpVersion ?? '–'} />
-            <Fact label="PHP" value={s.phpVersion} />
+            <Fact label="PHP" value={sitePhp(s)} />
             <Fact label="Certificate" value={ext.certExpiresAt ? `expires ${formatDate(ext.certExpiresAt)}` : '–'} />
             {multiServer && <Fact label="Backups kept on" value={ext.storageServerName} />}
             <Fact label="Acting as" value={ext.actAs?.login ?? '–'} />

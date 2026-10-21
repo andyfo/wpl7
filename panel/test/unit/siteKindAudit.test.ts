@@ -115,6 +115,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   'services/security.ts': { plan: hosted("s.status === 'running'"), hardeningPlan: hosted("'running'") },
   'services/securityEvents.ts': { fold: NAMES, recent: NAMES },
   'services/securityViews.ts': { securityOverview: hosted('hostedSites()'), fleetScans: hosted('hostedSites()') },
+  'services/phpReleases.ts': { readSitePhp: hosted('isExternal(site)'), sweepPhpReleases: hosted('hostedSites()') },
   'services/siteHardening.ts': { sweepHardening: hosted('hostedSites()') },
   'services/siteImages.ts': { sweepSiteImages: hosted('hostedSites()') },
   'services/sites.ts': {

@@ -9,6 +9,7 @@ import { siteRuntimeFrom } from '../services/siteSpec.js';
 import { sweepLegacyRename } from '../services/legacyRename.js';
 import { sweepHardening } from '../services/siteHardening.js';
 import { sweepSiteImages } from '../services/siteImages.js';
+import { sweepPhpReleases } from '../services/phpReleases.js';
 import { sweepWildcardSites } from '../services/wildcardSites.js';
 import { FIRST_CHECK_DELAY_MS } from '../services/updates.js';
 import { fleetScanPass } from '../services/wpBulk.js';
@@ -435,7 +436,7 @@ export class Schedulers {
         group: 'background',
         name: 'Site network repair',
         description:
-          "Re-attaches Traefik, the mail relay and MariaDB to every site's network. Compose drops those connections whenever it recreates the stack. Also rebuilds any site container made before its protection reached inside it or running an older site image than its server has now, and any dev site still on a wildcard certificate its server can no longer renew.",
+          "Re-attaches Traefik, the mail relay and MariaDB to every site's network. Compose drops those connections whenever it recreates the stack. Also rebuilds any site container made before its protection reached inside it or running an older site image than its server has now, and any dev site still on a wildcard certificate its server can no longer renew. Hourly, it reads the PHP release each site runs.",
         pausable: false,
         lockedReason: 'Without it, a redeployed stack can leave sites unreachable.',
         cadence: () => ({ everyMs: MIN, text: 'Every minute' }),
@@ -450,10 +451,13 @@ export class Schedulers {
           // container carries the mounts, this is one container list per server an hour.
           // Containers on an older site image than their server now has: at boot, which
           // follows an update, then hourly for a worker that updated after the panel.
+          // The PHP release each site runs: the jobs that rebuild a container read it as they
+          // end, and this catches what happened outside them.
           if (how === 'boot' || Date.now() - this.hardeningSweptAt >= 60 * MIN) {
             this.hardeningSweptAt = Date.now();
             await sweepHardening(s, this.worker);
             await sweepSiteImages(s, this.worker);
+            await sweepPhpReleases(s);
             // Its own trigger is Settings -> DNS; this is for the sites that were busy then.
             await sweepWildcardSites(s, this.worker);
           }

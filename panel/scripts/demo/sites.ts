@@ -1,14 +1,15 @@
 /**
  * The sites: eleven on three servers, live, dev-only and stopped, each with its container in
- * the state its row says, a day of uptime and resource samples, and its disk use.
+ * the state its row says, a day of uptime and resource samples, and its disk use. Every server
+ * has a site image of each PHP branch.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { siteStats, sites } from '../../src/db/schema.js';
-import { sitePaths } from '../../src/services/siteSpec.js';
+import { siteImage, sitePaths } from '../../src/services/siteSpec.js';
 import type { TestWorld } from '../../test/helpers.js';
 import { DAY, MINUTE, ago } from './clock.js';
-import { ADMIN_EMAIL, SITES, devHostname, rng, seedOf, siteDomains, type DemoSite } from './data.js';
+import { ADMIN_EMAIL, PHP_RELEASES, SERVERS, SITES, devHostname, rng, seedOf, siteDomains, type DemoSite } from './data.js';
 import { onDisk } from './paths.js';
 
 const MB = 1024 * 1024;
@@ -19,6 +20,14 @@ export const siteIds = new Map<string, number>();
 export const createdAt = (site: DemoSite): number => (site.ageDays === 0 ? ago(10 * MINUTE) : ago(site.ageDays * DAY + 3 * 3600_000));
 
 export function seedSites(world: TestWorld): void {
+  // As setup.sh pulls them: one site image per branch on every server.
+  for (const server of SERVERS) {
+    const docker = server.id === 1 ? world.docker : world.remote(server.id).docker;
+    for (const [branch, release] of Object.entries(PHP_RELEASES)) {
+      docker.images.add(siteImage(branch));
+      docker.phpOf(siteImage(branch), release);
+    }
+  }
   for (const site of SITES) {
     const row = world.db
       .insert(sites)
@@ -31,6 +40,7 @@ export function seedSites(world: TestWorld): void {
         isLive: site.state === 'dev' ? 0 : 1,
         keepDevAlias: 1,
         phpVersion: site.php,
+        phpRelease: PHP_RELEASES[site.php] ?? null,
         locale: 'en_US',
         status: site.state === 'stopped' ? 'stopped' : 'running',
         dbName: `wp_${site.slug.replace(/-/g, '_')}`,
@@ -50,7 +60,6 @@ export function seedSites(world: TestWorld): void {
 
     const docker = site.server === 1 ? world.docker : world.remote(site.server).docker;
     docker.containers.set(`wp-${site.slug}`, site.state === 'stopped' ? 'exited' : 'running');
-    docker.images.add(`wpl7-wordpress:php${site.php}`);
     // The site's folder, which the Files tab and the backup views look at.
     fs.mkdirSync(onDisk(sitePaths(world.config, site.slug).wordpress), { recursive: true });
   }

@@ -27,6 +27,12 @@ export const SERVERS: DemoServer[] = [
   { id: 3, name: 'sin1', ip: '203.0.113.30', cpus: 2, memGb: 4, diskGb: 80 },
 ];
 
+/**
+ * The PHP release in each branch's site image on the demo's date (`DEMO_NOW` in clock.ts): the
+ * newest of each branch then. Every server has all four, and every hosted site runs its branch's.
+ */
+export const PHP_RELEASES: Record<string, string> = { '8.2': '8.2.34', '8.3': '8.3.35', '8.4': '8.4.26', '8.5': '8.5.11' };
+
 export type DemoSiteState = 'live' | 'dev' | 'stopped';
 
 export interface DemoSite {
