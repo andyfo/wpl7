@@ -94,7 +94,7 @@ export function hardeningFiles(policy: ContainerPolicy): { apache: string; php: 
 export interface HardeningSweep {
   /** Slugs a reconcile was queued for (or already had one waiting). */
   queued: string[];
-  /** Slugs whose container predates the mounts but could not be queued right now. */
+  /** Slugs whose container needs rebuilding but could not be queued right now. */
   busy: string[];
 }
 

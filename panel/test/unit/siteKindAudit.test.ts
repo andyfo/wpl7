@@ -116,6 +116,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   'services/securityEvents.ts': { fold: NAMES, recent: NAMES },
   'services/securityViews.ts': { securityOverview: hosted('hostedSites()'), fleetScans: hosted('hostedSites()') },
   'services/siteHardening.ts': { sweepHardening: hosted('hostedSites()') },
+  'services/siteImages.ts': { sweepSiteImages: hosted('hostedSites()') },
   'services/sites.ts': {
     bySlug: both('the guard itself: refuses an external site unless the caller takes either kind'),
     reconcileAll: hosted('hostedSites()'),
