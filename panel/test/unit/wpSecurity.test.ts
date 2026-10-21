@@ -84,7 +84,15 @@ const FEED: Record<string, unknown> = {
   },
 };
 
+/** wordpress.org's directory, asked about the one plugin the feed calls closed: closed it is. */
+const WPORG_ABANDONED = { error: 'closed', closed: true, closed_date: '2020-07-26', reason: 'security-issue', reason_text: 'Security Issue' };
+
 const feedFetch = (async (input: string | URL) => {
+  const url = new URL(String(input));
+  if (url.hostname === 'api.wordpress.org') {
+    const found = url.searchParams.get('request[slug]') === 'abandoned';
+    return new Response(JSON.stringify(found ? WPORG_ABANDONED : { error: 'Plugin not found.' }), { status: 404 });
+  }
   const key = String(input).replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '');
   const body = FEED[key];
   if (!body) return new Response('{"error":0,"data":{"name":null,"vulnerability":null}}', { status: 200 });

@@ -50,6 +50,7 @@ for a reason; remove one once there is nothing left to watch.
 | [WordPress's default From address](#wordpresss-default-from-address) | Medium | 2026-10-14 16:28 UTC | `wordpress@` and the home URL's host without `www.`, on 7.1.3 and trunk |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
 | [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 14:17 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
+| [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-10-20 12:22 UTC | The feed calls five listed bbPress plugins closed and misses `captcha`; the directory answers as `wporgListing` reads them |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -744,3 +745,51 @@ for a reason; remove one once there is nothing left to watch.
   - The client: find the option that now refuses those commands, put it in
     `IMPORT_CLIENT_ARGS`, and keep imports off the new image until the engine test passes.
   - Either way, run the engine test on the new image before it reaches a server.
+
+## wordpress.org's directory, as the panel's closed flag reads it
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-20 12:22 UTC. The feed says `closed: 1` for five plugins that
+  wordpress.org lists: `bbpress` (2.6.20, updated 2026-10-15), `bbpress-private-replies`,
+  `bbpress-new-topic-notifications`, `bbpress-enable-tinymce-visual-tab` and
+  `bbpress-direct-quotes`. Archived copies of bbPress's page from 2026-09-11 to 2026-10-15 show
+  it open each time, so the flag is not a closure the feed failed to clear. The feed has
+  `closed: null` for `captcha`, `display-widgets` and `wp-symposium`, which wordpress.org closed.
+  The directory answers as `wporgListing` reads it: a listed plugin or theme is a 200 with its
+  `slug` and a `version`, a closed plugin a 404 with `error: "closed"`, `closed: true` and a
+  `reason`, and a slug it does not have a 404 with an `error` string. A closed plugin's page
+  stays up with the same sentence the API gives as `description`. Only that sentence says
+  whether a closure is temporary. The themes API says "Theme not found" for a theme it took
+  down as well.
+- **The problem:** the feed's `closed` flag is wrong both ways. A false one put "Closed on
+  wordpress.org — replace it." on an open plugin, and mailed it as a new vulnerability. A missed
+  one leaves a plugin closed for a security issue unflagged.
+- **What we do about it:** `checkClosed` in `panel/src/services/vulnerabilities.ts` asks
+  wordpress.org's directory (`wporgListing` in `panel/src/services/wporg.ts`) about every
+  plugin the feed is asked about, and about a theme the feed calls closed. Listed is open.
+  Closed is closed, with the directory's reason. A slug the directory does not have keeps the
+  feed's flag, which is all a closed theme gets. With no answer, the panel keeps its previous
+  verdict. A closed verdict is asked about again after an hour (`CLOSED_TTL_MS`). The updates
+  page's Limits names the two gaps: themes, and temporary closures shown like permanent ones.
+- **Check:**
+  ```bash
+  for s in bbpress bbpress-private-replies captcha; do
+    curl -s "https://www.wpvulnerability.net/plugin/$s/" | jq -c '.data | {plugin, closed, closed_reason, closed_date}'
+  done
+  for s in bbpress wp-gdpr-compliance not-a-real-plugin-wpl7; do
+    curl -s -o /tmp/wporg.json -w '%{http_code} ' "https://api.wordpress.org/plugins/info/1.2/?action=plugin_information&request%5Bslug%5D=$s&request%5Bfields%5D%5Bsections%5D=0"
+    jq -c '{slug, version, error, closed, reason, description}' /tmp/wporg.json
+  done
+  for s in twentytwentyfive not-a-real-theme-wpl7; do
+    curl -s -o /tmp/wporg.json -w '%{http_code} ' "https://api.wordpress.org/themes/info/1.2/?action=theme_information&request%5Bslug%5D=$s"
+    jq -c '{slug, version, error}' /tmp/wporg.json
+  done
+  ```
+  The directory should answer 200 with a slug and version, 404 with `error: "closed"` and a
+  reason, 404 with an error string, then 200 and 404 for the two themes.
+- **When it changes:**
+  - The directory answers in another shape: update `wporgListing` and
+    `panel/test/unit/wporg.test.ts`. A closed plugin must never read as listed.
+  - The themes API starts saying a theme is closed, or the plugins API gets a field for a
+    temporary closure: read it, and drop the matching line from the updates page's Limits.
+  - The feed's flags change, either way: nothing to do. The panel goes by the directory.

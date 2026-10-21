@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanText, WporgDirectoryService } from '../../src/services/wporg.js';
+import { cleanText, WporgDirectoryService, wporgListing } from '../../src/services/wporg.js';
 import { AppError } from '../../src/lib/errors.js';
 
 /** A trimmed-down copy of a real api.wordpress.org query_plugins payload. */
@@ -143,5 +143,76 @@ describe('WporgDirectoryService.info', () => {
     const err = await svc.info('akismet').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AppError);
     expect((err as AppError).statusCode).toBe(502);
+  });
+});
+
+describe('wporgListing', () => {
+  /** The directory's answer for a closed plugin, as it came for one on 2026-10-20. */
+  const closedBody = (reason: string) => ({
+    error: 'closed',
+    name: 'Old Plugin',
+    slug: 'old-plugin',
+    description: 'This plugin has been closed as of January 30, 2021 and is not available for download.',
+    closed: true,
+    closed_date: '2021-01-30',
+    reason,
+    reason_text: 'Security Issue',
+  });
+
+  it('reads a plugin the directory lists, asking for a small answer', async () => {
+    const { fetchImpl, urls } = stubFetch([{ status: 200, body: { name: 'bbPress', slug: 'bbpress', version: '2.6.20' } }]);
+
+    expect(await wporgListing('plugin', 'bbpress', fetchImpl)).toEqual({ state: 'listed' });
+    expect(urls[0]).toContain('/plugins/info/1.2/?action=plugin_information');
+    expect(urls[0]).toContain('request%5Bslug%5D=bbpress');
+    // The readme alone is tens of kilobytes on a popular plugin.
+    expect(urls[0]).toContain('request%5Bfields%5D%5Bsections%5D=0');
+  });
+
+  it('reads a closed plugin with its reason, and "unknown" as no reason', async () => {
+    const { fetchImpl } = stubFetch([
+      { status: 404, body: closedBody('security-issue') },
+      { status: 404, body: closedBody('unknown') },
+    ]);
+
+    expect(await wporgListing('plugin', 'old-plugin', fetchImpl)).toEqual({ state: 'closed', reason: 'security-issue' });
+    expect(await wporgListing('plugin', 'old-plugin', fetchImpl)).toEqual({ state: 'closed', reason: null });
+  });
+
+  it('reads a slug the directory never had as absent', async () => {
+    const { fetchImpl, urls } = stubFetch([
+      { status: 404, body: { error: 'Plugin not found.' } },
+      { status: 404, body: { error: 'Theme not found' } },
+    ]);
+
+    expect(await wporgListing('plugin', 'acme-premium', fetchImpl)).toEqual({ state: 'absent' });
+    expect(await wporgListing('theme', 'acme-theme', fetchImpl)).toEqual({ state: 'absent' });
+    expect(urls[1]).toContain('/themes/info/1.2/?action=theme_information');
+  });
+
+  it('reads a theme the directory lists', async () => {
+    const { fetchImpl } = stubFetch([{ status: 200, body: { name: 'Twenty Twenty-Five', slug: 'twentytwentyfive', version: '1.5' } }]);
+
+    expect(await wporgListing('theme', 'twentytwentyfive', fetchImpl)).toEqual({ state: 'listed' });
+  });
+
+  it('throws on any answer that does not say, so nothing reads as listed by accident', async () => {
+    const { fetchImpl } = stubFetch([
+      { status: 503, body: null },
+      // Another slug's record, a record with no version, and a shape of another API.
+      { status: 200, body: { name: 'Other', slug: 'other', version: '1.0' } },
+      { status: 200, body: { name: 'bbPress', slug: 'bbpress' } },
+      { status: 200, body: { error: 0, data: { name: 'bbPress' } } },
+    ]);
+    for (let i = 0; i < 4; i++) await expect(wporgListing('plugin', 'bbpress', fetchImpl)).rejects.toThrow(/wordpress.org answered HTTP/);
+
+    const offline = (() => Promise.reject(new Error('getaddrinfo ENOTFOUND'))) as unknown as typeof fetch;
+    await expect(wporgListing('plugin', 'bbpress', offline)).rejects.toThrow('ENOTFOUND');
+  });
+
+  it('never reads a closure as listed, whatever the status', async () => {
+    const { fetchImpl } = stubFetch([{ status: 200, body: { ...closedBody('author-request'), version: '1.0' } }]);
+
+    expect(await wporgListing('plugin', 'old-plugin', fetchImpl)).toEqual({ state: 'closed', reason: 'author-request' });
   });
 });

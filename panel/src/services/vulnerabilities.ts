@@ -5,7 +5,7 @@ import { siteWpComponents, siteWpStatus, vulnFeed, type VulnFeedRow } from '../d
 import type { WpComponentKind } from '../../shared/schemas.js';
 import type { FeedCoverage, VulnerabilityDto, VulnSeverity } from '../../shared/types.js';
 import { matchRange, type VersionRange } from '../lib/wpVersions.js';
-import { cleanText } from './wporg.js';
+import { cleanText, closureReason, wporgListing, type WporgListing } from './wporg.js';
 import type { Logger } from './index.js';
 import type { SettingsService } from './settings.js';
 
@@ -14,6 +14,11 @@ const API_BASE = 'https://www.wpvulnerability.net';
 const TTL_MS = 24 * 3600_000;
 /** A failed lookup is retried sooner than that, but not on every scan. */
 const ERROR_TTL_MS = 3600_000;
+/**
+ * So is a closed one. Closures are often temporary, and a plugin back in the directory should
+ * lose its "replace it" at the next scan, not a day later.
+ */
+const CLOSED_TTL_MS = 3600_000;
 const TIMEOUT_MS = 15_000;
 /**
  * Four at a time. The API is free, asks for no key and publishes no rate limit, only
@@ -193,7 +198,7 @@ function parseEnvelope(kind: WpComponentKind, body: unknown): FetchedSlug {
   return {
     known,
     closed: Boolean(Number(data.closed ?? 0)),
-    closedReason: typeof data.closed_reason === 'string' ? data.closed_reason : null,
+    closedReason: closureReason(data.closed_reason),
     // `latest` is a unix timestamp of the last release, not a version number.
     latestReleaseAt: Number.isFinite(latest) && latest > 0 ? latest * 1000 : null,
     advisories: list.map(normalizeAdvisory),
@@ -205,6 +210,7 @@ export interface VulnerabilityFeedOptions {
   baseUrl?: string;
   ttlMs?: number;
   errorTtlMs?: number;
+  closedTtlMs?: number;
   timeoutMs?: number;
   concurrency?: number;
   now?: () => number;
@@ -215,14 +221,17 @@ export interface VulnerabilityFeedOptions {
  * for an installed version.
  *
  * What leaves the box: a plugin/theme slug or a WordPress version, once per slug per day.
- * Never a site name, a domain or an address - and not at all when `wp.vulnerabilityFeed`
- * is off, which is why that switch exists (docs/updates.md says so in the UI too).
+ * Every plugin's slug also goes to wordpress.org's directory, which has the last word on
+ * whether it is closed, and so does a theme's when the feed calls it closed. Never a site
+ * name, a domain or an address - and not at all when `wp.vulnerabilityFeed` is off, which is
+ * why that switch exists (docs/updates.md says so in the UI too).
  */
 export class VulnerabilityFeedService {
   private readonly fetchImpl: typeof fetch;
   private readonly baseUrl: string;
   private readonly ttlMs: number;
   private readonly errorTtlMs: number;
+  private readonly closedTtlMs: number;
   private readonly timeoutMs: number;
   private readonly concurrency: number;
   private readonly now: () => number;
@@ -237,6 +246,7 @@ export class VulnerabilityFeedService {
     this.baseUrl = opts.baseUrl ?? API_BASE;
     this.ttlMs = opts.ttlMs ?? TTL_MS;
     this.errorTtlMs = opts.errorTtlMs ?? ERROR_TTL_MS;
+    this.closedTtlMs = opts.closedTtlMs ?? CLOSED_TTL_MS;
     this.timeoutMs = opts.timeoutMs ?? TIMEOUT_MS;
     this.concurrency = opts.concurrency ?? CONCURRENCY;
     this.now = opts.now ?? Date.now;
@@ -350,7 +360,7 @@ export class VulnerabilityFeedService {
   private isStale(row: VulnFeedRow | undefined): boolean {
     if (!row) return true;
     if (row.error || row.fetchedAt === null) return this.now() - row.attemptedAt > this.errorTtlMs;
-    return this.now() - row.fetchedAt > this.ttlMs;
+    return this.now() - row.fetchedAt > (row.closed === 1 ? this.closedTtlMs : this.ttlMs);
   }
 
   /**
@@ -371,11 +381,24 @@ export class VulnerabilityFeedService {
     );
     let failed = 0;
     const refreshed: VulnRef[] = [];
+    // Slugs wordpress.org gave no answer about, told once: an outage would be one line per plugin.
+    const unanswered: string[] = [];
+    let lastError = '';
     const queue = [...due];
     const workers = Array.from({ length: Math.min(this.concurrency, queue.length) }, async () => {
       for (let ref = queue.shift(); ref !== undefined; ref = queue.shift()) {
         try {
-          const data = await this.fetchSlug(ref);
+          let data = await this.fetchSlug(ref);
+          // Every plugin, for the closures the feed misses. A theme only when the feed calls it
+          // closed: the themes directory never says closed, so all it can do is clear the flag.
+          if (ref.kind === 'plugin' || (ref.kind === 'theme' && data.closed)) {
+            const checked = await this.checkClosed(ref.kind, ref.slug, data, existing.get(refKey(ref.kind, ref.slug)));
+            data = checked.data;
+            if (checked.error !== null) {
+              unanswered.push(`${ref.kind} "${ref.slug}"`);
+              lastError = checked.error;
+            }
+          }
           this.upsertSuccess(ref, data);
           refreshed.push(ref);
         } catch (err) {
@@ -387,6 +410,13 @@ export class VulnerabilityFeedService {
       }
     });
     await Promise.all(workers);
+    if (unanswered.length > 0) {
+      const named = unanswered.length > 3 ? `${unanswered.slice(0, 3).join(', ')} and ${unanswered.length - 3} more` : unanswered.join(', ');
+      this.log.warn(
+        `Vulnerability feed: wordpress.org did not say whether ${named} ${unanswered.length === 1 ? 'is' : 'are'} closed, ` +
+          `so the panel kept what it said before (${lastError})`,
+      );
+    }
     return { fetched: refreshed.length, failed, skipped: unique.size - due.length, refreshed };
   }
 
@@ -399,6 +429,34 @@ export class VulnerabilityFeedService {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const body = (await res.json()) as unknown;
     return parseEnvelope(ref.kind, body);
+  }
+
+  /**
+   * Whether a plugin or theme is closed, by wordpress.org's directory. The feed's flag is wrong
+   * both ways: it has called plugins closed that the directory lists, and missed plugins the
+   * directory closed, and "closed" tells the operator to replace one. Listed means open. Closed
+   * means closed, with the directory's reason. A slug the directory does not have leaves the
+   * feed's flag standing, which is all a closed theme ever gets. With no answer, the panel keeps
+   * what it said before: a flag that came and went with wordpress.org's outages would mail a
+   * new alert each time it came back. Only a slug with nothing before goes by the feed alone.
+   */
+  private async checkClosed(
+    kind: 'plugin' | 'theme',
+    slug: string,
+    data: FetchedSlug,
+    previous: VulnFeedRow | undefined,
+  ): Promise<{ data: FetchedSlug; error: string | null }> {
+    let listing: WporgListing;
+    try {
+      listing = await wporgListing(kind, slug, this.fetchImpl, this.timeoutMs);
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      if (!previous || previous.fetchedAt === null) return { data, error };
+      return { data: { ...data, closed: previous.closed === 1, closedReason: previous.closedReason }, error };
+    }
+    if (listing.state === 'listed') return { data: { ...data, closed: false, closedReason: null }, error: null };
+    if (listing.state === 'closed') return { data: { ...data, closed: true, closedReason: listing.reason }, error: null };
+    return { data, error: null };
   }
 
   private upsertSuccess(ref: VulnRef, data: FetchedSlug): void {
