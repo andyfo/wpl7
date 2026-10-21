@@ -20,10 +20,10 @@ for a reason; remove one once there is nothing left to watch.
 | [RDAP: registry endpoints and bootstrap](#rdap-registry-endpoints-and-bootstrap) | Medium | 2026-10-13 08:35 UTC | .co, .io, .me and .us still absent from IANA; supplement used |
 | [Reminders: PHP and OS support dates](#reminders-php-and-os-support-dates) | Medium | 2026-10-13 08:35 UTC | PHP, Ubuntu and Debian dates match upstream tables |
 | [Reminders: Cloudflare token lifetime](#reminders-cloudflare-token-lifetime) | Medium | 2026-10-13 08:35 UTC | User and account verification endpoints expose status and optional expiry |
-| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-10-14 11:05 UTC | Open upstream; worked around |
+| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-10-21 12:19 UTC | Open upstream; worked around. v3.7.15 and v3.7.16 leave the rate limiter alone |
 | [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-10-19 05:49 UTC | 0.21.15 is still the latest; same definitions as the pinned 0.21.12 |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-10-02 05:12 UTC | Both overrides apply to 0.21.12; signatures named |
-| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-14 11:05 UTC | 2.7.6 is the latest; patch still needed |
+| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-21 12:19 UTC | 2.7.6 is the latest; patch still needed |
 | [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
 | [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
 | [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-10-04 18:10 UTC | `latest` is v5.1.0; hostname logic as relied on |
@@ -55,11 +55,14 @@ for a reason; remove one once there is nothing left to watch.
 ## Traefik: an idle visitor's rate limit refills
 
 - **Priority:** High
-- **Last checked:** 2026-10-14 11:05 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
+- **Last checked:** 2026-10-21 12:19 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
   is open, with nothing since the Traefik team said on 2026-09-28 they would reproduce it. The
-  latest release is still v3.7.14 (2026-10-06), which `traefik:v3.7` in `deploy/docker-compose.yml`
-  follows. Its one rate-limit change is to the Redis limiter's Lua script (#13825), which WPL7
-  does not use.
+  latest release is v3.7.16 (2026-10-20), after v3.7.15 (2026-10-15), which `traefik:v3.7` in
+  `deploy/docker-compose.yml` follows. Neither changes the rate limiter. Their security fixes are
+  in parts WPL7 does not use: the Kubernetes ingress-nginx provider (GHSA-p8wx-ph99-xgcr,
+  GHSA-28hp-c82p-8vqj), FastProxy (GHSA-ww7c-q3mv-xx22) and ForwardAuth (GHSA-hrpp-p4fc-wwf8).
+  3.7.15's migration notes (`CONNECT` answered with 501, the Gateway API's backend protocol) do
+  not touch it either.
 - **The problem:** Traefik drops a visitor's rate-limit bucket after `1 + 1/rate` seconds without
   a request - 2 seconds for limits of one a second or more, 4 for 20 a minute - and starts the
   next request on a full burst. With logins at 20 a minute in bursts of 30, a guesser who paused
@@ -132,7 +135,7 @@ for a reason; remove one once there is nothing left to watch.
 ## SFTPGo: our build and its overwrite patch
 
 - **Priority:** High
-- **Last checked:** 2026-10-14 11:05 UTC. We build v2.7.6 (commit 62ae9ba3) with
+- **Last checked:** 2026-10-21 12:19 UTC. We build v2.7.6 (commit 62ae9ba3) with
   `deploy/sftpgo-image/staged-overwrite.patch`; v2.7.6 (2026-09-19) is still the latest release,
   and no advisory has been published since the four of that day, which 2.7.6 fixes (one high:
   stored XSS through directory names in the WebClient). Nothing on `main` since 2026-10-03, and
