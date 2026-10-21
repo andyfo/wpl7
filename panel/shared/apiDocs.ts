@@ -204,6 +204,18 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       },
       {
         method: 'PUT',
+        path: '/api/sites/:slug/limits',
+        summary: 'Set the site container\'s own CPU, memory and process limits, or put them back on the panel\'s settings',
+        input:
+          '{cpuLimit?, memoryLimitMb?, pidsLimit?} - each a number, or null for Settings\' value; left out = unchanged. CPU in cores; 0 = uncapped, for CPU and processes',
+        returns:
+          '{site: SiteDetail, job} - job: the server.applySiteLimits that changes the container in place (lifting a CPU cap recreates it); 200 and null when nothing it runs with changed',
+        job: true,
+        level: 'full',
+        levelReason: 'More for one site is less for the other sites on its server',
+      },
+      {
+        method: 'PUT',
         path: '/api/sites/:slug/backups-enabled',
         summary: 'Include or exclude this site from the scheduled backup run',
         input: '{enabled}',
@@ -1985,7 +1997,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         path: '/api/settings',
         summary: 'Every panel setting',
         returns:
-          '{settings, ownBackupKeepDays: [{slug, days}], ownBackupBeforeUpdates: [{slug, value}]} - the sites with a keep period, or a backup-before-updates setting, of their own',
+          '{settings, ownBackupKeepDays: [{slug, days}], ownBackupBeforeUpdates: [{slug, value}], ownSiteLimits: [{slug, cpuLimit, memoryLimitMb, pidsLimit}]} - the sites with a keep period, a backup-before-updates setting, or container limits of their own (null = Settings\')',
         level: 'read',
       },
       {

@@ -1,4 +1,4 @@
-// @docs servers/add
+// @docs servers/add, sites/settings
 import { PassThrough, Readable, Writable } from 'node:stream';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -7,7 +7,8 @@ import type { CoreServices } from '../../services/index.js';
 import type { JobContext } from '../context.js';
 import { PluginSyncService } from '../../services/pluginSync.js';
 import { CLOUDFLARE } from '../../services/dns.js';
-import { limitsChange, siteRuntimeFrom, type SiteRuntime } from '../../services/siteSpec.js';
+import { hasOwnLimits, limitsChange, NO_OWN_LIMITS, siteRuntimeFrom, type SiteRuntime } from '../../services/siteSpec.js';
+import { fitCpus } from '../../services/docker.js';
 import { ServerUnreachableError, SshConnection } from '../../servers/sshConnection.js';
 import { shellQuote } from '../../servers/sshExec.js';
 import { readPanelPrivateKey, readPanelPublicKey } from '../../servers/keys.js';
@@ -45,24 +46,24 @@ const describeLimits = (l: SiteRuntime): string =>
   ].join(', ');
 
 /**
- * Bring every site container on one server to the CPU, memory and process ceilings in
- * Settings, which otherwise only reach a container when it is built. In place, running or
- * stopped, so no site goes down for it - except to lift a CPU cap, which Docker cannot do to
- * an existing container: those sites are queued a Recreate container of their own. A site
- * that already has a job waiting cannot be queued another, so it is recorded as `deferred`
- * and Schedulers.siteLimitsTick comes back for it once that job has run.
+ * Bring every site container on one server to its CPU, memory and process ceilings - the
+ * site's own, and Settings' for the rest - which otherwise only reach a container when it is
+ * built. In place, running or stopped, so no site goes down for it - except to lift a CPU cap,
+ * which Docker cannot do to an existing container: those sites are queued a Recreate container
+ * of their own. A site that already has a job waiting cannot be queued another, so it is
+ * recorded as `deferred` and Schedulers.siteLimitsTick comes back for it once that job has run.
  *
+ * Queued by a save in Settings, and by a site's own limits changing (SitesService.setLimits).
  * The limits are read when this starts, not when it was queued, so a second save made while
  * it waited is applied as well. It holds the server's lane, so no container on the server is
- * being rebuilt from the previous settings while it runs.
+ * being rebuilt from the previous limits while it runs.
  */
 export async function serverApplySiteLimits(
   ctx: JobContext<z.infer<typeof serverApplySiteLimitsPayload>>,
   s: CoreServices,
 ): Promise<void> {
   const handle = s.servers.handleFor(ctx.payload.serverId);
-  const limits = siteRuntimeFrom(s.settings);
-  // Mid-create or mid-delete: the create builds from the settings as they are when it runs.
+  // Mid-create or mid-delete: the create builds from the limits as they are when it runs.
   const rows = s.db
     .select()
     .from(sites)
@@ -70,7 +71,16 @@ export async function serverApplySiteLimits(
     .orderBy(asc(sites.id))
     .all()
     .filter((site) => site.status !== 'provisioning' && site.status !== 'deleting');
-  ctx.info(`Applying ${describeLimits(limits)} to the ${rows.length} site(s) on "${handle.name}"…`);
+  const own = rows.filter(hasOwnLimits).length;
+  ctx.info(
+    `Applying ${describeLimits(siteRuntimeFrom(s.settings, NO_OWN_LIMITS))} to the ${rows.length} site(s) on "${handle.name}"` +
+      (own > 0 ? ` (${own} with limits of their own)` : '') +
+      '…',
+  );
+  // What the containers get, and so what they are compared with: a CPU cap above the host's cores
+  // is all of them (fitCpus).
+  const cpus = rows.length > 0 ? await handle.docker.hostCpus() : null;
+  const fitted: string[] = [];
 
   const updated: string[] = [];
   const recreating: string[] = [];
@@ -79,15 +89,19 @@ export async function serverApplySiteLimits(
   let current = 0;
   for (const [i, site] of rows.entries()) {
     ctx.checkCanceled();
+    const asked = siteRuntimeFrom(s.settings, site);
+    const limits = fitCpus(asked, cpus);
+    if (limits !== asked) fitted.push(site.slug);
     try {
       const now = await handle.docker.containerLimits(site.containerName);
-      // No container to change; whatever builds one reads the settings then.
+      // No container to change; whatever builds one reads the limits then.
       if (!now) continue;
       const change = limitsChange(now, limits);
       if (change === 'none') {
         current++;
       } else if (change === 'in-place') {
         await handle.docker.updateContainerLimits(site.containerName, limits);
+        if (hasOwnLimits(site)) ctx.info(`${site.slug} has limits of its own: ${describeLimits(limits)}.`);
         updated.push(site.slug);
       } else {
         // Typically queued behind this job in the same lane - a restart, a backup.
@@ -120,6 +134,13 @@ export async function serverApplySiteLimits(
     }
   }
 
+  if (fitted.length > 0) {
+    const one = fitted.length === 1;
+    ctx.info(
+      `"${handle.name}" has ${cpus} CPU core(s), fewer than ${fitted.join(', ')} ${one ? 'is' : 'are'} set to: ` +
+        `${one ? 'it gets' : 'they get'} all of them.`,
+    );
+  }
   // `deferred` is what siteLimitsTick reads back.
   ctx.setResult({ updated, recreating, deferred, current, failed });
   ctx.info(

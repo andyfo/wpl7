@@ -104,7 +104,7 @@ Updates act at once, each with its own buttons.
 
 | Tab | |
 |---|---|
-| **Sites** | Site defaults: PHP version, language, admin email (prefilled in the New Site wizard), default server. Container limits: CPU cores, memory, process ceiling per site container, brought to every existing site at once. FTP & SFTP: on or off everywhere, and the ports |
+| **Sites** | Site defaults: PHP version, language, admin email (prefilled in the New Site wizard), default server. Container limits: CPU cores, memory, process ceiling per site container, brought to every existing site at once; a site can have its own (its Settings tab). FTP & SFTP: on or off everywhere, and the ports |
 | **Backups** | Schedule (a field per cron column, with the next three fire times), how many to keep per site |
 | **Security** | How often every site's plugins, themes and core are re-read, and whether they are rated against known vulnerabilities. Malware scans: whether every site is scanned, with AMWScan's signatures or not, how often, what happens on a finding, and each scan's memory and time ([security.md](security.md#malware-scans)). Trusted proxies: Cloudflare, and proxies of your own, whose header names the visitor ([security.md](security.md#visitors-behind-a-proxy)) |
 | **Mail** | How long mail traffic is kept, the volume per site per hour that flags a site, the (higher) one at which the relay stops accepting its mail, and where operational alerts go: mail suspensions, malware scan findings, and a new release |

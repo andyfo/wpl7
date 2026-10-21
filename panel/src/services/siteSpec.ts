@@ -2,6 +2,7 @@
 import path from 'node:path';
 import type { Config } from '../config.js';
 import type { ServerRow, SiteRow } from '../db/schema.js';
+import type { SiteLimits } from '../../shared/types.js';
 import type { ContainerLimits, SiteContainerSpec } from './docker.js';
 import type { DnsService } from './dns.js';
 import { traefikLabels } from './labels.js';
@@ -35,25 +36,47 @@ max_input_vars = 3000
 `;
 
 /**
- * Per-site container limits. Read from settings at every container build rather than
- * baked into the image or compose, so a site created today cannot end up unbounded because
- * a call site forgot to pass them (the builder requires this argument). Containers that
- * already exist are brought to a changed limit by server.applySiteLimits.
+ * Per-site container limits: the site's own, and Settings' for each it has none of. Read at
+ * every container build rather than baked into the image or compose, so a site created today
+ * cannot end up unbounded because a call site forgot to pass them (the builder requires this
+ * argument), and none of them loses its own because a call site forgot the site. Containers
+ * that already exist are brought to a changed limit by server.applySiteLimits.
  */
 export type SiteRuntime = ContainerLimits;
 
 type RuntimeSettings = Pick<PanelSettings, 'siteCpuLimit' | 'siteMemoryLimitMb' | 'sitePidsLimit'>;
+type RuntimeSettingsReader = { get<K extends keyof RuntimeSettings>(key: K): RuntimeSettings[K] };
 
-export function siteRuntimeFrom(settings: { get<K extends keyof RuntimeSettings>(key: K): RuntimeSettings[K] }): SiteRuntime {
-  const cpu = Number(settings.get('siteCpuLimit') ?? 0);
-  const memMb = Number(settings.get('siteMemoryLimitMb') ?? 0) || 512;
-  const pids = Number(settings.get('sitePidsLimit') ?? 0);
+/** The limits a site sets for itself (sites.cpu_limit and the rest): null = as Settings says. */
+export type OwnSiteLimits = Pick<SiteRow, 'cpuLimit' | 'memoryLimitMb' | 'pidsLimit'>;
+
+/** For a site with no limits of its own: what Settings gives every site. */
+export const NO_OWN_LIMITS: OwnSiteLimits = { cpuLimit: null, memoryLimitMb: null, pidsLimit: null };
+
+/** Settings' limits, in the units a site's own are in. */
+export function defaultSiteLimits(settings: RuntimeSettingsReader): SiteLimits<number> {
+  return {
+    cpuLimit: Number(settings.get('siteCpuLimit') ?? 0),
+    memoryLimitMb: Number(settings.get('siteMemoryLimitMb') ?? 0) || 512,
+    pidsLimit: Number(settings.get('sitePidsLimit') ?? 0),
+  };
+}
+
+export function siteRuntimeFrom(settings: RuntimeSettingsReader, own: OwnSiteLimits): SiteRuntime {
+  const defaults = defaultSiteLimits(settings);
+  const cpu = own.cpuLimit ?? defaults.cpuLimit;
+  const memMb = own.memoryLimitMb ?? defaults.memoryLimitMb;
+  const pids = own.pidsLimit ?? defaults.pidsLimit;
   return {
     memoryBytes: memMb * 1024 * 1024,
     ...(cpu > 0 ? { nanoCpus: Math.round(cpu * 1e9) } : {}),
     ...(pids > 0 ? { pidsLimit: pids } : {}),
   };
 }
+
+/** Whether a site has any limit of its own. */
+export const hasOwnLimits = (own: OwnSiteLimits): boolean =>
+  own.cpuLimit !== null || own.memoryLimitMb !== null || own.pidsLimit !== null;
 
 /**
  * What it takes to bring a container from `current` to `desired`. Docker changes all three

@@ -203,15 +203,15 @@ A site container is built to be survivable when — not if — the WordPress ins
 | Networks | its own + egress only; it cannot address another site or the panel |
 | Capabilities | Docker's defaults minus `NET_RAW MKNOD SYS_CHROOT AUDIT_WRITE SETFCAP SETPCAP`. `NET_RAW` is the one that matters: with it, root in the container can forge packets and poison ARP caches on the bridges it shares |
 | `no-new-privileges` | set, so the setuid binaries Debian ships (`su`, `mount`, `passwd`) cannot be used to escalate. wp-cli is unaffected — its uid comes from `docker exec -u 33:33`, which the daemon applies |
-| CPU / memory / pids | per-site ceilings from Settings (default 2 cores, 512 MB, 512 pids), so one site cannot take the box down for its neighbours |
+| CPU / memory / pids | per-site ceilings from Settings (default 2 cores, 512 MB, 512 pids), or the site's own where it has one (`sites.cpu_limit`, `memory_limit_mb`, `pids_limit`), so one site cannot take the box down for its neighbours |
 | Mail | its own SASL login; the relay refuses any sender domain owned by another site (docs/mail.md) |
 
 These are applied when the container is **built** — except the CPU, memory and pids ceilings,
-which saving them in Settings also changes on every existing site container in place
-(`server.applySiteLimits`, one job per server, no restart). The one change Docker cannot make to
-a live container is lifting a CPU cap, so setting CPU to 0 recreates each site instead (a site
-busy with another job right then, once that job has run). Sites created before the rest of this
-policy catch up via **Recreate container** (`site.reconcile`).
+which saving them in Settings, or as a site's own on its Settings tab, also changes on the
+existing site containers in place (`server.applySiteLimits`, one job per server, no restart). The
+one change Docker cannot make to a live container is lifting a CPU cap, so setting CPU to 0
+recreates each site instead (a site busy with another job right then, once that job has run).
+Sites created before the rest of this policy catch up via **Recreate container** (`site.reconcile`).
 
 ## Security
 
