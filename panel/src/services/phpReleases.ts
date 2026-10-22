@@ -63,21 +63,26 @@ export async function sweepPhpReleases(s: CoreServices): Promise<void> {
 const NO_ANSWER = Symbol('no answer');
 
 /**
- * The release a site's container runs, or NO_ANSWER after `phpReadTimeoutMs`: Docker can take a
- * request and never answer it, and nothing waiting on this reading should wait for that.
+ * What `asked` answers, or NO_ANSWER after `timeoutMs`. Docker can take a request and never answer
+ * it, and nothing waiting on a reading here should wait for that.
  */
-async function read(s: CoreServices, docker: DockerPort, site: SiteRow): Promise<string | null | typeof NO_ANSWER> {
+async function within<T>(asked: Promise<T>, timeoutMs: number): Promise<T | typeof NO_ANSWER> {
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
-      docker.containerPhpVersion(site.containerName),
+      asked,
       new Promise<typeof NO_ANSWER>((resolve) => {
-        timer = setTimeout(() => resolve(NO_ANSWER), s.config.phpReadTimeoutMs);
+        timer = setTimeout(() => resolve(NO_ANSWER), timeoutMs);
       }),
     ]);
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The release a site's container runs, or NO_ANSWER after `phpReadTimeoutMs`. */
+function read(s: CoreServices, docker: DockerPort, site: SiteRow): Promise<string | null | typeof NO_ANSWER> {
+  return within(docker.containerPhpVersion(site.containerName), s.config.phpReadTimeoutMs);
 }
 
 /**
@@ -90,8 +95,17 @@ function store(s: CoreServices, site: SiteRow, release: string | null, mark: num
   s.db.update(sites).set({ phpRelease: release }).where(eq(sites.id, site.id)).run();
 }
 
-/** The site images a server has, oldest branch first, with the release in each: what a site built there gets. */
-export async function siteImagePhp(docker: DockerPort): Promise<{ version: string; release: string | null }[]> {
+/**
+ * The site images a server has, oldest branch first, with the release in each: what a site built
+ * there gets. Throws when Docker has not answered within `timeoutMs`.
+ */
+export async function siteImagePhp(docker: DockerPort, timeoutMs: number): Promise<{ version: string; release: string | null }[]> {
+  const images = await within(imagesOf(docker), timeoutMs);
+  if (images === NO_ANSWER) throw new Error('Docker did not answer in time');
+  return images;
+}
+
+async function imagesOf(docker: DockerPort): Promise<{ version: string; release: string | null }[]> {
   const images: { version: string; release: string | null }[] = [];
   for (const tag of await docker.imageTags(SITE_IMAGE_REPO)) {
     const version = /:php(\d+\.\d+)$/.exec(tag)?.[1];

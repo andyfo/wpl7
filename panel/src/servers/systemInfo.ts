@@ -122,6 +122,8 @@ export class SystemInfoService {
     private readonly hostExec: ExecPort | null = null,
     /** Injected so the suite never reaches a real nameserver; see services/mailDns.ts. */
     private readonly resolver: DnsResolver = systemResolver,
+    /** How long the site images' PHP may take to read: `phpReadTimeoutMs` in the config. */
+    private readonly phpTimeoutMs = 10_000,
   ) {}
 
   /**
@@ -169,10 +171,10 @@ export class SystemInfoService {
     return dto;
   }
 
-  /** The PHP in the server's site images. A Docker that does not answer is no reason to lose the rest. */
+  /** The PHP in the server's site images. A Docker that fails or does not answer is no reason to lose the rest. */
   private async sitePhp(name: string, handle: ServerHandle): Promise<ServerSystemInfoDto['php']> {
     try {
-      return await siteImagePhp(handle.docker);
+      return await siteImagePhp(handle.docker, this.phpTimeoutMs);
     } catch (err) {
       this.log.warn(`Site images on "${name}" could not be read: ${err instanceof Error ? err.message : String(err)}`);
       return [];

@@ -113,7 +113,7 @@ describe('SystemInfoService', () => {
     expect(dto.os).toBeNull();
   });
 
-  it('names the PHP release in each of the server\'s site images, and does without them when Docker does not answer', async () => {
+  it('names the PHP release in each of the server\'s site images, and does without them when Docker fails', async () => {
     const exec = new FakeExec();
     exec.resultDefault = { stdout: UBUNTU, stderr: '', exitCode: 0 };
     const w = await makeWorld({ exec });
@@ -129,6 +129,22 @@ describe('SystemInfoService', () => {
     w.docker.imageTags = () => Promise.reject(new Error('connect ENOENT /var/run/docker.sock'));
     const dto = await service.describe(1, { refresh: true });
     expect(dto).toMatchObject({ reachable: true, os: 'Ubuntu 24.04.1 LTS', php: [] });
+  });
+
+  it('shows the host facts without the site images when Docker takes the request and never answers', async () => {
+    const exec = new FakeExec();
+    exec.resultDefault = { stdout: UBUNTU, stderr: '', exitCode: 0 };
+    const w = await makeWorld({ exec });
+    const service = new SystemInfoService(w.servers, log, null, undefined, 50);
+    const never = <T>() => new Promise<T>(() => undefined);
+
+    w.docker.imageTags = never;
+    expect(await service.describe(1)).toMatchObject({ reachable: true, os: 'Ubuntu 24.04.1 LTS', cpus: 4, php: [] });
+
+    // The tags come, and an image's own details do not.
+    w.docker.imageTags = async () => ['wpl7-wordpress:php8.3'];
+    w.docker.imagePhpVersion = never;
+    expect(await service.describe(1, { refresh: true })).toMatchObject({ reachable: true, os: 'Ubuntu 24.04.1 LTS', php: [] });
   });
 
   it('refuses an id that is not a server', async () => {

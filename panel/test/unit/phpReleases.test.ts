@@ -152,7 +152,7 @@ describe('a server\'s site images', () => {
     }
     w.docker.phpOf(siteImage('8.3'), '8.3.36');
     w.docker.phpOf(siteImage('8.4'), '8.4.27');
-    expect(await siteImagePhp(w.docker)).toEqual([
+    expect(await siteImagePhp(w.docker, 1000)).toEqual([
       { version: '8.3', release: '8.3.36' },
       { version: '8.4', release: '8.4.27' },
       // An image that does not say.
