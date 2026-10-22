@@ -97,6 +97,42 @@ describe('the PHP release a site runs', () => {
     expect(releaseOf(w, site)).toBeNull();
   });
 
+  it('lets the job end when Docker never answers, and keeps the release it had', async () => {
+    const w = await makeWorld();
+    w.docker.phpOf(siteImage('8.3'), '8.3.35');
+    const site = await createSite(w);
+    (w.config as { phpReadTimeoutMs: number }).phpReadTimeoutMs = 50;
+    // Docker took the request and will never answer it.
+    w.docker.containerPhpVersion = () => new Promise<string | null>(() => undefined);
+    const job = w.worker.enqueue('site.restart', { siteId: site.id }, { id: site.id, slug: site.slug, serverId: site.serverId });
+    expect(await runJob(w, job.id)).toBe('succeeded');
+    await sweepPhpReleases(w.core);
+    expect(releaseOf(w, site)).toBe('8.3.35');
+  });
+
+  it('drops a sweep\'s reading of a site that a job changed while the reading was out', async () => {
+    const w = await makeWorld();
+    w.docker.phpOf(siteImage('8.3'), '8.3.35');
+    w.docker.images.add(siteImage('8.4'));
+    w.docker.phpOf(siteImage('8.4'), '8.4.27');
+    const site = await createSite(w);
+    w.db.update(sites).set({ phpRelease: null }).where(eq(sites.id, site.id)).run();
+    // The sweep reads the 8.3 container, and its answer comes back after a switch to 8.4.
+    const docker = w.docker;
+    const real = docker.containerPhpVersion.bind(docker);
+    let answer!: (release: string) => void;
+    docker.containerPhpVersion = () => {
+      docker.containerPhpVersion = real;
+      return new Promise((resolve) => (answer = resolve));
+    };
+    const sweep = sweepPhpReleases(w.core);
+    const job = w.deps.sites.changePhp(site.slug, '8.4');
+    expect(await runJob(w, job.id)).toBe('succeeded');
+    answer('8.3.35');
+    await sweep;
+    expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()).toMatchObject({ phpVersion: '8.4', phpRelease: '8.4.27' });
+  });
+
   it('keeps the last reading on a server that cannot be reached', async () => {
     const w = await makeWorld();
     w.docker.phpOf(siteImage('8.3'), '8.3.35');

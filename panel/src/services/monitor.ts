@@ -186,8 +186,16 @@ export class MonitorService {
     };
   }
 
+  /**
+   * Where the count of jobs beginning and ending on sites stands now. A reading of a site taken
+   * after this has gone stale once changedSince says so, here and in services/phpReleases.ts.
+   */
+  changeMark(): number {
+    return this.changeSeq;
+  }
+
   /** Whether a job is changing the site, or has begun or ended since `seq`. */
-  private changedSince(siteId: number, seq: number): boolean {
+  changedSince(siteId: number, seq: number): boolean {
     const change = this.changes.get(siteId);
     return change !== undefined && (change.holds > 0 || change.seq > seq);
   }

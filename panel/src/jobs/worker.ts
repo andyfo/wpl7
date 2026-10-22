@@ -525,8 +525,9 @@ export class JobWorker {
 
   /**
    * Read the PHP release of the container a job left its site with (services/phpReleases.ts), so
-   * the pages show the new one as the job ends. A failed reading keeps the old one until the
-   * hourly sweep.
+   * the pages show the new one as the job ends. The job's deadline is over by now, so the reading
+   * has one of its own: one that fails or does not come keeps the old release until the hourly
+   * sweep, and the job ends either way.
    */
   private async rereadPhp(job: JobRow): Promise<void> {
     if (job.siteId === null || !SITE_INTERRUPTING_JOBS.has(job.type as JobType)) return;
@@ -599,7 +600,13 @@ export class JobWorker {
           // overtake it, and neither job's reading would stand.
           const late = release;
           release = null;
-          this.holdLaneUntilSettled(job, handlerPromise.catch(() => undefined).then(() => this.releaseChecks(job, late)));
+          this.holdLaneUntilSettled(
+            job,
+            handlerPromise
+              .catch(() => undefined)
+              .then(() => this.releaseChecks(job, late))
+              .then(() => this.rereadPhp(job)),
+          );
         }
         throw err;
       } finally {

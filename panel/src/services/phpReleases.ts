@@ -21,13 +21,24 @@ import { SITE_IMAGE_REPO } from './siteSpec.js';
 
 /** Read one hosted site's release again. */
 export async function readSitePhp(s: CoreServices, siteId: number): Promise<void> {
+  const mark = s.monitor.changeMark();
   const site = s.db.select().from(sites).where(eq(sites.id, siteId)).get();
   if (!site || isExternal(site)) return;
-  store(s, site, await s.servers.handleFor(site.serverId).docker.containerPhpVersion(site.containerName));
+  const release = await read(s, s.servers.handleFor(site.serverId).docker, site);
+  if (release === NO_ANSWER) {
+    s.log.warn(`Site "${site.slug}": Docker did not say which PHP it runs in time. The hourly sweep reads it again.`);
+    return;
+  }
+  store(s, site, release, mark);
 }
 
-/** Read every hosted site's release, a server at a time. One that cannot be reached keeps what it had. */
+/**
+ * Read every hosted site's release, a server at a time. A server that cannot be reached, or whose
+ * Docker stops answering, keeps what it had.
+ */
 export async function sweepPhpReleases(s: CoreServices): Promise<void> {
+  // Taken with the list, as the uptime check takes its own (MonitorService.tickUptime).
+  const mark = s.monitor.changeMark();
   const rows = s.db.select().from(sites).where(hostedSites()).all();
   for (const server of s.servers.listRows()) {
     if (server.status === 'unreachable' || server.status === 'provisioning') continue;
@@ -35,16 +46,47 @@ export async function sweepPhpReleases(s: CoreServices): Promise<void> {
     if (mine.length === 0) continue;
     try {
       const docker = s.servers.handleFor(server.id).docker;
-      for (const site of mine) store(s, site, await docker.containerPhpVersion(site.containerName));
+      for (const site of mine) {
+        // A job on the site reads it as it ends.
+        if (s.monitor.changedSince(site.id, mark)) continue;
+        const release = await read(s, docker, site);
+        // Every other site on the server would wait as long.
+        if (release === NO_ANSWER) throw new Error('Docker did not answer in time');
+        store(s, site, release, mark);
+      }
     } catch (err) {
       s.log.warn(`PHP release sweep on "${server.name}" failed: ${err instanceof Error ? err.message : err}`);
     }
   }
 }
 
-/** A reading, like the disk use: it does not count as a change to the site. */
-function store(s: CoreServices, site: SiteRow, release: string | null): void {
-  if (site.phpRelease === release) return;
+const NO_ANSWER = Symbol('no answer');
+
+/**
+ * The release a site's container runs, or NO_ANSWER after `phpReadTimeoutMs`: Docker can take a
+ * request and never answer it, and nothing waiting on this reading should wait for that.
+ */
+async function read(s: CoreServices, docker: DockerPort, site: SiteRow): Promise<string | null | typeof NO_ANSWER> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      docker.containerPhpVersion(site.containerName),
+      new Promise<typeof NO_ANSWER>((resolve) => {
+        timer = setTimeout(() => resolve(NO_ANSWER), s.config.phpReadTimeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Store a reading, unless a job has begun or ended on the site since `mark` (MonitorService.
+ * changedSince): it may be of the container that job replaced, and the job reads the site again
+ * as it ends. Like the disk use, a reading does not count as a change to the site.
+ */
+function store(s: CoreServices, site: SiteRow, release: string | null, mark: number): void {
+  if (s.monitor.changedSince(site.id, mark) || site.phpRelease === release) return;
   s.db.update(sites).set({ phpRelease: release }).where(eq(sites.id, site.id)).run();
 }
 
