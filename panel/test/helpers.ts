@@ -228,6 +228,11 @@ export class FakeDocker implements DockerPort {
   imageIds = new Map<string, string>();
   /** The image id each container was created from, as `listManaged` reports it. */
   private imageByContainer = new Map<string, string>();
+  /**
+   * The PHP release in each image (its `PHP_VERSION`), by image id; an image not here does not
+   * say. A container runs the one of the image it was created from. `phpOf` sets one by tag.
+   */
+  imagePhp = new Map<string, string>();
   execQueue: RunResult[] = [];
   /** Scripted container logs, keyed by container name (mail-log ingest reads these). */
   logs = new Map<string, string>();
@@ -338,6 +343,10 @@ export class FakeDocker implements DockerPort {
   containerImages = new Map<string, string>([['wpl7-panel', 'ghcr.io/andyfo/wpl7/panel:0.3.0']]);
   async containerImage(name: string): Promise<string | null> {
     return this.containers.has(name) ? (this.containerImages.get(name) ?? `${name}:latest`) : null;
+  }
+  async containerPhpVersion(name: string): Promise<string | null> {
+    const id = this.containers.has(name) ? this.imageByContainer.get(name) : undefined;
+    return id ? (this.imagePhp.get(id) ?? null) : null;
   }
   /**
    * How each container was started. Traefik defaults to what deploy/docker-compose.yml starts it
@@ -503,6 +512,17 @@ export class FakeDocker implements DockerPort {
   }
   async imageId(tag: string): Promise<string | null> {
     return this.images.has(tag) ? (this.imageIds.get(tag) ?? `sha256:${tag}`) : null;
+  }
+  /** Give the image a tag names now a PHP release. */
+  phpOf(tag: string, release: string): void {
+    this.imagePhp.set(this.imageIds.get(tag) ?? `sha256:${tag}`, release);
+  }
+  async imagePhpVersion(ref: string): Promise<string | null> {
+    const id = this.imagePhp.has(ref) ? ref : await this.imageId(ref);
+    return id ? (this.imagePhp.get(id) ?? null) : null;
+  }
+  async imageTags(repository: string): Promise<string[]> {
+    return [...this.images].filter((tag) => tag.startsWith(`${repository}:`));
   }
   async buildImage(tag: string, contextDir: string, buildArgs: Record<string, string>): Promise<void> {
     this.record('buildImage', [tag, contextDir, buildArgs]);

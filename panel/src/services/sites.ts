@@ -432,6 +432,7 @@ export class SitesService {
       devHostname: site.devHostname,
       isLive: site.isLive === 1,
       phpVersion: site.phpVersion,
+      phpRelease: site.phpRelease,
       status: site.status as SiteSummary['status'],
       up: monitor?.up ?? null,
       httpStatus: monitor?.httpStatus ?? null,

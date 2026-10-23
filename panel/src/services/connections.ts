@@ -17,6 +17,7 @@ import type {
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { sameSecret, sha256Hex } from '../lib/crypto.js';
 import { panelUrl } from '../lib/panelUrl.js';
+import { phpReleaseOf } from '../lib/phpRelease.js';
 import { compareVersions } from '../lib/wpVersions.js';
 import { isValidSlug } from '../lib/slug.js';
 import { externalSites, isExternal } from '../lib/siteKind.js';
@@ -375,7 +376,13 @@ export class ConnectionsService {
         });
         this.db
           .update(sites)
-          .set({ status: 'connected', wpAdminUser: actAs?.login ?? target.wpAdminUser, phpVersion: phpMinor(report.php), updatedAt: now })
+          .set({
+            status: 'connected',
+            wpAdminUser: actAs?.login ?? target.wpAdminUser,
+            phpVersion: phpMinor(report.php),
+            phpRelease: phpReleaseOf(report.php),
+            updatedAt: now,
+          })
           .where(eq(sites.id, target.id))
           .run();
         return replaced;
@@ -463,6 +470,7 @@ export class ConnectionsService {
             isLive: 1,
             keepDevAlias: 0,
             phpVersion: phpMinor(report.php),
+            phpRelease: phpReleaseOf(report.php),
             locale: report.locale || 'en_US',
             status: 'connected',
             dbName: '',
@@ -723,7 +731,13 @@ export class ConnectionsService {
         warnings: JSON.stringify(this.pingWarnings(row, ping)),
         offeredVersion: offer?.version ?? null,
       });
-      if (ping.php) this.db.update(sites).set({ phpVersion: phpMinor(ping.php), updatedAt: Date.now() }).where(eq(sites.id, site.id)).run();
+      if (ping.php) {
+        this.db
+          .update(sites)
+          .set({ phpVersion: phpMinor(ping.php), phpRelease: phpReleaseOf(ping.php), updatedAt: Date.now() })
+          .where(eq(sites.id, site.id))
+          .run();
+      }
     } catch (err) {
       const homeChanged = err instanceof PluginSourceError && err.code === 'home_changed' ? (err.details?.home as string | null) : null;
       this.mark(row.id, {

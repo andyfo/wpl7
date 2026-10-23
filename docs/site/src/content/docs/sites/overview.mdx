@@ -11,11 +11,13 @@ sources:
   - panel/web/src/lib/siteHealth.ts
   - panel/src/lib/httpProbe.ts
   - panel/src/services/sites.ts
+  - panel/src/services/phpReleases.ts
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
+import Since from '~/components/Since.astro';
 
-**Sites → All sites** lists every site on every server, with its state, its PHP version and
+**Sites → All sites** lists every site on every server, with its state, its PHP release and
 its traffic. A row opens the site's page, whose tabs hold everything about that site.
 
 <Screenshot name="sites-list" alt="Sites → All sites: eleven sites on three servers, under Hosted" />
@@ -28,7 +30,7 @@ its traffic. A row opens the site's page, whose tabs hold everything about that 
 | **Status** | One badge for the site's state, explained below. |
 | **Mode** | **dev** while the site is on its dev domain, **live** once it has gone live. **external** for a site hosted elsewhere. |
 | **Server** | Where the site runs. Shown when there is more than one server. |
-| **PHP** | The site's PHP version. |
+| **PHP** | <Since v="0.3.3" /> The PHP release the site runs, such as 8.4.27. Its branch, such as 8.4, until the release has been read. |
 | **Updates** | Plugin, theme and WordPress updates the last scan found, with the worst known vulnerability. A dash means not scanned yet. |
 | **Visitors** | Unique visitors in the last 24 hours. Hover for page views. |
 | **Disk** | The space the site uses. |
@@ -39,7 +41,7 @@ to open the site, or Cmd-click or Ctrl-click it to open the site in a new tab.
 
 [Sites hosted elsewhere](/docs/sites/external/) are in a card of their own, **External**, under
 the sites hosted here, which are then titled **Hosted**. The External card shows their status,
-PHP version, updates, last backup, and when they were added. **Connect site** at the top adds one.
+PHP release, updates, last backup, and when they were added. **Connect site** at the top adds one.
 
 <Screenshot name="sites-external" alt="The External card under the Sites list: one site online, one whose plugin does not answer" />
 

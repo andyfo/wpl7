@@ -60,7 +60,7 @@ import {
   createFailed,
   useSiteCreation,
 } from '../components/SiteCreation';
-import { countryName, flagOf, formatBytes, formatDate, localeName, timeAgo } from '../lib/format';
+import { countryName, flagOf, formatBytes, formatDate, localeName, sitePhp, timeAgo } from '../lib/format';
 import { siteHealth } from '../lib/siteHealth';
 
 const SITE_TABS = [
@@ -191,7 +191,7 @@ function SiteFacts({ site: s, creating = false }: { site: SiteDetailDto; creatin
         <FactRow label="Domains" value={s.domains.join(', ')} />
         {s.devHostname && <FactRow label="Dev hostname" value={s.devHostname} />}
         {multiServer && <FactRow label="Server" value={s.serverName} />}
-        <FactRow label="PHP" value={s.phpVersion} />
+        <FactRow label="PHP" value={sitePhp(s)} />
         <FactRow label="Language" value={localeName(meta.data?.locales, s.locale)} />
         {!creating && <FactRow label="Container" value={s.containerState} />}
         {creating ? (
