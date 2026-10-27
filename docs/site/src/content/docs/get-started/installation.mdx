@@ -8,6 +8,8 @@ sources:
   - provision/setup.sh
   - provision/lib.sh
   - provision/daemon.json
+  - provision/journald.conf
+  - provision/apt-clean.conf
   - "provision/firewall/*"
   - deploy/.env.example
   - panel/src/db/seed.ts
@@ -113,6 +115,7 @@ The full list is in [Installer and scripts](/docs/reference/installer-and-script
 | Docker | Installs Docker CE with its compose plugin from Docker's repository. Writes `/etc/docker/daemon.json` with log rotation and `live-restore`. |
 | Firewall | UFW denies incoming traffic except SSH, rate-limited, and ports 80 and 443. Existing rules stay. |
 | Blocked addresses | Installs the `wpl7-firewall` helper and its systemd unit, which load blocked addresses into the nftables table `inet wpl7`. |
+| Logs and caches | Limits the system journal to 500 MB. Has apt empty its package cache once a week. |
 | Swap | Adds a 2 GB `/swapfile` when memory is under 4 GB and no swap is active. |
 | Directories | Creates `/srv` with `sites`, `backups`, `mysql`, `traefik`, `panel`, `plugins`, `mail` and `wpl7-firewall`. |
 | Configuration | Writes `/opt/wpl7/deploy/.env`, mode `0600`, with generated database and session secrets. |
