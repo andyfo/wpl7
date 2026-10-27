@@ -78,6 +78,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     userClaimed: hosted('hostedSites()'),
     pruneUploads: hosted('hostedSites()'),
   },
+  'services/dockerCleanup.ts': { needsOn: hosted('hostedSites()') },
   'services/domainGuard.ts': { assertDomainsFree: both('a domain belongs to one site, of either kind') },
   'services/externalBackup.ts': { pruneOrphans: both('external sites only (externalSites)') },
   'services/ftp.ts': {

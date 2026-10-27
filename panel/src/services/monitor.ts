@@ -3,7 +3,7 @@ import fsp from 'node:fs/promises';
 import os from 'node:os';
 import { and, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { serverStats, siteStats, sites, type SiteRow } from '../db/schema.js';
+import { serverStats, siteStats, sites, type ServerRow, type SiteRow } from '../db/schema.js';
 import type { Config } from '../config.js';
 import type { ServerMonitorDto, ServerStatsDto, SiteMonitorDto } from '../../shared/types.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
@@ -21,10 +21,11 @@ export interface ExternalSites {
   recordCert(siteId: number, expiresAt: number | null): void;
 }
 
-/** Who hears about each probe that ran (services/alerts.ts). */
+/** Who hears about each probe that ran, and each server's disk reading (services/alerts.ts). */
 export interface ProbeListeners {
   probed(site: SiteRow, reading: { ok: boolean; status: number | null; error?: string | null }): Promise<void>;
   certificate(site: SiteRow, expiresAt: number | null): Promise<void>;
+  diskChecked(server: ServerRow, stats: ServerStatsDto): Promise<void>;
 }
 /** How long the check at the end of a job gives a container that has just started to answer. */
 const SETTLE_MS = 10_000;
@@ -383,6 +384,7 @@ export class MonitorService {
         if (!stats) return;
         this.latestServers.set(row.id, stats);
         this.db.insert(serverStats).values({ serverId: row.id, ts: Date.now(), ...stats }).run();
+        await this.listeners?.diskChecked(row, stats).catch(() => undefined);
       }),
     );
   }

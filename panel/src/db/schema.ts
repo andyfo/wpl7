@@ -1683,7 +1683,8 @@ export type SiteConnectionRow = typeof siteConnections.$inferSelect;
 /**
  * What the alerts (services/alerts.ts) last said about a site, so a restart neither repeats an
  * alert nor misses a recovery. One row per condition that is on: `down:<siteId>`,
- * `backup:<siteId>`, `connector:<siteId>`, `cert:<siteId>`.
+ * `backup:<siteId>`, `connector:<siteId>`, `cert:<siteId>`, and `disk:<serverId>` for a server,
+ * with no site.
  */
 export const alertStates = sqliteTable('alert_states', {
   key: text('key').primaryKey(),

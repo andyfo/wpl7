@@ -147,6 +147,29 @@ describe('wpl7_stamp', () => {
   });
 });
 
+describe('wpl7_prune_db_copies', () => {
+  it('keeps the copy this update took, with its -wal and -shm, and removes the older ones', () => {
+    // update.sh copies the database before each update's migrations, and nothing removed them.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-update-'));
+    stubs.push(dir);
+    const names = ['panel.db.pre-0.3.1', 'panel.db.pre-0.3.1-wal', 'panel.db.pre-0.3.2', 'panel.db.pre-0.3.2-wal', 'panel.db.pre-0.3.2-shm', 'state.json', 'current.log'];
+    for (const name of names) fs.writeFileSync(path.join(dir, name), 'x');
+
+    const res = runShell(`wpl7_prune_db_copies ${JSON.stringify(dir)} ${JSON.stringify(path.join(dir, 'panel.db.pre-0.3.2'))}`, dir);
+
+    expect(res.status).toBe(0);
+    expect(fs.readdirSync(dir).sort()).toEqual(['current.log', 'panel.db.pre-0.3.2', 'panel.db.pre-0.3.2-shm', 'panel.db.pre-0.3.2-wal', 'state.json']);
+  });
+
+  it('does nothing in a folder without copies', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-update-'));
+    stubs.push(dir);
+    const res = runShell(`wpl7_prune_db_copies ${JSON.stringify(dir)} ${JSON.stringify(path.join(dir, 'panel.db.pre-1.0.0'))}`, dir);
+    expect(res.status).toBe(0);
+    expect(fs.readdirSync(dir)).toEqual([]);
+  });
+});
+
 /** A folder of commands for a script's PATH: name -> bash body. Every stub logs its call to `calls`. */
 function stubCommands(commands: Record<string, string>): { dir: string; calls: () => string[] } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-inst-'));

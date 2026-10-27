@@ -236,6 +236,7 @@ async function main(): Promise<void> {
   core.monitor.attachExternal(core.connections, {
     probed: (site, reading) => core.alerts.probed(site, reading),
     certificate: (site, expiresAt) => core.alerts.certificate(site, expiresAt),
+    diskChecked: (server, stats) => core.alerts.diskChecked(server, stats),
   });
   const worker = new JobWorker(db, core);
   // Circular by nature: the reconciler enqueues jobs, the worker runs handlers that need

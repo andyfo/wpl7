@@ -719,7 +719,7 @@ function MonitoringTab({ s, set }: TabProps) {
               label="External sites: WPL7 Connect not answering, certificate expiring"
             />
           </div>
-          <p className="text-xs text-neutral-500">Suspended mail, malware findings, failed offsite copies and new releases are always sent.</p>
+          <p className="text-xs text-neutral-500">Suspended mail, malware findings, failed offsite copies, a server low on disk and new releases are always sent.</p>
         </div>
       </Card>
 

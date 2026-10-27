@@ -82,7 +82,8 @@ same script.
    files and database copy.
 
 There are no down-migrations. A failed update goes back to the whole previous state. The log of
-the last update is `/srv/panel/update/current.log`.
+the last update is `/srv/panel/update/current.log`. The database copy of the last update stays
+beside it, and a healthy update removes the copies of earlier ones.
 
 ## Image mode and checkout mode
 

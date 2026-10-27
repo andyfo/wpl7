@@ -26,6 +26,7 @@ for a reason; remove one once there is nothing left to watch.
 | [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-21 19:22 UTC | 2.7.6 is the latest; patch still needed |
 | [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-10-21 16:24 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12 |
 | [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
+| [Docker: the build cache and image names, as the nightly clean-up reads them](#docker-the-build-cache-and-image-names-as-the-nightly-clean-up-reads-them) | Medium | 2026-10-27 17:47 UTC | Docker 29.9.2: both prune parameters trim, `all` would remove shared layers first |
 | [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-10-04 18:10 UTC | `latest` is v5.1.0; hostname logic as relied on |
 | [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-09-30 07:23 UTC | Both answer as expected |
 | [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-09-30 09:51 UTC | All six as listed |
@@ -206,6 +207,39 @@ for a reason; remove one once there is nothing left to watch.
      `wpl7-firewall apply`. A blocked client must time out on 80 and 443 and still reach 22.
   5. Repeat after `ufw reload`, `systemctl restart docker`, a restart of the whole container (a
      reboot: the boot unit loads the table), and `wpl7-firewall off` / `on`.
+
+## Docker: the build cache and image names, as the nightly clean-up reads them
+
+- **Priority:** Medium
+- **Last checked:** 2026-10-27 17:47 UTC. Measured on Docker Engine 29.9.2, in two throwaway `docker:29-dind`
+  daemons, one on each image store (`--storage-driver=overlay2` for the classic one).
+- **The problem:** dockerd trims the build cache only when free space falls under 20% of the disk,
+  and then only down to 10% of it (`DefaultGCPolicy` in moby's
+  `daemon/internal/builder-next/worker/gc.go`). The nightly housekeeping trims it itself instead,
+  and removes the images nothing uses (`panel/src/services/dockerCleanup.ts`). Both rest on details
+  of the Engine API:
+  - `POST /build/prune` takes `reserved-space` since API 1.48 and still reads the deprecated
+    `keep-storage` without it. `DockerService.pruneBuildCache` sends both, and not `all`. With
+    `all`, BuildKit removes the least recently used records first, image layers included, and
+    counts them against the target. Removing a layer an image keeps frees nothing, so the private
+    cache stayed. Without `all`, only cache no image shares is removed.
+  - On the containerd image store, an image pulled by digest lists `repo@sha256:…` in `RepoTags`
+    and is not dangling. On the classic store it has no tags, only `RepoDigests`. The clean-up
+    reads both, and removes an image by each of its names: Docker refuses one with two names by id.
+  - A rebuild through the API (the classic builder, which the panel uses) leaves the replaced image
+    without a name on both stores. A BuildKit rebuild through the CLI leaves none on the containerd
+    store.
+  - `ImageID` in the container list is the `Id` of `GET /images/json`, and an image a container
+    uses, running or stopped, is refused with 409 without `force`.
+- **Check:** the Engine API changelog and the release notes since the last check. Look for
+  `keep-storage` being removed, a change to how `reserved-space` and `all` select records, and a
+  change to the default builder GC policy. Then run the probe again: build three images whose
+  first stage writes a few MB that the final stage leaves out, and call `pruneBuildCache` with a
+  smaller limit. The private cache must shrink to it, oldest first.
+- **When it changes:** if `keep-storage` is gone, drop it from `pruneBuildCache`. If the default
+  GC starts trimming early enough on its own, consider dropping the nightly trim. If image listing
+  changes, rerun `test/unit/dockerCleanup.test.ts`'s cases against a real daemon before relying on
+  `imagesToRemove`.
 
 ## boky/postfix: how the relay picks its hostname
 

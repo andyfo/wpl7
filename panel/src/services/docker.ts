@@ -272,6 +272,20 @@ export interface ContainerLogsOpts {
   tail?: number;
 }
 
+/** An image as the nightly clean-up weighs it (services/dockerCleanup.ts). */
+export interface ImageSummary {
+  id: string;
+  /**
+   * The names to remove it by: `repo:tag`, and on the containerd image store also `repo@sha256:…`
+   * for one pulled by digest. Empty once a newer image took its last tag.
+   */
+  tags: string[];
+  /** `repo@sha256:…` for each registry it came from; empty for one built on the server. */
+  digests: string[];
+  /** Unix seconds: when it was built. */
+  created: number;
+}
+
 /** Narrow surface consumed by job handlers and services; faked in tests. */
 export interface DockerPort {
   createSiteContainer(spec: SiteContainerSpec): Promise<void>;
@@ -333,6 +347,15 @@ export interface DockerPort {
   removeImage(ref: string): Promise<void>;
   /** Remove untagged images carrying all these labels (`key=value`): what a build left behind. */
   pruneImages(labels: string[]): Promise<void>;
+  /** Every image on the server, intermediate build steps aside. */
+  listImages(): Promise<ImageSummary[]>;
+  /** The image of every container on the server, running or not. */
+  containerImageIds(): Promise<string[]>;
+  /**
+   * Remove build cache that no build is using and no image shares, least recently used first,
+   * until at most `keepBytes` of it is left. Returns the bytes freed.
+   */
+  pruneBuildCache(keepBytes: number): Promise<number>;
   /** One read of the container's cumulative CPU/memory counters (see ContainerSample). */
   sampleStats(name: string): Promise<ContainerSample>;
   /** `imageId` is the image the container was created from, which its tag may have moved off since. */
@@ -1026,6 +1049,45 @@ export class DockerService implements DockerPort {
 
   async pruneImages(labels: string[]): Promise<void> {
     await this.docker.pruneImages({ filters: { dangling: ['true'], label: labels } });
+  }
+
+  async listImages(): Promise<ImageSummary[]> {
+    // Older daemons name an image without a tag `<none>:<none>`, and its digest `<none>@<none>`.
+    const real = (names: string[] | undefined) => (names ?? []).filter((name) => !name.startsWith('<none>'));
+    return (await this.docker.listImages()).map((image) => ({
+      id: image.Id,
+      tags: real(image.RepoTags),
+      digests: real(image.RepoDigests),
+      created: image.Created,
+    }));
+  }
+
+  async containerImageIds(): Promise<string[]> {
+    return (await this.docker.listContainers({ all: true })).map((c) => c.ImageID);
+  }
+
+  async pruneBuildCache(keepBytes: number): Promise<number> {
+    const keep = String(Math.max(0, Math.floor(keepBytes)));
+    // The request dockerode's pruneBuilder makes, with the query it leaves out. `reserved-space`
+    // is the parameter since API 1.48; older daemons read `keep-storage`, which newer ones still
+    // take when `reserved-space` is absent.
+    //
+    // Not `all`: with it, BuildKit removes the oldest records first whether or not an image
+    // shares them, and counts what they hold against the target. Removing a layer an image keeps
+    // frees nothing, so it stopped with the cache only builds had still there. Measured on
+    // Docker 29.9.2, with both image stores.
+    const result = await new Promise<{ SpaceReclaimed?: number } | null>((resolve, reject) => {
+      this.docker.modem.dial(
+        {
+          path: '/build/prune?',
+          method: 'POST',
+          options: { 'reserved-space': keep, 'keep-storage': keep },
+          statusCodes: { 200: true, 500: 'server error' },
+        },
+        (err: unknown, data: unknown) => (err ? reject(err) : resolve(data as { SpaceReclaimed?: number } | null)),
+      );
+    });
+    return result?.SpaceReclaimed ?? 0;
   }
 
   async pullImage(tag: string, onProgress?: (line: string) => void): Promise<void> {

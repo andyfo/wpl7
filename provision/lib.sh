@@ -127,6 +127,18 @@ wpl7_db_copy() {
   done
 }
 
+# Remove the copies earlier updates took (`panel.db.pre-<version>`, with their -wal and -shm),
+# all but `keep` and its own. Only the newest can still undo anything: it is the database as it
+# was before the version now running migrated it. Each is as big as the database.
+wpl7_prune_db_copies() {
+  local dir=$1 keep=$2 copy
+  for copy in "$dir"/panel.db.pre-*; do
+    [ -e "$copy" ] || continue
+    case "$copy" in "$keep"|"$keep-wal"|"$keep-shm") continue ;; esac
+    rm -f -- "$copy"
+  done
+}
+
 # ------------------------------------------------------------------- health
 
 # Wait for a container to report healthy (or merely running, for images without a

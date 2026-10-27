@@ -385,6 +385,7 @@ if [ "$healthy" = 1 ]; then
   PHASE=switched
   FINISHED="$(date -u +%Y-%m-%dT%H:%M:%SZ | jq -R .)"
   write_state
+  if [ -n "$DB_SNAPSHOT" ]; then wpl7_prune_db_copies "$UPDATE_DIR" "$DB_SNAPSHOT"; fi
   log "Updated to $TO."
   echo "   The panel finishes the job itself: worker servers and any per-version steps run"
   echo "   as a job in the new panel (Settings -> Updates)."
