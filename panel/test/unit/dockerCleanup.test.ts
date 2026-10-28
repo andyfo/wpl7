@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { servers, sites } from '../../src/db/schema.js';
@@ -113,6 +115,40 @@ describe('cleanDocker', () => {
     expect(total).toEqual({ imagesRemoved: 6, buildCacheFreedBytes: 2 * GiB });
     expect(lines).toContain('Docker on "worker-1": removed 1 image(s) nothing uses: wpl7-sftpgo:2.7.5-wpl7.1');
     expect(lines).toContainEqual(expect.stringMatching(/^Docker on ".+": removed 5 image\(s\) nothing uses: .+; freed 2\.0 GiB of build cache$/));
+  });
+
+  it("leaves the panel's server's images alone while update.sh runs there, however it was started", async () => {
+    const w = await makeWorld();
+    const lines: string[] = [];
+    const log = { info: (m: string) => lines.push(m), warn: (m: string) => lines.push(`WARN ${m}`) };
+    // update.sh by hand, part-way: the next release's site image is pulled, and not yet named
+    // wpl7-wordpress:php8.3. This panel's release is not that one, so nothing else protects it.
+    const state = path.join(w.config.paths.panel, 'update', 'state.json');
+    fs.mkdirSync(path.dirname(state), { recursive: true });
+    fs.writeFileSync(state, JSON.stringify({ phase: 'fetching', pid: 4242, to: '9.9.9' }));
+    add(w.docker, 'ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9');
+    w.docker.buildCacheBytes = 2 * GiB;
+    const worker = w.addSshServer('worker-1');
+    add(worker.docker, 'wpl7-sftpgo:2.7.5-wpl7.1');
+
+    const total = await cleanDocker(w.core, log);
+
+    // The host was asked whether the updater is still there, and said yes (the fake's exit 0).
+    expect(w.host.commands).toContain('systemctl is-active --quiet wpl7-update || kill -0 4242 2>/dev/null');
+    expect(removed(w.docker)).toEqual([]);
+    expect(w.docker.images.has('ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9')).toBe(true);
+    // The build cache is not what the update needs, and a worker is not where it runs.
+    expect(w.docker.buildCacheBytes).toBe(BUILD_CACHE_KEEP_BYTES);
+    expect(removed(worker.docker)).toEqual(['wpl7-sftpgo:2.7.5-wpl7.1']);
+    expect(total.imagesRemoved).toBe(1);
+    expect(lines).toContainEqual(
+      expect.stringMatching(/^Docker on ".+": an update of the panel is running here, so its images wait for the next run; freed 1\.0 GiB of build cache$/),
+    );
+
+    // Once it is over, the next run removes what nothing needs.
+    fs.writeFileSync(state, JSON.stringify({ phase: 'switched', pid: 4242, to: '9.9.9' }));
+    await cleanDocker(w.core, log);
+    expect(removed(w.docker)).toEqual(['ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9']);
   });
 
   it('keeps an image a site on that server still runs, and one Docker refuses to remove', async () => {

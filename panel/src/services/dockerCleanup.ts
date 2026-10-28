@@ -24,7 +24,8 @@ import { DKIM_CONTAINER, MAIL_CONTAINER, MARIADB_CONTAINER, PANEL_CONTAINER, TRA
  * An image goes when no container uses it, running or stopped, no name the panel needs points
  * at it, and it is WPL7's: every name it has is in a repository WPL7 pulls or builds into, or it
  * has no name at all. A server's own images, under names of their own, are left alone. Of the
- * panel's images, the newest one no container runs stays too, for a rollback.
+ * panel's images, the newest one no container runs stays too, for a rollback. While an update of
+ * the panel runs on its server, nothing is removed there (removeUnusedImages says why).
  *
  * Docker trims the build cache only once free space falls under a fifth of the disk, and then
  * only down to a tenth of it. Here it keeps BUILD_CACHE_KEEP_BYTES of what no image shares, the
@@ -128,10 +129,18 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
 /** How the log names an image: its first name, or its short id when it has none. */
 const nameOf = (image: ImageSummary) => image.tags[0] ?? image.digests[0] ?? `untagged ${image.id.replace(/^sha256:/, '').slice(0, 12)}`;
 
-/** One server's images. Returns the names of those removed. */
-export async function removeUnusedImages(s: CoreServices, handle: ServerHandle, log: HousekeepingLog): Promise<string[]> {
+/**
+ * One server's images. Returns the names of those removed, or null when an update of the panel
+ * is running on that server and they were left for the next run.
+ */
+export async function removeUnusedImages(s: CoreServices, handle: ServerHandle, log: HousekeepingLog): Promise<string[] | null> {
   const { docker } = handle;
   const images = await docker.listImages();
+  // update.sh runs on the panel's own server, started from the panel or by hand, and pulls the
+  // next release's images before it gives them their local names. Until then this panel, which
+  // does not know that release, would take them for leftovers and the update would fail. Asked
+  // after the list is read: an update that starts later pulls nothing into it.
+  if (handle.kind === 'local' && (await s.system.isRunning())) return null;
   const inUse = new Set(await docker.containerImageIds());
   const { needed: neededRefs, repos, panelRepos } = await needsOn(s, handle);
   const needed = new Set<string>();
@@ -173,8 +182,11 @@ export async function cleanDocker(
     const said: string[] = [];
     try {
       const removed = await removeUnusedImages(s, handle, log);
-      total.imagesRemoved += removed.length;
-      if (removed.length > 0) said.push(`removed ${removed.length} image(s) nothing uses: ${removed.join(', ')}`);
+      if (removed === null) said.push('an update of the panel is running here, so its images wait for the next run');
+      else {
+        total.imagesRemoved += removed.length;
+        if (removed.length > 0) said.push(`removed ${removed.length} image(s) nothing uses: ${removed.join(', ')}`);
+      }
     } catch (err) {
       log.warn(`Docker on "${server.name}": removing old images failed: ${errorText(err)}`);
     }
