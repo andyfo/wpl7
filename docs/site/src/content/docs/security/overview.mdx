@@ -7,6 +7,8 @@ sources:
   - panel/shared/security.ts
   - panel/src/services/security.ts
   - panel/src/services/siteHardening.ts
+  - panel/src/services/siteImages.ts
+  - deploy/wordpress-image/Dockerfile
   - panel/src/services/siteNetwork.ts
   - panel/src/services/docker.ts
   - panel/src/services/mailAuth.ts
@@ -74,6 +76,10 @@ and that key opens every machine you own.
 The settings inside a container guard against a stolen admin login, not against code already running
 in the site. A scan reads files, not the database. Containers built before a protection existed keep
 the old one until they are recreated, which the panel does once, by itself.
+
+A site's PHP comes from its site image. When an update brings a newer image, the panel rebuilds every
+site container on it, so a PHP security release reaches every site. The site image does not build on
+a PHP older than the last security release of its branch.
 
 ## The panel is root-equivalent
 

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "a4278687-9615-42a4-862c-da84c39f6946",
+  "id": "88b307ea-15d6-42ca-8d55-032a27664fde",
   "prevId": "bf763cd3-c77e-408b-9e1b-482abbf02dfe",
   "tables": {
     "alert_states": {
@@ -6060,6 +6060,13 @@
           "notNull": true,
           "autoincrement": false
         },
+        "php_release": {
+          "name": "php_release",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "locale": {
           "name": "locale",
           "type": "text",
@@ -6172,27 +6179,6 @@
         "backup_before_updates": {
           "name": "backup_before_updates",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "cpu_limit": {
-          "name": "cpu_limit",
-          "type": "real",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "memory_limit_mb": {
-          "name": "memory_limit_mb",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "pids_limit": {
-          "name": "pids_limit",
-          "type": "integer",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

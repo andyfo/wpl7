@@ -54,6 +54,13 @@ export const sites = sqliteTable(
     isLive: integer('is_live').notNull().default(0),
     keepDevAlias: integer('keep_dev_alias').notNull().default(1),
     phpVersion: text('php_version').notNull(),
+    /**
+     * The PHP release the site runs, such as 8.4.27, as last read: from its container for a
+     * hosted site (services/phpReleases.ts), from WPL7 Connect for an external one. NULL until
+     * read, and while a hosted site has no container. `php_version` is its branch, which the
+     * PHP version selectors set.
+     */
+    phpRelease: text('php_release'),
     locale: text('locale').notNull().default('en_US'),
     status: text('status').notNull(),
     dbName: text('db_name').notNull(),
@@ -108,12 +115,13 @@ export const sites = sqliteTable(
     /**
      * 'hosted' | 'external'. An external site is hosted elsewhere and reached through the WPL7
      * Connect plugin (site_connections). It fills the columns above that only a hosted site has
-     * meaningfully: `server_id` is the server that keeps its backups, `php_version` the PHP it
-     * reported, `domains` its home's host, `db_name`, `db_user`, `db_password` and
-     * `container_name` are '', `mail_password` is NULL, and `disk_bytes` is the size of its copy
-     * on that server. Its status is 'connected', 'disconnected' or 'deleting', never 'running',
-     * and SitesService.bySlug and the jobs' loadSite refuse it unless the caller asks for either
-     * kind: that is what keeps its empty container fields from ever reaching Docker.
+     * meaningfully: `server_id` is the server that keeps its backups, `php_version` and
+     * `php_release` the PHP it reported, `domains` its home's host, `db_name`, `db_user`,
+     * `db_password` and `container_name` are '', `mail_password` is NULL, and `disk_bytes` is the
+     * size of its copy on that server. Its status is 'connected', 'disconnected' or 'deleting',
+     * never 'running', and SitesService.bySlug and the jobs' loadSite refuse it unless the caller
+     * asks for either kind: that is what keeps its empty container fields from ever reaching
+     * Docker.
      */
     kind: text('kind').notNull().default('hosted'),
     createdAt: integer('created_at').notNull(),

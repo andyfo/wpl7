@@ -224,6 +224,15 @@ export class FakeDocker implements DockerPort {
   /** Binds of the container as last created, for enforceFileBinds. */
   private bindsByContainer = new Map<string, string[]>();
   images = new Set<string>(['wpl7-wordpress:php8.3']);
+  /** The id a tag points at; one not set here is `sha256:<tag>`. Set one to move a tag onto a new image. */
+  imageIds = new Map<string, string>();
+  /** The image id each container was created from, as `listManaged` reports it. */
+  private imageByContainer = new Map<string, string>();
+  /**
+   * The PHP release in each image (its `PHP_VERSION`), by image id; an image not here does not
+   * say. A container runs the one of the image it was created from. `phpOf` sets one by tag.
+   */
+  imagePhp = new Map<string, string>();
   execQueue: RunResult[] = [];
   /** Scripted container logs, keyed by container name (mail-log ingest reads these). */
   logs = new Map<string, string>();
@@ -292,6 +301,7 @@ export class FakeDocker implements DockerPort {
     this.record('createSiteContainer', [spec]);
     this.bindsByContainer.set(spec.name, spec.binds);
     this.labelsByContainer.set(spec.name, spec.labels);
+    this.imageByContainer.set(spec.name, (await this.imageId(spec.image)) ?? spec.image);
     const { nanoCpus } = fitCpus(spec, this.cpus);
     this.limits.set(spec.name, {
       memoryBytes: spec.memoryBytes ?? 512 * 1024 * 1024,
@@ -334,6 +344,10 @@ export class FakeDocker implements DockerPort {
   containerImages = new Map<string, string>([['wpl7-panel', 'ghcr.io/andyfo/wpl7/panel:0.3.0']]);
   async containerImage(name: string): Promise<string | null> {
     return this.containers.has(name) ? (this.containerImages.get(name) ?? `${name}:latest`) : null;
+  }
+  async containerPhpVersion(name: string): Promise<string | null> {
+    const id = this.containers.has(name) ? this.imageByContainer.get(name) : undefined;
+    return id ? (this.imagePhp.get(id) ?? null) : null;
   }
   /**
    * How each container was started. Traefik defaults to what deploy/docker-compose.yml starts it
@@ -503,6 +517,20 @@ export class FakeDocker implements DockerPort {
   async imageExists(tag: string): Promise<boolean> {
     return this.images.has(tag);
   }
+  async imageId(tag: string): Promise<string | null> {
+    return this.images.has(tag) ? (this.imageIds.get(tag) ?? `sha256:${tag}`) : null;
+  }
+  /** Give the image a tag names now a PHP release. */
+  phpOf(tag: string, release: string): void {
+    this.imagePhp.set(this.imageIds.get(tag) ?? `sha256:${tag}`, release);
+  }
+  async imagePhpVersion(ref: string): Promise<string | null> {
+    const id = this.imagePhp.has(ref) ? ref : await this.imageId(ref);
+    return id ? (this.imagePhp.get(id) ?? null) : null;
+  }
+  async imageTags(repository: string): Promise<string[]> {
+    return [...this.images].filter((tag) => tag.startsWith(`${repository}:`));
+  }
   async buildImage(tag: string, contextDir: string, buildArgs: Record<string, string>): Promise<void> {
     this.record('buildImage', [tag, contextDir, buildArgs]);
     this.images.add(tag);
@@ -533,7 +561,7 @@ export class FakeDocker implements DockerPort {
   /** Labels of every container as created, site and service alike - what listManaged filters on. */
   private labelsByContainer = new Map<string, Record<string, string>>();
 
-  async listManaged(labelFilters: string[] = []): Promise<{ name: string; labels: Record<string, string>; state: string }[]> {
+  async listManaged(labelFilters: string[] = []): Promise<{ name: string; labels: Record<string, string>; state: string; imageId: string }[]> {
     return [...this.labelsByContainer.entries()]
       .filter(([name, labels]) =>
         this.containers.has(name) &&
@@ -542,7 +570,7 @@ export class FakeDocker implements DockerPort {
           return k !== undefined && (v === undefined ? k in labels : labels[k] === v);
         }),
       )
-      .map(([name, labels]) => ({ name, labels, state: this.containers.get(name)! }));
+      .map(([name, labels]) => ({ name, labels, state: this.containers.get(name)!, imageId: this.imageByContainer.get(name) ?? '' }));
   }
 
   // --- service containers (the FTP gateway and file servers, services/ftp.ts) --------

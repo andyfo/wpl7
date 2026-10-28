@@ -4,6 +4,17 @@
 ARG PHP_TAG=php8.3
 FROM wordpress:${PHP_TAG}-apache
 
+# Refuse a base image whose PHP predates the last security release of its branch, so a stale
+# cached base fails the build instead of shipping. Raise a branch's floor with each PHP
+# security release (docs/internal/watchlist.md); a branch missing here is not checked.
+RUN php -r '$floor = ["8.2" => "8.2.35", "8.3" => "8.3.36", "8.4" => "8.4.27", "8.5" => "8.5.12"][PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION] ?? "0"; \
+    if (version_compare(PHP_VERSION, $floor, "<")) { fwrite(STDERR, "PHP " . PHP_VERSION . " is older than " . $floor . ", the last security release of its branch. Pull a newer base image.\n"); exit(1); }'
+
+# Upload progress tracking stays off: nothing in WordPress uses it, and PHP's advisory for
+# CVE-2026-109619 found it running before a request is initialized, which is where that bug
+# was exploited. The advisory recommends it off even once PHP is patched.
+RUN printf 'session.upload_progress.enabled = Off\n' > /usr/local/etc/php/conf.d/zz-wpl7-hardening.ini
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends msmtp msmtp-mta less mariadb-client \
   && rm -rf /var/lib/apt/lists/*

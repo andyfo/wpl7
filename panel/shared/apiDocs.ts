@@ -109,7 +109,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       {
         method: 'GET',
         path: '/api/sites',
-        summary: 'List every site with its status, health probe and WordPress snapshot',
+        summary: 'List every site with its status, health probe, PHP release and WordPress snapshot',
         returns: '{items: SiteSummary[]}',
         level: 'read',
       },
@@ -1456,9 +1456,9 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       {
         method: 'GET',
         path: '/api/servers/:id/info',
-        summary: 'What the machine is: OS, kernel, CPU, memory, uptime, Docker version',
+        summary: 'What the machine is: OS, kernel, CPU, memory, uptime, Docker version, and the PHP release in each site image',
         input: '?refresh=true skips the one-minute cache',
-        returns: '{reachable, os, kernel, arch, cpus, memTotalBytes, uptimeSeconds, dockerVersion, …}',
+        returns: '{reachable, os, kernel, arch, cpus, memTotalBytes, uptimeSeconds, dockerVersion, php: [{version, release}], …}',
         level: 'read',
       },
       {

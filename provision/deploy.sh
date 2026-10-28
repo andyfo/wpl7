@@ -217,7 +217,8 @@ apply() {
     versions="$(grep -m1 '^WP_PHP_VERSIONS=' "$ENV_FILE" | cut -d= -f2- || true)"
     versions="${versions:-8.2,8.3,8.4,8.5}"
     for v in ${versions//,/ }; do
-      docker build --build-arg "PHP_TAG=php$v" -t "wpl7-wordpress:php$v" "$DEPLOY_DIR/wordpress-image" || return 1
+      # --pull: a cached base would keep the PHP it was pulled with, and miss every security release since.
+      docker build --pull --build-arg "PHP_TAG=php$v" -t "wpl7-wordpress:php$v" "$DEPLOY_DIR/wordpress-image" || return 1
     done
   fi
   if [ "$need_stack" = 1 ]; then

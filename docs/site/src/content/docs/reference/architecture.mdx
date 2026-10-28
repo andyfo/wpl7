@@ -6,6 +6,8 @@ sidebar:
 sources:
   - "deploy/docker-compose*.yml"
   - panel/src/services/siteSpec.ts
+  - panel/src/services/siteImages.ts
+  - deploy/wordpress-image/Dockerfile
   - panel/src/services/siteNetwork.ts
   - panel/src/services/labels.ts
   - panel/src/services/docker.ts
@@ -118,6 +120,11 @@ at the same path, so every path the panel hands to Docker is valid on the host.
 
 The image `wpl7-wordpress:php<version>` is the official `wordpress:php<version>-apache` image
 with msmtp, so PHP's `mail()` reaches the relay, and WP-CLI. PHP 8.2 to 8.5 are offered.
+
+<Since v="0.3.2" /> The image turns off PHP's upload progress tracking, which WordPress does not use.
+Its build stops when the base image's PHP is older than the last security release of its branch.
+When a server's image changes, the panel rebuilds the containers of that server's sites on it, at
+its next start or within the hour.
 
 | Mounted from the host | Inside the container |
 |---|---|

@@ -49,7 +49,13 @@ export interface SiteSummary {
   domains: string[];
   devHostname: string | null;
   isLive: boolean;
+  /** The PHP branch the site is set to, such as 8.4: what the PHP version selectors set. */
   phpVersion: string;
+  /**
+   * The PHP release the site runs, such as 8.4.27: read from its container, or as WPL7 Connect
+   * reported it for a site hosted elsewhere. null until read, and while a hosted site has no container.
+   */
+  phpRelease: string | null;
   status: SiteStatus;
   /**
    * Last HTTP probe verdict. `null` = no probe has completed since the panel started;
@@ -1235,6 +1241,11 @@ export interface ServerSystemInfoDto {
   /** Seconds since the machine booted. */
   uptimeSeconds: number | null;
   dockerVersion: string | null;
+  /**
+   * The site images the server has, oldest PHP branch first, with the PHP release in each: what a
+   * site gets there when its container is built. `release` is null when the image does not say.
+   */
+  php: { version: string; release: string | null }[];
   /** When the reading was taken; it is cached for a minute on the server. */
   readAt: number;
 }

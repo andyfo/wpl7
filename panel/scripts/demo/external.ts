@@ -95,6 +95,8 @@ export function seedExternalSites(world: TestWorld): void {
   const connect = connectVersion(world);
   for (const site of EXTERNAL_SITES) {
     const host = new URL(site.home).hostname;
+    // Hosted elsewhere, on whatever PHP release that host runs.
+    const php = `${site.php}.26`;
     const row = world.db
       .insert(sites)
       .values({
@@ -107,6 +109,7 @@ export function seedExternalSites(world: TestWorld): void {
         isLive: 1,
         keepDevAlias: 0,
         phpVersion: site.php,
+        phpRelease: php,
         locale: 'en_US',
         status: 'connected',
         dbName: '',
@@ -141,7 +144,7 @@ export function seedExternalSites(world: TestWorld): void {
         transport: 'rest',
         pluginVersion: connect,
         protocol: 1,
-        report: JSON.stringify(report(site.home, site.title, `${site.php}.26`, { loader: true, connect, plugins })),
+        report: JSON.stringify(report(site.home, site.title, php, { loader: true, connect, plugins })),
         warnings: '[]',
         commands: '[]',
         actAsUserId: 1,

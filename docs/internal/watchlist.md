@@ -20,10 +20,11 @@ for a reason; remove one once there is nothing left to watch.
 | [RDAP: registry endpoints and bootstrap](#rdap-registry-endpoints-and-bootstrap) | Medium | 2026-10-13 08:35 UTC | .co, .io, .me and .us still absent from IANA; supplement used |
 | [Reminders: PHP and OS support dates](#reminders-php-and-os-support-dates) | Medium | 2026-10-13 08:35 UTC | PHP, Ubuntu and Debian dates match upstream tables |
 | [Reminders: Cloudflare token lifetime](#reminders-cloudflare-token-lifetime) | Medium | 2026-10-13 08:35 UTC | User and account verification endpoints expose status and optional expiry |
-| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-10-21 12:19 UTC | Open upstream; worked around. v3.7.15 and v3.7.16 leave the rate limiter alone |
-| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-10-19 05:49 UTC | 0.21.15 is still the latest; same definitions as the pinned 0.21.12 |
+| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-10-21 19:22 UTC | Open upstream; worked around |
+| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-10-21 14:03 UTC | 0.21.15 is the latest; same definitions as the pinned 0.21.12 |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-10-02 05:12 UTC | Both overrides apply to 0.21.12; signatures named |
-| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-21 12:19 UTC | 2.7.6 is the latest; patch still needed |
+| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-21 19:22 UTC | 2.7.6 is the latest; patch still needed |
+| [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-10-21 16:24 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12 |
 | [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
 | [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
 | [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-10-04 18:10 UTC | `latest` is v5.1.0; hostname logic as relied on |
@@ -55,14 +56,11 @@ for a reason; remove one once there is nothing left to watch.
 ## Traefik: an idle visitor's rate limit refills
 
 - **Priority:** High
-- **Last checked:** 2026-10-21 12:19 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
-  is open, with nothing since the Traefik team said on 2026-09-28 they would reproduce it. The
-  latest release is v3.7.16 (2026-10-20), after v3.7.15 (2026-10-15), which `traefik:v3.7` in
-  `deploy/docker-compose.yml` follows. Neither changes the rate limiter. Their security fixes are
-  in parts WPL7 does not use: the Kubernetes ingress-nginx provider (GHSA-p8wx-ph99-xgcr,
-  GHSA-28hp-c82p-8vqj), FastProxy (GHSA-ww7c-q3mv-xx22) and ForwardAuth (GHSA-hrpp-p4fc-wwf8).
-  3.7.15's migration notes (`CONNECT` answered with 501, the Gateway API's backend protocol) do
-  not touch it either.
+- **Last checked:** 2026-10-21 19:22 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
+  is open, with nothing since the Traefik team said on 2026-09-28 they would reproduce it. Two
+  releases since the last check: v3.7.15 (2026-10-15) and v3.7.16 (2026-10-20), the latest, which
+  `traefik:v3.7` in `deploy/docker-compose.yml` follows. Neither changes rate limiting: their
+  fixes are to CONNECT requests, FastProxy, ForwardAuth and the Kubernetes providers.
 - **The problem:** Traefik drops a visitor's rate-limit bucket after `1 + 1/rate` seconds without
   a request - 2 seconds for limits of one a second or more, 4 for 20 a minute - and starts the
   next request on a full burst. With logins at 20 a minute in bursts of 30, a guesser who paused
@@ -82,13 +80,13 @@ for a reason; remove one once there is nothing left to watch.
 ## AMWScan: the pinned image and its signatures
 
 - **Priority:** High
-- **Last checked:** 2026-10-19 05:49 UTC, with no new release. We pin 0.21.12, whose
-  definitions are 2026.09.08.1. The latest release is v0.21.15 (2026-10-03, after 0.21.13 and
-  0.21.14 the day before). Its definitions are the same 2026.09.08.1: only the manifest's
+- **Last checked:** 2026-10-21 14:03 UTC. No release since the last check. We pin 0.21.12, whose
+  definitions are 2026.09.08.1. The latest release is still v0.21.15 (2026-10-03, after 0.21.13
+  and 0.21.14 the day before). Its definitions are the same 2026.09.08.1: only the manifest's
   `createdAt` differs. Its engine changes are prompts without a terminal, which `--report-only`
   and `--silent` never reach, and trusted administrators for `--scan-wordpress-db`, which WPL7
-  does not use. The pin stays: moving it would check every catalog zip again for the same
-  signatures.
+  does not use. The pin stays:
+  moving it would check every catalog zip again for the same signatures.
 - **The problem:** the scanner image is pinned by digest (`SCANNER_IMAGE` in
   `panel/src/services/scanEngines.ts`) and runs with `--disable-definitions-update`. Its
   signatures are the ones bundled in that image, and they age until the pin moves. Upstream
@@ -135,7 +133,7 @@ for a reason; remove one once there is nothing left to watch.
 ## SFTPGo: our build and its overwrite patch
 
 - **Priority:** High
-- **Last checked:** 2026-10-21 12:19 UTC. We build v2.7.6 (commit 62ae9ba3) with
+- **Last checked:** 2026-10-21 19:22 UTC. We build v2.7.6 (commit 62ae9ba3) with
   `deploy/sftpgo-image/staged-overwrite.patch`; v2.7.6 (2026-09-19) is still the latest release,
   and no advisory has been published since the four of that day, which 2.7.6 fixes (one high:
   stored XSS through directory names in the WebClient). Nothing on `main` since 2026-10-03, and
@@ -154,6 +152,35 @@ for a reason; remove one once there is nothing left to watch.
   - Build the image and check that an overwrite over SFTP keeps the old file until the new one is
     complete. Then publish it (the `sftpgo` job in `build-images.yml`).
   - **Upstream fixes the overwrite itself:** drop the patch.
+
+## PHP security releases and the site image's floor
+
+- **Priority:** High
+- **Last checked:** 2026-10-21 16:24 UTC. PHP 8.5.12, 8.4.27, 8.3.36 and 8.2.35 (2026-10-21) fix two critical
+  remote code execution bugs, CVE-2026-109618 and CVE-2026-109619 (GHSA-w8hw-w9fx-j79w,
+  GHSA-6wmf-4rv5-p3rp). Apache with mod_php, which every site container runs, is where both were
+  exploited before any application code ran. The official `php` images had all four within hours;
+  `wordpress:php<X.Y>-apache` is rebuilt on them after that. The floor is set to these four.
+- **The problem:** a site's PHP is whatever its `wordpress:php<X.Y>-apache` base had when the site
+  image was built. A stale base, cached on a server or in CI, ships an old PHP without anyone
+  noticing, and a running container keeps its image until it is rebuilt.
+- **What we do about it:** `deploy/wordpress-image/Dockerfile` refuses to build on a PHP below the
+  floor of its branch. Every build pulls its base (CI's `pull: true`, `--pull` in the provision
+  scripts, `pull` in the panel's own builds). The panel rebuilds site containers onto the image
+  their server has now (`services/siteImages.ts`). Upload progress tracking stays off, as the
+  advisory for CVE-2026-109619 recommends even after patching.
+- **Check:** the security releases on [php.net](https://www.php.net/archive/2026.php) and
+  `gh api repos/php/php-src/security-advisories --jq '.[] | [.published_at, .severity, .summary] | @tsv'`
+  since the last check. Then the versions the official images carry:
+  `curl -s https://raw.githubusercontent.com/docker-library/php/master/versions.json`.
+- **When it changes:**
+  - **A security release:** once `wordpress:php<X.Y>-apache` carries it, raise that branch's floor
+    in the Dockerfile and cut a release. CI builds the site images on the new base, and updated
+    installs rebuild their sites on them.
+  - **A new PHP branch offered (`WP_PHP_VERSIONS`):** give it a floor too. A branch missing from the
+    table is not checked.
+  - **An advisory with a configuration mitigation:** weigh putting it in the site image, as the
+    upload progress setting is.
 
 ## Docker: the firewall backend
 

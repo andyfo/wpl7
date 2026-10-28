@@ -380,7 +380,8 @@ PHP_VERSIONS="${PHP_VERSIONS:-8.2,8.3,8.4,8.5}"
 if [ "$SOURCE_MODE" = build ]; then
   log "Building wpl7-wordpress images for offered PHP versions"
   for v in ${PHP_VERSIONS//,/ }; do
-    docker build --build-arg "PHP_TAG=php$v" -t "wpl7-wordpress:php$v" "$DEPLOY_DIR/wordpress-image"
+    # --pull: a cached base would keep the PHP it was pulled with, and miss every security release since.
+    docker build --pull --build-arg "PHP_TAG=php$v" -t "wpl7-wordpress:php$v" "$DEPLOY_DIR/wordpress-image"
   done
 elif [ "${WPL7_SKIP_PULL:-0}" = 1 ]; then
   log "WPL7_SKIP_PULL=1: keeping the wpl7-wordpress images already on this host"

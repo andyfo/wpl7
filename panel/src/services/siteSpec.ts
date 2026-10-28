@@ -16,7 +16,10 @@ import {
   WP_EXTRA_IN_CONTAINER,
 } from './siteHardening.js';
 
-export const siteImage = (phpVersion: string) => `wpl7-wordpress:php${phpVersion}`;
+/** Where a server keeps its site images: one tag per PHP branch, `php<version>`. */
+export const SITE_IMAGE_REPO = 'wpl7-wordpress';
+
+export const siteImage = (phpVersion: string) => `${SITE_IMAGE_REPO}:php${phpVersion}`;
 
 export const WORDPRESS_CONFIG_EXTRA = [
   // Behind Traefik's TLS termination WP would otherwise see is_ssl()=false -> redirect loop.

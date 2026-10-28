@@ -6,6 +6,7 @@ import type { Readable } from 'node:stream';
 import Docker from 'dockerode';
 import { collectDemuxed, demuxBuffer, demuxToStreams } from '../lib/demux.js';
 import { badGateway, timedOut } from '../lib/errors.js';
+import { phpReleaseOf } from '../lib/phpRelease.js';
 
 export interface RunResult {
   stdout: string;
@@ -293,6 +294,11 @@ export interface DockerPort {
   containerState(name: string): Promise<ContainerState>;
   /** The image reference a container was created from; null when it does not exist. */
   containerImage(name: string): Promise<string | null>;
+  /**
+   * The PHP release a container runs (`PHP_VERSION`, which it took from its image when it was
+   * created); null when it does not exist or its image does not say.
+   */
+  containerPhpVersion(name: string): Promise<string | null>;
   /** The ceilings a container runs under now; null when it does not exist. */
   containerLimits(name: string): Promise<ContainerLimits | null>;
   /**
@@ -324,7 +330,16 @@ export interface DockerPort {
   execDuplex(name: string, cmd: string[], opts?: ExecDuplexOpts): Promise<{ stream: Duplex; stderr: () => string }>;
   runEphemeral(opts: EphemeralOpts): Promise<RunResult>;
   imageExists(tag: string): Promise<boolean>;
-  /** Builds from every file in `contextDir` (a flat folder), on this server's daemon. */
+  /** The id of the image a tag names now (`sha256:…`); null when there is no such image. */
+  imageId(tag: string): Promise<string | null>;
+  /** The PHP release in an image, by tag or id (`PHP_VERSION`); null when there is no such image or it does not say. */
+  imagePhpVersion(ref: string): Promise<string | null>;
+  /** Every `repository:tag` this daemon has of a repository, such as `wpl7-wordpress`. */
+  imageTags(repository: string): Promise<string[]>;
+  /**
+   * Builds from every file in `contextDir` (a flat folder), on this server's daemon, always on a
+   * freshly pulled base image.
+   */
   buildImage(tag: string, contextDir: string, buildArgs: Record<string, string>, onProgress?: (line: string) => void): Promise<void>;
   pullImage(tag: string, onProgress?: (line: string) => void): Promise<void>;
   /** Give an image a second name, `repo:tag`. */
@@ -335,7 +350,8 @@ export interface DockerPort {
   pruneImages(labels: string[]): Promise<void>;
   /** One read of the container's cumulative CPU/memory counters (see ContainerSample). */
   sampleStats(name: string): Promise<ContainerSample>;
-  listManaged(labelFilters: string[]): Promise<{ name: string; labels: Record<string, string>; state: string }[]>;
+  /** `imageId` is the image the container was created from, which its tag may have moved off since. */
+  listManaged(labelFilters: string[]): Promise<{ name: string; labels: Record<string, string>; state: string; imageId: string }[]>;
   /**
    * Create the network if absent; recreate it if it exists with different isolation. On a
    * recreate, `detached` names the containers that had to be disconnected first - the caller
@@ -394,6 +410,10 @@ export function bindToMount(bind: string): Docker.MountSettings {
 
 const isStatusError = (err: unknown, code: number): boolean =>
   typeof err === 'object' && err !== null && (err as { statusCode?: number }).statusCode === code;
+
+/** `PHP_VERSION` from a container's or an image's environment, where the official PHP images set it. */
+const phpVersionIn = (env: string[] | null | undefined): string | null =>
+  phpReleaseOf(env?.find((entry) => entry.startsWith('PHP_VERSION='))?.slice('PHP_VERSION='.length));
 
 /**
  * A site's memory ceiling, with swap at twice it. Sent together on every change, not just at
@@ -545,6 +565,16 @@ export class DockerService implements DockerPort {
     try {
       const info = (await this.docker.getContainer(name).inspect()) as { Config?: { Image?: string } };
       return info.Config?.Image ?? null;
+    } catch (err) {
+      if (isStatusError(err, 404)) return null;
+      throw err;
+    }
+  }
+
+  async containerPhpVersion(name: string): Promise<string | null> {
+    try {
+      const info = (await this.docker.getContainer(name).inspect()) as { Config?: { Env?: string[] | null } };
+      return phpVersionIn(info.Config?.Env);
     } catch (err) {
       if (isStatusError(err, 404)) return null;
       throw err;
@@ -966,13 +996,31 @@ export class DockerService implements DockerPort {
   }
 
   async imageExists(tag: string): Promise<boolean> {
+    return (await this.imageId(tag)) !== null;
+  }
+
+  async imageId(tag: string): Promise<string | null> {
     try {
-      await this.docker.getImage(tag).inspect();
-      return true;
+      return (await this.docker.getImage(tag).inspect()).Id;
     } catch (err) {
-      if (isStatusError(err, 404)) return false;
+      if (isStatusError(err, 404)) return null;
       throw err;
     }
+  }
+
+  async imagePhpVersion(ref: string): Promise<string | null> {
+    try {
+      return phpVersionIn((await this.docker.getImage(ref).inspect()).Config?.Env);
+    } catch (err) {
+      if (isStatusError(err, 404)) return null;
+      throw err;
+    }
+  }
+
+  async imageTags(repository: string): Promise<string[]> {
+    const images = await this.docker.listImages({ filters: { reference: [repository] } });
+    // RepoTags holds every name of the image: a pulled site image is also its registry tag.
+    return images.flatMap((image) => image.RepoTags ?? []).filter((tag) => tag.startsWith(`${repository}:`));
   }
 
   async buildImage(
@@ -989,9 +1037,10 @@ export class DockerService implements DockerPort {
       .map((d) => d.name);
     // forcerm: the container of a step that FAILS is otherwise left behind, stopped - and it
     // holds on to the image it ran in, so nothing of a failed build could be pruned.
+    // pull: a cached base keeps the PHP it was pulled with, and misses every security release since.
     const stream = await this.docker.buildImage(
       { context: contextDir, src },
-      { t: tag, buildargs: buildArgs, rm: true, forcerm: true },
+      { t: tag, buildargs: buildArgs, rm: true, forcerm: true, pull: true },
     );
     await this.followProgress(stream, onProgress);
   }
@@ -1163,7 +1212,7 @@ export class DockerService implements DockerPort {
     }
   }
 
-  async listManaged(labelFilters: string[]): Promise<{ name: string; labels: Record<string, string>; state: string }[]> {
+  async listManaged(labelFilters: string[]): Promise<{ name: string; labels: Record<string, string>; state: string; imageId: string }[]> {
     const containers = await this.docker.listContainers({
       all: true,
       filters: { label: labelFilters },
@@ -1172,6 +1221,7 @@ export class DockerService implements DockerPort {
       name: (c.Names[0] ?? '').replace(/^\//, ''),
       labels: c.Labels ?? {},
       state: c.State,
+      imageId: c.ImageID,
     }));
   }
 

@@ -4,6 +4,7 @@ import type { ExecPort } from '../lib/exec.js';
 import { notFound } from '../lib/errors.js';
 import { systemResolver, type DnsResolver } from '../services/mailDns.js';
 import type { Logger } from '../services/index.js';
+import { siteImagePhp } from '../services/phpReleases.js';
 import type { ServerHandle, ServerRegistry } from './registry.js';
 
 /** Sections are separated by this on its own line, so a missing file just leaves one empty. */
@@ -30,7 +31,7 @@ export const SYSTEM_INFO_SCRIPT = [
   'docker --version 2>/dev/null',
 ].join('\n');
 
-type Facts = Omit<ServerSystemInfoDto, 'serverId' | 'reachable' | 'error' | 'readAt'>;
+type Facts = Omit<ServerSystemInfoDto, 'serverId' | 'reachable' | 'error' | 'readAt' | 'php'>;
 
 const EMPTY: Facts = {
   os: null,
@@ -102,8 +103,8 @@ const PTR_TTL_MS = 10 * 60_000;
 const PTR_TIMEOUT_MS = 3000;
 
 /**
- * What a server says about itself — OS, kernel, CPU, uptime — for the server detail page,
- * plus what DNS says about its address, for About.
+ * What a server says about itself — OS, kernel, CPU, uptime, the PHP in its site images — for
+ * the server detail page, plus what DNS says about its address, for About.
  *
  * Cached for a minute because it costs a round trip on a machine that may be across the
  * internet, and because none of it changes between two page views. Server 1 is asked over
@@ -121,6 +122,8 @@ export class SystemInfoService {
     private readonly hostExec: ExecPort | null = null,
     /** Injected so the suite never reaches a real nameserver; see services/mailDns.ts. */
     private readonly resolver: DnsResolver = systemResolver,
+    /** How long the site images' PHP may take to read: `phpReadTimeoutMs` in the config. */
+    private readonly phpTimeoutMs = 10_000,
   ) {}
 
   /**
@@ -157,14 +160,25 @@ export class SystemInfoService {
     let dto: ServerSystemInfoDto;
     try {
       const res = await this.execFor(handle).run('sh', ['-c', SYSTEM_INFO_SCRIPT], { timeoutMs: 30_000 });
-      dto = { serverId, reachable: true, error: null, readAt: Date.now(), ...parseSystemInfo(res.stdout) };
+      const php = await this.sitePhp(row.name, handle);
+      dto = { serverId, reachable: true, error: null, readAt: Date.now(), ...parseSystemInfo(res.stdout), php };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.log.warn(`System info for "${row.name}" failed: ${message}`);
-      dto = { serverId, reachable: false, error: message, readAt: Date.now(), ...EMPTY };
+      dto = { serverId, reachable: false, error: message, readAt: Date.now(), ...EMPTY, php: [] };
     }
     this.cache.set(serverId, dto);
     return dto;
+  }
+
+  /** The PHP in the server's site images. A Docker that fails or does not answer is no reason to lose the rest. */
+  private async sitePhp(name: string, handle: ServerHandle): Promise<ServerSystemInfoDto['php']> {
+    try {
+      return await siteImagePhp(handle.docker, this.phpTimeoutMs);
+    } catch (err) {
+      this.log.warn(`Site images on "${name}" could not be read: ${err instanceof Error ? err.message : String(err)}`);
+      return [];
+    }
   }
 
   /** Host view of a server: the SSH hop for server 1, the ordinary exec port otherwise. */

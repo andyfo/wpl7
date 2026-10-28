@@ -146,6 +146,20 @@ describe('connecting a site hosted elsewhere', () => {
     expect(detail.external).toMatchObject({ actAs: { id: 7, login: 'editor-in-chief' }, storageServerName: 'local', warnings: [] });
   });
 
+  it('shows the PHP release the site reports, and the one each hourly check hears', async () => {
+    const { app, world, headers, ready, add } = await connectWorld();
+    const { id, fake } = await ready();
+    await add(id);
+    const site = world.db.select().from(sites).where(eq(sites.slug, 'shop')).get()!;
+    expect(site).toMatchObject({ phpVersion: '8.3', phpRelease: '8.3.35' });
+
+    // Its host moved it to another branch.
+    fake.php = '8.4.27';
+    expect(await world.core.connections.checkSite(site)).toBe(true);
+    const list = (await app.inject({ method: 'GET', url: '/api/sites', headers })).json() as { items: SiteSummary[] };
+    expect(list.items.find((s) => s.slug === 'shop')).toMatchObject({ phpVersion: '8.4', phpRelease: '8.4.27' });
+  });
+
   it('refuses Add site before the panel reached the plugin, and for a multisite network', async () => {
     const { app, headers, create, enroll, add, world } = await connectWorld();
     const { dto, token, publicKey } = await create();

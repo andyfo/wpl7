@@ -1,0 +1,1 @@
+ALTER TABLE `sites` ADD `php_release` text;
