@@ -211,6 +211,11 @@ export const JOB_TYPE_INFO = {
       "Backs the site up, then loads an uploaded SQL dump into one of its databases as the site's own database user.",
     category: 'databases',
   },
+  'database.alter': {
+    label: 'Change table structure',
+    description: "Creates, changes, empties or drops a table in one of the site's databases, as the site's own database user.",
+    category: 'databases',
+  },
   'database.deleteUnused': {
     label: 'Delete unused database',
     description: 'Drops a database that no site uses from its server.',

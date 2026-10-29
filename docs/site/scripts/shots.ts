@@ -110,6 +110,13 @@ export const SHOTS: Shot[] = [
     theme: 'both',
   },
   {
+    name: 'site-database-structure',
+    what: 'The Structure view of wp_options: its columns, its primary key, and the buttons that change them',
+    path: '/sites/northwind-bakery?tab=database&table=wp_options',
+    theme: 'light',
+    prepare: steps(button('Structure'), scrollTo('Browse wp_northwind_bakery')),
+  },
+  {
     name: 'site-database-row',
     what: 'One row of wp_options open, its serialized plugin list edited as PHP data',
     path: '/sites/northwind-bakery?tab=database&table=wp_options',

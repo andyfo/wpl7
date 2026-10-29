@@ -879,6 +879,9 @@ export class DockerService implements DockerPort {
     });
     out.on('end', () => stream.push(null));
     out.on('error', (err) => stream.destroy(err));
+    // The command is gone once its output has been read: say so the way a socket does. A reader
+    // like mysql2 fails a pending query on 'close', not on 'end', and would wait for ever.
+    stream.on('end', () => stream.destroy());
     return { stream, stderr: () => stderrText };
   }
 

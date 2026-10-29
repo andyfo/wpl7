@@ -1,5 +1,5 @@
 // @docs reference/architecture, sites/database
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import mysql from 'mysql2';
 import type { FieldPacket, ResultSetHeader } from 'mysql2';
@@ -7,6 +7,7 @@ import { DB_LIMITS, type DbRowFilter, type DbRowKey } from '../../shared/databas
 import type {
   DbCell,
   DbColumnDto,
+  DbForeignKeyDto,
   DbIndexDto,
   DbQueryDto,
   DbQueryResultDto,
@@ -46,9 +47,32 @@ export interface RowsQuery {
   sort?: string;
   dir: 'asc' | 'desc';
   filters: DbRowFilter[];
+  /** Every filter must match ('all', the default), or one is enough. */
+  match?: 'all' | 'any';
 }
 
 export type DbValues = Record<string, string | null>;
+
+export interface ExecuteOpts {
+  /** How long to wait for the table's lock before giving up, changing nothing. */
+  lockWaitSeconds: number;
+  /** The longest the connection to MariaDB lives. */
+  relayMs: number;
+  /** A statement still running after this is killed on the server. */
+  killAfterMs?: number;
+  /** Asked every second; true kills the statement (a job's Cancel). */
+  canceled?: () => boolean;
+}
+
+/** A structure change to try on a temporary table before it runs (DbBrowserPort.tryDdl). */
+export interface DdlAttempt {
+  /** The table's own name, for MariaDB's words. */
+  table: string;
+  /** The table to copy, empty; none for a new table. */
+  copyOf?: string;
+  /** The statement, for the temporary table of this name. */
+  statement: (temporary: string) => string;
+}
 
 export interface DbBrowserPort {
   tables(t: DbTarget): Promise<DbTableDto[]>;
@@ -62,6 +86,23 @@ export interface DbBrowserPort {
   remove(t: DbTarget, table: string, keys: DbRowKey[]): Promise<DbWriteResultDto>;
   /** SQL from the editor: one statement after another, stopping at the first error. */
   run(t: DbTarget, sql: string): Promise<DbQueryDto>;
+  /**
+   * One statement for a job (a structure change): a session of its own, with no time limit on
+   * the statement and `lockWaitSeconds` for the table's lock.
+   */
+  execute(t: DbTarget, sql: string, opts: ExecuteOpts): Promise<DbWriteResultDto>;
+  /**
+   * A structure change tried first on an empty temporary copy of the table: what MariaDB refuses
+   * (a default the type cannot hold, a counter with no key) is a 400 before anything runs. False
+   * when it could not be tried; the change is then checked only when it runs.
+   */
+  tryDdl(t: DbTarget, attempt: DdlAttempt): Promise<boolean>;
+  /**
+   * The user's connection that holds a named lock (IS_USED_LOCK), or null when none does; with
+   * `kill`, that connection is killed too. How a change made in Adminer is found and stopped
+   * (src/adminer): its connection holds a lock named after the request.
+   */
+  lockHolder(t: DbTarget, name: string, opts?: { kill?: boolean }): Promise<number | null>;
   /** Hang up the connections kept idle for the next request. */
   closeIdle(): void;
 }
@@ -175,6 +216,7 @@ interface TableMeta {
   indexes: DbIndexDto[];
   key: string[] | null;
   rows: number | null;
+  foreignKeys: DbForeignKeyDto[];
 }
 
 /** mysql2 errors carry MariaDB's code and message; a dropped connection is `fatal`. */
@@ -235,6 +277,7 @@ export class DbBrowserService implements DbBrowserPort {
         indexes: meta.indexes,
         key: meta.key,
         rows: meta.rows,
+        foreignKeys: meta.foreignKeys,
       };
     });
   }
@@ -243,13 +286,18 @@ export class DbBrowserService implements DbBrowserPort {
     return this.withSession(t, DB_LIMITS.browseSeconds, true, async (conn) => {
       const meta = await tableMeta(conn, table);
       const names = new Set(meta.columns.map((c) => c.name));
-      const where = buildWhere(q.filters, names);
+      const where = buildWhere(q.filters, names, {
+        match: q.match,
+        anyColumns: meta.columns.filter((c) => c.kind !== 'binary').map((c) => c.name),
+      });
       if (q.sort !== undefined && !names.has(q.sort)) throw badRequest(`The table has no column "${q.sort}"`);
-      // Ties in the sorted column are broken by the key, or without one by every other column:
+      // Ties in the sorted column are broken by the key, or without one by the other columns:
       // otherwise MariaDB may order them differently from one page to the next, and paging shows
-      // some rows twice and others never.
+      // some rows twice and others never. Not by long text or binary ones, though: sorting by
+      // those makes every page of a big table slow, for rows that differ in nothing else.
       const dir = q.dir === 'desc' ? 'DESC' : 'ASC';
-      const tieBreak = (meta.key ?? meta.columns.map((c) => c.name)).filter((c) => c !== q.sort);
+      const short = (c: Column) => c.kind !== 'binary' && !((c.kind === 'text' || c.kind === 'json') && (c.maxLength === null || c.maxLength > 255));
+      const tieBreak = (meta.key ?? meta.columns.filter(short).map((c) => c.name)).filter((c) => c !== q.sort);
       const order = q.sort
         ? `ORDER BY ${[q.sort, ...tieBreak].map((c) => `${quoteIdent(c)} ${dir}`).join(', ')}`
         : meta.key
@@ -370,7 +418,7 @@ export class DbBrowserService implements DbBrowserPort {
           // still running a little after it is killed on the server, and its connection closed.
           seconds: this.sqlSeconds,
           killAfterMs: (this.sqlSeconds + 5) * 1000,
-          kill: () => this.killQuery(t, conn.threadId),
+          kill: async () => void (await this.killQuery(t, conn.threadId)),
         });
         results.push(...outcome.results);
         if (outcome.stop) break;
@@ -379,11 +427,123 @@ export class DbBrowserService implements DbBrowserPort {
     }, { mapErrors: false });
   }
 
-  /** `KILL QUERY` for one of the user's own connections, over a connection of its own: a user may kill its own. */
-  private async killQuery(t: DbTarget, threadId: number | null): Promise<void> {
-    if (!threadId) return;
+  /**
+   * Without the browser's time limit - an ALTER on a big table outlives it - and with a short wait
+   * for the table's lock: a change that waited behind a site busy in the table would hold up every
+   * query after it, so it gives up instead.
+   */
+  async tryDdl(t: DbTarget, attempt: DdlAttempt): Promise<boolean> {
+    const temporary = `wpl7_try_${randomBytes(6).toString('hex')}`;
+    const outcome = await this.withSession(
+      t,
+      10,
+      true,
+      async (conn): Promise<'tried' | 'not tried' | SqlError> => {
+        // A copy stuck behind the site's own work is a check skipped, not a wait.
+        await write(conn, 'SET SESSION lock_wait_timeout = 5', []);
+        try {
+          if (attempt.copyOf) {
+            const copied = await write(conn, `CREATE TEMPORARY TABLE ${quoteIdent(temporary)} LIKE ${quoteIdent(attempt.copyOf)}`, []).then(
+              () => true,
+              () => false,
+            );
+            if (!copied) return 'not tried';
+          }
+          return await write(conn, attempt.statement(temporary), []).then(
+            () => 'tried' as const,
+            (err: SqlError) => err,
+          );
+        } finally {
+          // Back to the idle connections as it came.
+          await write(conn, `DROP TEMPORARY TABLE IF EXISTS ${quoteIdent(temporary)}`, []);
+          await write(conn, 'SET SESSION lock_wait_timeout = DEFAULT', []);
+        }
+      },
+      { mapErrors: false },
+    ).catch(() => 'not tried' as const);
+    if (outcome === 'tried') return true;
+    if (outcome === 'not tried') return false;
+    const message = sqlErrorMessage(outcome);
+    // What a temporary copy cannot have (a full-text index in InnoDB) or a lock not had in time
+    // says nothing about the change.
+    if (!outcome.errno || outcome.fatal || outcome.errno === 1205 || outcome.errno === 1969 || /temporary/i.test(message)) return false;
+    throw new AppError('validation_error', 400, `MariaDB would refuse this: ${message.split(temporary).join(attempt.table)}`, {
+      code: outcome.code ?? null,
+    });
+  }
+
+  async lockHolder(t: DbTarget, name: string, opts: { kill?: boolean } = {}): Promise<number | null> {
+    return this.withSession(t, DB_LIMITS.browseSeconds, true, async (conn) => {
+      const [row] = await select<[number | string | null]>(conn, 'SELECT IS_USED_LOCK(?)', [name]);
+      const holder = row?.[0] === null || row?.[0] === undefined ? null : Number(row[0]);
+      if (holder !== null && opts.kill) {
+        // A user may kill its own connections. Gone in the meantime is as good as killed.
+        await write(conn, `KILL ${holder}`, []).catch(() => undefined);
+      }
+      return holder;
+    });
+  }
+
+  async execute(t: DbTarget, sql: string, opts: ExecuteOpts): Promise<DbWriteResultDto> {
+    const release = await this.slot();
+    let conn: mysql.Connection | null = null;
+    let stopped: 'time' | 'canceled' | null = null;
+    let watchdog: NodeJS.Timeout | null = null;
+    try {
+      conn = await this.open(t, opts.relayMs);
+      await write(conn, `SET SESSION max_statement_time = 0, lock_wait_timeout = ${Math.max(1, Math.floor(opts.lockWaitSeconds))}`, []);
+      const open = conn;
+      const started = Date.now();
+      // A statement the job no longer waits for must not run on: killed on the server, then hung up.
+      watchdog = setInterval(() => {
+        if (stopped) return;
+        if (opts.canceled?.()) stopped = 'canceled';
+        else if (opts.killAfterMs !== undefined && Date.now() - started > opts.killAfterMs) stopped = 'time';
+        if (stopped) void this.killQuery(t, open.threadId).finally(() => open.destroy());
+      }, 1000);
+      watchdog.unref?.();
+      // No values: the statement is sent as it is, a `?` in a comment left alone.
+      const res = await new Promise<ResultSetHeader>((resolve, reject) => {
+        open.query({ sql }, (err, r) => (err ? reject(err) : resolve(r as ResultSetHeader)));
+      });
+      // Killed, a statement may still end without an error (SLEEP does): it was cut short all the same.
+      if (stopped) throw new Error('stopped');
+      const warnings = res.warningStatus ? await select<[string, number, string]>(open, 'SHOW WARNINGS').catch(() => []) : [];
+      endQuietly(conn);
+      return { affected: res.affectedRows ?? 0, insertId: null, warnings: warnings.map((w) => `${w[0]} ${w[1]}: ${w[2]}`) };
+    } catch (err) {
+      const threadId = conn?.threadId ?? null;
+      conn?.destroy();
+      if (stopped === 'canceled') throw new AppError('conflict', 409, 'Canceled: the statement was stopped on the server');
+      if (stopped === 'time') throw timedOut(`The statement ran longer than ${Math.round((opts.killAfterMs ?? 0) / 60_000)} minutes and was stopped`);
+      const e = err as SqlError;
+      if (e?.errno === 1205 || e?.code === 'ER_LOCK_WAIT_TIMEOUT') {
+        throw conflict(`The table is in use (the site is working in it); nothing was changed. Try again in a moment.`);
+      }
+      if (threadId && (e?.fatal || !e?.errno)) {
+        // The connection went, the statement perhaps not: one the job no longer waits for must
+        // not finish after the job has said it failed.
+        const killed = await this.killQuery(t, threadId);
+        throw badGateway(
+          `Lost the connection to MariaDB on ${this.serverName()}: ${e instanceof Error ? sqlErrorMessage(e) : String(err)}. ` +
+            (killed ? 'If the statement was still running, it was stopped there.' : 'The statement may still be running there.'),
+        );
+      }
+      throw this.mapError(err, 0);
+    } finally {
+      if (watchdog) clearInterval(watchdog);
+      release();
+    }
+  }
+
+  /**
+   * `KILL QUERY` for one of the user's own connections, over a connection of its own: a user may
+   * kill its own. False when MariaDB could not be reached to ask.
+   */
+  private async killQuery(t: DbTarget, threadId: number | null): Promise<boolean> {
+    if (!threadId) return true;
     const conn = await this.open(t).catch(() => null);
-    if (!conn) return;
+    if (!conn) return false;
     try {
       await write(conn, `KILL QUERY ${Number(threadId)}`, []);
     } catch {
@@ -391,6 +551,7 @@ export class DbBrowserService implements DbBrowserPort {
     } finally {
       endQuietly(conn);
     }
+    return true;
   }
 
   // ---------------------------------------------------------------- sessions
@@ -436,11 +597,11 @@ export class DbBrowserService implements DbBrowserPort {
     }
   }
 
-  private async open(t: DbTarget): Promise<mysql.Connection> {
+  private async open(t: DbTarget, relayMs = RELAY_MAX_MS): Promise<mysql.Connection> {
     let relay: { stream: Duplex; stderr: () => string };
     try {
       // As MariaDB's own unprivileged user: the relay needs nothing but a socket.
-      relay = await this.docker.execDuplex(this.container, RELAY_CMD, { timeoutMs: RELAY_MAX_MS, user: 'mysql' });
+      relay = await this.docker.execDuplex(this.container, RELAY_CMD, { timeoutMs: relayMs, user: 'mysql' });
     } catch (err) {
       throw badGateway(`Could not reach MariaDB on ${this.serverName()}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -567,24 +728,31 @@ async function tableMeta(conn: mysql.Connection, table: string): Promise<TableMe
     conn.query(
       {
         sql: `SELECT TABLE_NAME, TABLE_TYPE, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?;
-SELECT COLUMN_NAME, COLUMN_TYPE, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY, EXTRA, COLUMN_COMMENT, CHARACTER_MAXIMUM_LENGTH, CHARACTER_SET_NAME
+SELECT COLUMN_NAME, COLUMN_TYPE, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY, EXTRA, COLUMN_COMMENT, CHARACTER_MAXIMUM_LENGTH, CHARACTER_SET_NAME, COLLATION_NAME
   FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION;
-SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME, INDEX_TYPE
-  FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY INDEX_NAME = 'PRIMARY' DESC, INDEX_NAME, SEQ_IN_INDEX`,
-        values: [table, table, table],
+SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME, INDEX_TYPE, SUB_PART
+  FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? ORDER BY INDEX_NAME = 'PRIMARY' DESC, INDEX_NAME, SEQ_IN_INDEX;
+SELECT k.CONSTRAINT_NAME, k.COLUMN_NAME, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME, r.DELETE_RULE, r.UPDATE_RULE
+  FROM information_schema.KEY_COLUMN_USAGE k
+  JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND r.TABLE_NAME = k.TABLE_NAME
+  WHERE k.TABLE_SCHEMA = DATABASE() AND k.TABLE_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL
+  ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION;
+SELECT CONSTRAINT_NAME, CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS
+  WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND LEVEL = 'Column'`,
+        values: [table, table, table, table, table],
         rowsAsArray: true,
       },
       (err, rows) => (err ? reject(err) : resolve(rows as unknown as unknown[][][])),
     );
   });
-  const [tableRows = [], columnRows = [], indexRows = []] = sets;
+  const [tableRows = [], columnRows = [], indexRows = [], foreignKeyRows = [], checkRows = []] = sets;
   const found = tableRows[0] as [string, string, number | string | null] | undefined;
   if (!found) throw notFound(`There is no table "${table}" in this database`);
   const view = found[1] === 'VIEW';
   const columns: Column[] = (
-    columnRows as [string, string, string, string, string | null, string, string, string, number | string | null, string | null][]
+    columnRows as [string, string, string, string, string | null, string, string, string, number | string | null, string | null, string | null][]
   ).map(
-    ([name, type, dataType, nullable, dflt, key, extra, comment, maxLength, charset]) => ({
+    ([name, type, dataType, nullable, dflt, key, extra, comment, maxLength, charset, collation]) => ({
       name,
       type,
       kind: columnKind(dataType),
@@ -594,16 +762,27 @@ SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME, INDEX_TYPE
       extra: extra ?? '',
       comment: comment ?? '',
       charset: charset ?? null,
+      collation: collation ?? null,
+      check: null,
       maxLength: maxLength === null ? null : Number(maxLength),
     }),
   );
+  for (const [name, clause] of checkRows as [string, string][]) columnCheck(columns, name, clause);
   const byName = new Map<string, DbIndexDto>();
-  for (const [name, nonUnique, column, type] of indexRows as [string, number | string, string, string][]) {
-    const index = byName.get(name) ?? { name, unique: Number(nonUnique) === 0, columns: [], type };
+  for (const [name, nonUnique, column, type, subPart] of indexRows as [string, number | string, string, string, number | string | null][]) {
+    const index: DbIndexDto = byName.get(name) ?? { name, unique: Number(nonUnique) === 0, columns: [], lengths: [], type };
     index.columns.push(column);
+    index.lengths.push(subPart === null ? null : Number(subPart));
     byName.set(name, index);
   }
   const indexes = [...byName.values()];
+  const keysByName = new Map<string, DbForeignKeyDto>();
+  for (const [name, column, refTable, refColumn, onDelete, onUpdate] of foreignKeyRows as string[][]) {
+    const fk = keysByName.get(name!) ?? { name: name!, columns: [], refTable: refTable!, refColumns: [], onDelete: onDelete!, onUpdate: onUpdate! };
+    fk.columns.push(column!);
+    fk.refColumns.push(refColumn!);
+    keysByName.set(name!, fk);
+  }
   const nullable = new Set(columns.filter((c) => c.nullable).map((c) => c.name));
   const keyIndex = view
     ? undefined
@@ -615,7 +794,26 @@ SELECT INDEX_NAME, NON_UNIQUE, COLUMN_NAME, INDEX_TYPE
     indexes,
     key: keyIndex ? keyIndex.columns : null,
     rows: view || found[2] === null ? null : Number(found[2]),
+    foreignKeys: [...keysByName.values()],
   };
+}
+
+/**
+ * A column-level CHECK, put with its column. MariaDB names one after its column, and keeps the
+ * name through RENAME COLUMN: so the column its clause names, if it names one, else the one the
+ * name says. A JSON column's check (`json_valid(col)` on longtext) is what makes it JSON: it
+ * becomes the type, so a change keeps it.
+ */
+function columnCheck(columns: Column[], name: string, clause: string): void {
+  const named = [...clause.matchAll(/`((?:[^`]|``)+)`/g)].map((m) => m[1]!.replace(/``/g, '`'));
+  const mentioned = [...new Set(named)].filter((n) => columns.some((c) => c.name === n));
+  const owner = columns.find((c) => c.name === (mentioned.length === 1 ? mentioned[0] : name));
+  if (!owner) return;
+  if (owner.type === 'longtext' && clause === `json_valid(${quoteIdent(owner.name)})`) {
+    owner.type = 'json';
+    return;
+  }
+  owner.check = owner.check ? `${owner.check} AND ${clause}` : clause;
 }
 
 function publicColumn(c: Column): DbColumnDto {

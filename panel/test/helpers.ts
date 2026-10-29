@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
-import { Duplex, type Readable, type Writable } from 'node:stream';
+import { Duplex, duplexPair, type Readable, type Writable } from 'node:stream';
+import http from 'node:http';
 import Database from 'better-sqlite3';
 import { connectDb, openDb, type Db } from '../src/db/index.js';
 import { runMigrations } from '../src/db/migrate.js';
@@ -84,6 +85,7 @@ import { ImportService } from '../src/services/imports.js';
 import { ConnectionsService } from '../src/services/connections.js';
 import { ExternalBackupService } from '../src/services/externalBackup.js';
 import { DatabasesService } from '../src/services/databases.js';
+import { AdminerService } from '../src/adminer/index.js';
 import { AlertService } from '../src/services/alerts.js';
 import type { HostPort } from '../src/servers/hostPort.js';
 import { ApiKeysService } from '../src/services/apiKeys.js';
@@ -500,8 +502,21 @@ export class FakeDocker implements DockerPort {
   }
   /** Answers runEphemeral itself when set (a scan engine, a quarantine move); otherwise the queue does. */
   ephemeral: ((opts: EphemeralOpts) => RunResult | Promise<RunResult>) | null = null;
+  /**
+   * What answers Adminer's relay (src/adminer/relay.ts) here: an HTTP handler standing in for the
+   * PHP server in the container. Unset, the relay fails as a stopped container's would.
+   */
+  adminerHttp: http.RequestListener | null = null;
+  private adminerServer: http.Server | null = null;
   async execDuplex(name: string, cmd: string[]): Promise<{ stream: Duplex; stderr: () => string }> {
     this.record('execDuplex', [name, cmd]);
+    if (name === 'wpl7-adminer' && cmd.join(' ') === 'php /srv/adminer/relay.php' && this.adminerHttp) {
+      if (this.containers.get(name) !== 'running') throw new Error('container wpl7-adminer is not running');
+      this.adminerServer ??= http.createServer((req, res) => this.adminerHttp?.(req, res));
+      const [panelSide, adminerSide] = duplexPair();
+      this.adminerServer.emit('connection', adminerSide);
+      return { stream: panelSide, stderr: () => '' };
+    }
     throw new Error('FakeDocker has no relay: tests reach databases through a FakeDbBrowser');
   }
   async runEphemeral(opts: EphemeralOpts): Promise<RunResult> {
@@ -1600,6 +1615,8 @@ export async function makeWorld(
   } as unknown as CoreServices;
   core.wpInventory = new WpInventoryService(core, vulnerabilities);
   core.databases = new DatabasesService(db, config, servers, log);
+  const users = new UsersService(db);
+  core.adminer = new AdminerService(db, config, servers, settings, users, core.databases, dns, log);
   core.externalBackups = new ExternalBackupService(core);
   core.alerts = new AlertService(core);
   const serverInfo = new SystemInfoService(servers, log, null, opts.resolver);
@@ -1615,9 +1632,9 @@ export async function makeWorld(
   offsite.attachWorker(worker);
   importsService.attachWorker(worker);
   connections.attachWorker(worker);
+  core.adminer.attachWorker(worker);
   const shell = new FakeShell();
   const wporg = opts.wporg ?? new FakeWporg();
-  const users = new UsersService(db);
   const deps: AppDeps = {
     ...core,
     worker,

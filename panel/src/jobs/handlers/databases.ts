@@ -1,11 +1,11 @@
-// @docs databases/overview, sites/database
+// @docs databases/overview, sites/database, sites/database-structure
 import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { siteDatabases, type SiteRow } from '../../db/schema.js';
-import { extraDbNameSchema, DB_OBJECT_NAME_RE } from '../../../shared/databases.js';
+import { extraDbNameSchema, DB_LIMITS, DB_OBJECT_NAME_RE } from '../../../shared/databases.js';
 import { generateSecret } from '../../lib/crypto.js';
-import { AppError } from '../../lib/errors.js';
+import { AppError, JobCanceledError } from '../../lib/errors.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { DbTarget } from '../../services/dbBrowser.js';
 import type { CoreServices } from '../../services/index.js';
@@ -417,6 +417,49 @@ async function assertStillInstalled(ctx: JobContext<unknown>, s: CoreServices, s
       `The site is stopped, so no one can run the installer. ${backedUp ? 'Restore the backup taken before the import' : 'Restore a backup'}, ` +
       `or import a dump whose tables start with ${site.tablePrefix}, then start the site.`,
   );
+}
+
+// ------------------------------------------------------------------ table structure
+
+export const databaseAlterPayload = z.object({
+  siteId: z.number().int(),
+  database: z.string(),
+  /** What the job list says: "Add column x to wp_posts". */
+  summary: z.string().max(300),
+  /** Built and checked by the route (lib/sqlDdl.ts) from the change asked for; run as they are. */
+  statements: z.array(z.string().max(DB_LIMITS.ddlChars)).min(1).max(10),
+});
+
+/**
+ * A structure change: statements lib/sqlDdl.ts built from a form, run one after another as the
+ * site's own database user, so MariaDB keeps them to the site's databases. A table the site is
+ * busy in fails the change after a few seconds rather than stalling the site behind it.
+ */
+export async function databaseAlter(ctx: JobContext<z.infer<typeof databaseAlterPayload>>, s: CoreServices): Promise<void> {
+  const p = ctx.payload;
+  const site = loadSite(s.db, p.siteId);
+  const target = s.databases.targetFor(site, p.database);
+  const server = s.servers.handleFor(site.serverId);
+  for (const sql of p.statements) {
+    ctx.checkCanceled();
+    ctx.info(sql.length > 2000 ? `${sql.slice(0, 2000)}…` : sql);
+    const res = await server.dbBrowser
+      .execute(target, sql, {
+        lockWaitSeconds: 10,
+        relayMs: 2 * 3600_000,
+        // Stopped on the server before the job's own deadline (registry: two hours), and on Cancel.
+        killAfterMs: 115 * 60_000,
+        canceled: () => ctx.cancelRequested,
+      })
+      .catch((err: unknown) => {
+        if (ctx.cancelRequested) throw new JobCanceledError();
+        throw err;
+      });
+    // What MariaDB noted: a value rounded to a narrower type is a note, not an error.
+    for (const w of res.warnings ?? []) ctx.warn(`MariaDB: ${w}`);
+  }
+  ctx.info('Done.');
+  ctx.setResult({ database: p.database });
 }
 
 // ------------------------------------------------------------------ a database no site uses

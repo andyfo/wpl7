@@ -187,6 +187,8 @@ export const jobTypes = [
   'database.delete',
   'database.password',
   'database.import',
+  // A table made, changed, emptied or dropped from the Structure view.
+  'database.alter',
   // A database on a server that no site uses, dropped (the Databases page).
   'database.deleteUnused',
   'server.provision',
@@ -1580,6 +1582,8 @@ export const settingsUpdateBody = z.object({
   scanQuarantineKeepDays: z.number().int().min(0).max(3650).optional(),
   /** The MCP server for AI apps (docs/mcp.md); needs PANEL_DOMAIN and TLS in production. */
   mcpEnabled: z.boolean().optional(),
+  /** "Open in Adminer" on a site's Database tab. */
+  adminerEnabled: z.boolean().optional(),
 }).strict();
 
 /**

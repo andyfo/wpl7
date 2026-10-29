@@ -20,11 +20,11 @@ for a reason; remove one once there is nothing left to watch.
 | [RDAP: registry endpoints and bootstrap](#rdap-registry-endpoints-and-bootstrap) | Medium | 2026-10-13 08:35 UTC | .co, .io, .me and .us still absent from IANA; supplement used |
 | [Reminders: PHP and OS support dates](#reminders-php-and-os-support-dates) | Medium | 2026-10-13 08:35 UTC | PHP, Ubuntu and Debian dates match upstream tables |
 | [Reminders: Cloudflare token lifetime](#reminders-cloudflare-token-lifetime) | Medium | 2026-10-13 08:35 UTC | User and account verification endpoints expose status and optional expiry |
-| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-10-21 19:22 UTC | Open upstream; worked around |
-| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-10-21 14:03 UTC | 0.21.15 is the latest; same definitions as the pinned 0.21.12 |
+| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-10-29 09:51 UTC | Open upstream, fix #13958 awaiting review; worked around |
+| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-10-29 09:51 UTC | 0.21.15 is the latest; same definitions as the pinned 0.21.12 |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-10-02 05:12 UTC | Both overrides apply to 0.21.12; signatures named |
-| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-21 19:22 UTC | 2.7.6 is the latest; patch still needed |
-| [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-10-21 16:24 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12 |
+| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-29 09:51 UTC | 2.7.6 is the latest; patch still needed |
+| [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-10-29 09:51 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12; CVE-2026-115560 unfixed, mitigated by upload progress off |
 | [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
 | [Docker: the build cache and image names, as the nightly clean-up reads them](#docker-the-build-cache-and-image-names-as-the-nightly-clean-up-reads-them) | Medium | 2026-10-27 17:47 UTC | Docker 29.9.2: both prune parameters trim, `all` would remove shared layers first |
 | [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
@@ -51,17 +51,20 @@ for a reason; remove one once there is nothing left to watch.
 | [WordPress's answer to a fatal error](#wordpresss-answer-to-a-fatal-error) | Low | 2026-10-09 15:55 UTC | 500, as relied on |
 | [WordPress's default From address](#wordpresss-default-from-address) | Medium | 2026-10-14 16:28 UTC | `wordpress@` and the home URL's host without `www.`, on 7.1.3 and trunk |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
-| [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 14:17 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
+| [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 22:05 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
+| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-10-29 10:03 UTC | 6.2.0 (2026-10-23) is the latest, and pinned; no new advisory; `php:8.4-cli-alpine` is PHP 8.4.27 |
 | [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-10-20 12:22 UTC | The feed calls five listed bbPress plugins closed and misses `captcha`; the directory answers as `wporgListing` reads them |
 
 ## Traefik: an idle visitor's rate limit refills
 
 - **Priority:** High
-- **Last checked:** 2026-10-21 19:22 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
-  is open, with nothing since the Traefik team said on 2026-09-28 they would reproduce it. Two
-  releases since the last check: v3.7.15 (2026-10-15) and v3.7.16 (2026-10-20), the latest, which
-  `traefik:v3.7` in `deploy/docker-compose.yml` follows. Neither changes rate limiting: their
-  fixes are to CONNECT requests, FastProxy, ForwardAuth and the Kubernetes providers.
+- **Last checked:** 2026-10-29 09:51 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
+  is open, with nothing since the Traefik team said on 2026-09-28 they would reproduce it. Its
+  fix, [traefik#13958](https://github.com/traefik/traefik/pull/13958) (against `v3.7`, milestone
+  3.7), still waits for review; since the last check it has only a user's comment asking for a
+  merge. No release since the last check: v3.7.16 (2026-10-20) is still the latest, which
+  `traefik:v3.7` in `deploy/docker-compose.yml` follows. Nothing under
+  `pkg/middlewares/ratelimiter` has changed on `v3.7` or `master` since 2026-10-01.
 - **The problem:** Traefik drops a visitor's rate-limit bucket after `1 + 1/rate` seconds without
   a request - 2 seconds for limits of one a second or more, 4 for 20 a minute - and starts the
   next request on a full burst. With logins at 20 a minute in bursts of 30, a guesser who paused
@@ -81,13 +84,13 @@ for a reason; remove one once there is nothing left to watch.
 ## AMWScan: the pinned image and its signatures
 
 - **Priority:** High
-- **Last checked:** 2026-10-21 14:03 UTC. No release since the last check. We pin 0.21.12, whose
-  definitions are 2026.09.08.1. The latest release is still v0.21.15 (2026-10-03, after 0.21.13
-  and 0.21.14 the day before). Its definitions are the same 2026.09.08.1: only the manifest's
-  `createdAt` differs. Its engine changes are prompts without a terminal, which `--report-only`
-  and `--silent` never reach, and trusted administrators for `--scan-wordpress-db`, which WPL7
-  does not use. The pin stays:
-  moving it would check every catalog zip again for the same signatures.
+- **Last checked:** 2026-10-29 09:51 UTC. No release or commit since the last check. We pin
+  0.21.12, whose definitions are 2026.09.08.1. The latest release is still v0.21.15 (2026-10-03,
+  after 0.21.13 and 0.21.14 the day before). Its definitions are the same 2026.09.08.1: only the
+  manifest's `createdAt` differs. Its engine changes are prompts without a terminal, which
+  `--report-only` and `--silent` never reach, and trusted administrators for
+  `--scan-wordpress-db`, which WPL7 does not use. The pin stays: moving it would check every
+  catalog zip again for the same signatures.
 - **The problem:** the scanner image is pinned by digest (`SCANNER_IMAGE` in
   `panel/src/services/scanEngines.ts`) and runs with `--disable-definitions-update`. Its
   signatures are the ones bundled in that image, and they age until the pin moves. Upstream
@@ -134,11 +137,14 @@ for a reason; remove one once there is nothing left to watch.
 ## SFTPGo: our build and its overwrite patch
 
 - **Priority:** High
-- **Last checked:** 2026-10-21 19:22 UTC. We build v2.7.6 (commit 62ae9ba3) with
+- **Last checked:** 2026-10-29 09:51 UTC. We build v2.7.6 (commit 62ae9ba3) with
   `deploy/sftpgo-image/staged-overwrite.patch`; v2.7.6 (2026-09-19) is still the latest release,
   and no advisory has been published since the four of that day, which 2.7.6 fixes (one high:
-  stored XSS through directory names in the WebClient). Nothing on `main` since 2026-10-03, and
-  nothing there changes how an upload replaces a file.
+  stored XSS through directory names in the WebClient). The `2.7.x` branch has not moved since
+  2026-09-26. `main` got 14 commits in one push on 2026-10-22, among them hardening of SFTP's
+  per-host limit (open directories now count), aborted transfers, WebDAV times, OIDC logout and
+  API key logging. None changes how an upload replaces a file. The patch's code still applies to
+  `main`; one test hunk, in `internal/sftpd/sftpd_test.go`, does not.
 - **The problem:** SFTPGo is on the internet (FTP and SFTP). Upstream's `upload_mode: 1` renames
   an existing file to a temporary name before an overwrite, so the file is missing for the whole
   transfer - WordPress without its `wp-config.php` shows the installer - and is deleted if the
@@ -157,11 +163,16 @@ for a reason; remove one once there is nothing left to watch.
 ## PHP security releases and the site image's floor
 
 - **Priority:** High
-- **Last checked:** 2026-10-21 16:24 UTC. PHP 8.5.12, 8.4.27, 8.3.36 and 8.2.35 (2026-10-21) fix two critical
-  remote code execution bugs, CVE-2026-109618 and CVE-2026-109619 (GHSA-w8hw-w9fx-j79w,
-  GHSA-6wmf-4rv5-p3rp). Apache with mod_php, which every site container runs, is where both were
-  exploited before any application code ran. The official `php` images had all four within hours;
-  `wordpress:php<X.Y>-apache` is rebuilt on them after that. The floor is set to these four.
+- **Last checked:** 2026-10-29 09:51 UTC. No PHP release and no GitHub advisory since the last
+  check. PHP 8.5.12, 8.4.27, 8.3.36 and 8.2.35 (2026-10-21) are still the latest; they fix two
+  critical remote code execution bugs, CVE-2026-109618 and CVE-2026-109619 (GHSA-w8hw-w9fx-j79w,
+  GHSA-6wmf-4rv5-p3rp), and the floor is set to them. The official `php` images carry the same
+  four. On 2026-10-23 php.net published an informational advisory for CVE-2026-115560: an
+  unlikely remote code execution through session upload progress, when an application switches
+  `session.serialize_handler` to `php` at runtime. It asks for `session.upload_progress.enabled=0`
+  until the next regular release, which will carry the fix and the full advisory. The site image
+  already sets it off. The 2026-10-26 news, Windows builds with Brotli 1.2.1 for CVE-2026-111497,
+  leaves the PHP versions unchanged.
 - **The problem:** a site's PHP is whatever its `wordpress:php<X.Y>-apache` base had when the site
   image was built. A stale base, cached on a server or in CI, ships an old PHP without anyone
   noticing, and a running container keeps its image until it is rebuilt.
@@ -781,10 +792,10 @@ for a reason; remove one once there is nothing left to watch.
 ## The MariaDB image's bash and client, as the database browser and imports rely on them
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-19 14:17 UTC. `mariadb:11.4`, rebuilt 2026-10-17, is MariaDB
+- **Last checked:** 2026-10-19 22:05 UTC. `mariadb:11.4`, rebuilt 2026-10-17, is MariaDB
   11.4.13 on Ubuntu 24.04.5. Its bash is 5.2.21 and opens `/dev/tcp`. Its client, 15.2, refuses
   `\!`, `system`, `source` and `LOAD DATA LOCAL INFILE` with the import flags. The engine test
-  `panel/test/engine/dbBrowser.test.ts` passes on it: 15 of 15.
+  `panel/test/engine/dbBrowser.test.ts` passes on it: 19 of 19.
 - **The problem:** two things lean on the image.
   - A site's **Database** tab reaches MariaDB through `docker exec`. The relay (`RELAY_CMD` in
     `panel/src/services/dbBrowser.ts`) is `bash -c 'exec 3<>/dev/tcp/127.0.0.1/3306 …'` inside
@@ -809,6 +820,37 @@ for a reason; remove one once there is nothing left to watch.
   - The client: find the option that now refuses those commands, put it in
     `IMPORT_CLIENT_ARGS`, and keep imports off the new image until the engine test passes.
   - Either way, run the engine test on the new image before it reaches a server.
+
+## Adminer: the pinned build and its advisories
+
+- **Priority:** High
+- **Last checked:** 2026-10-29 10:03 UTC. Adminer 6.2.0 (2026-10-23) is the latest release, and
+  the image now pins it. Its notes rename or remove no hook the plugin uses; they add optional
+  plugins and driver field keys. There are still 22 advisories, the newest GHSA-r9r5-j5q8-8c59
+  (2026-09-25), in the SQLite driver, which the MySQL-only build leaves out. The image's base,
+  `php:8.4-cli-alpine`, is PHP 8.4.27. The engine test `panel/test/engine/adminer.test.ts` passes
+  on 6.2.0: 5 of 5.
+- **The problem:** "Open in Adminer" runs Adminer's MySQL-only English build on every server
+  that uses it, pinned in `deploy/adminer-image/Dockerfile` by `ADMINER_VERSION` and
+  `ADMINER_SHA256`. It sits behind the panel's front door, signs in as a site's own database
+  user and listens on no network, but a bug in Adminer's core or its MySQL code still reaches
+  whoever opens it. Adminer fixed several such bugs this year, some within days of each other.
+- **Check:** releases and advisories since the last check:
+  `gh api repos/vrana/adminer/releases --jq '.[0:3][] | "\(.tag_name) \(.published_at)"'` and
+  `gh api repos/vrana/adminer/security-advisories --jq 'sort_by(.published_at) | reverse | .[0:5][] | "\(.published_at) \(.severity) \(.summary)"'`.
+  Then the base image:
+  `docker pull php:8.4-cli-alpine && docker run --rm php:8.4-cli-alpine php -v`.
+- **When it changes:** tell the user.
+  - A new release: set `ADMINER_VERSION` and `ADMINER_SHA256` in the Dockerfile and
+    `deploy/adminer-image/VERSION` to `<release>-wpl7.1`. Read the release notes for the plugin
+    hooks `wpl7.php` uses (`credentials`, `login`, `afterConnect`, `verifyLoginToken`, `loginForm`,
+    `bruteForceKey`, `verifyVersion`, `serviceWorker`, `manifest`, `importServerPath`), for
+    `connection()`, which `afterConnect` takes the request's lock with, and for `adminer_object()`
+    and `X-Forwarded-Prefix`, which `router.php` relies on. Run the engine test, then merge: CI
+    publishes the image.
+  - An advisory that reaches the MySQL build before a fix is out: ask the user to switch Adminer
+    off in **Settings → Security** until it is.
+  - A new PHP patch release: bump `VERSION` (`-wpl7.2`) so servers take the new base.
 
 ## wordpress.org's directory, as the panel's closed flag reads it
 

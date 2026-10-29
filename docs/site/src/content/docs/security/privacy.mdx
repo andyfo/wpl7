@@ -85,7 +85,8 @@ to the destinations you add.
 The installer and every update download the release from GitHub. Servers pull container images from
 GitHub's container registry and from Docker Hub, and packages from Ubuntu's mirrors and Docker's
 repository. A server pulls the scanner image for its first scan, rclone for its first offsite copy,
-and the FTP server image for its first FTP login.
+the FTP server image for its first FTP login, and Adminer the first time a database opens in it.
+Adminer's own check for new versions is turned off.
 
 ## The rest of the stack
 

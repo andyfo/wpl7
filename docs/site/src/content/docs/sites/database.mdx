@@ -1,6 +1,6 @@
 ---
 title: A site's database
-description: "See how a site connects to its database, browse and edit its tables, run SQL, and export or import a dump."
+description: "See how a site connects to its database, browse and edit its tables and their structure, run SQL, and export or import a dump."
 sidebar:
   order: 9
 sources:
@@ -32,12 +32,28 @@ server can connect. MariaDB has no port open to the internet.
 ## Browse and edit rows
 
 1. Under **Browse**, pick a table on the left.
-2. Choose a column's name to sort by it. **Filter** keeps the rows that match.
+2. Choose a column's name to sort by it.
 3. Choose a row to open it. Change its values, then choose **Save**. **Delete row** removes it.
 4. **Insert row** adds a row. Columns left empty take their default.
 
 The panel finds a row by its primary key. A table without one, and a view, are read only here.
-**Structure** shows a table's columns and indexes.
+
+## Find rows
+
+Above the rows, pick a column, a comparison and a value, then choose **Search**.
+
+- **Add condition** adds another line. **Match all** keeps the rows that meet every line, and
+  **Match any** the rows that meet one.
+- **Any column** looks in every column of the table at once, as text, binary ones left out.
+- **is one of** takes values apart by commas: `12, 15, 40`.
+- **=** with no value finds empty text.
+- **Clear** shows every row again.
+
+## Change a table's structure
+
+**Structure** above the rows lists the table's columns, indexes and foreign keys, with the forms
+that change them. **New** beside the table filter makes a table. See
+[Change a table's structure](/docs/sites/database-structure/).
 
 ## Edit WordPress's serialized values
 
@@ -83,6 +99,11 @@ Every query runs as the site's own database user. MariaDB keeps it to that site'
 cannot see another site's data or MariaDB's own users. An import runs as that user too, and a
 dump cannot run commands or read files on the server.
 
+## Open it in Adminer
+
+**Adminer** beside a database opens it in [Adminer](/docs/databases/adminer/) in a new tab, for
+what this tab does not do.
+
 ## Limits
 
 - A statement runs for at most 50 seconds from the SQL editor, and 20 seconds while browsing.
@@ -96,6 +117,8 @@ dump cannot run commands or read files on the server.
 ## Related
 
 - [Databases](/docs/databases/overview/)
+- [Change a table's structure](/docs/sites/database-structure/)
+- [Adminer](/docs/databases/adminer/)
 - [How backups work](/docs/backups/overview/)
 - [Restore and download](/docs/backups/restore/)
 - [Files](/docs/sites/files/)

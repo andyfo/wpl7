@@ -1,9 +1,10 @@
-// @docs sites/database
+// @docs sites/database, databases/adminer
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { SiteDatabaseDto, SiteDatabaseEntryDto } from '../../../../shared/types';
 import { dbExportUrl, revealDbPassword, scanDatabases, useDbTables, useSiteDatabases } from '../../api/databases';
+import { api } from '../../api/client';
 import { useRunJob, useSite } from '../../api/hooks';
 import { formatBytes, timeAgo } from '../../lib/format';
 import { Button, Card, ConfirmDialog, ErrorNote, Segmented, Spinner } from '../ui';
@@ -277,6 +278,7 @@ function DatabasesCard({
 }) {
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<unknown>(null);
+  const adminer = useOpenInAdminer(slug);
   const rescan = async () => {
     setScanning(true);
     setScanError(null);
@@ -334,6 +336,17 @@ function DatabasesCard({
                 >
                   Import
                 </button>
+                {info.adminer === null && (
+                  <button
+                    type="button"
+                    className="px-1.5 text-xs font-medium text-neutral-600 hover:underline disabled:opacity-50"
+                    disabled={!!unavailable || adminer.busy === d.name}
+                    title={unavailable ?? 'Open it in Adminer, in a new tab'}
+                    onClick={() => void adminer.open(d.name)}
+                  >
+                    {adminer.busy === d.name ? 'Opening…' : 'Adminer'}
+                  </button>
+                )}
                 {d.kind === 'extra' && (
                   <button
                     type="button"
@@ -362,9 +375,47 @@ function DatabasesCard({
           {scanning ? 'Reading…' : 'Refresh'}
         </button>
       </p>
-      <ErrorNote error={scanError} />
+      {adminer.blockedUrl && (
+        <p className="mt-2 text-xs">
+          The browser blocked the new tab.{' '}
+          <a className="underline" href={adminer.blockedUrl} target="_blank" rel="noreferrer">
+            Open Adminer
+          </a>{' '}
+          (the link works once, for a minute).
+        </p>
+      )}
+      <ErrorNote error={scanError ?? adminer.error} />
     </Card>
   );
+}
+
+/**
+ * "Open in Adminer": the panel mints a link that works once, and a new tab spends it. The tab is
+ * opened inside the click and pointed at the link after, as "Log in to WordPress" does: opened
+ * once the answer is in, a popup blocker would stop it.
+ */
+function useOpenInAdminer(slug: string) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const [blockedUrl, setBlockedUrl] = useState<string | null>(null);
+  const open = async (db: string) => {
+    setBusy(db);
+    setError(null);
+    setBlockedUrl(null);
+    const tab = window.open('', '_blank');
+    if (tab) tab.opener = null;
+    try {
+      const res = await api<{ url: string }>(`/api/sites/${slug}/databases/${encodeURIComponent(db)}/adminer`, { method: 'POST' });
+      if (tab) tab.location.replace(res.url);
+      else setBlockedUrl(res.url);
+    } catch (err) {
+      tab?.close();
+      setError(err);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return { open, busy, error, blockedUrl };
 }
 
 function SizeText({ entry }: { entry: SiteDatabaseEntryDto }) {

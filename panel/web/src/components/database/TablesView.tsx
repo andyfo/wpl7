@@ -1,8 +1,11 @@
 // @docs sites/database
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
+  DB_ANY_COLUMN,
+  DB_ANY_COLUMN_OPS,
   DB_FILTER_LABELS,
+  DB_FILTER_LIST,
   DB_FILTER_UNARY,
   DB_LIMITS,
   dbFilterOps,
@@ -10,12 +13,13 @@ import {
   type DbRowFilter,
   type DbRowKey,
 } from '../../../../shared/databases';
-import type { DbCell, DbColumnDto, DbRowsPageDto, DbTableStructureDto } from '../../../../shared/types';
-import { deleteDbRows, useDbRows, useDbStructure, useDbTables, type RowsQuery } from '../../api/databases';
+import type { DbCell, DbColumnDto, DbRowsPageDto } from '../../../../shared/types';
+import { deleteDbRows, useDbRows, useDbTables, type RowsQuery } from '../../api/databases';
 import { formatBytes } from '../../lib/format';
 import { Button, ConfirmDialog, EmptyState, ErrorNote, Spinner, compactInputClass, inputClass } from '../ui';
 import { CellView, cellText } from './cells';
 import { RowSheet, type RowSheetMode } from './RowSheet';
+import { NewTableDialog, StructureEditor } from './StructureEditor';
 
 const PAGE_SIZES = [25, 50, 100, 250, 500] as const;
 
@@ -35,6 +39,7 @@ export function TablesView({
 }) {
   const tables = useDbTables(slug, db);
   const [filter, setFilter] = useState('');
+  const [creating, setCreating] = useState(false);
   if (tables.isError && !tables.data) return <ErrorNote error={tables.error} />;
   if (!tables.data) return <Spinner />;
   const shown = tables.data.filter((t) => t.name.toLowerCase().includes(filter.trim().toLowerCase()));
@@ -42,12 +47,17 @@ export function TablesView({
   return (
     <div className="flex flex-col gap-4 lg:flex-row">
       <aside className="shrink-0 lg:w-60">
-        <input
-          className={`${inputClass} mb-2`}
-          placeholder={`Filter ${tables.data.length} tables`}
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-        />
+        <div className="mb-2 flex gap-1.5">
+          <input
+            className={`${inputClass} min-w-0 flex-1`}
+            placeholder={`Filter ${tables.data.length} tables`}
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
+          <Button small variant="secondary" onClick={() => setCreating(true)} title="New table">
+            New
+          </Button>
+        </div>
         {tables.data.length === 0 ? (
           <EmptyState>No tables.</EmptyState>
         ) : (
@@ -79,6 +89,8 @@ export function TablesView({
             db={db}
             table={current.name}
             bytes={current.bytes}
+            tables={tables.data.map((t) => t.name)}
+            onTable={onTable}
             onOpenSql={onOpenSql}
           />
         ) : table ? (
@@ -87,6 +99,18 @@ export function TablesView({
           <EmptyState>Pick a table to see its rows.</EmptyState>
         )}
       </div>
+      {creating && (
+        <NewTableDialog
+          slug={slug}
+          db={db}
+          tables={tables.data.map((t) => t.name)}
+          onCreated={(name) => {
+            setCreating(false);
+            onTable(name);
+          }}
+          onClose={() => setCreating(false)}
+        />
+      )}
     </div>
   );
 }
@@ -97,16 +121,20 @@ function TableView({
   db,
   table,
   bytes,
+  tables,
+  onTable,
   onOpenSql,
 }: {
   slug: string;
   db: string;
   table: string;
   bytes: number | null;
+  tables: string[];
+  onTable: (table: string | null) => void;
   onOpenSql: (sql: string) => void;
 }) {
   const qc = useQueryClient();
-  const [q, setQ] = useState<RowsQuery>({ offset: 0, limit: 50, sort: null, dir: 'asc', filters: [] });
+  const [q, setQ] = useState<RowsQuery>({ offset: 0, limit: 50, sort: null, dir: 'asc', filters: [], match: 'all' });
   const [structure, setStructure] = useState(false);
   const [sheet, setSheet] = useState<RowSheetMode | null>(null);
   const [picked, setPicked] = useState<Map<string, DbRowKey>>(new Map());
@@ -187,14 +215,15 @@ function TableView({
       </div>
 
       {structure ? (
-        <StructureView slug={slug} db={db} table={table} />
+        <StructureEditor slug={slug} db={db} table={table} tables={tables} onTable={onTable} />
       ) : (
         <>
           {(page?.columns ?? lastColumns) && (
             <FilterBar
               columns={(page?.columns ?? lastColumns)!}
               filters={q.filters}
-              onChange={(filters) => setQ({ ...q, offset: 0, filters })}
+              match={q.match}
+              onChange={(filters, match) => setQ({ ...q, offset: 0, filters, match })}
             />
           )}
           <ErrorNote error={rows.error} />
@@ -204,7 +233,7 @@ function TableView({
                 Try again
               </Button>
               {(q.filters.length > 0 || q.offset > 0 || q.sort) && (
-                <Button small variant="secondary" onClick={() => setQ({ ...q, offset: 0, sort: null, filters: [] })}>
+                <Button small variant="secondary" onClick={() => setQ({ ...q, offset: 0, sort: null, filters: [], match: 'all' })}>
                   Show the first rows
                 </Button>
               )}
@@ -366,141 +395,152 @@ function TableView({
   );
 }
 
-/** The filters on a table view: the ones in force, and a row to add one. */
+/** One condition as it is being written: the value is kept even for a comparison that takes none. */
+interface DraftFilter {
+  column: string;
+  op: DbFilterOp;
+  value: string;
+}
+
+const toDraft = (f: DbRowFilter): DraftFilter => ({ column: f.column, op: f.op, value: f.value ?? '' });
+/** The comparisons that look for a part of the text, or for one of a list. */
+const SEARCHES: readonly DbFilterOp[] = ['contains', 'notContains', 'startsWith', 'endsWith', ...DB_FILTER_LIST];
+const fromDraft = (f: DraftFilter): DbRowFilter =>
+  DB_FILTER_UNARY.includes(f.op) ? { column: f.column, op: f.op } : { column: f.column, op: f.op, value: f.value };
+
+/**
+ * The filters on a table view: rows of column, comparison and value, kept as a draft until Search.
+ * "Any column" looks in every column but the binary ones.
+ */
 function FilterBar({
   columns,
   filters,
+  match,
   onChange,
 }: {
   columns: DbColumnDto[];
   filters: DbRowFilter[];
-  onChange: (filters: DbRowFilter[]) => void;
+  match: 'all' | 'any';
+  onChange: (filters: DbRowFilter[], match: 'all' | 'any') => void;
 }) {
   // Text is what a filter usually looks for: a name, a slug, a URL - not the row's id.
-  const [column, setColumn] = useState((columns.find((c) => c.kind === 'text') ?? columns[0])?.name ?? '');
-  const [op, setOp] = useState<DbFilterOp>('contains');
-  const [value, setValue] = useState('');
-  const unary = DB_FILTER_UNARY.includes(op);
-  const add = () => {
-    if (!column || filters.length >= DB_LIMITS.filters) return;
-    onChange([...filters, unary ? { column, op } : { column, op, value }]);
-    setValue('');
-  };
+  const firstText = (columns.find((c) => c.kind === 'text') ?? columns[0])?.name ?? DB_ANY_COLUMN;
+  const blank = (): DraftFilter => ({ column: firstText, op: 'contains', value: '' });
+  const [rows, setRows] = useState<DraftFilter[]>(() => (filters.length > 0 ? filters.map(toDraft) : [blank()]));
+  const [how, setHow] = useState(match);
+  // What is in force changed from outside (a table switched, "Show the first rows"): follow it.
+  const applied = JSON.stringify([filters, match]);
+  useEffect(() => {
+    setRows(filters.length > 0 ? filters.map(toDraft) : [blank()]);
+    setHow(match);
+  }, [applied]);
+
+  // A search or a list with no value filters nothing: such a row is left out. "= (nothing)" is
+  // kept: it looks for empty text.
+  const ready = rows.filter((r) => r.value !== '' || !SEARCHES.includes(r.op)).map(fromDraft);
+  const dirty = JSON.stringify([ready, ready.length > 1 ? how : 'all']) !== JSON.stringify([filters, filters.length > 1 ? match : 'all']);
+  const set = (i: number, patch: Partial<DraftFilter>) =>
+    setRows((all) =>
+      all.map((r, j) => {
+        if (j !== i) return r;
+        const next = { ...r, ...patch };
+        // "Any column" takes only the comparisons that read as a search.
+        if (next.column === DB_ANY_COLUMN && !DB_ANY_COLUMN_OPS.includes(next.op)) next.op = 'contains';
+        return next;
+      }),
+    );
+
   return (
-    <div className="space-y-2">
-      {filters.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {filters.map((f, i) => (
-            <span key={i} className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2.5 py-0.5 text-xs">
-              <span className="font-mono">{f.column}</span> {DB_FILTER_LABELS[f.op]}
-              {!DB_FILTER_UNARY.includes(f.op) && <span className="font-medium">“{f.value}”</span>}
-              <button type="button" aria-label="Remove this filter" className="ml-0.5 text-neutral-400 hover:text-neutral-700" onClick={() => onChange(filters.filter((_, j) => j !== i))}>
+    <form
+      className="space-y-1.5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onChange(ready, ready.length > 1 ? how : 'all');
+      }}
+    >
+      {rows.map((r, i) => {
+        const ops = r.column === DB_ANY_COLUMN ? DB_ANY_COLUMN_OPS : dbFilterOps;
+        return (
+          <div key={i} className="flex flex-wrap items-center gap-1.5">
+            {i > 0 ? (
+              <span className="w-10 text-right text-xs text-neutral-500">{how === 'any' ? 'or' : 'and'}</span>
+            ) : (
+              rows.length > 1 && <span className="w-10" />
+            )}
+            <select
+              className={`${compactInputClass} py-1 text-xs`}
+              value={r.column}
+              onChange={(e) => set(i, { column: e.target.value })}
+              aria-label="Column"
+            >
+              <option value={DB_ANY_COLUMN}>Any column</option>
+              {columns.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className={`${compactInputClass} py-1 text-xs`}
+              value={r.op}
+              onChange={(e) => set(i, { op: e.target.value as DbFilterOp })}
+              aria-label="Comparison"
+            >
+              {ops.map((o) => (
+                <option key={o} value={o}>
+                  {DB_FILTER_LABELS[o]}
+                </option>
+              ))}
+            </select>
+            {!DB_FILTER_UNARY.includes(r.op) && (
+              <input
+                className={`${compactInputClass} w-48 py-1 text-xs`}
+                placeholder={DB_FILTER_LIST.includes(r.op) ? 'a, b, c' : 'Value'}
+                value={r.value}
+                onChange={(e) => set(i, { value: e.target.value })}
+                aria-label="Value"
+              />
+            )}
+            {rows.length > 1 && (
+              <button
+                type="button"
+                aria-label="Remove this condition"
+                className="px-1 text-neutral-400 hover:text-neutral-700"
+                onClick={() => setRows((all) => all.filter((_, j) => j !== i))}
+              >
                 ✕
               </button>
-            </span>
-          ))}
-          {filters.length > 1 && (
-            <button type="button" className="text-xs text-neutral-500 underline" onClick={() => onChange([])}>
-              Clear
-            </button>
-          )}
-        </div>
-      )}
-      <form
-        className="flex flex-wrap items-center gap-1.5"
-        onSubmit={(e) => {
-          e.preventDefault();
-          add();
-        }}
-      >
-        <select className={`${compactInputClass} py-1 text-xs`} value={column} onChange={(e) => setColumn(e.target.value)} aria-label="Column">
-          {columns.map((c) => (
-            <option key={c.name} value={c.name}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-        <select className={`${compactInputClass} py-1 text-xs`} value={op} onChange={(e) => setOp(e.target.value as DbFilterOp)} aria-label="Comparison">
-          {dbFilterOps.map((o) => (
-            <option key={o} value={o}>
-              {DB_FILTER_LABELS[o]}
-            </option>
-          ))}
-        </select>
-        {!unary && (
-          <input
-            className={`${compactInputClass} w-48 py-1 text-xs`}
-            placeholder="Value"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            aria-label="Value"
-          />
-        )}
-        <Button small variant="secondary" type="submit" disabled={filters.length >= DB_LIMITS.filters}>
-          Filter
+            )}
+          </div>
+        );
+      })}
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <Button small variant={dirty ? 'primary' : 'secondary'} type="submit">
+          Search
         </Button>
-      </form>
-    </div>
-  );
-}
-
-function StructureView({ slug, db, table }: { slug: string; db: string; table: string }) {
-  const s = useDbStructure(slug, db, table);
-  if (s.isError && !s.data) return <ErrorNote error={s.error} />;
-  if (!s.data) return <Spinner />;
-  return <Structure s={s.data} />;
-}
-
-function Structure({ s }: { s: DbTableStructureDto }) {
-  const keyNames = useMemo(() => new Set(s.key ?? []), [s.key]);
-  return (
-    <div className="space-y-4">
-      <div className="overflow-x-auto rounded-lg border border-neutral-200">
-        <table className="w-full text-[13px]">
-          <thead className="bg-neutral-50 text-left text-neutral-600">
-            <tr>
-              <th className="px-2 py-1.5 font-medium">Column</th>
-              <th className="px-2 py-1.5 font-medium">Type</th>
-              <th className="px-2 py-1.5 font-medium">NULL</th>
-              <th className="px-2 py-1.5 font-medium">Default</th>
-              <th className="px-2 py-1.5 font-medium">Extra</th>
-            </tr>
-          </thead>
-          <tbody>
-            {s.columns.map((c) => (
-              <tr key={c.name} className="border-t border-neutral-100">
-                <td className="px-2 py-1 font-mono">
-                  {c.name}
-                  {keyNames.has(c.name) && <span className="ml-1.5 text-[11px] text-neutral-400">key</span>}
-                </td>
-                <td className="px-2 py-1 font-mono text-neutral-600">{c.type}</td>
-                <td className="px-2 py-1">{c.nullable ? 'yes' : 'no'}</td>
-                <td className="px-2 py-1 font-mono text-neutral-600">{c.default ?? ''}</td>
-                <td className="px-2 py-1 text-neutral-600">{c.extra}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        {rows.length < DB_LIMITS.filters && (
+          <button type="button" className="text-neutral-600 underline" onClick={() => setRows((all) => [...all, blank()])}>
+            Add condition
+          </button>
+        )}
+        {rows.length > 1 && (
+          <select
+            className={`${compactInputClass} py-0.5 text-xs`}
+            value={how}
+            onChange={(e) => setHow(e.target.value as 'all' | 'any')}
+            aria-label="Rows must match"
+          >
+            <option value="all">Match all</option>
+            <option value="any">Match any</option>
+          </select>
+        )}
+        {filters.length > 0 && (
+          <button type="button" className="text-neutral-500 underline" onClick={() => onChange([], 'all')}>
+            Clear
+          </button>
+        )}
       </div>
-      {s.indexes.length > 0 && (
-        <div>
-          <h3 className="mb-1 text-xs font-medium uppercase tracking-wide text-neutral-400">Indexes</h3>
-          <ul className="space-y-0.5 text-[13px]">
-            {s.indexes.map((i) => (
-              <li key={i.name}>
-                <span className="font-mono">{i.name}</span>
-                <span className="text-neutral-500">
-                  {' '}
-                  ({i.columns.join(', ')}){i.unique ? ' · unique' : ''}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {!s.key && s.type === 'table' && (
-        <p className="text-xs text-neutral-500">No primary key: rows are read only here. Change them with SQL.</p>
-      )}
-    </div>
+    </form>
   );
 }
+
