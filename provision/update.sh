@@ -168,6 +168,15 @@ if [ "$DRY" = 0 ] && [ -f "$STATE_FILE" ]; then
 fi
 write_state
 
+# The third lock, for the images. The panel's nightly Docker clean-up removes old ones on this
+# server, and would take this release's for leftovers: the ones pulled below, or left by an earlier
+# try, get their local names only after. It takes this lock while it removes images, and this run
+# holds it to its end, so the two never overlap.
+if [ "$DRY" = 0 ]; then
+  wpl7_hold_image_lock "$UPDATE_DIR" ||
+    fail "The panel's Docker clean-up has held the server's images for ten minutes. Try again later, or restart the panel (docker restart wpl7-panel) to stop it."
+fi
+
 # --------------------------------------------------------------- 2. resolve
 
 log "Resolving $TO"
@@ -243,13 +252,6 @@ if [ -n "$MIN_FROM" ] && [ -n "$FROM" ]; then
 fi
 
 # ----------------------------------------------------------------- 3. fetch
-
-# The panel's nightly Docker clean-up removes old images on this server. It would take this
-# release's for leftovers: the ones pulled below, or left by an earlier try, are named only after.
-# The clean-up marks the time it removes images, then looks for a running update, which the state
-# written at the lock already announces. So one that starts from now on leaves the images alone,
-# and this waits for one already under way.
-if [ "$DRY" = 0 ]; then wpl7_wait_for_docker_cleanup "$UPDATE_DIR"; fi
 
 # Pin what is running RIGHT NOW, before a single pull, by image id.
 #

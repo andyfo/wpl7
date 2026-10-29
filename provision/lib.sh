@@ -127,22 +127,18 @@ wpl7_db_copy() {
   done
 }
 
-# Wait while the panel's nightly Docker clean-up holds its mark in `dir`: it is removing images,
-# and would take ones an update has not named yet for leftovers (panel/src/services/dockerCleanup.ts).
-# The caller has already written to state.json that an update is running, so a clean-up that starts
-# from then on leaves the images alone. A mark counts only while the panel runs, and for ten
-# minutes at most: what set it otherwise died part-way.
-wpl7_wait_for_docker_cleanup() {
-  local mark="$1/docker-cleanup" said=0
-  while [ -e "$mark" ]; do
-    [ "$(docker inspect --format '{{.State.Running}}' wpl7-panel 2>/dev/null || true)" = true ] || return 0
-    if [ -n "$(find "$mark" -mmin +10 2>/dev/null)" ]; then
-      echo "   ignoring a Docker clean-up mark older than ten minutes"
-      return 0
-    fi
-    if [ "$said" = 0 ]; then echo "   waiting for the panel's Docker clean-up to finish"; said=1; fi
-    sleep "${WPL7_CLEANUP_POLL_SEC:-2}"
-  done
+# Hold the lock the panel's nightly Docker clean-up takes while it removes images on this server
+# (panel/src/services/dockerCleanup.ts), from now until this shell exits. An update names the images
+# it pulls only after pulling them, and the clean-up would take them for leftovers. The lock is the
+# kernel's flock, on fd 9, so it goes when this shell does, crash or not. A clean-up under way is
+# waited for, for ten minutes at most; past that this returns 1, and the update stops instead of
+# running into it.
+wpl7_hold_image_lock() {
+  mkdir -p "$1"
+  exec 9>"$1/docker.lock"
+  flock --exclusive --nonblock 9 && return 0
+  echo "   waiting for the panel's Docker clean-up to finish"
+  flock --exclusive --wait "${WPL7_IMAGE_LOCK_WAIT_SEC:-600}" 9
 }
 
 # Remove the copies earlier updates took (`panel.db.pre-<version>`, with their -wal and -shm),

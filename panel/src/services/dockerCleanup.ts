@@ -1,8 +1,5 @@
 // @docs servers/resources
-import fs from 'node:fs';
-import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
-import type { Config } from '../config.js';
 import { sites } from '../db/schema.js';
 import { hostedSites } from '../lib/siteKind.js';
 import type { ServerHandle } from '../servers/registry.js';
@@ -28,7 +25,7 @@ import { DKIM_CONTAINER, MAIL_CONTAINER, MARIADB_CONTAINER, PANEL_CONTAINER, TRA
  * at it, and it is WPL7's: every name it has is in a repository WPL7 pulls or builds into, or it
  * has no name at all. A server's own images, under names of their own, are left alone. Of the
  * panel's images, the newest one no container runs stays too, for a rollback. An update of the
- * panel and the removal of images on its server take turns (removeUnusedImages says how).
+ * panel and the removal of images on its server take turns, through a lock (removeUnusedImages).
  *
  * Docker trims the build cache only once free space falls under a fifth of the disk, and then
  * only down to a tenth of it. Here it keeps BUILD_CACHE_KEEP_BYTES of what no image shares, the
@@ -133,38 +130,23 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
 const nameOf = (image: ImageSummary) => image.tags[0] ?? image.digests[0] ?? `untagged ${image.id.replace(/^sha256:/, '').slice(0, 12)}`;
 
 /**
- * The mark the clean-up holds on the panel's own server while it removes images there.
- * provision/update.sh waits for it to go before it pulls anything (wpl7_wait_for_docker_cleanup in
- * provision/lib.sh), and the clean-up looks for a running update only once it holds the mark.
- */
-export function cleanupMark(config: Config): string {
-  return path.join(config.paths.panel, 'update', 'docker-cleanup');
-}
-
-/** At boot no clean-up can be running yet, and the mark of one a crash cut short would hold up an update. */
-export function clearCleanupMark(config: Config): void {
-  fs.rmSync(cleanupMark(config), { force: true });
-}
-
-/**
  * One server's images. Returns the names of those removed, or null when an update of the panel
- * is running on that server and they were left for the next run.
+ * holds the images on that server and they were left for the next run.
  */
 export async function removeUnusedImages(s: CoreServices, handle: ServerHandle, log: HousekeepingLog): Promise<string[] | null> {
   if (handle.kind !== 'local') return removeFrom(s, handle, log);
-  // update.sh runs on the panel's own server, started from the panel or by hand. It names the next
-  // release's images only after pulling them, or after finding them left by an earlier try, and
-  // this panel, which does not know that release, would take them for leftovers. So the two take
-  // turns. This marks the time it removes images, then looks for an update. update.sh writes that
-  // it is running, then waits for the mark. Whichever looks second sees the other.
-  const mark = cleanupMark(s.config);
-  fs.mkdirSync(path.dirname(mark), { recursive: true });
-  fs.writeFileSync(mark, `${new Date().toISOString()}\n`);
+  // update.sh runs on the panel's own server, started from the panel or by hand. It names the
+  // next release's images only after pulling them, or after finding them left by an earlier try,
+  // and this panel, which does not know that release, would take them for leftovers. It holds a
+  // lock from its start to its end, and the clean-up takes the same one or leaves the images be.
+  // It is the kernel's flock: it goes when its holder ends, so nothing ever has to guess that a
+  // holder is gone, and a clean-up that hangs keeps an update out rather than letting it in.
+  const lock = await s.system.tryImageLock();
+  if (!lock) return null;
   try {
-    if (await s.system.isRunning()) return null;
     return await removeFrom(s, handle, log);
   } finally {
-    fs.rmSync(mark, { force: true });
+    await lock.release();
   }
 }
 
@@ -212,7 +194,7 @@ export async function cleanDocker(
     const said: string[] = [];
     try {
       const removed = await removeUnusedImages(s, handle, log);
-      if (removed === null) said.push('an update of the panel is running here, so its images wait for the next run');
+      if (removed === null) said.push('an update of the panel holds its images here, so they wait for the next run');
       else {
         total.imagesRemoved += removed.length;
         if (removed.length > 0) said.push(`removed ${removed.length} image(s) nothing uses: ${removed.join(', ')}`);

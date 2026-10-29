@@ -74,8 +74,9 @@ same script.
 
 1. An install too old for the release is told to update to an intermediate one first.
 2. The new images are pulled. If the nightly housekeeping is removing old Docker images at that
-   moment, the update waits for it first. The pre-flight warns about keys missing from
-   `deploy/.env`, little free disk, or a release that needs downtime.
+   moment, the update waits for it first, for ten minutes at most. Past that it stops, and you can
+   run it again. The pre-flight warns about keys missing from `deploy/.env`, little free disk, or a
+   release that needs downtime.
 3. The panel stops, and its database is copied. Then the new version starts.
 4. The [health gate](/docs/reference/glossary/#health-gate) waits for the new panel to report healthy,
    as the new version.

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,7 +7,8 @@ import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { servers, sites } from '../../src/db/schema.js';
 import type { ImageSummary } from '../../src/services/docker.js';
-import { BUILD_CACHE_KEEP_BYTES, cleanDocker, cleanupMark, imagesToRemove, repositoryOf } from '../../src/services/dockerCleanup.js';
+import { BUILD_CACHE_KEEP_BYTES, cleanDocker, imagesToRemove, repositoryOf } from '../../src/services/dockerCleanup.js';
+import { tryFlock } from '../../src/lib/flock.js';
 import { SCANNER_IMAGE } from '../../src/services/scanEngines.js';
 import { makeWorld, waitFor, type FakeDocker } from '../helpers.js';
 
@@ -30,11 +31,36 @@ const removed = (docker: FakeDocker) => docker.calls.filter((c) => c.method === 
 
 const LIB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../provision/lib.sh');
 
-/** A `docker` for the host's PATH that says the panel's container is running. */
-function panelRunning(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-stub-'));
-  fs.writeFileSync(path.join(dir, 'docker'), '#!/usr/bin/env bash\necho true\n', { mode: 0o755 });
-  return dir;
+/** flock(1) is in util-linux: the panel's image, Ubuntu and CI have it, macOS does not. */
+const hasFlock = spawnSync('flock', ['--version']).status === 0;
+
+/** update.sh's lock step in a real shell: `wpl7_hold_image_lock`, then what it would pull. */
+function updateShell(dir: string, waitSec: number, after = 'echo PULLING') {
+  // A process group of its own: killing the update kills what it started, as stopping it would.
+  const child = spawn('bash', ['-c', `set -euo pipefail\n. "${LIB}"\nwpl7_hold_image_lock "${dir}"\n${after}`], {
+    env: { ...process.env, WPL7_IMAGE_LOCK_WAIT_SEC: String(waitSec) },
+    detached: true,
+  });
+  let out = '';
+  child.stdout.on('data', (chunk: Buffer) => (out += chunk.toString()));
+  // `close`, not `exit`: only then has everything it printed been read.
+  const exited = new Promise<number | null>((resolve) => child.on('close', (code) => resolve(code)));
+  return { child, out: () => out, exited, kill: () => process.kill(-child.pid!, 'SIGKILL') };
+}
+
+/** Removal on server 1 that stops at its first image until `release` is called. */
+function pauseRemoval(docker: FakeDocker) {
+  let reached!: () => void;
+  const atRemoval = new Promise<void>((resolve) => (reached = resolve));
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const remove = docker.removeImage.bind(docker);
+  docker.removeImage = async (ref: string) => {
+    reached();
+    await held;
+    return remove(ref);
+  };
+  return { atRemoval, release };
 }
 
 describe('repositoryOf', () => {
@@ -129,83 +155,59 @@ describe('cleanDocker', () => {
     expect(lines).toContainEqual(expect.stringMatching(/^Docker on ".+": removed 5 image\(s\) nothing uses: .+; freed 2\.0 GiB of build cache$/));
   });
 
-  it("leaves the panel's server's images alone while update.sh runs there, however it was started", async () => {
+  it("leaves the panel's server's images alone while update.sh holds them", async () => {
     const w = await makeWorld();
     const lines: string[] = [];
     const log = { info: (m: string) => lines.push(m), warn: (m: string) => lines.push(`WARN ${m}`) };
-    // update.sh by hand, part-way: the next release's site image is pulled, and not yet named
-    // wpl7-wordpress:php8.3. This panel's release is not that one, so nothing else protects it.
-    const state = path.join(w.config.paths.panel, 'update', 'state.json');
-    fs.mkdirSync(path.dirname(state), { recursive: true });
-    fs.writeFileSync(state, JSON.stringify({ phase: 'fetching', pid: 4242, to: '9.9.9' }));
+    // update.sh part-way: the next release's site image is pulled and not yet named
+    // wpl7-wordpress:php8.3. This panel's release is not that one, so only the lock protects it.
     add(w.docker, 'ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9');
     w.docker.buildCacheBytes = 2 * GiB;
     const worker = w.addSshServer('worker-1');
     add(worker.docker, 'wpl7-sftpgo:2.7.5-wpl7.1');
+    const free = w.core.system.tryImageLock.bind(w.core.system);
+    w.core.system.tryImageLock = async () => null;
 
     const total = await cleanDocker(w.core, log);
 
-    // The host was asked whether the updater is still there, and said yes (the fake's exit 0).
-    expect(w.host.commands).toContain('systemctl is-active --quiet wpl7-update || kill -0 4242 2>/dev/null');
     expect(removed(w.docker)).toEqual([]);
-    expect(w.docker.images.has('ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9')).toBe(true);
     // The build cache is not what the update needs, and a worker is not where it runs.
     expect(w.docker.buildCacheBytes).toBe(BUILD_CACHE_KEEP_BYTES);
     expect(removed(worker.docker)).toEqual(['wpl7-sftpgo:2.7.5-wpl7.1']);
     expect(total.imagesRemoved).toBe(1);
     expect(lines).toContainEqual(
-      expect.stringMatching(/^Docker on ".+": an update of the panel is running here, so its images wait for the next run; freed 1\.0 GiB of build cache$/),
+      expect.stringMatching(/^Docker on ".+": an update of the panel holds its images here, so they wait for the next run; freed 1\.0 GiB of build cache$/),
     );
-    expect(fs.existsSync(cleanupMark(w.config))).toBe(false);
 
     // Once it is over, the next run removes what nothing needs.
-    fs.writeFileSync(state, JSON.stringify({ phase: 'switched', pid: 4242, to: '9.9.9' }));
+    w.core.system.tryImageLock = free;
     await cleanDocker(w.core, log);
     expect(removed(w.docker)).toEqual(['ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9']);
   });
 
-  it('and update.sh take turns: an update that starts while it removes images waits for it', async () => {
+  it("holds the image lock exactly while it removes images on the panel's server", async () => {
     const w = await makeWorld();
     const log = { info: () => undefined, warn: () => undefined };
-    // An earlier try at 9.9.9 left its site image. A retry finds it, so its pull fetches nothing,
-    // and names it only after: the image is in the clean-up's list before the retry starts.
-    add(w.docker, 'ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9');
-    let reached!: () => void;
-    const atRemoval = new Promise<void>((resolve) => (reached = resolve));
-    let release!: () => void;
-    const held = new Promise<void>((resolve) => (release = resolve));
-    const remove = w.docker.removeImage.bind(w.docker);
-    w.docker.removeImage = async (ref: string) => {
-      reached();
-      await held;
-      return remove(ref);
+    add(w.docker, 'wpl7-wordpress:php8.1');
+    const worker = w.addSshServer('worker-1');
+    add(worker.docker, 'wpl7-wordpress:php8.1');
+    let held = false;
+    w.core.system.tryImageLock = async () => {
+      held = true;
+      return { release: async () => void (held = false) };
     };
-    const cleaning = cleanDocker(w.core, log);
-    await atRemoval;
-
-    // The retry starts now, after the clean-up found no update: it says it is running, then waits.
-    const updateDir = path.dirname(cleanupMark(w.config));
-    fs.writeFileSync(path.join(updateDir, 'state.json'), JSON.stringify({ phase: 'fetching', pid: 4242 }));
-    const stub = panelRunning();
-    const update = spawn('bash', ['-c', `set -euo pipefail\n. "${LIB}"\nwpl7_wait_for_docker_cleanup "${updateDir}"\necho PULLING`], {
-      env: { ...process.env, PATH: `${stub}:${process.env.PATH ?? ''}`, WPL7_CLEANUP_POLL_SEC: '0.05' },
-    });
-    let out = '';
-    update.stdout.on('data', (chunk: Buffer) => (out += chunk.toString()));
-    const exited = new Promise<number | null>((resolve) => update.on('exit', resolve));
-    await waitFor(() => out.includes('waiting'), 15_000);
-    // Held as long as the clean-up is: give it time to get past the mark, if it could.
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(out).toBe("   waiting for the panel's Docker clean-up to finish\n");
-
-    release();
-    await cleaning;
-    expect(await exited).toBe(0);
-    expect(out).toContain('PULLING');
-    // Removed before the retry pulled: it fetches the image again, and names it.
-    expect(removed(w.docker)).toEqual(['ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9']);
-    expect(fs.existsSync(cleanupMark(w.config))).toBe(false);
-    fs.rmSync(stub, { recursive: true, force: true });
+    const seen: [string, boolean][] = [];
+    for (const [name, docker] of [['local', w.docker], ['worker', worker.docker]] as const) {
+      const remove = docker.removeImage.bind(docker);
+      docker.removeImage = async (ref: string) => {
+        seen.push([name, held]);
+        return remove(ref);
+      };
+    }
+    await cleanDocker(w.core, log);
+    // A worker is not where update.sh runs, so its images are removed without the lock.
+    expect(seen).toEqual([['local', true], ['worker', false]]);
+    expect(held).toBe(false);
   });
 
   it('keeps an image a site on that server still runs, and one Docker refuses to remove', async () => {
@@ -243,5 +245,67 @@ describe('cleanDocker', () => {
     expect(docker.images.has('wpl7-wordpress:php8.1')).toBe(true);
     expect(docker.images.has('wpl7-wordpress:php8.0')).toBe(true);
     expect(total.imagesRemoved).toBe(0);
+  });
+});
+
+describe.skipIf(!hasFlock)('the clean-up and update.sh, through the real flock', () => {
+  const quiet = { info: () => undefined, warn: () => undefined };
+
+  async function world() {
+    const w = await makeWorld();
+    w.core.system.tryImageLock = () => tryFlock(w.core.system.imageLockFile());
+    // An earlier try at 9.9.9 left its site image. A retry finds it, so its pull fetches nothing,
+    // and names it only after: the image is in the clean-up's list before the retry starts.
+    add(w.docker, 'ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9');
+    return { w, dir: path.dirname(w.core.system.imageLockFile()) };
+  }
+
+  it('an update that starts while the clean-up removes images waits for it, however long it takes', async () => {
+    const { w, dir } = await world();
+    const pause = pauseRemoval(w.docker);
+    const cleaning = cleanDocker(w.core, quiet);
+    await pause.atRemoval;
+
+    const update = updateShell(dir, 30);
+    await waitFor(() => update.out().includes('waiting'), 15_000);
+    // No mark to expire: the lock is held for as long as the clean-up runs.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(update.out()).toBe("   waiting for the panel's Docker clean-up to finish\n");
+
+    pause.release();
+    await cleaning;
+    expect(await update.exited).toBe(0);
+    expect(update.out()).toContain('PULLING');
+    // Removed before the retry pulled: it fetches the image again, and names it.
+    expect(removed(w.docker)).toEqual(['ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9']);
+  });
+
+  it('an update gives up rather than run into a clean-up that does not end', async () => {
+    const { w, dir } = await world();
+    const pause = pauseRemoval(w.docker);
+    const cleaning = cleanDocker(w.core, quiet);
+    await pause.atRemoval;
+
+    const update = updateShell(dir, 1);
+    expect(await update.exited).toBe(1);
+    expect(update.out()).not.toContain('PULLING');
+
+    pause.release();
+    await cleaning;
+  });
+
+  it("leaves the images alone while an update holds the lock, and takes it again once that process is gone", async () => {
+    const { w, dir } = await world();
+    const update = updateShell(dir, 30, 'echo HELD\nsleep 60');
+    await waitFor(() => update.out().includes('HELD'), 15_000);
+
+    await cleanDocker(w.core, quiet);
+    expect(removed(w.docker)).toEqual([]);
+
+    // Killed, not finished: the kernel lets the lock go with the processes.
+    update.kill();
+    await update.exited;
+    await cleanDocker(w.core, quiet);
+    expect(removed(w.docker)).toEqual(['ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9']);
   });
 });

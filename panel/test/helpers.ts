@@ -1494,7 +1494,11 @@ export async function makeWorld(
   const github = opts.github ?? new FakeGitHub();
   const updates = new UpdateService(settings, config, log, github.fetch);
   const host = opts.host ?? new FakeHostExec();
-  const system = new SystemUpdateService(db, config, settings, updates, new HostShell(db, config, servers, log, host.run), log);
+  // The image lock always free: flock(1) is not on every machine the suite runs on. Tests of the
+  // lock itself swap in the real one (dockerCleanup.test.ts, flock.test.ts).
+  const system = new SystemUpdateService(db, config, settings, updates, new HostShell(db, config, servers, log, host.run), log, async () => ({
+    release: async () => undefined,
+  }));
   // `worker` is filled in by JobWorker's constructor below - see CoreServices.
   // The real bundled recipes (panel/catalog), so a test sees what an install sees; tests
   // that need a recipe of their own add it through `core.licenses.catalog.add()`. No network
