@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { afterAll, describe, expect, it } from 'vitest';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -144,6 +144,83 @@ describe('wpl7_stamp', () => {
 
     expect(res.status).toBe(0);
     expect(res.stdout).toContain('STAMPED:9.9.9-source');
+  });
+});
+
+/** flock(1) is in util-linux: the panel's image, Ubuntu and CI have it, macOS does not. */
+const hasFlock = spawnSync('flock', ['--version']).status === 0;
+
+describe.skipIf(!hasFlock)('wpl7_hold_image_lock', () => {
+  const updateDir = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-update-'));
+    stubs.push(dir);
+    return dir;
+  };
+  /** Another process that holds the lock until it is killed, as the panel's clean-up would. */
+  const holder = (dir: string) => spawn('flock', ['--exclusive', '--close', path.join(dir, 'docker.lock'), 'sleep', '60']);
+  const lib = JSON.stringify(LIB);
+
+  it('takes the lock at once when it is free, and holds it until the shell ends', () => {
+    const dir = updateDir();
+    const lock = JSON.stringify(path.join(dir, 'docker.lock'));
+    const res = spawnSync('bash', ['-c', `set -euo pipefail\n. ${lib}\nwpl7_hold_image_lock ${JSON.stringify(dir)}\nflock --nonblock ${lock} true || echo HELD`], { encoding: 'utf8' });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toBe('HELD\n');
+    // The shell has ended, and the lock with it.
+    expect(spawnSync('flock', ['--nonblock', path.join(dir, 'docker.lock'), 'true']).status).toBe(0);
+  });
+
+  it('waits for a holder, and takes the lock once it is gone', async () => {
+    const dir = updateDir();
+    const held = holder(dir);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const res = spawn('bash', ['-c', `set -euo pipefail\n. ${lib}\nwpl7_hold_image_lock ${JSON.stringify(dir)}\necho PULLING`], {
+      env: { ...process.env, WPL7_IMAGE_LOCK_WAIT_SEC: '30' },
+    });
+    let out = '';
+    res.stdout.on('data', (chunk: Buffer) => (out += chunk.toString()));
+    const exited = new Promise<number | null>((resolve) => res.on('close', (code) => resolve(code)));
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(out).toBe("   waiting for the panel's Docker clean-up to finish\n");
+    held.kill('SIGKILL');
+    expect(await exited).toBe(0);
+    expect(out).toContain('PULLING');
+  });
+
+  it('gives up once the wait is over, and the update stops there', () => {
+    const dir = updateDir();
+    const held = holder(dir);
+    spawnSync('sleep', ['0.2']);
+    const res = spawnSync('bash', ['-c', `set -euo pipefail\n. ${lib}\nwpl7_hold_image_lock ${JSON.stringify(dir)} || exit 7\necho PULLING`], {
+      encoding: 'utf8',
+      env: { ...process.env, WPL7_IMAGE_LOCK_WAIT_SEC: '1' },
+    });
+    held.kill('SIGKILL');
+    expect(res.status).toBe(7);
+    expect(res.stdout).not.toContain('PULLING');
+  });
+});
+
+describe('wpl7_prune_db_copies', () => {
+  it('keeps the copy this update took, with its -wal and -shm, and removes the older ones', () => {
+    // update.sh copies the database before each update's migrations, and nothing removed them.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-update-'));
+    stubs.push(dir);
+    const names = ['panel.db.pre-0.3.1', 'panel.db.pre-0.3.1-wal', 'panel.db.pre-0.3.2', 'panel.db.pre-0.3.2-wal', 'panel.db.pre-0.3.2-shm', 'state.json', 'current.log'];
+    for (const name of names) fs.writeFileSync(path.join(dir, name), 'x');
+
+    const res = runShell(`wpl7_prune_db_copies ${JSON.stringify(dir)} ${JSON.stringify(path.join(dir, 'panel.db.pre-0.3.2'))}`, dir);
+
+    expect(res.status).toBe(0);
+    expect(fs.readdirSync(dir).sort()).toEqual(['current.log', 'panel.db.pre-0.3.2', 'panel.db.pre-0.3.2-shm', 'panel.db.pre-0.3.2-wal', 'state.json']);
+  });
+
+  it('does nothing in a folder without copies', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-update-'));
+    stubs.push(dir);
+    const res = runShell(`wpl7_prune_db_copies ${JSON.stringify(dir)} ${JSON.stringify(path.join(dir, 'panel.db.pre-1.0.0'))}`, dir);
+    expect(res.status).toBe(0);
+    expect(fs.readdirSync(dir)).toEqual([]);
   });
 });
 

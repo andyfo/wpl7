@@ -173,6 +173,21 @@ else
     echo "      each start of it also removes the table of blocked addresses (and Docker's rules)." >&2
   fi
 fi
+
+log "System journal (500 MB at most) and apt's package cache (emptied weekly)"
+if ! cmp -s "$REPO_DIR/provision/journald.conf" /etc/systemd/journald.conf.d/wpl7.conf 2>/dev/null; then
+  install -d -m 0755 /etc/systemd/journald.conf.d
+  install -m 0644 "$REPO_DIR/provision/journald.conf" /etc/systemd/journald.conf.d/wpl7.conf
+  # journald reads its limit when it starts, and a full rotation removes what is over it.
+  if systemctl restart systemd-journald 2>/dev/null; then
+    journalctl --rotate >/dev/null 2>&1 || true
+  else
+    echo "NOTE: systemd-journald did not restart here; the journal's limit applies from the next boot." >&2
+  fi
+fi
+install -m 0644 "$REPO_DIR/provision/apt-clean.conf" /etc/apt/apt.conf.d/52wpl7-clean
+apt-get clean
+
 mkdir -p "$SRV_ROOT/mail/dkim" "$SRV_ROOT/mail/policy" "$SRV_ROOT/mail/sasl" "$SRV_ROOT/mail/sasl2"
 chmod 700 "$SRV_ROOT/backups" "$SRV_ROOT/mysql" "$SRV_ROOT/panel" "$SRV_ROOT/mail/dkim" "$SRV_ROOT/mail/sasl"
 

@@ -4,6 +4,7 @@ import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
 import { alertStates, siteConnections, sites, vulnNotices, type AlertStateRow, type SiteConnectionRow, type SiteRow } from '../db/schema.js';
 import { panelUrl } from '../lib/panelUrl.js';
+import { formatBytes } from '../../shared/bytes.js';
 import type { SettingsService } from './settings.js';
 import type { Logger } from './index.js';
 import type { VulnFinding, WpInventoryService } from './wpInventory.js';
@@ -12,7 +13,8 @@ import type { VulnFinding, WpInventoryService } from './wpInventory.js';
  * Emails about sites, to the alert address in Settings (MailService.notifyOperator): a site that
  * stopped answering and came back, a new vulnerability, a backup that failed, and for sites
  * hosted elsewhere a plugin that stopped answering and a certificate about to expire. Each kind
- * has a switch in Settings → Monitoring. Without an address they are only logged.
+ * has a switch in Settings → Monitoring. A server running out of disk has none: that one is always
+ * sent. Without an address they are only logged.
  *
  * What was said is kept in the database (`alert_states`, `vuln_notices`), so a restart neither
  * repeats an alert nor misses a recovery. An alert the relay did not take is tried again, at most
@@ -29,6 +31,12 @@ const CERT_WARN_MS = 7 * 24 * 3600_000;
 const CERT_RENEWED_MS = 14 * 24 * 3600_000;
 /** At most one failed-backup email per site in this long. */
 const BACKUP_QUIET_MS = 24 * 3600_000;
+/** A server with less than this share of its disk free is running out of space... */
+export const DISK_LOW = 0.1;
+/** ...until it has this much free again, so a disk hovering at the line sends one email, not one a minute. */
+export const DISK_OK = 0.15;
+/** Readings in a row below DISK_LOW before it counts: one odd reading is not worth an email. */
+export const DISK_LOW_AFTER = 2;
 /** Raw errors in an email are cut here. */
 const MAX_ERROR = 500;
 /** An alert the relay did not take is tried again this long after. */
@@ -55,6 +63,11 @@ interface DownDetail extends Delivery {
   fails: number;
   status?: number | null;
   error?: string | null;
+}
+
+interface DiskDetail extends Delivery {
+  /** Readings in a row below DISK_LOW. */
+  lows: number;
 }
 
 /**
@@ -196,6 +209,52 @@ export class AlertService {
       }));
     }
     this.put({ key, siteId: site.id, since: row?.since ?? now, notifiedAt, detail: JSON.stringify(next) });
+  }
+
+  /**
+   * One reading of a server's disk. Low after DISK_LOW_AFTER readings in a row under DISK_LOW,
+   * and fine again once DISK_OK of it is free. Sent whatever the switches say, like a suspended
+   * mail account: a full disk stops every site on the server.
+   */
+  async diskChecked(server: { id: number; name: string }, disk: { diskTotal: number; diskUsed: number }): Promise<void> {
+    if (disk.diskTotal <= 0) return;
+    const key = `disk:${server.id}`;
+    const row = this.state(key);
+    const detail = { lows: 0, ...parse<DiskDetail>(row?.detail) } as DiskDetail;
+    const free = Math.max(0, disk.diskTotal - disk.diskUsed);
+    const share = free / disk.diskTotal;
+    const counted = detail.lows >= DISK_LOW_AFTER;
+    const percent = `${Math.floor(share * 100)}%`;
+    const base = panelUrl(this.s.config);
+    const page = base ? `${base}/servers/${server.id}` : `Servers → ${server.name}`;
+    if (share >= (counted ? DISK_OK : DISK_LOW)) {
+      if (!row) return;
+      this.drop(key);
+      if (counted && this.recoveryDue(row, detail)) {
+        await this.send(`${server.name} has disk space again`, [
+          `${server.name} has ${formatBytes(free)} free of ${formatBytes(disk.diskTotal)} (${percent}) again.`,
+          `It was low on disk space for ${duration(Date.now() - row.since)}, from ${utc(row.since)}.`,
+          '',
+          page,
+        ]);
+      }
+      return;
+    }
+    let next: DiskDetail = { ...detail, lows: share < DISK_LOW ? detail.lows + 1 : detail.lows };
+    let notifiedAt = row?.notifiedAt ?? null;
+    if (next.lows >= DISK_LOW_AFTER) {
+      ({ next, notifiedAt } = await this.deliver(next, notifiedAt, true, () => [
+        `${server.name} is running out of disk space`,
+        [
+          `${server.name} has ${formatBytes(free)} free of ${formatBytes(disk.diskTotal)} (${percent}).`,
+          'A full disk stops its sites and their databases, and the panel too if it runs there.',
+          'Backups usually take the most space: keep fewer of them, or move them offsite or to a disk of their own.',
+          '',
+          page,
+        ],
+      ]));
+    }
+    this.put({ key, siteId: null, since: row?.since ?? Date.now(), notifiedAt, detail: JSON.stringify(next) });
   }
 
   /** A backup job that failed: one email per site a day at most. */

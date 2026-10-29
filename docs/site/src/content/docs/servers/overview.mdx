@@ -97,6 +97,8 @@ starts, for example after an update. **Container stats (seconds)** sets the serv
 
 - The panel emails when a site goes down, with **Site down, and back up** on in
   [Settings](/docs/panel/settings/#alerts). It sends no email when a server goes down.
+- The email for a server low on disk, at 10% free, watches the disk that holds `/srv`. A backup
+  location on a disk of its own is not watched.
 - The uptime check runs from the server itself, through its Traefik. It does not test DNS, or
   the route a visitor takes from outside.
 - The disk figures cover the filesystem that holds `/srv`. A backup location on another disk

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { backups, moveCleanups, servers, serverStats, sites } from '../../src/db/schema.js';
+import { alertStates, backups, moveCleanups, servers, serverStats, sites } from '../../src/db/schema.js';
 import { makeApp, makeWorld } from '../helpers.js';
 
 async function authedApp() {
@@ -143,10 +143,13 @@ describe('servers API', () => {
         diskUsed: 100,
       })
       .run();
+    // And a disk alert, which has no foreign key to go with it.
+    world.db.insert(alertStates).values({ key: `disk:${s2.id}`, since: Date.now(), detail: '{"lows":2}' }).run();
     const res = await app.inject({ method: 'DELETE', url: `/api/servers/${s2.id}`, headers });
     expect(res.statusCode).toBe(200);
     expect(world.db.select().from(servers).all()).toHaveLength(1);
     expect(world.db.select().from(serverStats).all()).toHaveLength(0);
+    expect(world.db.select().from(alertStates).all()).toHaveLength(0);
   });
 
   it('refuses to delete a server that still holds a parked copy from a move', async () => {

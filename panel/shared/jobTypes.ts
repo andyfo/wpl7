@@ -250,7 +250,7 @@ export const JOB_TYPE_INFO = {
   'system.housekeeping': {
     label: 'Nightly housekeeping',
     description:
-      'Prunes old backups, statistics, mail and API logs and finished jobs, applies offsite retention, finishes moved sites whose DNS has settled and refreshes the vulnerability feed.',
+      'Prunes old backups, statistics, mail and API logs and finished jobs, applies offsite retention, removes Docker images nothing uses and trims the build cache, finishes moved sites whose DNS has settled and refreshes the vulnerability feed.',
     category: 'system',
   },
   'site.malwareScan': {

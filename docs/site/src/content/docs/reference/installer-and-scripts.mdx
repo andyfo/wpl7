@@ -8,6 +8,8 @@ sources:
   - "provision/*.sh"
   - "provision/firewall/*"
   - provision/daemon.json
+  - provision/journald.conf
+  - provision/apt-clean.conf
 ---
 
 One script installs WPL7, and the scripts in `provision/` keep it running. They print their
@@ -105,6 +107,8 @@ What it does:
 - Sets UFW to refuse incoming traffic except SSH, 80 and 443. SSH is rate-limited on every port
   sshd listens on, and existing rules are kept.
 - Installs the `wpl7-firewall` helper and its boot unit, `wpl7-firewall.service`.
+- Limits the system journal to 500 MB, from `provision/journald.conf`.
+- Has apt empty its package cache once a week, from `provision/apt-clean.conf`.
 - Creates the folders under `/srv`, and a 2 GB swap file when the machine has less than 4 GB of
   memory and no swap.
 - Writes `deploy/.env` from `deploy/.env.example` on the first run, with generated database and
@@ -173,7 +177,8 @@ Moves an install in image mode to another release. Try it first with `--dry-run`
 | `-h`, `--help` | Prints the usage, as the first argument only |
 
 Run it as the checkout owner. It runs itself again as root with `sudo -n`. It writes its state
-and log to `/srv/panel/update/`. The new panel has to pass a
+and log to `/srv/panel/update/`, with the copy of the panel database it takes. Once the new panel
+is healthy, it removes the copies earlier updates took. The new panel has to pass a
 [health gate](/docs/reference/glossary/#health-gate) within `WPL7_UPDATE_HEALTH_TIMEOUT`
 seconds, 300 by default. Otherwise the
 [rollback](/docs/reference/glossary/#rollback) puts back the previous image, bundle and panel

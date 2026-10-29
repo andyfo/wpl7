@@ -1,9 +1,10 @@
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { alertStates, siteConnections, siteStats, sites, vulnNotices } from '../../src/db/schema.js';
-import { AlertService, DOWN_AFTER, RETRY_MS } from '../../src/services/alerts.js';
+import { AlertService, DISK_LOW_AFTER, DOWN_AFTER, RETRY_MS } from '../../src/services/alerts.js';
+import type { ExecPort } from '../../src/lib/exec.js';
 import type { VulnFinding } from '../../src/services/wpInventory.js';
-import { makeWorld, type TestWorld } from '../helpers.js';
+import { fakeExecOk, makeWorld, type TestWorld } from '../helpers.js';
 import { connectionRow, externalWorld, siteRow } from '../connectWorld.js';
 
 /** Emails about sites (services/alerts.ts): what goes out, once, and what a restart keeps. */
@@ -248,5 +249,55 @@ describe('alerts', () => {
     await w.core.alerts.certificate(siteRow(w), Date.now() + 3 * 24 * 3600_000);
     expect(sent.map((m) => m.taken)).toEqual([false, true]);
     expect(site.id).toBe(siteRow(w).id);
+  });
+
+  it("says a server is running out of disk, whatever the switches say, and once it has room again", async () => {
+    const w = await makeWorld();
+    const sent = capture(w);
+    for (const key of ['alertsSiteDown', 'alertsVulnerabilities', 'alertsBackups', 'alertsConnector'] as const) w.core.settings.set(key, false);
+    // What `df -kP` on the server says, of a 40 GiB disk.
+    let freeKb = 3_000_000;
+    const exec: ExecPort = {
+      ...fakeExecOk,
+      async run() {
+        const df = `Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 41943040 ${41_943_040 - freeKb} ${freeKb} 90% /srv`;
+        return { stdout: `0.10 0.20 0.30 1/100 42\n==\nMemTotal: 4000000 kB\nMemAvailable: 2000000 kB\n==\n${df}\n`, stderr: '', exitCode: 0 };
+      },
+    };
+    const box = w.addSshServer('box-1', { exec });
+    // Only this server's: the panel's own reading is of the disk the tests run on.
+    const about = () => sent.filter((m) => m.subject.startsWith('box-1'));
+
+    for (let i = 1; i < DISK_LOW_AFTER; i++) await w.core.monitor.tickServerStats();
+    expect(about()).toEqual([]);
+    await w.core.monitor.tickServerStats();
+    await w.core.monitor.tickServerStats();
+    expect(about().map((m) => m.subject)).toEqual(['box-1 is running out of disk space']);
+    expect(about()[0]!.body).toContain('box-1 has 2.9 GiB free of 40.0 GiB (7%).');
+    expect(about()[0]!.body).toContain(`http://panel.example.test/servers/${box.id}`);
+
+    // Above the line, but not by enough: still the same trouble, and nothing new to say.
+    freeKb = 5_000_000;
+    await w.core.monitor.tickServerStats();
+    expect(about()).toHaveLength(1);
+    freeKb = 8_000_000;
+    await w.core.monitor.tickServerStats();
+    expect(about().map((m) => m.subject)).toEqual(['box-1 is running out of disk space', 'box-1 has disk space again']);
+    expect(about()[1]!.body).toMatch(/box-1 has 7\.6 GiB free of 40\.0 GiB \(19%\) again\.\nIt was low on disk space for \d+ min/);
+    expect(w.db.select().from(alertStates).where(eq(alertStates.key, `disk:${box.id}`)).get()).toBeUndefined();
+  });
+
+  it('sends nothing for one low reading of a disk', async () => {
+    const w = await makeWorld();
+    const sent = capture(w);
+    const server = { id: 7, name: 'box-7' };
+    await w.core.alerts.diskChecked(server, { diskTotal: 100, diskUsed: 95 });
+    await w.core.alerts.diskChecked(server, { diskTotal: 100, diskUsed: 50 });
+    await w.core.alerts.diskChecked(server, { diskTotal: 100, diskUsed: 95 });
+    expect(sent).toEqual([]);
+    // A reading without a disk (a failed df) says nothing either way.
+    await w.core.alerts.diskChecked(server, { diskTotal: 0, diskUsed: 0 });
+    await w.core.alerts.diskChecked(server, { diskTotal: 100, diskUsed: 95 });
+    expect(sent.map((m) => m.subject)).toEqual(['box-7 is running out of disk space']);
   });
 });

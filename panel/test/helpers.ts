@@ -19,6 +19,7 @@ import type {
   EnsureNetworkResult,
   EphemeralOpts,
   ExecOpts,
+  ImageSummary,
   NetworkInfo,
   NetworkSpec,
   RunResult,
@@ -561,10 +562,50 @@ export class FakeDocker implements DockerPort {
   }
   async removeImage(ref: string): Promise<void> {
     this.record('removeImage', [ref]);
+    const id = ref.startsWith('sha256:') ? ref : this.images.has(ref) ? await this.imageId(ref) : null;
+    // As Docker does: the last name of an image a container uses is refused, and so is its id.
+    const lastName = id !== null && [...this.images].filter((tag) => this.imageIds.get(tag) === id || `sha256:${tag}` === id).length <= 1;
+    if (id && lastName && (await this.containerImageIds()).includes(id)) {
+      throw Object.assign(new Error(`conflict: unable to delete ${id.slice(7, 19)} (must be forced) - image is being used by a container`), { statusCode: 409 });
+    }
+    if (ref.startsWith('sha256:')) {
+      for (const tag of [...this.images]) if ((this.imageIds.get(tag) ?? `sha256:${tag}`) === ref) this.images.delete(tag);
+      this.untaggedImages = this.untaggedImages.filter((image) => image.id !== ref);
+    }
     this.images.delete(ref);
   }
   async pruneImages(labels: string[]): Promise<void> {
     this.record('pruneImages', [labels]);
+  }
+  /** Images without a tag in `images`: one a rebuild left behind, or one pulled by digest. */
+  untaggedImages: ImageSummary[] = [];
+  /** When an image was built (Unix seconds), by id; 0 for one not here. */
+  imageCreated = new Map<string, number>();
+  async listImages(): Promise<ImageSummary[]> {
+    const byId = new Map<string, ImageSummary>();
+    for (const tag of this.images) {
+      const id = (await this.imageId(tag))!;
+      const image = byId.get(id) ?? { id, tags: [], digests: [], created: this.imageCreated.get(id) ?? 0 };
+      image.tags.push(tag);
+      byId.set(id, image);
+    }
+    return [...byId.values(), ...this.untaggedImages];
+  }
+  async containerImageIds(): Promise<string[]> {
+    const ids: string[] = [];
+    for (const name of this.containers.keys()) {
+      const id = this.imageByContainer.get(name) ?? (await this.imageId(this.serviceSpecs.get(name)?.image ?? (await this.containerImage(name))!));
+      if (id) ids.push(id);
+    }
+    return ids;
+  }
+  /** Build cache no image shares, in bytes: what `pruneBuildCache` can free. */
+  buildCacheBytes = 0;
+  async pruneBuildCache(keepBytes: number): Promise<number> {
+    this.record('pruneBuildCache', [keepBytes]);
+    const freed = Math.max(0, this.buildCacheBytes - keepBytes);
+    this.buildCacheBytes -= freed;
+    return freed;
   }
   /** Cumulative CPU counter; advanced by `cpuNsPerSample` on every read, like a real one. */
   cpuNs = 0;
@@ -1171,7 +1212,7 @@ export interface TestWorld {
    * Insert an ssh-kind server row. real:true gives it a real filesystem in its own
    * tmpdir (path-mapped hostExec + LocalFiles) so tar/extract/stream semantics are real.
    */
-  addSshServer(name: string, opts?: { real?: boolean; publicIp?: string; devDomain?: string }): FakeServerPorts & { id: number };
+  addSshServer(name: string, opts?: { real?: boolean; publicIp?: string; devDomain?: string; exec?: ExecPort }): FakeServerPorts & { id: number };
 }
 
 /**
@@ -1431,7 +1472,7 @@ export async function makeWorld(
         docker: new FakeDocker(),
         dbAdmin: new FakeDbAdmin(),
         dbBrowser: new FakeDbBrowser(),
-        exec: fakeExecOk,
+        exec: opts.exec ?? fakeExecOk,
         files: new LocalFiles(),
       };
     }
@@ -1468,7 +1509,11 @@ export async function makeWorld(
   const github = opts.github ?? new FakeGitHub();
   const updates = new UpdateService(settings, config, log, github.fetch);
   const host = opts.host ?? new FakeHostExec();
-  const system = new SystemUpdateService(db, config, settings, updates, new HostShell(db, config, servers, log, host.run), log);
+  // The image lock always free: flock(1) is not on every machine the suite runs on. Tests of the
+  // lock itself swap in the real one (dockerCleanup.test.ts, flock.test.ts).
+  const system = new SystemUpdateService(db, config, settings, updates, new HostShell(db, config, servers, log, host.run), log, async () => ({
+    release: async () => undefined,
+  }));
   // `worker` is filled in by JobWorker's constructor below - see CoreServices.
   // The real bundled recipes (panel/catalog), so a test sees what an install sees; tests
   // that need a recipe of their own add it through `core.licenses.catalog.add()`. No network
@@ -1581,6 +1626,7 @@ export async function makeWorld(
   core.monitor.attachExternal(core.connections, {
     probed: (site, reading) => core.alerts.probed(site, reading),
     certificate: (site, expiresAt) => core.alerts.certificate(site, expiresAt),
+    diskChecked: (server, stats) => core.alerts.diskChecked(server, stats),
   });
   const worker = new JobWorker(db, core);
   offsite.attachWorker(worker);

@@ -29,12 +29,13 @@ describe('nightly housekeeping as a job', () => {
 
     const done = await runJob(w, job.id);
     expect(done.status).toBe('succeeded');
-    expect(JSON.parse(done.result!)).toMatchObject({ jobsPruned: 1, backupsPruned: 0, oldBackupsDeleted: 0 });
+    expect(JSON.parse(done.result!)).toMatchObject({ jobsPruned: 1, backupsPruned: 0, oldBackupsDeleted: 0, dockerImagesRemoved: 0, buildCacheFreedBytes: 0 });
     expect(w.db.select().from(jobs).where(eq(jobs.id, old.id)).get()).toBeUndefined();
 
     const log = w.db.select().from(jobLogs).where(eq(jobLogs.jobId, job.id)).orderBy(asc(jobLogs.id)).all().map((l) => l.message);
     expect(log[0]).toMatch(/^Backup retention/);
     expect(log).toContain('Job retention: removed 1 finished job(s) older than 90 days');
+    expect(log).toContainEqual(expect.stringMatching(/^Docker on ".+": nothing to remove$/));
     expect(log.at(-1)).toBe('Housekeeping done.');
   });
 

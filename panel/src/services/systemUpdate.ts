@@ -7,6 +7,7 @@ import { jobs, systemUpdates, type JobRow, type SystemUpdateRow } from '../db/sc
 import type { Config } from '../config.js';
 import type { HostShell } from '../servers/hostShell.js';
 import { badRequest, conflict, internal } from '../lib/errors.js';
+import { tryFlock, type HeldLock } from '../lib/flock.js';
 import { shellQuote } from '../servers/sshExec.js';
 import type { UpdateStateDto } from '../../shared/types.js';
 import type { JobWorker } from '../jobs/worker.js';
@@ -50,7 +51,25 @@ export class SystemUpdateService {
     private readonly updates: UpdateService,
     private readonly host: HostShell,
     private readonly log: Logger,
+    /** How the image lock is taken: flock(1), or a fake in tests on machines without it. */
+    private readonly tryLock: (file: string) => Promise<HeldLock | null> = tryFlock,
   ) {}
+
+  // ---------------------------------------------------------------- image lock
+
+  /**
+   * The file update.sh holds a lock on from its start to its end (wpl7_hold_image_lock in
+   * provision/lib.sh). It names the images it pulls only after pulling them, so nothing may
+   * remove images on this server meanwhile.
+   */
+  imageLockFile(): string {
+    return path.join(this.updateDir(), 'docker.lock');
+  }
+
+  /** That lock, for the Docker clean-up while it removes images here. Null while an update holds it. */
+  tryImageLock(): Promise<HeldLock | null> {
+    return this.tryLock(this.imageLockFile());
+  }
 
   // ----------------------------------------------------------- maintenance
 

@@ -4,6 +4,7 @@ import { and, eq, inArray, lt, sql } from 'drizzle-orm';
 import { batches, jobs, moveCleanups, serverStats, sessions, siteStats } from '../db/schema.js';
 import type { JobWorker } from '../jobs/worker.js';
 import { ApiActivityService } from './apiActivity.js';
+import { cleanDocker } from './dockerCleanup.js';
 import { pruneOAuth } from './oauth.js';
 import type { CoreServices } from './index.js';
 
@@ -116,6 +117,11 @@ export async function runHousekeeping(
   });
   if (result.databaseUploadsRemoved > 0) log.info(`Database uploads: removed ${result.databaseUploadsRemoved} older than a day`);
   checkCanceled();
+
+  // Docker on every server: images nothing runs or needs any more, and the build cache.
+  const docker = await cleanDocker(s, log, checkCanceled);
+  result.dockerImagesRemoved = docker.imagesRemoved;
+  result.buildCacheFreedBytes = docker.buildCacheFreedBytes;
 
   const statsCutoff = Date.now() - (s.settings.get('monitorRetentionDays') || 7) * 24 * 3600_000;
   s.db.delete(siteStats).where(lt(siteStats.ts, statsCutoff)).run();

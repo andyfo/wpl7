@@ -281,7 +281,7 @@ export class Schedulers {
         description: JOB_TYPE_INFO['system.housekeeping'].description,
         pausable: true,
         pauseWarning:
-          'Old backups, statistics, logs and finished jobs stop being removed, so disks and the database keep growing until you resume.',
+          'Old backups, statistics, logs, finished jobs and Docker images stop being removed, so disks and the database keep growing until you resume.',
         cadence: () => ({ cron: HOUSEKEEPING_CRON, text: describeCron(HOUSEKEEPING_CRON) ?? HOUSEKEEPING_CRON }),
         nextRunAt: () => nextCronRun(HOUSEKEEPING_CRON),
         tick: () => this.housekeepingTick(),

@@ -3,7 +3,7 @@ import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { z } from 'zod';
-import { backups, moveCleanups, servers, serverStats } from '../db/schema.js';
+import { alertStates, backups, moveCleanups, servers, serverStats } from '../db/schema.js';
 import {
   backupRelocateBody,
   serverCreateBody,
@@ -269,6 +269,8 @@ export function registerServerRoutes(app: FastifyInstance, deps: AppDeps): void 
       // row per server per minute - so without this the DELETE below always failed the
       // foreign-key check (500) once the server had been registered for a minute.
       deps.db.delete(serverStats).where(eq(serverStats.serverId, row.id)).run();
+      // Its disk alert (services/alerts.ts), which nothing would read or end again.
+      deps.db.delete(alertStates).where(eq(alertStates.key, `disk:${row.id}`)).run();
       deps.db.delete(servers).where(eq(servers.id, row.id)).run();
     });
     return reply.send({

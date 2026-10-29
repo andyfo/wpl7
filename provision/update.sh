@@ -168,6 +168,15 @@ if [ "$DRY" = 0 ] && [ -f "$STATE_FILE" ]; then
 fi
 write_state
 
+# The third lock, for the images. The panel's nightly Docker clean-up removes old ones on this
+# server, and would take this release's for leftovers: the ones pulled below, or left by an earlier
+# try, get their local names only after. It takes this lock while it removes images, and this run
+# holds it to its end, so the two never overlap.
+if [ "$DRY" = 0 ]; then
+  wpl7_hold_image_lock "$UPDATE_DIR" ||
+    fail "The panel's Docker clean-up has held the server's images for ten minutes. Try again later, or restart the panel (docker restart wpl7-panel) to stop it."
+fi
+
 # --------------------------------------------------------------- 2. resolve
 
 log "Resolving $TO"
@@ -385,6 +394,7 @@ if [ "$healthy" = 1 ]; then
   PHASE=switched
   FINISHED="$(date -u +%Y-%m-%dT%H:%M:%SZ | jq -R .)"
   write_state
+  if [ -n "$DB_SNAPSHOT" ]; then wpl7_prune_db_copies "$UPDATE_DIR" "$DB_SNAPSHOT"; fi
   log "Updated to $TO."
   echo "   The panel finishes the job itself: worker servers and any per-version steps run"
   echo "   as a job in the new panel (Settings -> Updates)."

@@ -127,6 +127,32 @@ wpl7_db_copy() {
   done
 }
 
+# Hold the lock the panel's nightly Docker clean-up takes while it removes images on this server
+# (panel/src/services/dockerCleanup.ts), from now until this shell exits. An update names the images
+# it pulls only after pulling them, and the clean-up would take them for leftovers. The lock is the
+# kernel's flock, on fd 9, so it goes when this shell does, crash or not. A clean-up under way is
+# waited for, for ten minutes at most; past that this returns 1, and the update stops instead of
+# running into it.
+wpl7_hold_image_lock() {
+  mkdir -p "$1"
+  exec 9>"$1/docker.lock"
+  flock --exclusive --nonblock 9 && return 0
+  echo "   waiting for the panel's Docker clean-up to finish"
+  flock --exclusive --wait "${WPL7_IMAGE_LOCK_WAIT_SEC:-600}" 9
+}
+
+# Remove the copies earlier updates took (`panel.db.pre-<version>`, with their -wal and -shm),
+# all but `keep` and its own. Only the newest can still undo anything: it is the database as it
+# was before the version now running migrated it. Each is as big as the database.
+wpl7_prune_db_copies() {
+  local dir=$1 keep=$2 copy
+  for copy in "$dir"/panel.db.pre-*; do
+    [ -e "$copy" ] || continue
+    case "$copy" in "$keep"|"$keep-wal"|"$keep-shm") continue ;; esac
+    rm -f -- "$copy"
+  done
+}
+
 # ------------------------------------------------------------------- health
 
 # Wait for a container to report healthy (or merely running, for images without a
