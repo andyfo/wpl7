@@ -56,6 +56,7 @@ describe('built-in schedules', () => {
       'update-check',
       'catalog',
       'mail-ingest',
+      'adminer-idle',
       'site-networks',
       'site-protection',
       'blocked-addresses',
@@ -66,7 +67,7 @@ describe('built-in schedules', () => {
     expect(byKey.get('backups')).toMatchObject({ kind: 'builtin', group: 'jobs', pausable: true, settingsHref: '/settings#backups' });
     expect(byKey.get('backups')!.cadence.cron).toBe(w.deps.settings.get('backupCron'));
     expect(byKey.get('uptime')!.group).toBe('background');
-    for (const key of ['mail-ingest', 'site-networks', 'site-protection', 'blocked-addresses', 'wildcard-token', 'ftp', 'update-watchdog']) {
+    for (const key of ['mail-ingest', 'adminer-idle', 'site-networks', 'site-protection', 'blocked-addresses', 'wildcard-token', 'ftp', 'update-watchdog']) {
       expect(byKey.get(key)!.pausable, key).toBe(false);
       expect(byKey.get(key)!.lockedReason, key).toBeTruthy();
     }

@@ -78,6 +78,30 @@ describe('JobWorker', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/Site #42 was held .* letting its jobs start/));
   });
 
+  it('keeps a hold its change renews, past the age a leaked one is let go at', async () => {
+    const w = await makeWorld();
+    const status = (id: number) => w.db.select().from(jobs).where(eq(jobs.id, id)).get()!.status;
+    const site = { id: 42, slug: 'demo' };
+    const hold = w.worker.holdSite(site);
+    const job = w.worker.enqueue('demo', { steps: 1, stepMs: 0 }, site);
+    const now = Date.now.bind(Date);
+    const later = vi.spyOn(Date, 'now').mockImplementation(() => now() + 16 * 60_000);
+    // Still under way 16 minutes on: renewed, it holds.
+    hold.renew();
+    w.worker.start();
+    try {
+      await new Promise((r) => setTimeout(r, 300));
+      expect(status(job.id)).toBe('queued');
+      hold();
+      // Let go, a renewal changes nothing.
+      hold.renew();
+      await waitFor(() => status(job.id) === 'succeeded');
+    } finally {
+      await w.worker.stop();
+      later.mockRestore();
+    }
+  });
+
   it('cancels queued jobs and reports running/terminal as not cancelable', async () => {
     const w = await makeWorld();
     const job = w.worker.enqueue('demo', { steps: 1 });

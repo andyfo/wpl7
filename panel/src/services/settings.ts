@@ -160,6 +160,11 @@ export interface PanelSettings {
    * work again when it is switched back on.
    */
   mcpEnabled: boolean;
+  /**
+   * "Open in Adminer" on a site's Database tab (src/adminer). On by default; off, the button is
+   * gone and the front door opens nothing: what to reach for while an Adminer advisory is open.
+   */
+  adminerEnabled: boolean;
 }
 
 const KEY_MAP: Record<keyof PanelSettings, string> = {
@@ -223,6 +228,7 @@ const KEY_MAP: Record<keyof PanelSettings, string> = {
   scanTimeoutMin: 'scan.timeoutMin',
   scanQuarantineKeepDays: 'scan.quarantineKeepDays',
   mcpEnabled: 'mcp.enabled',
+  adminerEnabled: 'adminer.enabled',
 };
 
 export class SettingsService {

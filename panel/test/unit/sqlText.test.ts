@@ -37,6 +37,35 @@ describe('SQL text the database browser builds', () => {
     expect(() => buildWhere([{ column: 'nope', op: 'eq', value: '1' }], cols)).toThrow(/no column "nope"/);
   });
 
+  it('matches any of the filters, a list of values, and any column', () => {
+    const cols = new Set(['id', 'title', 'body', 'data']);
+    const anyColumns = ['id', 'title', 'body'];
+    const where = buildWhere(
+      [
+        { column: 'id', op: 'in', value: '1, 2,3' },
+        { column: '*', op: 'contains', value: 'shop' },
+      ],
+      cols,
+      { match: 'any', anyColumns },
+    );
+    expect(where.sql).toBe(
+      'WHERE (`id` IN (?, ?, ?)) OR ((CAST(`id` AS CHAR) LIKE ? OR CAST(`title` AS CHAR) LIKE ? OR CAST(`body` AS CHAR) LIKE ?))',
+    );
+    expect(where.values).toEqual(['1', '2', '3', '%shop%', '%shop%', '%shop%']);
+    // A negative comparison on any column: no column may match, a NULL one counting as no match.
+    expect(buildWhere([{ column: '*', op: 'notContains', value: 'x' }], cols, { anyColumns }).sql).toBe(
+      'WHERE NOT (COALESCE(CAST(`id` AS CHAR) LIKE ?, 0) OR COALESCE(CAST(`title` AS CHAR) LIKE ?, 0) OR COALESCE(CAST(`body` AS CHAR) LIKE ?, 0))',
+    );
+    // Empty items in a list are left out; a list of nothing is refused.
+    expect(buildWhere([{ column: 'id', op: 'in', value: '12, 15,' }], cols).values).toEqual(['12', '15']);
+    expect(() => buildWhere([{ column: 'id', op: 'in', value: ' , ' }], cols)).toThrow(/at least one value/);
+    expect(buildWhere([{ column: 'id', op: 'notIn', value: '7' }], cols).sql).toBe('WHERE `id` NOT IN (?)');
+    expect(() => buildWhere([{ column: '*', op: 'lt', value: '3' }], cols, { anyColumns })).toThrow(/Pick a column/);
+    expect(() => buildWhere([{ column: 'id', op: 'in', value: Array(101).fill('1').join(',') }], cols)).toThrow(/at most 100/);
+    // One filter: "any" changes nothing.
+    expect(buildWhere([{ column: 'id', op: 'eq', value: '1' }], cols, { match: 'any' }).sql).toBe('WHERE `id` = ?');
+  });
+
   it('finds a row by exactly its key columns, NULL-safe', () => {
     expect(buildKeyCondition({ a: '1', b: null }, ['a', 'b'])).toEqual({ sql: '`a` <=> ? AND `b` <=> ?', values: ['1', null] });
     expect(() => buildKeyCondition({ a: '1' }, ['a', 'b'])).toThrow(/send exactly those/);
@@ -81,8 +110,9 @@ SELECT 2;`;
     const big = `INSERT INTO t VALUES ${Array.from({ length: 50_000 }, (_, i) => `(${i},'x')`).join(',\n')}`;
     const started = Date.now();
     expect(splitStatements(`${big};SELECT 1`)).toHaveLength(2);
-    expect(Date.now() - started).toBeLessThan(2000);
-  });
+    // Linear is well under a second; rescanning would take minutes. The margin is for a busy machine.
+    expect(Date.now() - started).toBeLessThan(10_000);
+  }, 30_000);
 });
 
 describe('what the browser shows', () => {

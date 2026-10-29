@@ -432,6 +432,19 @@ export class Schedulers {
         tick: () => s.mail.ingestTick(),
       },
       {
+        key: 'adminer-idle',
+        group: 'background',
+        name: 'Adminer',
+        description: "Stops each server's Adminer once nobody has used it for 30 minutes. The next \"Open in Adminer\" starts it again.",
+        pausable: false,
+        lockedReason: 'Adminer runs only while it is used: what keeps it from running unwatched.',
+        cadence: () => ({ everyMs: MIN, text: 'Every minute' }),
+        tick: async () => {
+          const stopped = await s.adminer.stopIdle();
+          return stopped === 0 ? { idle: true } : {};
+        },
+      },
+      {
         key: 'site-networks',
         group: 'background',
         name: 'Site network repair',
@@ -553,6 +566,7 @@ export class Schedulers {
       // as this tick; a minute keeps the abuse counters useful without hammering the
       // Docker API of every server.
       every('mail-ingest', MIN),
+      every('adminer-idle', MIN),
       // Visitor statistics are reconstructed from each Traefik's access log the same way,
       // and on the same cadence - a minute of resolution is plenty for a traffic chart.
       every('traffic-ingest', MIN),

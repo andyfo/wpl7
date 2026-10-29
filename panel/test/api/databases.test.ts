@@ -8,6 +8,7 @@ import { sitePaths } from '../../src/services/siteSpec.js';
 import type { AccessLevel } from '../../shared/access.js';
 import type { DatabaseListDto, DbRowsPageDto, SiteDatabaseDto } from '../../shared/types.js';
 import { wordpressTables } from '../dbBrowserFake.js';
+import { badRequest } from '../../src/lib/errors.js';
 import { hostExec, type ExecPort } from '../../src/lib/exec.js';
 import { makeApp, makeWorld, waitFor, type TestWorld } from '../helpers.js';
 
@@ -246,6 +247,30 @@ describe('the database browser', () => {
     // Every call went as the site's database user, to the database asked for.
     expect(world.dbBrowser.calls.every((c) => c.target.user === 'wp_alpha' && c.target.password === 'pw-alpha')).toBe(true);
     expect(world.dbBrowser.calls.every((c) => c.target.database === 'wp_alpha')).toBe(true);
+  });
+
+  it('filters on any column, and keeps a row that matches any one filter', async () => {
+    const { app, headers, world } = await signedIn();
+    addSite(world, 'alpha');
+    const rows = async (filters: object[], match?: string) => {
+      const qs = `limit=50&sort=option_name&filters=${encodeURIComponent(JSON.stringify(filters))}${match ? `&match=${match}` : ''}`;
+      const res = await app.inject({ method: 'GET', url: `/api/sites/alpha/databases/wp_alpha/tables/wp_options/rows?${qs}`, headers });
+      expect(res.statusCode, res.body).toBe(200);
+      return (res.json() as DbRowsPageDto).rows.map((r) => r[1]);
+    };
+    expect(await rows([{ column: '*', op: 'contains', value: 'alpha.test' }])).toEqual(['home', 'siteurl']);
+    const both = [
+      { column: 'option_name', op: 'eq', value: 'blogname' },
+      { column: 'option_name', op: 'in', value: 'home, siteurl' },
+    ];
+    expect(await rows(both)).toEqual([]);
+    expect(await rows(both, 'any')).toEqual(['blogname', 'home', 'siteurl']);
+    const bad = await app.inject({
+      method: 'GET',
+      url: `/api/sites/alpha/databases/wp_alpha/tables/wp_options/rows?filters=${encodeURIComponent(JSON.stringify([{ column: 'option_name', op: 'eq', value: 'x' }]))}&match=some`,
+      headers,
+    });
+    expect(bad.statusCode).toBe(400);
   });
 
   it("refuses a database that is not one of the site's", async () => {
@@ -545,6 +570,117 @@ describe('export and import', () => {
       payload: { uploadId: 'upload-ffffffffffffffff' },
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('table structure', () => {
+  const column = { nullable: false, default: { kind: 'none' } };
+
+  it('previews a change as SQL, then runs it as a job, as the site’s user', async () => {
+    const { app, headers, world } = await signedIn();
+    addSite(world, 'alpha');
+    const url = '/api/sites/alpha/databases/wp_alpha/tables/wp_options/alter';
+    const changes = [{ op: 'addColumn', column: { ...column, name: 'note', type: 'varchar(100)' }, position: { after: 'option_name' } }];
+    const preview = await app.inject({ method: 'POST', url, headers, payload: { changes, preview: true } });
+    expect(preview.statusCode, preview.body).toBe(200);
+    expect(preview.json()).toEqual({ statements: ['ALTER TABLE `wp_options` ADD COLUMN `note` varchar(100) NOT NULL AFTER `option_name`'] });
+    expect(world.dbBrowser.executed).toEqual([]);
+
+    const res = await app.inject({ method: 'POST', url, headers, payload: { changes } });
+    expect(res.statusCode, res.body).toBe(202);
+    const done = await runJob(world, jobId(res));
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(world.dbBrowser.executed).toEqual(['ALTER TABLE `wp_options` ADD COLUMN `note` varchar(100) NOT NULL AFTER `option_name`']);
+    const call = world.dbBrowser.calls.find((c) => c.method === 'execute')!;
+    expect(call.target).toEqual({ database: 'wp_alpha', user: 'wp_alpha', password: 'pw-alpha' });
+    expect(call.args[1]).toMatchObject({ lockWaitSeconds: 10 });
+    expect(JSON.parse(done.payload).summary).toBe('Add column note to wp_options');
+  });
+
+  it('creates, empties and drops tables', async () => {
+    const { app, headers, world } = await signedIn();
+    addSite(world, 'alpha');
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/sites/alpha/databases/wp_alpha/tables',
+      headers,
+      payload: { name: 'shop_orders', columns: [{ ...column, name: 'id', type: 'bigint unsigned', autoIncrement: true }], primaryKey: ['id'] },
+    });
+    expect(create.statusCode, create.body).toBe(202);
+    expect((await runJob(world, jobId(create))).status).toBe('succeeded');
+    const empty = await app.inject({ method: 'POST', url: '/api/sites/alpha/databases/wp_alpha/tables/wp_posts/truncate', headers });
+    expect((await runJob(world, jobId(empty))).status).toBe('succeeded');
+    const drop = await app.inject({ method: 'DELETE', url: '/api/sites/alpha/databases/wp_alpha/tables/wp_posts?preview=true', headers });
+    expect(drop.json()).toEqual({ statements: ['DROP TABLE `wp_posts`'] });
+    expect(world.dbBrowser.executed).toEqual([
+      'CREATE TABLE `shop_orders` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB',
+      'TRUNCATE TABLE `wp_posts`',
+    ]);
+  });
+
+  it('says what is wrong before queuing anything', async () => {
+    const { app, headers, world } = await signedIn();
+    addSite(world, 'alpha');
+    const url = '/api/sites/alpha/databases/wp_alpha/tables/wp_options/alter';
+    const bad = await app.inject({ method: 'POST', url, headers, payload: { changes: [{ op: 'dropColumn', name: 'nope' }] } });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.json().error.message).toMatch(/no column "nope"/);
+    const type = await app.inject({
+      method: 'POST',
+      url,
+      headers,
+      payload: { changes: [{ op: 'addColumn', column: { ...column, name: 'x', type: 'int) ; DROP TABLE wp_users; --' }, position: null }] },
+    });
+    expect(type.statusCode).toBe(400);
+    const missing = await app.inject({ method: 'DELETE', url: '/api/sites/alpha/databases/wp_alpha/tables/nope', headers });
+    expect(missing.statusCode).toBe(404);
+    expect(world.db.select().from(jobs).all().filter((j) => j.type === 'database.alter')).toEqual([]);
+  });
+
+  it('tries a change on an empty copy of the table first, and takes no name that is taken', async () => {
+    const { app, headers, world } = await signedIn();
+    addSite(world, 'alpha');
+    const url = '/api/sites/alpha/databases/wp_alpha/tables/wp_options/alter';
+    const changes = [{ op: 'addColumn', column: { ...column, name: 'n', type: 'int', default: { kind: 'value', value: 'abc' } }, position: null }];
+    world.dbBrowser.tryAnswer = () => {
+      throw badRequest("MariaDB would refuse this: Invalid default value for 'n'");
+    };
+    for (const preview of [true, false]) {
+      const refused = await app.inject({ method: 'POST', url, headers, payload: { changes, preview } });
+      expect(refused.statusCode).toBe(400);
+      expect(refused.json().error.message).toBe("MariaDB would refuse this: Invalid default value for 'n'");
+    }
+    expect(world.dbBrowser.calls.filter((c) => c.method === 'tryDdl').at(-1)!.args).toEqual([
+      'wp_options',
+      "ALTER TABLE `wpl7_try_fake` ADD COLUMN `n` int NOT NULL DEFAULT 'abc'",
+    ]);
+    // A temporary table takes no foreign key: a change of nothing else is not tried.
+    world.dbBrowser.calls = [];
+    const fk = { op: 'addForeignKey', foreignKey: { columns: ['option_id'], refTable: 'wp_posts', refColumns: ['ID'] } };
+    expect((await app.inject({ method: 'POST', url, headers, payload: { changes: [fk], preview: true } })).statusCode).toBe(200);
+    expect(world.dbBrowser.calls.filter((c) => c.method === 'tryDdl')).toEqual([]);
+    world.dbBrowser.tryAnswer = () => true;
+
+    const rename = await app.inject({ method: 'POST', url, headers, payload: { changes: [{ op: 'rename', name: 'wp_posts' }], preview: true } });
+    expect(rename.statusCode).toBe(400);
+    expect(rename.json().error.message).toMatch(/called "wp_posts" already/);
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/sites/alpha/databases/wp_alpha/tables',
+      headers,
+      payload: { name: 'wp_posts', columns: [{ ...column, name: 'id', type: 'int' }], primaryKey: [], preview: true },
+    });
+    expect(create.statusCode).toBe(400);
+    // What would not fit a job is refused here, not when the job starts.
+    const long = Array.from({ length: 4 }, (_, i) => ({
+      op: 'addColumn',
+      column: { ...column, name: `c${i}`, type: 'text', default: { kind: 'value', value: 'x'.repeat(60_000) } },
+      position: null,
+    }));
+    const tooLong = await app.inject({ method: 'POST', url, headers, payload: { changes: long } });
+    expect(tooLong.statusCode).toBe(400);
+    expect(tooLong.json().error.message).toMatch(/at most 200,000/);
+    expect(world.db.select().from(jobs).all().filter((j) => j.type === 'database.alter')).toEqual([]);
   });
 });
 

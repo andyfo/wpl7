@@ -59,6 +59,9 @@ import { ImportService } from './services/imports.js';
 import { ConnectionsService } from './services/connections.js';
 import { ExternalBackupService } from './services/externalBackup.js';
 import { DatabasesService } from './services/databases.js';
+import { panelUrl } from './lib/panelUrl.js';
+import { AdminerService } from './adminer/index.js';
+import { createFrontDoor } from './adminer/frontDoor.js';
 import { AlertService } from './services/alerts.js';
 import { hostPortFor } from './servers/hostPort.js';
 import type { CoreServices, Logger } from './services/index.js';
@@ -227,6 +230,8 @@ async function main(): Promise<void> {
   } as CoreServices;
   core.wpInventory = new WpInventoryService(core, vulnerabilities);
   core.databases = new DatabasesService(db, config, servers, log);
+  const users = new UsersService(db);
+  core.adminer = new AdminerService(db, config, servers, settings, users, core.databases, core.dns, log);
   core.externalBackups = new ExternalBackupService(core);
   core.alerts = new AlertService(core);
   const serverInfo = new SystemInfoService(servers, log, hostExec, systemResolver, config.phpReadTimeoutMs);
@@ -243,9 +248,9 @@ async function main(): Promise<void> {
   offsite.attachWorker(worker);
   importsService.attachWorker(worker);
   connections.attachWorker(worker);
+  core.adminer.attachWorker(worker);
   const schedulers = new Schedulers(core, worker);
   const wporg = new WporgDirectoryService();
-  const users = new UsersService(db);
   const deps: AppDeps = {
     ...core,
     worker,
@@ -310,6 +315,15 @@ async function main(): Promise<void> {
   await app.listen({ port: config.port, host: '0.0.0.0' });
   app.log.info(`panel listening on :${config.port} (tls mode: ${config.tlsMode}, dev domain: ${config.devDomain})`);
 
+  // Adminer's front door: a server of its own, on its own port and address (src/adminer).
+  const adminerDoor = createFrontDoor(core.adminer, {
+    host: config.adminer.host,
+    secure: config.adminer.url.startsWith('https:'),
+    panelUrl: panelUrl(config) ?? `http://localhost:${config.port}`,
+  });
+  adminerDoor.listen(config.adminer.port, '0.0.0.0');
+  void core.adminer.writeRoute().catch((err: unknown) => log.warn(`Adminer's route was not written: ${String(err)}`));
+
   // This panel may be the one an update just installed, or the one a rollback brought back.
   // Either way something has to clear the maintenance flag and queue the work only the new
   // panel can do - the per-version steps and the worker servers.
@@ -344,6 +358,7 @@ async function main(): Promise<void> {
     schedulers.stop();
     await worker.stop();
     await app.close();
+    adminerDoor.close();
     hostExec.close();
     await servers.closeAll();
     db.$client.close();

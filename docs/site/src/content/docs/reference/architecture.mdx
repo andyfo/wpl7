@@ -12,6 +12,7 @@ sources:
   - panel/src/services/labels.ts
   - panel/src/services/docker.ts
   - panel/src/services/dbBrowser.ts
+  - panel/src/adminer/containers.ts
   - panel/src/services/ftpConfig.ts
   - panel/src/lib/slug.ts
   - panel/src/jobs/lanes.ts
@@ -36,6 +37,7 @@ map: what runs, what it is called, where it keeps its files, and what can reach 
 | `wp-<slug>` | `wpl7-wordpress:php<version>` | One WordPress site |
 | `wpl7-ftp` | `wpl7-sftpgo` | The FTP and SFTP gateway. Only on a server with FTP logins |
 | `wpl7-ftp-<slug>` | `wpl7-sftpgo` | The file server behind one site's FTP logins |
+| `wpl7-adminer` | `wpl7-adminer` | [Adminer](/docs/databases/adminer/), only while someone uses it. The panel reaches it through `docker exec`, so it listens on no network |
 
 Malware scans, offsite copies and database imports run in throwaway containers that exist for
 one task.
@@ -59,6 +61,7 @@ one task.
 | `wpl7_egress` | no, with traffic between containers switched off | Every site container. Its only use is the way out to the internet |
 | `wpl7_ftp` | yes | The FTP gateway and the file servers |
 | `wpl7_ftp_edge` | no, with traffic between containers switched off | The FTP gateway alone, for its published ports |
+| `wpl7_adminer` | yes | Adminer and MariaDB as `mariadb` |
 
 A site can reach the infrastructure it needs and the internet. It cannot reach another site or
 the panel. A `docker compose up` recreates Traefik, MariaDB and the relay without the site
@@ -192,6 +195,9 @@ server, and the panel restarts Traefik when the token changes.
 - A site's **Database** tab reaches MariaDB through `docker exec`: a relay in the `wpl7-mariadb`
   container joins the command's input and output to MariaDB's port. It logs in as the site's own
   database user. No database port is published, and none is forwarded over SSH.
+- [Adminer](/docs/databases/adminer/) has a front door of its own in the panel's process, on
+  port 3001 and the address `db.<dev domain>`. It passes each request on through `docker exec`
+  to the site's server's `wpl7-adminer`.
 - AI apps use the same API through `/mcp`.
 
 | Lane | What runs in it |

@@ -60,6 +60,7 @@ interface PanelSettings {
   ftpPassivePortStart: number;
   ftpPassivePortEnd: number;
   securityTrustedProxies: TrustedProxiesSetting;
+  adminerEnabled: boolean;
   scanEnabled: boolean;
   scanSignatures: boolean;
   scanIntervalHours: number;
@@ -93,6 +94,7 @@ const CARD_TAB: Record<string, TabId> = {
   wordpress: 'security',
   security: 'security',
   proxies: 'security',
+  adminer: 'security',
   mail: 'mail',
   cloudflare: 'dns',
   wildcard: 'dns',
@@ -127,6 +129,7 @@ const SETTING_TAB: Record<keyof PanelSettings, TabId> = {
   vulnerabilityFeed: 'security',
   securityTrustedProxies: 'security',
   scanEnabled: 'security',
+  adminerEnabled: 'security',
   scanSignatures: 'security',
   scanIntervalHours: 'security',
   scanOnFinding: 'security',
@@ -679,6 +682,13 @@ function SecurityTab({ s, set }: TabProps) {
       {s.securityTrustedProxies && (
         <TrustedProxiesCard value={s.securityTrustedProxies} onChange={(v) => set('securityTrustedProxies', v)} />
       )}
+
+      <Card title="Adminer" id="adminer">
+        <Toggle checked={s.adminerEnabled !== false} onChange={(v) => set('adminerEnabled', v)} label="Let admins open a site's database in Adminer" />
+        <p className="mt-1 text-xs text-neutral-500">
+          It runs on a server only while it is used, signed in as the site's own database user. Off, the button is gone.
+        </p>
+      </Card>
     </>
   );
 }
