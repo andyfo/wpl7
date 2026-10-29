@@ -71,6 +71,8 @@ export class FakeConnectedSite extends FakeSourceSite {
   cleanups: string[] = [];
   /** The update offer the last ping carried. */
   offer: { version: string; package: string; expires: number } | null = null;
+  /** PHP_VERSION on the site, as its report and every ping say it. */
+  php = '8.3.35';
   readonly extra: FakeReportExtra;
   private ops = new Map<string, { state: 'running' | 'done'; result?: Record<string, unknown>; kind: string; slug: string; previous?: FakePlugin | FakeTheme }>();
 
@@ -115,7 +117,7 @@ export class FakeConnectedSite extends FakeSourceSite {
       windows: false,
       table_prefix: this.opts.prefix ?? 'wp_',
       wp: this.core.version,
-      php: '8.3.35',
+      php: this.php,
       locale: 'en_US',
       blog_public: 1,
       admin_email: 'admin@shop.example.org',
@@ -202,7 +204,7 @@ export class FakeConnectedSite extends FakeSourceSite {
           actions: ['ping', 'info', 'snapshot', 'files', 'range', 'bundle', 'tables', 'sql', 'inventory', 'update', 'op', 'rollback', 'cleanup', 'component', 'rest', 'commands', 'help', 'run', 'login', 'disconnect'],
           home: this.currentHome,
           wp: this.core.version,
-          php: '8.3.35',
+          php: this.php,
           commands: [...this.commands.keys()],
           loader: this.extra.loader ?? true,
           fs_method: this.extra.fs_method ?? 'direct',

@@ -5,10 +5,12 @@ sidebar:
   order: 12
 sources:
   - panel/web/src/pages/SiteDetail.tsx
+  - panel/web/src/components/SiteLimits.tsx
   - panel/web/src/pages/Settings.tsx
   - panel/src/routes/sites.ts
   - panel/src/services/sites.ts
   - panel/src/jobs/handlers/sites.ts
+  - panel/src/jobs/handlers/servers.ts
   - panel/src/services/siteSpec.ts
   - panel/src/db/seed.ts
 ---
@@ -16,9 +18,8 @@ sources:
 import Screenshot from '~/components/Screenshot.astro';
 import Since from '~/components/Since.astro';
 
-A site's **Settings** tab switches its PHP version, changes its domains and deletes the site.
-Stopping, starting and rebuilding its container are on the **Overview** tab. Resource limits
-are the same for every site, under **Settings → Sites**.
+A site's **Settings** tab switches its PHP version, changes its domains, sets its container limits
+and deletes the site. Stopping, starting and rebuilding its container are on the **Overview** tab.
 
 <Screenshot name="site-settings" alt="A site's Settings tab: PHP version, domains and the danger zone" />
 
@@ -27,6 +28,9 @@ are the same for every site, under **Settings → Sites**.
 Under **PHP version**, pick a **Version** and choose **Switch**. The job recreates the container
 with the new PHP image, and files and the database stay as they are. If the site does not
 answer on the new version, the job puts the old container back and fails.
+
+A version is a PHP branch, such as 8.4. The site runs the release in its server's image of that
+branch, such as 8.4.27. Its **Overview** tab shows the release.
 
 To change the site's domains, see [Domains and going live](/docs/sites/domains/).
 
@@ -46,15 +50,32 @@ again afterwards.
 
 ## Set resource limits
 
-Every site container gets the limits under **Settings → Sites → Site container limits**. Saving
-reaches every existing site at once, without a restart. Lifting the CPU cap with 0 is the
-exception: it restarts each site once.
+Every site container gets the limits under **Settings → Sites → Site container limits**, unless
+the site has its own. Saving reaches the existing sites at once, without a restart. Lifting the
+CPU cap with 0 is the exception: it restarts each site once.
 
 | Field | Default | Note |
 |---|---|---|
 | **CPU cores per site** | 2 | Fractions allowed. 0 means uncapped. |
 | **Memory per site (MB)** | 512 | The container is killed if it exceeds this. |
 | **Processes per site** | 512 | 0 means uncapped. |
+
+## Give a site its own limits
+
+<Since v="0.3.3" /> A site can have more, or less, than the default.
+
+<Screenshot name="site-limits" alt="A site's Container limits card with memory set to 1024 MB and the other two fields on the default" />
+
+1. On the site's **Settings** tab, under **Container limits**, fill in **CPU cores**,
+   **Memory (MB)** or **Processes**.
+2. Choose **Save limits**.
+
+An empty field uses the default, which the field names under it. To put a limit back on the
+default, clear its field and save. The change reaches the container at once, without a restart.
+Lifting the CPU cap with 0 restarts the site once.
+
+The site keeps its own limits when the defaults change. **Settings → Sites** lists the sites with
+limits of their own, under **Site container limits**.
 
 ## Delete a site
 
@@ -77,7 +98,7 @@ deleted, nothing of the site is left: no files, no database and no backup.
 
 ## Limits
 
-- Resource limits apply to all sites alike. One site cannot have limits of its own.
+- A site gets at most the CPU cores its server has. A higher CPU limit gives it all of them.
 - Switching PHP replaces the container, so the site does not answer for a few seconds.
 - If a recreated container starts but does not answer, **Recreate container** leaves it in
   place. The job log warns about it.

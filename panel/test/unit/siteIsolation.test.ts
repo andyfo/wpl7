@@ -7,7 +7,7 @@ import { makeApp, makeWorld, waitFor, type TestWorld } from '../helpers.js';
 import { limitsChange, sitePaths, type SiteRuntime } from '../../src/services/siteSpec.js';
 import { Schedulers } from '../../src/jobs/schedulers.js';
 import { ServerUnreachableError } from '../../src/servers/sshConnection.js';
-import type { JobDto } from '../../shared/types.js';
+import type { JobDto, SiteDetail } from '../../shared/types.js';
 import {
   bindToMount,
   DockerService,
@@ -644,5 +644,285 @@ describe('changed container limits', () => {
     expect(limitsChange(at(512, 2, 512), at(512, 2))).toBe('in-place');
     expect(limitsChange(at(512, 2, 512), at(512, undefined, 512))).toBe('recreate');
     expect(limitsChange(at(512, 2, 512), at(1024))).toBe('recreate');
+  });
+});
+
+/** The API as a signed-in admin. */
+async function adminApi(w: TestWorld) {
+  const { app } = await makeApp(w);
+  const login = await app.inject({
+    method: 'POST',
+    url: '/api/auth/login',
+    payload: { username: 'admin', password: 'correct-horse-battery' },
+  });
+  const c = login.cookies.find((x) => x.name === 'panel.sid')!;
+  const headers = { cookie: `${c.name}=${c.value}`, 'x-csrf': '1' };
+  return (method: 'GET' | 'PUT', url: string, payload?: unknown) =>
+    app.inject({ method, url, headers, ...(payload === undefined ? {} : { payload: payload as Record<string, unknown> }) });
+}
+
+type LimitsAnswer = { site: SiteDetail; job: JobDto | null };
+
+describe("a site's own container limits", () => {
+  it('reach its container in place, and leave the other sites on Settings', async () => {
+    const w = await makeWorld();
+    await createSite(w);
+    await createSite(w, { ...baseBody, title: 'Second Site' });
+    const api = await adminApi(w);
+    w.docker.calls.length = 0;
+
+    const res = await api('PUT', '/api/sites/demo-site/limits', { memoryLimitMb: 1024, pidsLimit: 0 });
+    expect(res.statusCode).toBe(202);
+    const { site, job } = res.json() as LimitsAnswer;
+    expect(job!.type).toBe('server.applySiteLimits');
+    expect(res.headers.location).toBe(`/api/jobs/${job!.id}`);
+    expect(site.limits).toEqual({
+      own: { cpuLimit: null, memoryLimitMb: 1024, pidsLimit: 0 },
+      defaults: { cpuLimit: 2, memoryLimitMb: 512, pidsLimit: 512 },
+    });
+    await runAll(w);
+
+    expect(jobRow(w, job!.id).status).toBe('succeeded');
+    expect(w.docker.limits.get('wp-demo-site')).toEqual({ memoryBytes: 1024 * MB, nanoCpus: 2e9 });
+    expect(w.docker.limits.get('wp-second-site')).toEqual({ memoryBytes: 512 * MB, nanoCpus: 2e9, pidsLimit: 512 });
+    // Changed while it runs: nothing was rebuilt, stopped or restarted.
+    expect(w.docker.calls.filter((c) => LIFECYCLE.includes(c.method))).toEqual([]);
+  });
+
+  it('stay when Settings change, which still reach the limits the site has none of', async () => {
+    const w = await makeWorld();
+    await createSite(w);
+    await createSite(w, { ...baseBody, title: 'Second Site' });
+    const api = await adminApi(w);
+    await api('PUT', '/api/sites/demo-site/limits', { memoryLimitMb: 1024 });
+    await runAll(w);
+
+    expect((await api('PUT', '/api/settings', { siteMemoryLimitMb: 256, siteCpuLimit: 1 })).statusCode).toBe(200);
+    await runAll(w);
+
+    expect(w.docker.limits.get('wp-demo-site')).toEqual({ memoryBytes: 1024 * MB, nanoCpus: 1e9, pidsLimit: 512 });
+    expect(w.docker.limits.get('wp-second-site')).toEqual({ memoryBytes: 256 * MB, nanoCpus: 1e9, pidsLimit: 512 });
+  });
+
+  it('are what a container built for the site gets', async () => {
+    const w = await makeWorld();
+    await createSite(w);
+    const api = await adminApi(w);
+    await api('PUT', '/api/sites/demo-site/limits', { cpuLimit: 0.5, memoryLimitMb: 2048 });
+    await runAll(w);
+
+    const job = w.deps.sites.reconcile('demo-site');
+    expect((await runJob(w, job.id)).status).toBe('succeeded');
+
+    const spec = specs(w).at(-1)!;
+    expect(spec.nanoCpus).toBe(0.5e9);
+    expect(spec.memoryBytes).toBe(2048 * MB);
+    expect(spec.pidsLimit).toBe(512);
+  });
+
+  it('go back to Settings one at a time, the others kept', async () => {
+    const w = await makeWorld();
+    await createSite(w);
+    const api = await adminApi(w);
+    await api('PUT', '/api/sites/demo-site/limits', { cpuLimit: 4, memoryLimitMb: 1024 });
+    await runAll(w);
+
+    const res = await api('PUT', '/api/sites/demo-site/limits', { memoryLimitMb: null });
+    expect(res.statusCode).toBe(202);
+    expect((res.json() as LimitsAnswer).site.limits!.own).toEqual({ cpuLimit: 4, memoryLimitMb: null, pidsLimit: null });
+    await runAll(w);
+
+    expect(w.docker.limits.get('wp-demo-site')).toEqual({ memoryBytes: 512 * MB, nanoCpus: 4e9, pidsLimit: 512 });
+  });
+
+  it('queue nothing when the container would get what it has, and are listed in Settings either way', async () => {
+    const w = await makeWorld();
+    await createSite(w);
+    const api = await adminApi(w);
+    const passes = () => w.db.select().from(jobs).where(eq(jobs.type, 'server.applySiteLimits')).all();
+
+    // The default's value, made the site's own: a later change in Settings no longer reaches it.
+    const res = await api('PUT', '/api/sites/demo-site/limits', { memoryLimitMb: 512 });
+    expect(res.statusCode).toBe(200);
+    expect((res.json() as LimitsAnswer).job).toBeNull();
+    expect(passes()).toEqual([]);
+
+    const settings = (await api('GET', '/api/settings')).json() as { ownSiteLimits: unknown };
+    expect(settings.ownSiteLimits).toEqual([{ slug: 'demo-site', cpuLimit: null, memoryLimitMb: 512, pidsLimit: null }]);
+  });
+
+  it('take a CPU cap off by recreating the container', async () => {
+    const w = await makeWorld();
+    await createSite(w);
+    await createSite(w, { ...baseBody, title: 'Second Site' });
+    const api = await adminApi(w);
+
+    await api('PUT', '/api/sites/demo-site/limits', { cpuLimit: 0 });
+    await runAll(w);
+
+    const reconciles = w.db.select().from(jobs).where(eq(jobs.type, 'site.reconcile')).all();
+    expect(reconciles.map((j) => [j.siteSlug, j.status])).toEqual([['demo-site', 'succeeded']]);
+    expect(w.docker.limits.get('wp-demo-site')).toEqual({ memoryBytes: 512 * MB, pidsLimit: 512 });
+    expect(w.docker.limits.get('wp-second-site')!.nanoCpus).toBe(2e9);
+  });
+
+  it('come back for a site lifting its own CPU cap once it is free, with the cap in Settings in force', async () => {
+    const w = await makeWorld();
+    await createSite(w);
+    const api = await adminApi(w);
+    const schedulers = new Schedulers(w.core, w.worker);
+
+    await api('PUT', '/api/sites/demo-site/limits', { cpuLimit: 0 });
+    // Queued behind the limits pass, in the same lane: while the pass runs, the site is busy.
+    const restart = w.deps.sites.action('demo-site', 'restart');
+    await runAll(w);
+    expect(jobRow(w, restart.id).status).toBe('succeeded');
+    expect(w.docker.limits.get('wp-demo-site')!.nanoCpus).toBe(2e9);
+
+    await schedulers.siteLimitsTick();
+    await runAll(w);
+    expect(w.docker.limits.get('wp-demo-site')).toEqual({ memoryBytes: 512 * MB, pidsLimit: 512 });
+    schedulers.stop();
+  });
+
+  it('reach the server a site is moving to, once the move is over', async () => {
+    const w = await makeWorld();
+    await createSite(w);
+    const web2 = w.addSshServer('web-2');
+    const api = await adminApi(w);
+    // Queued, never run here: its target builds the container from the row as it reads it then.
+    const move = w.deps.sites.move('demo-site', { targetServerId: web2.id });
+
+    const res = await api('PUT', '/api/sites/demo-site/limits', { memoryLimitMb: 1024 });
+    expect(res.statusCode).toBe(202);
+
+    const passes = w.db.select().from(jobs).where(eq(jobs.type, 'server.applySiteLimits')).all();
+    expect(passes.map((j) => j.serverId).sort()).toEqual([1, web2.id].sort());
+    // Each waits for the move, which holds both servers.
+    expect(passes.every((j) => j.id > move.id)).toBe(true);
+    // The one to follow is the one that reaches the container: where the site is going.
+    expect(jobRow(w, (res.json() as LimitsAnswer).job!.id).serverId).toBe(web2.id);
+  });
+
+  it('come from Settings to the server a site is moving to, though no site is there yet', async () => {
+    const w = await makeWorld();
+    await createSite(w);
+    const web2 = w.addSshServer('web-2');
+    const api = await adminApi(w);
+    w.deps.sites.move('demo-site', { targetServerId: web2.id });
+
+    const res = await api('PUT', '/api/settings', { siteMemoryLimitMb: 1024 });
+    const queued = (res.json() as { jobs: JobDto[] }).jobs;
+    expect(queued.map((j) => jobRow(w, j.id).serverId).sort()).toEqual([1, web2.id].sort());
+  });
+
+  it('refuse a limit out of range, and a site still being made', async () => {
+    const w = await makeWorld();
+    const site = await createSite(w);
+    const api = await adminApi(w);
+
+    // A cap under 0.01 cores: Docker takes it, and the container then fails to start.
+    for (const payload of [{ memoryLimitMb: 64 }, { cpuLimit: 65 }, { cpuLimit: -1 }, { cpuLimit: 0.005 }, { pidsLimit: 1.5 }, {}, { diskMb: 10 }]) {
+      expect((await api('PUT', '/api/sites/demo-site/limits', payload)).statusCode, JSON.stringify(payload)).toBe(400);
+    }
+    const settings = await api('PUT', '/api/settings', { siteCpuLimit: 0.005 });
+    expect(settings.statusCode).toBe(400);
+    expect(settings.body).toContain('0 for none, or at least 0.01 cores');
+    expect((await api('PUT', '/api/sites/demo-site/limits', { cpuLimit: 0.01 })).statusCode).toBe(202);
+    w.db.update(sites).set({ cpuLimit: null }).where(eq(sites.id, site.id)).run();
+    w.db.update(sites).set({ status: 'provisioning' }).where(eq(sites.id, site.id)).run();
+    expect((await api('PUT', '/api/sites/demo-site/limits', { memoryLimitMb: 1024 })).statusCode).toBe(409);
+
+    const row = w.db.select().from(sites).where(eq(sites.id, site.id)).get()!;
+    expect([row.cpuLimit, row.memoryLimitMb, row.pidsLimit]).toEqual([null, null, null]);
+  });
+});
+
+describe('a CPU cap above the host\'s cores', () => {
+  it('is fitted to them when a container is made or changed, the count asked for once', async () => {
+    const created: { HostConfig: Record<string, unknown> }[] = [];
+    const updates: Record<string, unknown>[] = [];
+    let asked = 0;
+    const docker = new DockerService('wpl7_proxy', 'wpl7_db', {
+      info: async () => {
+        asked++;
+        return { NCPU: 4 };
+      },
+      createContainer: async (opts: { HostConfig: Record<string, unknown> }) => {
+        created.push(opts);
+        return { id: 'x' };
+      },
+      getNetwork: () => ({ connect: async () => undefined }),
+      getContainer: () => ({
+        update: async (opts: Record<string, unknown>) => {
+          updates.push(opts);
+        },
+      }),
+    } as never);
+    const spec = (nanoCpus?: number): SiteContainerSpec => ({
+      name: 'wp-demo',
+      image: 'i',
+      env: {},
+      labels: {},
+      binds: [],
+      networks: ['wpl7_site_demo'],
+      memoryBytes: 512 * MB,
+      ...(nanoCpus ? { nanoCpus } : {}),
+    });
+
+    // Docker refuses more: "range of CPUs is from 0.01 to 4.00, as there are only 4 CPUs available".
+    await docker.createSiteContainer(spec(8e9));
+    await docker.createSiteContainer(spec(4e9));
+    await docker.createSiteContainer(spec(1.5e9));
+    await docker.createSiteContainer(spec());
+    await docker.updateContainerLimits('wp-demo', { memoryBytes: 512 * MB, nanoCpus: 6e9 });
+
+    expect(created.map((c) => c.HostConfig.NanoCpus)).toEqual([4e9, 4e9, 1.5e9, undefined]);
+    expect(updates[0]!.NanoCpus).toBe(4e9);
+    expect(asked).toBe(1);
+  });
+
+  it('goes as it is when the host does not say how many it has', async () => {
+    const created: { HostConfig: Record<string, unknown> }[] = [];
+    const docker = new DockerService('wpl7_proxy', 'wpl7_db', {
+      info: async () => {
+        throw new Error('connect ECONNREFUSED');
+      },
+      createContainer: async (opts: { HostConfig: Record<string, unknown> }) => {
+        created.push(opts);
+        return { id: 'x' };
+      },
+      getNetwork: () => ({ connect: async () => undefined }),
+    } as never);
+    await docker.createSiteContainer({
+      name: 'wp-demo',
+      image: 'i',
+      env: {},
+      labels: {},
+      binds: [],
+      networks: ['wpl7_site_demo'],
+      memoryBytes: 512 * MB,
+      nanoCpus: 8e9,
+    });
+    expect(created[0]!.HostConfig.NanoCpus).toBe(8e9);
+  });
+
+  it('is all of them on a smaller server, and does not change the container on every pass', async () => {
+    const w = await makeWorld();
+    // Fewer than the default's 2.
+    w.docker.cpus = 1;
+    await createSite(w);
+    expect(w.docker.limits.get('wp-demo-site')!.nanoCpus).toBe(1e9);
+    const api = await adminApi(w);
+
+    await api('PUT', '/api/sites/demo-site/limits', { cpuLimit: 8 });
+    w.docker.calls.length = 0;
+    await runAll(w);
+
+    // All the server's cores, which the container already has.
+    expect(w.docker.calls.filter((c) => c.method === 'updateContainerLimits')).toEqual([]);
+    expect(w.docker.limits.get('wp-demo-site')!.nanoCpus).toBe(1e9);
+    const log = w.db.select().from(jobLogs).all().map((l) => l.message);
+    expect(log).toContain('"local" has 1 CPU core(s), fewer than demo-site is set to: it gets all of them.');
   });
 });

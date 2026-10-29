@@ -8,6 +8,7 @@ sources:
   - panel/src/services/systemUpdate.ts
   - panel/src/jobs/handlers/systemUpdate.ts
   - panel/src/updates/hooks.ts
+  - panel/src/services/siteImages.ts
   - panel/web/src/components/UpdatesCard.tsx
   - panel/web/src/components/UpdateProgress.tsx
   - provision/update.sh
@@ -16,6 +17,7 @@ sources:
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
+import Since from '~/components/Since.astro';
 
 The panel checks for a new version once an hour, and the header says when there is one. An update
 replaces the panel, checks that the new one is healthy, and puts everything back if it is not. Site
@@ -103,12 +105,20 @@ needs, updates every worker server, and lifts the read-only state.
 A failed step is a failed job, never a rollback, because the new version is already running. Fix
 what it reports, then choose **Re-run**.
 
+<Since v="0.3.2" /> The panel then rebuilds every site container that runs an older site image than
+its server now has. That is how a PHP security release reaches the sites. Each rebuild is a job of
+its own, with its own rollback. Sites on a worker server follow within the hour after that server
+updates. A site busy with another job is rebuilt at the next hourly check.
+
+In checkout mode, the same happens when a rebuild changes the site images. `deploy.sh` and
+`build.sh --images` pull the newest WordPress base image for each rebuild.
+
 ## Limits
 
 - A panel that always has a job running keeps updates waiting.
 - The button needs the panel's SSH access as root to its own host. A host that refuses root logins
   updates from the command line.
-- Existing sites keep their site image until their container is recreated.
+- An update that brings new site images rebuilds every site once. Each site is unreachable for a second or two.
 
 ## Related
 

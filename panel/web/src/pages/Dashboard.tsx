@@ -7,7 +7,7 @@ import { jobLabel } from '../../../shared/jobTypes';
 import { Card, EmptyState, ErrorNote, JobStatusBadge, SiteHealthBadge, StatTile, StatusBadge } from '../components/ui';
 import { Icon } from '../components/Icon';
 import { ResourceCharts } from '../components/ResourceCharts';
-import { formatBytes, timeAgo } from '../lib/format';
+import { formatBytes, sitePhp, timeAgo } from '../lib/format';
 import { siteHealth } from '../lib/siteHealth';
 
 export function Dashboard() {
@@ -215,7 +215,7 @@ export function Dashboard() {
                     {multiServer && (
                       <td className="pr-3 text-xs text-neutral-500">{site.kind === 'external' ? 'External' : site.serverName}</td>
                     )}
-                    <td className="pr-3 text-xs text-neutral-500">PHP {site.phpVersion}</td>
+                    <td className="pr-3 text-xs text-neutral-500">PHP {sitePhp(site)}</td>
                     <td className="pr-3 text-xs text-neutral-500">
                       {m?.cpuPct != null ? `${m.cpuPct.toFixed(1)}%` : '—'}
                     </td>

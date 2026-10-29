@@ -55,7 +55,8 @@ you update, and read the release notes. See [Changelog](/docs/help/changelog/).
 ### How many sites fit on one server?
 
 That depends on the sites, and there is a ceiling. Each site has limits for memory, CPU and
-processes, by default 512 MB, 2 cores and 512 processes. These cap a site and reserve nothing.
+processes, by default 512 MB, 2 cores and 512 processes, and a site can have its own. These cap a
+site and reserve nothing.
 Each site also gets a Docker network of its own, and Docker's default address pools leave room
 for about 25 sites per server. See [Architecture](/docs/reference/architecture/).
 
@@ -69,6 +70,10 @@ until DNS catches up. See [Add a server](/docs/servers/add/) and [Move a site to
 
 PHP 8.2, 8.3, 8.4 and 8.5. Each site picks its own, and you can switch it later. See
 [Site settings](/docs/sites/settings/).
+
+A site picks the branch, such as 8.4. Each WPL7 release builds its site images on the newest PHP
+releases of that day, and an update rebuilds every site on them. The Sites list shows the release
+each site runs, such as 8.4.27. See [Updating WPL7](/docs/panel/updating/#what-the-panel-does-afterwards).
 
 ### Can I bring my existing WordPress sites?
 

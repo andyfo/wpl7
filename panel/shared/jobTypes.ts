@@ -234,7 +234,7 @@ export const JOB_TYPE_INFO = {
   'server.applySiteLimits': {
     label: 'Apply container limits',
     description:
-      'Brings every site container on the server to the CPU, memory and process limits in Settings, in place, without a restart. Lifting a CPU cap is the exception: those sites each get a "Recreate site container" job.',
+      'Brings every site container on the server to its CPU, memory and process limits - its own, or else those in Settings - in place, without a restart. Lifting a CPU cap is the exception: those sites each get a "Recreate site container" job.',
     category: 'servers',
   },
   'server.relocateBackups': {

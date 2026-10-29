@@ -16,6 +16,7 @@ import { OffsiteService } from './services/offsite.js';
 import { StorageService } from './services/storage.js';
 import { LocalHostExec } from './servers/hostExec.js';
 import { SystemInfoService } from './servers/systemInfo.js';
+import { systemResolver } from './services/mailDns.js';
 import { DnsService } from './services/dns.js';
 import { DnsAccount } from './services/dnsAccount.js';
 import { TraefikDnsSync } from './services/traefikDns.js';
@@ -233,7 +234,7 @@ async function main(): Promise<void> {
   core.adminer = new AdminerService(db, config, servers, settings, users, core.databases, core.dns, log);
   core.externalBackups = new ExternalBackupService(core);
   core.alerts = new AlertService(core);
-  const serverInfo = new SystemInfoService(servers, log, hostExec);
+  const serverInfo = new SystemInfoService(servers, log, hostExec, systemResolver, config.phpReadTimeoutMs);
   core.reminders = new ReminderService(core, serverInfo);
   // The hourly check of each external site and every uptime probe are what the alerts hear from.
   core.connections.attachEvents({ checked: (site, conn) => core.alerts.connectorChecked(site, conn) });

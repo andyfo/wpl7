@@ -1445,6 +1445,59 @@ export const backupBeforeUpdatesBody = z
   })
   .strict();
 
+/**
+ * A site container's CPU, memory and process limits: the ranges Settings (`siteCpuLimit`,
+ * `siteMemoryLimitMb`, `sitePidsLimit`) and a site's own take. CPU is in cores, fractions
+ * allowed. 0 = uncapped, for CPU and processes.
+ */
+export const SITE_LIMIT_RANGES = {
+  cpuLimit: { min: 0, max: 64 },
+  memoryLimitMb: { min: 128, max: 65536 },
+  pidsLimit: { min: 0, max: 100000 },
+} as const;
+
+/**
+ * The smallest CPU cap a container can start with. Docker takes a smaller one, but the kernel
+ * refuses a quota under a millisecond per 100 ms period, so the container then fails to start.
+ */
+export const MIN_CPU_CAP = 0.01;
+
+/** A CPU limit as Docker can run it: 0 for none, or a cap of at least MIN_CPU_CAP. */
+export const cpuLimitAllowed = (cores: number): boolean => cores === 0 || cores >= MIN_CPU_CAP;
+
+/** Why a container limit cannot be saved, or null. `label` names the field as its form does. */
+export function siteLimitProblem(key: keyof typeof SITE_LIMIT_RANGES, label: string, n: number): string | null {
+  const { min, max } = SITE_LIMIT_RANGES[key];
+  const inRange = Number.isFinite(n) && n >= min && n <= max;
+  if (key === 'cpuLimit') return inRange && cpuLimitAllowed(n) ? null : `${label}: 0, or a number from ${MIN_CPU_CAP} to ${max}.`;
+  return inRange && Number.isInteger(n) ? null : `${label}: a whole number from ${min} to ${max}.`;
+}
+
+const cpuLimitSchema = z
+  .number()
+  .min(SITE_LIMIT_RANGES.cpuLimit.min)
+  .max(SITE_LIMIT_RANGES.cpuLimit.max)
+  .refine(cpuLimitAllowed, `A CPU limit is 0 for none, or at least ${MIN_CPU_CAP} cores`);
+const memoryLimitMbSchema = z
+  .number()
+  .int()
+  .min(SITE_LIMIT_RANGES.memoryLimitMb.min)
+  .max(SITE_LIMIT_RANGES.memoryLimitMb.max);
+const pidsLimitSchema = z.number().int().min(SITE_LIMIT_RANGES.pidsLimit.min).max(SITE_LIMIT_RANGES.pidsLimit.max);
+
+/** A site's own limits. Each one left out is kept as it is; null puts it back on Settings. */
+export const siteLimitsBody = z
+  .object({
+    cpuLimit: cpuLimitSchema.nullable().optional(),
+    memoryLimitMb: memoryLimitMbSchema.nullable().optional(),
+    pidsLimit: pidsLimitSchema.nullable().optional(),
+  })
+  .strict()
+  .refine(
+    (b) => b.cpuLimit !== undefined || b.memoryLimitMb !== undefined || b.pidsLimit !== undefined,
+    'Send cpuLimit, memoryLimitMb or pidsLimit to change',
+  );
+
 export const mailSuspensionBody = z
   .object({
     suspended: z.boolean(),
@@ -1482,11 +1535,10 @@ export const settingsUpdateBody = z.object({
   alertsBackups: z.boolean().optional(),
   alertsConnector: z.boolean().optional(),
   domainLookups: z.boolean().optional(),
-  /** 0 = uncapped. Fractional cores allowed. */
-  siteCpuLimit: z.number().min(0).max(64).optional(),
-  siteMemoryLimitMb: z.number().int().min(128).max(65536).optional(),
-  /** 0 = uncapped. */
-  sitePidsLimit: z.number().int().min(0).max(100000).optional(),
+  /** What every site's container gets, unless the site has its own (siteLimitsBody). */
+  siteCpuLimit: cpuLimitSchema.optional(),
+  siteMemoryLimitMb: memoryLimitMbSchema.optional(),
+  sitePidsLimit: pidsLimitSchema.optional(),
   defaultPhpVersion: phpVersionSchema.optional(),
   defaultLocale: localeSchema.optional(),
   /** Prefilled in the New Site wizard and used by a create that leaves it out. '' = none. */
@@ -1683,6 +1735,7 @@ export type MailSuspensionBody = z.infer<typeof mailSuspensionBody>;
 export type BackupsEnabledBody = z.infer<typeof backupsEnabledBody>;
 export type BackupKeepDaysBody = z.infer<typeof backupKeepDaysBody>;
 export type BackupBeforeUpdatesBody = z.infer<typeof backupBeforeUpdatesBody>;
+export type SiteLimitsBody = z.infer<typeof siteLimitsBody>;
 export type WpPluginInstallBody = z.infer<typeof wpPluginInstallBody>;
 export type SiteMoveBody = z.infer<typeof siteMoveBody>;
 export type ServerCreateBody = z.infer<typeof serverCreateBody>;

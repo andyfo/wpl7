@@ -39,7 +39,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   'jobs/handlers/wp.ts': { wpScanAll: both('external sites are scanned in a group of their own (isExternal)') },
   'jobs/schedulers.ts': {
     backupTick: both('connected external sites are backed up too'),
-    siteLimitsTick: both("only asks whether a deferred site's lane is free"),
+    siteLimitsTick: both("only asks whether a site lifts a CPU cap of its own, and whether a deferred site's lane is free"),
     wpCronTick: hosted("'running'"),
     wpScanIsDue: both('connected external sites are scanned too'),
     wpScanNextDue: both('connected external sites are scanned too'),
@@ -116,11 +116,14 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   'services/security.ts': { plan: hosted("s.status === 'running'"), hardeningPlan: hosted("'running'") },
   'services/securityEvents.ts': { fold: NAMES, recent: NAMES },
   'services/securityViews.ts': { securityOverview: hosted('hostedSites()'), fleetScans: hosted('hostedSites()') },
+  'services/phpReleases.ts': { readSitePhp: hosted('isExternal(site)'), sweepPhpReleases: hosted('hostedSites()') },
   'services/siteHardening.ts': { sweepHardening: hosted('hostedSites()') },
+  'services/siteImages.ts': { sweepSiteImages: hosted('hostedSites()') },
   'services/sites.ts': {
     bySlug: both('the guard itself: refuses an external site unless the caller takes either kind'),
     reconcileAll: hosted('hostedSites()'),
     applyLimits: hosted('hostedSites()'),
+    ownSiteLimits: hosted('hostedSites()'),
     list: both('the site list shows both kinds'),
     ownBackupKeepDays: NAMES,
     ownBackupBeforeUpdates: NAMES,

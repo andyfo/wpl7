@@ -967,7 +967,7 @@ export async function siteImportFinish(ctx: JobContext<z.infer<typeof siteImport
     await s.security.kick(server.id);
     await server.docker.removeContainer(site.containerName);
     await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings)),
+      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings, site)),
     );
     await startSiteContainer(server, s, site, ctx);
     const up = await probeSite(server, site.containerName, primary, s.config.probeTimeoutMs);

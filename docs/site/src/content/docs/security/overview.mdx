@@ -7,6 +7,8 @@ sources:
   - panel/shared/security.ts
   - panel/src/services/security.ts
   - panel/src/services/siteHardening.ts
+  - panel/src/services/siteImages.ts
+  - deploy/wordpress-image/Dockerfile
   - panel/src/services/siteNetwork.ts
   - panel/src/services/docker.ts
   - panel/src/services/mailAuth.ts
@@ -52,8 +54,8 @@ A site container:
 - runs without `NET_RAW`, so it cannot forge packets or poison ARP caches on the networks it shares,
   and with `no-new-privileges`, so setuid programs are not an escalation path.
 - is capped at 2 CPU cores, 512 MB and 512 processes by default, under **Site container limits** in
-  <UiPath href="/docs/panel/settings/">Settings → Sites</UiPath>. A miner or a fork bomb slows only
-  its own site.
+  <UiPath href="/docs/panel/settings/">Settings → Sites</UiPath>, or at limits of its own. A miner or
+  a fork bomb slows only its own site.
 - has its own mail login, and the relay refuses any sender domain that belongs to another site. It
   cannot send DKIM-signed phishing as one of your other customers.
 - cannot turn the panel against its neighbors through its files. A link it plants resolves inside
@@ -74,6 +76,10 @@ and that key opens every machine you own.
 The settings inside a container guard against a stolen admin login, not against code already running
 in the site. A scan reads files, not the database. Containers built before a protection existed keep
 the old one until they are recreated, which the panel does once, by itself.
+
+A site's PHP comes from its site image. When an update brings a newer image, the panel rebuilds every
+site container on it, so a PHP security release reaches every site. The site image does not build on
+a PHP older than the last security release of its branch.
 
 ## The panel is root-equivalent
 

@@ -5,7 +5,7 @@ import type { SiteSummary } from '../../../shared/types';
 import { useMeta, useSites } from '../api/hooks';
 import { Button, Card, EmptyState, ExternalLinkIcon, inputClass, Segmented, SiteHealthBadge, StatusBadge } from '../components/ui';
 import { SeverityBadge } from '../components/wp/severity';
-import { formatBytes, timeAgo } from '../lib/format';
+import { formatBytes, sitePhp, timeAgo } from '../lib/format';
 import { siteHealth } from '../lib/siteHealth';
 import { layoutFrom, sitesView, type SitesLayout } from './sitesLayout';
 
@@ -149,7 +149,7 @@ function SitesTable({ sites, multiServer, scheme, single }: { sites: SiteSummary
                   {external ? '–' : site.serverName}
                 </td>
               )}
-              <td className="py-2.5 pr-3 text-neutral-600">{site.phpVersion}</td>
+              <td className="py-2.5 pr-3 text-neutral-600">{sitePhp(site)}</td>
               <td className="py-2.5 pr-3 text-right whitespace-nowrap">
                 <UpdatesCell site={site} />
               </td>
@@ -229,7 +229,7 @@ function ExternalSitesCard({ sites }: { sites: SiteSummary[] }) {
               <td className="py-2.5 pr-3">
                 <SiteHealthBadge health={siteHealth(site)} />
               </td>
-              <td className="py-2.5 pr-3 text-neutral-600">{site.phpVersion}</td>
+              <td className="py-2.5 pr-3 text-neutral-600">{sitePhp(site)}</td>
               <td className="py-2.5 pr-3 text-right whitespace-nowrap">
                 <UpdatesCell site={site} />
               </td>

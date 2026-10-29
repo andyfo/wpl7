@@ -109,7 +109,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       {
         method: 'GET',
         path: '/api/sites',
-        summary: 'List every site with its status, health probe and WordPress snapshot',
+        summary: 'List every site with its status, health probe, PHP release and WordPress snapshot',
         returns: '{items: SiteSummary[]}',
         level: 'read',
       },
@@ -201,6 +201,18 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         returns: '202 {jobs}',
         job: true,
         level: 'manage',
+      },
+      {
+        method: 'PUT',
+        path: '/api/sites/:slug/limits',
+        summary: 'Set the site container\'s own CPU, memory and process limits, or put them back on the panel\'s settings',
+        input:
+          '{cpuLimit?, memoryLimitMb?, pidsLimit?} - each a number, or null for Settings\' value; left out = unchanged. CPU in cores; 0 = uncapped, for CPU and processes',
+        returns:
+          '{site: SiteDetail, job} - job: the server.applySiteLimits that changes the container in place (lifting a CPU cap recreates it); 200 and null when nothing it runs with changed',
+        job: true,
+        level: 'full',
+        levelReason: 'More for one site is less for the other sites on its server',
       },
       {
         method: 'PUT',
@@ -1488,9 +1500,9 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       {
         method: 'GET',
         path: '/api/servers/:id/info',
-        summary: 'What the machine is: OS, kernel, CPU, memory, uptime, Docker version',
+        summary: 'What the machine is: OS, kernel, CPU, memory, uptime, Docker version, and the PHP release in each site image',
         input: '?refresh=true skips the one-minute cache',
-        returns: '{reachable, os, kernel, arch, cpus, memTotalBytes, uptimeSeconds, dockerVersion, …}',
+        returns: '{reachable, os, kernel, arch, cpus, memTotalBytes, uptimeSeconds, dockerVersion, php: [{version, release}], …}',
         level: 'read',
       },
       {
@@ -2029,7 +2041,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         path: '/api/settings',
         summary: 'Every panel setting',
         returns:
-          '{settings, ownBackupKeepDays: [{slug, days}], ownBackupBeforeUpdates: [{slug, value}]} - the sites with a keep period, or a backup-before-updates setting, of their own',
+          '{settings, ownBackupKeepDays: [{slug, days}], ownBackupBeforeUpdates: [{slug, value}], ownSiteLimits: [{slug, cpuLimit, memoryLimitMb, pidsLimit}]} - the sites with a keep period, a backup-before-updates setting, or container limits of their own (null = Settings\')',
         level: 'read',
       },
       {

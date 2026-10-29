@@ -154,6 +154,13 @@ export const SHOTS: Shot[] = [
   },
   { name: 'site-settings', what: 'A site’s Settings tab: PHP version, domains, delete', path: '/sites/northwind-bakery', theme: 'light', prepare: tab('Settings') },
   {
+    name: 'site-limits',
+    what: 'A site’s container limits: memory of its own, CPU and processes on the defaults',
+    path: '/sites/northwind-bakery',
+    theme: 'light',
+    prepare: steps(tab('Settings'), scrollTo('Container limits')),
+  },
+  {
     name: 'sites-bulk',
     what: 'Sites → Bulk management: plugins with updates, two selected',
     path: '/sites/bulk',

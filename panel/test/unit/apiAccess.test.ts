@@ -30,6 +30,8 @@ const EXCEPTIONS: Record<string, string> = {
   'PUT /api/sites/:slug/mail-suspension': 'full',
   'DELETE /api/backups/:id': 'full',
   'POST /api/backups/bulk-delete': 'full',
+  // A site's share of its server: what one site is given, the others on it go without.
+  'PUT /api/sites/:slug/limits': 'full',
   // Reads that are more than Read only: what a file or a backup holds, a WP Godmode chat (a
   // command's output, quoting whatever the site holds), and a root shell.
   'GET /api/sites/:slug/files/content': 'manage',

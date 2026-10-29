@@ -223,6 +223,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     // Smoke checks retry while Apache boots; tests use a single attempt so the suite
     // never depends on whether anything is listening on 127.0.0.1:80.
     probeTimeoutMs: e.NODE_ENV === 'test' ? 0 : 30_000,
+    // How long the panel waits for Docker to say which PHP a site runs (services/phpReleases.ts).
+    // A daemon can take a request and never answer it, and the reading is not worth a job's lane.
+    phpReadTimeoutMs: 10_000,
     wpImageContext:
       e.WP_IMAGE_CONTEXT ||
       (fsExistsSync('/app/wordpress-image')

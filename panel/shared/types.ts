@@ -49,7 +49,13 @@ export interface SiteSummary {
   domains: string[];
   devHostname: string | null;
   isLive: boolean;
+  /** The PHP branch the site is set to, such as 8.4: what the PHP version selectors set. */
   phpVersion: string;
+  /**
+   * The PHP release the site runs, such as 8.4.27: read from its container, or as WPL7 Connect
+   * reported it for a site hosted elsewhere. null until read, and while a hosted site has no container.
+   */
+  phpRelease: string | null;
   status: SiteStatus;
   /**
    * Last HTTP probe verdict. `null` = no probe has completed since the panel started;
@@ -189,6 +195,20 @@ export interface SiteDetail extends SiteSummary {
    * `provisioning` is being made by its `site.create`, whose log its page shows.
    */
   activeJob: { id: number; type: JobType } | null;
+  /** Its container's CPU, memory and process limits; null for a site hosted elsewhere. */
+  limits: {
+    /** The site's own; null = the default. */
+    own: SiteLimits<number | null>;
+    /** Settings' (`siteCpuLimit`, `siteMemoryLimitMb`, `sitePidsLimit`), for each limit the site has none of its own. */
+    defaults: SiteLimits<number>;
+  } | null;
+}
+
+/** A site container's limits. CPU in cores; 0 = uncapped, for CPU and processes. */
+export interface SiteLimits<T> {
+  cpuLimit: T;
+  memoryLimitMb: T;
+  pidsLimit: T;
 }
 
 // ---------------------------------------------------------------------------
@@ -1221,6 +1241,11 @@ export interface ServerSystemInfoDto {
   /** Seconds since the machine booted. */
   uptimeSeconds: number | null;
   dockerVersion: string | null;
+  /**
+   * The site images the server has, oldest PHP branch first, with the PHP release in each: what a
+   * site gets there when its container is built. `release` is null when the image does not say.
+   */
+  php: { version: string; release: string | null }[];
   /** When the reading was taken; it is cached for a minute on the server. */
   readAt: number;
 }
