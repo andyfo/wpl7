@@ -32,7 +32,7 @@ Each site also has a Docker network of its own. Its only other members are Traef
 relay and MariaDB, so a site cannot reach another site or the panel. A second, shared network
 gives sites a way out to the internet for updates, with traffic between containers dropped.
 Every site container runs with Linux capabilities removed, without privilege escalation, and
-under the CPU, memory and process limits set in **Settings → Sites**.
+under the CPU, memory and process limits set in **Settings → Sites**, or on the site itself.
 
 WordPress's own cron is switched off. The panel runs each site's due cron events every five
 minutes instead. Mail from `wp_mail()` goes to the server's relay with the site's own login,

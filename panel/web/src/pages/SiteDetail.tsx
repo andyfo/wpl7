@@ -44,6 +44,7 @@ import { describeCron } from '../../../shared/cron';
 import { KeepDaysSetting } from '../components/backups/KeepDays';
 import { BackupBeforeUpdatesSetting } from '../components/backups/BackupBeforeUpdates';
 import { WpAdminLoginButton } from '../components/WpAdminLoginButton';
+import { SiteLimitsCard } from '../components/SiteLimits';
 import { ExternalOverview } from '../components/external/ExternalOverview';
 import { ExternalSettings } from '../components/external/ExternalSettings';
 import { Sparkline } from '../components/Sparkline';
@@ -1258,6 +1259,8 @@ function SettingsTab({ slug }: { slug: string }) {
       </Card>
 
       <ErrorNote error={run.error} />
+
+      <SiteLimitsCard site={s} />
 
       <Card title="Danger zone">
         <div className="flex items-center justify-between">

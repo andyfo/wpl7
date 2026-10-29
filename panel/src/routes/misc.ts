@@ -122,6 +122,7 @@ export function registerMiscRoutes(app: FastifyInstance, deps: AppDeps): void {
     // Beside the default they differ from, so Settings can name them.
     ownBackupKeepDays: deps.sites.ownBackupKeepDays(),
     ownBackupBeforeUpdates: deps.sites.ownBackupBeforeUpdates(),
+    ownSiteLimits: deps.sites.ownSiteLimits(),
   }));
 
   r.put('/api/settings', { schema: { body: settingsUpdateBody } }, async (req) => {
@@ -206,7 +207,8 @@ export function registerMiscRoutes(app: FastifyInstance, deps: AppDeps): void {
       }
     }
     // New ceilings have to reach the sites that already exist, not just the containers built
-    // from now on: one job per server changes them in place. Returned so the form can say so.
+    // from now on: one job per server changes them in place, on every site without its own.
+    // Returned so the form can say so.
     const jobs = limitsChanged ? deps.sites.applyLimits() : [];
     return { settings, jobs: jobs.map((job) => jobToDto(job, viewerOf(req))) };
   });

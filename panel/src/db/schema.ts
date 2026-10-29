@@ -104,6 +104,13 @@ export const sites = sqliteTable(
      * (shared/schemas.ts backupBeforeUpdatesValues). NULL = the `backup.beforeUpdates` setting.
      */
     backupBeforeUpdates: text('backup_before_updates'),
+    /**
+     * The site container's own CPU (cores), memory (MB) and process limits; 0 = uncapped, for CPU
+     * and processes. NULL = the `site.cpuLimit`, `site.memoryLimitMb` or `site.pidsLimit` setting.
+     */
+    cpuLimit: real('cpu_limit'),
+    memoryLimitMb: integer('memory_limit_mb'),
+    pidsLimit: integer('pids_limit'),
     diskBytes: integer('disk_bytes'),
     /**
      * 'hosted' | 'external'. An external site is hosted elsewhere and reached through the WPL7

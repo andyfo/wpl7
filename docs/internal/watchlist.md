@@ -27,6 +27,7 @@ for a reason; remove one once there is nothing left to watch.
 | [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-10-21 16:24 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12 |
 | [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
 | [Docker: the build cache and image names, as the nightly clean-up reads them](#docker-the-build-cache-and-image-names-as-the-nightly-clean-up-reads-them) | Medium | 2026-10-27 17:47 UTC | Docker 29.9.2: both prune parameters trim, `all` would remove shared layers first |
+| [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
 | [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-10-04 18:10 UTC | `latest` is v5.1.0; hostname logic as relied on |
 | [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-09-30 07:23 UTC | Both answer as expected |
 | [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-09-30 09:51 UTC | All six as listed |
@@ -240,6 +241,26 @@ for a reason; remove one once there is nothing left to watch.
   GC starts trimming early enough on its own, consider dropping the nightly trim. If image listing
   changes, rerun `test/unit/dockerCleanup.test.ts`'s cases against a real daemon before relying on
   `imagesToRemove`.
+
+## Docker: a CPU cap stays on a running container
+
+- **Priority:** Low
+- **Last checked:** 2026-10-19 16:22 UTC. [docker/for-linux#558](https://github.com/docker/for-linux/issues/558)
+  is open, with nothing since 2019. On Docker 28.1.1, `docker update --cpus 0` on a container
+  capped at 2 cores still exits 0 and leaves `NanoCpus` at 2000000000.
+- **The problem:** an update with a CPU limit of 0 means "leave it as it is" to Docker, so a cap
+  cannot be lifted from an existing container. `CpuQuota: -1` lifts it, but stays in the
+  container's config: a cap set later holds only until the next restart (checked on 28.1.1).
+- **What we do about it:** `limitsChange` in `panel/src/services/siteSpec.ts` answers `recreate`
+  for a site losing its CPU cap. `server.applySiteLimits` then queues a `site.reconcile`, which
+  builds a new container, and the site does not answer for a few seconds. That happens when the
+  CPU limit in Settings, or a site's own, is set to 0.
+- **Check:** `gh issue view 558 -R docker/for-linux --comments`, and the Docker Engine release
+  notes since the last check for `docker update` and `NanoCpus`.
+- **When it changes:** on a Docker release we install, confirm that an update with `NanoCpus: 0`
+  lifts the cap. Then `updateContainerLimits` can send it, `limitsChange` loses `recreate`, and
+  the "restarts each site once" sentences go from Settings, the site's Container limits card and
+  `docs/site/src/content/docs/sites/settings.mdx`.
 
 ## boky/postfix: how the relay picks its hostname
 

@@ -12,9 +12,15 @@ import { DnsTab } from '../components/settings/DnsTab';
 import { cronPatternError } from '../lib/cron';
 import { MalwareScanSettingsCard, TrustedProxiesCard, trustedProxiesProblem } from '../components/security/SettingsCards';
 import type { ScanOnFinding, TrustedProxiesSetting } from '../../../shared/security';
-import { backupBeforeUpdatesValues, MAX_BACKUP_KEEP_DAYS, type BackupBeforeUpdates } from '../../../shared/schemas';
+import {
+  backupBeforeUpdatesValues,
+  MAX_BACKUP_KEEP_DAYS,
+  SITE_LIMIT_RANGES,
+  siteLimitProblem,
+  type BackupBeforeUpdates,
+} from '../../../shared/schemas';
 import { BACKUP_BEFORE_UPDATES_LABELS } from '../components/wp/BulkRunOptions';
-import type { MetaDto } from '../../../shared/types';
+import type { MetaDto, SiteLimits } from '../../../shared/types';
 
 interface PanelSettings {
   backupCron: string;
@@ -154,12 +160,17 @@ interface TabProps {
   ownBackupKeepDays: { slug: string; days: number }[];
   /** The sites that decide for themselves whether an update backs them up first. */
   ownBackupBeforeUpdates: { slug: string; value: BackupBeforeUpdates }[];
+  /** The sites with container limits of their own: null where one follows Settings. */
+  ownSiteLimits: OwnSiteLimits[];
 }
+
+type OwnSiteLimits = { slug: string } & SiteLimits<number | null>;
 
 /** What GET /api/settings says beside the settings: the sites that differ from them. */
 interface OwnSettings {
   ownBackupKeepDays: { slug: string; days: number }[];
   ownBackupBeforeUpdates: { slug: string; value: BackupBeforeUpdates }[];
+  ownSiteLimits: OwnSiteLimits[];
 }
 
 export function Settings() {
@@ -232,9 +243,13 @@ export function Settings() {
   // The panel would reject it anyway; refusing here keeps the rest of the form saveable.
   const cronProblem = cronPatternError(s.backupCron, meta.data?.timezone);
   const proxiesProblem = s.securityTrustedProxies ? trustedProxiesProblem(s.securityTrustedProxies) : null;
+  const limitsProblem =
+    siteLimitProblem('cpuLimit', 'CPU cores per site', s.siteCpuLimit) ??
+    siteLimitProblem('memoryLimitMb', 'Memory per site (MB)', s.siteMemoryLimitMb) ??
+    siteLimitProblem('pidsLimit', 'Processes per site', s.sitePidsLimit);
   const dirtyTabs = new Set(Object.keys(patch).map((key) => SETTING_TAB[key as keyof PanelSettings]));
   const dirty = dirtyTabs.size > 0;
-  const canSave = dirty && cronProblem === null && proxiesProblem === null && !saving;
+  const canSave = dirty && cronProblem === null && proxiesProblem === null && limitsProblem === null && !saving;
 
   const save = async () => {
     setSaveError(null);
@@ -261,6 +276,7 @@ export function Settings() {
     meta: meta.data,
     ownBackupKeepDays: own.data?.ownBackupKeepDays ?? [],
     ownBackupBeforeUpdates: own.data?.ownBackupBeforeUpdates ?? [],
+    ownSiteLimits: own.data?.ownSiteLimits ?? [],
   };
   const formTab = tab !== 'dns' && tab !== 'updates';
 
@@ -320,7 +336,7 @@ export function Settings() {
                 {saved.applying && (
                   <>
                     {' '}
-                    Applying the new limits to every site —{' '}
+                    Applying the new limits —{' '}
                     <Link to="/jobs" className="underline">
                       see Jobs
                     </Link>
@@ -332,6 +348,7 @@ export function Settings() {
           </span>
           {cronProblem && <span className="text-sm text-red-700">Fix the backup schedule first.</span>}
           {proxiesProblem && <span className="text-sm text-red-700">Fix the trusted proxies first.</span>}
+          {limitsProblem && <span className="text-sm text-red-700">{limitsProblem}</span>}
           <ErrorNote error={saveError} />
           {dirty && (
             <>
@@ -364,7 +381,7 @@ function listOf(items: string[]): string {
 // ---------------------------------------------------------------------------
 // Sites: what a new site starts with, what any site may use, and FTP
 
-function SitesTab({ s, set, meta }: TabProps) {
+function SitesTab({ s, set, meta, ownSiteLimits }: TabProps) {
   return (
     <>
       <Card title="Site defaults" id="defaults">
@@ -411,22 +428,31 @@ function SitesTab({ s, set, meta }: TabProps) {
       <Card title="Site container limits" id="limits">
         <p className="mb-4 text-sm text-neutral-600">
           Saved changes reach every site right away, without a restart — except lifting the CPU cap (0),
-          which restarts each site once.
+          which restarts each site once. A site can set its own on its Settings tab.
         </p>
         <div className="grid max-w-2xl gap-4 sm:grid-cols-2">
           <Field label="CPU cores per site" hint="Fractions allowed (0.5 = half a core). 0 = uncapped.">
-            <input className={inputClass} type="number" min={0} max={64} step={0.5} value={s.siteCpuLimit}
-              onChange={(e) => set('siteCpuLimit', Number(e.target.value))} />
+            <input className={inputClass} type="number" min={SITE_LIMIT_RANGES.cpuLimit.min} max={SITE_LIMIT_RANGES.cpuLimit.max}
+              step={0.5} value={s.siteCpuLimit} onChange={(e) => set('siteCpuLimit', Number(e.target.value))} />
           </Field>
           <Field label="Memory per site (MB)" hint="The container is killed if it exceeds this.">
-            <input className={inputClass} type="number" min={128} max={65536} step={128} value={s.siteMemoryLimitMb}
+            <input className={inputClass} type="number" min={SITE_LIMIT_RANGES.memoryLimitMb.min}
+              max={SITE_LIMIT_RANGES.memoryLimitMb.max} step={128} value={s.siteMemoryLimitMb}
               onChange={(e) => set('siteMemoryLimitMb', Number(e.target.value))} />
           </Field>
           <Field label="Processes per site" hint="Apache needs a few hundred. 0 = uncapped.">
-            <input className={inputClass} type="number" min={0} max={100000} step={64} value={s.sitePidsLimit}
-              onChange={(e) => set('sitePidsLimit', Number(e.target.value))} />
+            <input className={inputClass} type="number" min={SITE_LIMIT_RANGES.pidsLimit.min} max={SITE_LIMIT_RANGES.pidsLimit.max}
+              step={64} value={s.sitePidsLimit} onChange={(e) => set('sitePidsLimit', Number(e.target.value))} />
           </Field>
         </div>
+        {ownSiteLimits.length > 0 && (
+          <div className="mt-4">
+            <OwnSiteList
+              tab="settings"
+              sites={ownSiteLimits.map((site) => ({ slug: site.slug, label: ownLimitsLabel(site) }))}
+            />
+          </div>
+        )}
       </Card>
 
       <Card title="FTP & SFTP" id="ftp">
@@ -576,8 +602,17 @@ function OwnKeepDays({ sites }: { sites: { slug: string; days: number }[] }) {
   );
 }
 
-/** Sites with a backup setting of their own, each linked to its Backups tab, where it is set. */
-function OwnSiteList({ sites }: { sites: { slug: string; label: string }[] }) {
+/** A site's own container limits, the ones it has: "1024 MB, no process cap". */
+function ownLimitsLabel(site: SiteLimits<number | null>): string {
+  const parts: string[] = [];
+  if (site.cpuLimit !== null) parts.push(site.cpuLimit === 0 ? 'no CPU cap' : `${site.cpuLimit} ${site.cpuLimit === 1 ? 'core' : 'cores'}`);
+  if (site.memoryLimitMb !== null) parts.push(`${site.memoryLimitMb} MB`);
+  if (site.pidsLimit !== null) parts.push(site.pidsLimit === 0 ? 'no process cap' : `${site.pidsLimit} processes`);
+  return parts.join(', ');
+}
+
+/** Sites with a setting of their own, each linked to the tab of its page where it is set. */
+function OwnSiteList({ sites, tab = 'backups' }: { sites: { slug: string; label: string }[]; tab?: string }) {
   if (sites.length === 0) return null;
   return (
     <p className="text-xs text-neutral-500">
@@ -585,7 +620,7 @@ function OwnSiteList({ sites }: { sites: { slug: string; label: string }[] }) {
       {sites.map((site, i) => (
         <span key={site.slug}>
           {i > 0 && ', '}
-          <Link className="underline" to={`/sites/${site.slug}?tab=backups`}>
+          <Link className="underline" to={`/sites/${site.slug}?tab=${tab}`}>
             {site.slug}
           </Link>{' '}
           ({site.label})

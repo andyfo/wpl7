@@ -126,7 +126,7 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
     ctx.info('Creating and starting container (unrouted until WordPress is installed)…');
     ctx.pushCompensation('remove container', () => server.docker.removeContainer(site.containerName));
     await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings), { routing: false }),
+      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings, site), { routing: false }),
     );
     await startSiteContainer(server, s, site, ctx);
 
@@ -225,7 +225,7 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
     await s.security.kick(server.id);
     await server.docker.removeContainer(site.containerName);
     await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings)),
+      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings, site)),
     );
     await startSiteContainer(server, s, site, ctx);
 
@@ -691,7 +691,7 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
   // then short-circuited by the "already runs" check above.
   const candidate: SpecSite = { ...site, phpVersion: newVersion };
   ctx.info(`Recreating container with PHP ${newVersion} (files and database untouched)…`);
-  await replaceContainer(ctx, server, s, siteRuntimeFrom(s.settings), site, { site: candidate, domains }, { site, domains }, shouldRun);
+  await replaceContainer(ctx, server, s, siteRuntimeFrom(s.settings, site), site, { site: candidate, domains }, { site, domains }, shouldRun);
 
   let up = true;
   if (shouldRun) {
@@ -705,7 +705,7 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
     ctx.error(`Site is not responding on PHP ${newVersion}; rolling back to PHP ${oldVersion}.`);
     await server.docker.removeContainer(site.containerName);
     await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings)),
+      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings, site)),
     );
     await startSiteContainer(server, s, site, ctx);
     throw new Error(`PHP ${newVersion} switch failed the smoke check; rolled back to ${oldVersion}`);
@@ -768,7 +768,7 @@ export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcile
     ctx,
     server,
     s,
-    siteRuntimeFrom(s.settings),
+    siteRuntimeFrom(s.settings, site),
     site,
     { site, domains },
     { site, domains },
@@ -861,7 +861,7 @@ export async function siteUpdateDomains(
   // Phase 1: serve old + new hosts together (old primary stays canonical while certs issue).
   const transition = [oldPrimary, ...new Set([...oldDomains.slice(1), ...newList.filter((d) => d !== oldPrimary)])];
   ctx.info(`Adding ${newList.join(', ')} to the router (old domains keep serving)…`);
-  await replaceContainer(ctx, server, s, siteRuntimeFrom(s.settings), site, { site, domains: transition }, { site, domains: oldDomains }, true);
+  await replaceContainer(ctx, server, s, siteRuntimeFrom(s.settings, site), site, { site, domains: transition }, { site, domains: oldDomains }, true);
 
   if (s.config.tlsMode !== 'none' && newPrimary !== oldPrimary) {
     ctx.info(`Waiting for ${newPrimary} to answer over HTTPS (certificate issuance)…`);
@@ -886,7 +886,7 @@ export async function siteUpdateDomains(
     ctx.error('A domain in this request was claimed by another site while certificates were issuing.');
     await server.docker.removeContainer(site.containerName);
     await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, oldDomains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings)),
+      buildSiteContainerSpec(s.config, site, oldDomains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings, site)),
     );
     if (wasRunning) await startSiteContainer(server, s, site, ctx);
     throw err;
@@ -904,7 +904,7 @@ export async function siteUpdateDomains(
   // rewrite for good (stale home/siteurl plus the alias redirect = redirect loop).
   const finalSite: SpecSite = { ...site };
   ctx.info(`Switching canonical domain to ${newPrimary}…`);
-  await replaceContainer(ctx, server, s, siteRuntimeFrom(s.settings), site, { site: finalSite, domains: newList }, { site, domains: transition }, wasRunning);
+  await replaceContainer(ctx, server, s, siteRuntimeFrom(s.settings, site), site, { site: finalSite, domains: newList }, { site, domains: transition }, wasRunning);
 
   const newUrl = siteUrl(s.config, newPrimary);
   // A site going live stops asking search engines to stay away (decided in the Go live dialog).
@@ -931,7 +931,7 @@ export async function siteUpdateDomains(
         `WordPress URL rewrite failed (${errMsg(err)}); restoring the transition router so the old canonical ` +
           `keeps working. Re-run the domain change to retry.`,
       );
-      await replaceContainer(ctx, server, s, siteRuntimeFrom(s.settings), site, { site, domains: transition }, { site, domains: transition }, wasRunning).catch(
+      await replaceContainer(ctx, server, s, siteRuntimeFrom(s.settings, site), site, { site, domains: transition }, { site, domains: transition }, wasRunning).catch(
         (restoreErr) => ctx.error(`Could not restore the transition router: ${errMsg(restoreErr)}`),
       );
       throw err;
