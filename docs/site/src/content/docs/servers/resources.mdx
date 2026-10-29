@@ -143,6 +143,8 @@ default configuration starts by deleting every rule, Docker's and UFW's included
 - Housekeeping runs once a night. During the day, the panel only emails you when a server has
   less than 10% of its disk free.
 - Docker images under names of your own are left alone, used or not.
+- While an update of the panel runs, the panel's server keeps its unused images until the next
+  night.
 - The panel shows no container logs. Read them in the Terminal.
 
 ## Related

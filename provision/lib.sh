@@ -127,6 +127,24 @@ wpl7_db_copy() {
   done
 }
 
+# Wait while the panel's nightly Docker clean-up holds its mark in `dir`: it is removing images,
+# and would take ones an update has not named yet for leftovers (panel/src/services/dockerCleanup.ts).
+# The caller has already written to state.json that an update is running, so a clean-up that starts
+# from then on leaves the images alone. A mark counts only while the panel runs, and for ten
+# minutes at most: what set it otherwise died part-way.
+wpl7_wait_for_docker_cleanup() {
+  local mark="$1/docker-cleanup" said=0
+  while [ -e "$mark" ]; do
+    [ "$(docker inspect --format '{{.State.Running}}' wpl7-panel 2>/dev/null || true)" = true ] || return 0
+    if [ -n "$(find "$mark" -mmin +10 2>/dev/null)" ]; then
+      echo "   ignoring a Docker clean-up mark older than ten minutes"
+      return 0
+    fi
+    if [ "$said" = 0 ]; then echo "   waiting for the panel's Docker clean-up to finish"; said=1; fi
+    sleep "${WPL7_CLEANUP_POLL_SEC:-2}"
+  done
+}
+
 # Remove the copies earlier updates took (`panel.db.pre-<version>`, with their -wal and -shm),
 # all but `keep` and its own. Only the newest can still undo anything: it is the database as it
 # was before the version now running migrated it. Each is as big as the database.

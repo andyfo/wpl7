@@ -12,6 +12,7 @@ import { TerminalService } from './servers/terminal.js';
 import { HostShell } from './servers/hostShell.js';
 import { ensurePanelSshKey } from './servers/keys.js';
 import { BackupService } from './services/backup.js';
+import { clearCleanupMark } from './services/dockerCleanup.js';
 import { OffsiteService } from './services/offsite.js';
 import { StorageService } from './services/storage.js';
 import { LocalHostExec } from './servers/hostExec.js';
@@ -280,6 +281,8 @@ async function main(): Promise<void> {
   worker.reconcileOnBoot();
   // After the worker's sweep, which fails the jobs a restart cut short: their imports follow.
   importsService.reconcileOnBoot();
+  // And a Docker clean-up a restart cut short: its mark would hold up an update (services/dockerCleanup.ts).
+  clearCleanupMark(config);
   worker.start();
   schedulers.start();
 

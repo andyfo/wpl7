@@ -244,6 +244,13 @@ fi
 
 # ----------------------------------------------------------------- 3. fetch
 
+# The panel's nightly Docker clean-up removes old images on this server. It would take this
+# release's for leftovers: the ones pulled below, or left by an earlier try, are named only after.
+# The clean-up marks the time it removes images, then looks for a running update, which the state
+# written at the lock already announces. So one that starts from now on leaves the images alone,
+# and this waits for one already under way.
+if [ "$DRY" = 0 ]; then wpl7_wait_for_docker_cleanup "$UPDATE_DIR"; fi
+
 # Pin what is running RIGHT NOW, before a single pull, by image id.
 #
 # On the edge channel the tag is a moving one: `panel:edge` is re-pointed at the new build by

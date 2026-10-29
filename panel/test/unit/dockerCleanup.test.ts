@@ -1,12 +1,15 @@
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { servers, sites } from '../../src/db/schema.js';
 import type { ImageSummary } from '../../src/services/docker.js';
-import { BUILD_CACHE_KEEP_BYTES, cleanDocker, imagesToRemove, repositoryOf } from '../../src/services/dockerCleanup.js';
+import { BUILD_CACHE_KEEP_BYTES, cleanDocker, cleanupMark, imagesToRemove, repositoryOf } from '../../src/services/dockerCleanup.js';
 import { SCANNER_IMAGE } from '../../src/services/scanEngines.js';
-import { makeWorld, type FakeDocker } from '../helpers.js';
+import { makeWorld, waitFor, type FakeDocker } from '../helpers.js';
 
 /** The nightly clean-up of Docker on each server (services/dockerCleanup.ts). */
 
@@ -24,6 +27,15 @@ function add(docker: FakeDocker, tag: string, created = 0): string {
 }
 
 const removed = (docker: FakeDocker) => docker.calls.filter((c) => c.method === 'removeImage').map((c) => c.args[0]);
+
+const LIB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../provision/lib.sh');
+
+/** A `docker` for the host's PATH that says the panel's container is running. */
+function panelRunning(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-stub-'));
+  fs.writeFileSync(path.join(dir, 'docker'), '#!/usr/bin/env bash\necho true\n', { mode: 0o755 });
+  return dir;
+}
 
 describe('repositoryOf', () => {
   it('drops the tag or the digest, and keeps a registry port', () => {
@@ -144,11 +156,56 @@ describe('cleanDocker', () => {
     expect(lines).toContainEqual(
       expect.stringMatching(/^Docker on ".+": an update of the panel is running here, so its images wait for the next run; freed 1\.0 GiB of build cache$/),
     );
+    expect(fs.existsSync(cleanupMark(w.config))).toBe(false);
 
     // Once it is over, the next run removes what nothing needs.
     fs.writeFileSync(state, JSON.stringify({ phase: 'switched', pid: 4242, to: '9.9.9' }));
     await cleanDocker(w.core, log);
     expect(removed(w.docker)).toEqual(['ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9']);
+  });
+
+  it('and update.sh take turns: an update that starts while it removes images waits for it', async () => {
+    const w = await makeWorld();
+    const log = { info: () => undefined, warn: () => undefined };
+    // An earlier try at 9.9.9 left its site image. A retry finds it, so its pull fetches nothing,
+    // and names it only after: the image is in the clean-up's list before the retry starts.
+    add(w.docker, 'ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9');
+    let reached!: () => void;
+    const atRemoval = new Promise<void>((resolve) => (reached = resolve));
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const remove = w.docker.removeImage.bind(w.docker);
+    w.docker.removeImage = async (ref: string) => {
+      reached();
+      await held;
+      return remove(ref);
+    };
+    const cleaning = cleanDocker(w.core, log);
+    await atRemoval;
+
+    // The retry starts now, after the clean-up found no update: it says it is running, then waits.
+    const updateDir = path.dirname(cleanupMark(w.config));
+    fs.writeFileSync(path.join(updateDir, 'state.json'), JSON.stringify({ phase: 'fetching', pid: 4242 }));
+    const stub = panelRunning();
+    const update = spawn('bash', ['-c', `set -euo pipefail\n. "${LIB}"\nwpl7_wait_for_docker_cleanup "${updateDir}"\necho PULLING`], {
+      env: { ...process.env, PATH: `${stub}:${process.env.PATH ?? ''}`, WPL7_CLEANUP_POLL_SEC: '0.05' },
+    });
+    let out = '';
+    update.stdout.on('data', (chunk: Buffer) => (out += chunk.toString()));
+    const exited = new Promise<number | null>((resolve) => update.on('exit', resolve));
+    await waitFor(() => out.includes('waiting'), 15_000);
+    // Held as long as the clean-up is: give it time to get past the mark, if it could.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(out).toBe("   waiting for the panel's Docker clean-up to finish\n");
+
+    release();
+    await cleaning;
+    expect(await exited).toBe(0);
+    expect(out).toContain('PULLING');
+    // Removed before the retry pulled: it fetches the image again, and names it.
+    expect(removed(w.docker)).toEqual(['ghcr.io/andyfo/wpl7/wordpress:php8.3-9.9.9']);
+    expect(fs.existsSync(cleanupMark(w.config))).toBe(false);
+    fs.rmSync(stub, { recursive: true, force: true });
   });
 
   it('keeps an image a site on that server still runs, and one Docker refuses to remove', async () => {

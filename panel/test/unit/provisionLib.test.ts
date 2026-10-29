@@ -147,6 +147,54 @@ describe('wpl7_stamp', () => {
   });
 });
 
+describe('wpl7_wait_for_docker_cleanup', () => {
+  const updateDir = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-update-'));
+    stubs.push(dir);
+    return dir;
+  };
+
+  it('returns at once without a mark', () => {
+    const dir = updateDir();
+    const res = runShell(`wpl7_wait_for_docker_cleanup ${JSON.stringify(dir)}; echo PULLING`, stubDocker('running', 'true'));
+    expect(res.status).toBe(0);
+    expect(res.stdout.trim()).toBe('PULLING');
+  });
+
+  it("waits while the panel's clean-up holds its mark", () => {
+    const dir = updateDir();
+    const mark = JSON.stringify(path.join(dir, 'docker-cleanup'));
+    const out = JSON.stringify(path.join(dir, 'out'));
+    fs.writeFileSync(path.join(dir, 'docker-cleanup'), 'x');
+    // The mark goes only once the wait has said it is waiting, and the wait must still be there.
+    const res = runShell(
+      [
+        `WPL7_CLEANUP_POLL_SEC=0.05 wpl7_wait_for_docker_cleanup ${JSON.stringify(dir)} > ${out} & waiter=$!`,
+        `until grep -q waiting ${out}; do sleep 0.05; done`,
+        `kill -0 "$waiter"; echo STILL-WAITING`,
+        `rm -f ${mark}; wait "$waiter"; cat ${out}; echo PULLING`,
+      ].join('\n'),
+      stubDocker('running', 'true'),
+    );
+    expect(res.status).toBe(0);
+    expect(res.stdout).toBe("STILL-WAITING\n   waiting for the panel's Docker clean-up to finish\nPULLING\n");
+  });
+
+  it('ignores a mark the panel cannot finish: not running, or ten minutes old', () => {
+    const dir = updateDir();
+    const mark = path.join(dir, 'docker-cleanup');
+    fs.writeFileSync(mark, 'x');
+    const stopped = runShell(`wpl7_wait_for_docker_cleanup ${JSON.stringify(dir)}; echo PULLING`, stubDocker('exited', 'false'));
+    expect(stopped.stdout.trim()).toBe('PULLING');
+
+    const old = new Date(Date.now() - 11 * 60_000);
+    fs.utimesSync(mark, old, old);
+    const stale = runShell(`wpl7_wait_for_docker_cleanup ${JSON.stringify(dir)}; echo PULLING`, stubDocker('running', 'true'));
+    expect(stale.status).toBe(0);
+    expect(stale.stdout).toBe('   ignoring a Docker clean-up mark older than ten minutes\nPULLING\n');
+  });
+});
+
 describe('wpl7_prune_db_copies', () => {
   it('keeps the copy this update took, with its -wal and -shm, and removes the older ones', () => {
     // update.sh copies the database before each update's migrations, and nothing removed them.
