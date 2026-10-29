@@ -16,8 +16,8 @@
 #   docker build -t "wpl7-adminer:$(cat deploy/adminer-image/VERSION)" deploy/adminer-image
 FROM php:8.4-cli-alpine
 
-ARG ADMINER_VERSION=6.1.2
-ARG ADMINER_SHA256=7526b56dc5ecee5b5cc88206ac8f3a757392c1b991838efa71bf9f7abbb8172e
+ARG ADMINER_VERSION=6.2.0
+ARG ADMINER_SHA256=8daeb33d23967df1a309d2614d0e7fcdfe99f799e25b4fd5312e5a7db159e58c
 
 # tini and coreutils: see the ENTRYPOINT below.
 RUN apk add --no-cache coreutils tini \
@@ -36,7 +36,8 @@ COPY router.php relay.php wpl7.php /srv/adminer/
 
 USER 65534:65534
 WORKDIR /srv/adminer
-ENV PHP_CLI_SERVER_WORKERS=4
+# Two more than the panel sends requests at once (frontDoor.ts): its own questions never wait.
+ENV PHP_CLI_SERVER_WORKERS=6
 # Every request is a `docker exec`, which the panel wraps in `timeout`. tini, as process 1, reaps
 # what an exec leaves behind: PHP's server would not, and each one would count against the
 # container's process limit for good. coreutils' timeout stays the parent of its command, where

@@ -15,8 +15,8 @@ import type { SettingsService } from '../services/settings.js';
 import type { UsersService } from '../services/users.js';
 import { hostedSites } from '../lib/siteKind.js';
 import { AdminerContainers } from './containers.js';
-import { adminerRequest, readAll } from './relay.js';
-import { ADMINER_IDLE_MS, AdminerSessions, type AdminerSession } from './sessions.js';
+import { ADMINER_CONTAINER, adminerRequest, readAll } from './relay.js';
+import { ADMINER_IDLE_MS, AdminerSessions, type AdminerSession, type AdminerTab } from './sessions.js';
 import { AdminerTickets, type AdminerTicket } from './tickets.js';
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err)).trim().slice(0, 300);
@@ -35,6 +35,14 @@ export class AdminerSessionEndedError extends Error {}
  * request (deploy/adminer-image/wpl7.php): MariaDB then says whether the change still runs.
  */
 export const adminerLockName = (tag: string) => `wpl7_adminer_${tag}`;
+
+/**
+ * What Adminer's gate (deploy/adminer-image/router.php) says of a tagged change: given up before
+ * PHP started it, so it never will run (`canceled`); started, and running or waiting for its
+ * session or its connection (`started`); or over (`done`). `gone`: Adminer is not running, so
+ * nothing of it runs in PHP. `unknown`: it could not be asked.
+ */
+type GateState = 'canceled' | 'started' | 'done' | 'gone' | 'unknown';
 
 /** What a read takes of a site: nothing. */
 const NO_HOLD: SiteHold = Object.assign(() => undefined, { renew: () => undefined });
@@ -64,7 +72,7 @@ export class AdminerService {
     private readonly dns: DnsService,
     private readonly log: Logger,
   ) {
-    this.sessions = new AdminerSessions((s) => this.alive(s));
+    this.sessions = new AdminerSessions((signIn) => this.alive(signIn));
     this.containers = new AdminerContainers(config, servers, log);
   }
 
@@ -84,17 +92,32 @@ export class AdminerService {
     return `${this.config.adminer.url}/open?ticket=${encodeURIComponent(this.tickets.issue(ticket))}`;
   }
 
-  /**
-   * A session from a spent ticket; its server's Adminer is started and signed in behind it while
-   * the tab that opened it comes to claim it (AdminerSessions.claim).
-   */
-  begin(ticket: AdminerTicket): AdminerSession {
+  /** A tab from a spent ticket: its starting page claims it a session (claim()). */
+  begin(ticket: AdminerTicket): AdminerTab {
     const site = this.siteOf(ticket.siteId);
     if (!site) throw new Error('That site is not there any more');
-    const target = this.databases.targetFor(site, ticket.database);
-    const session = this.sessions.create({ ...ticket, serverId: site.serverId, user: target.user });
-    void this.prepare(session, target.password);
-    return session;
+    this.databases.targetFor(site, ticket.database);
+    return this.sessions.openTab(ticket);
+  }
+
+  /**
+   * The tab's session, asked for by its starting page with whatever key the browser's cookie
+   * holds (`cookie`): the panel sign-in's session for the site's user if it has one - another
+   * tab's, on another of the site's databases too - or a new one, whose server's Adminer starts
+   * and signs in behind it. Returns the key to set when the cookie holds none of this sign-in's.
+   */
+  claim(tab: AdminerTab, cookie: string | undefined): { session: AdminerSession; key: string; isNew: boolean } {
+    const site = this.siteOf(tab.ticket.siteId);
+    if (!site) throw new AdminerSessionEndedError('That site is not there any more. Open its database again from the panel.');
+    const target = this.databases.targetFor(site, tab.ticket.database);
+    const { key, isNew } = this.sessions.keyFor(cookie, tab.ticket);
+    let session = this.sessions.find(tab.ticket, target.user, site.serverId);
+    if (!session) {
+      session = this.sessions.create({ ...tab.ticket, serverId: site.serverId, user: target.user });
+      void this.prepare(session, target.password);
+    }
+    tab.sessionId = session.id;
+    return { session, key, isNew };
   }
 
   /**
@@ -115,12 +138,16 @@ export class AdminerService {
 
   /**
    * Wait, after a change made in Adminer has ended for the front door, until it has ended in
-   * MariaDB too: PHP and the statement it runs go on after a browser or a relay goes. Its
-   * connection holds the lock named after the request's tag (adminerLockName), so MariaDB says
-   * whether it still runs. One that was cut off (`cut`: its relay failed, or the browser went
-   * before Adminer had the request whole) is killed. After a clean end its connection closes with
-   * the request; one still there after a few seconds is killed all the same. `renew` keeps the
-   * site's hold while this waits.
+   * Adminer and MariaDB too: PHP, and the statement it runs, go on after a browser or a relay goes.
+   * Its connection holds the lock named after the request's tag (adminerLockName), so MariaDB says
+   * whether it still runs.
+   *
+   * Answered whole, the request is over in PHP and its connection closes with it; one still there
+   * after a few seconds is killed. Cut off (`cut`: its relay failed, or the browser went before
+   * Adminer had it whole), PHP may still have it - waiting for a worker, its session or its
+   * connection - and run it later. So Adminer's gate is asked: one not yet started is given up
+   * there and never runs; a started one is waited for until it is over, its connection killed
+   * whenever MariaDB shows one. `renew` keeps the site's hold while this waits.
    */
   async settle(s: AdminerSession, tag: string, opts: { cut: boolean; renew: () => void }): Promise<void> {
     const site = this.siteOf(s.siteId);
@@ -139,30 +166,53 @@ export class AdminerService {
     let failures = 0;
     for (;;) {
       const waited = Date.now() - started;
+      // Cut off, the request is over only once Adminer's gate says so.
+      const gate: GateState = opts.cut ? await this.askGate(s.serverId, tag) : 'done';
       let holder: number | null | undefined;
       try {
         holder = await browser.lockHolder(target, name, { kill: opts.cut || waited >= t.graceMs });
         failures = 0;
       } catch (err) {
-        if (++failures >= 5) {
+        if (++failures >= 5 && gate !== 'started' && gate !== 'unknown') {
           this.log.warn(`Adminer for ${s.database}: could not tell whether a change still runs (${errorText(err)}); letting the site go`);
           return;
         }
         holder = undefined;
       }
-      // Cut off, Adminer may have had the request whole yet not connected: a few looks first.
-      if (holder === null && (!opts.cut || waited >= t.lookMs)) return;
+      if (holder === null && (gate === 'canceled' || gate === 'done' || gate === 'gone')) return;
       if (waited >= t.maxMs) {
-        this.log.warn(`Adminer for ${s.database}: a change still runs after ${Math.round(t.maxMs / 60_000)} minutes; letting the site go`);
+        this.log.warn(`Adminer for ${s.database}: a change was still not over after ${Math.round(t.maxMs / 60_000)} minutes; letting the site go`);
         return;
       }
       opts.renew();
-      await sleep(holder === null ? t.pollMs / 2 : t.pollMs);
+      // Each ask is a `docker exec` on the site's server: often at first, then less so.
+      await sleep(waited < 10 * t.pollMs ? t.pollMs : 5 * t.pollMs);
     }
   }
 
-  /** How settle() waits; shorter in the tests. */
-  settleTiming = { lookMs: 3_000, graceMs: 5_000, pollMs: 1_000, maxMs: 15 * 60_000 };
+  /** Adminer's gate's word on a tagged change (GateState); asking gives up one not yet started. */
+  private async askGate(serverId: number, tag: string): Promise<GateState> {
+    try {
+      const { docker } = this.servers.handleFor(serverId);
+      if ((await docker.containerState(ADMINER_CONTAINER)) !== 'running') return 'gone';
+      const res = await adminerRequest(docker, {
+        method: 'POST',
+        path: `/.wpl7/settle?tag=${encodeURIComponent(tag)}`,
+        headers: { 'x-wpl7-login-key': this.containers.loginKey(serverId), 'content-length': '0' },
+      });
+      const body = await readAll(res);
+      if (res.statusCode !== 200) return 'unknown';
+      const state = (JSON.parse(body) as { state?: string }).state;
+      // Created but not yet written: it has started.
+      if (state === '' || state === 'started') return 'started';
+      return state === 'canceled' || state === 'done' ? state : 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /** How settle() waits; shorter in the tests. Past maxMs it lets the site go all the same, loudly. */
+  settleTiming = { graceMs: 5_000, pollMs: 1_000, maxMs: 35 * 60_000 };
 
   /**
    * Switched off: every session ends now, and every Adminer stops, rather than once idle - one
@@ -173,9 +223,9 @@ export class AdminerService {
     return this.containers.stopAll();
   }
 
-  /** Where Adminer opens on the session's database. */
-  adminerPath(s: AdminerSession): string {
-    return `/?server=mariadb&username=${encodeURIComponent(s.user)}&db=${encodeURIComponent(s.database)}`;
+  /** Where Adminer opens on a database of the session's site: its first, unless named. */
+  adminerPath(s: AdminerSession, database: string = s.database): string {
+    return `/?server=mariadb&username=${encodeURIComponent(s.user)}&db=${encodeURIComponent(database)}`;
   }
 
   /** Stop the Adminers nobody uses (the scheduler, every minute). */
@@ -234,13 +284,13 @@ export class AdminerService {
   }
 
   /** Is the panel session behind an Adminer session still signed in, and its admin still there? */
-  private alive(s: AdminerSession): boolean {
+  private alive(signIn: { userId: number; panelSid: string }): boolean {
     const signedIn = this.db
       .select({ sid: panelSessions.sid })
       .from(panelSessions)
-      .where(and(eq(panelSessions.sid, s.panelSid), gt(panelSessions.expiresAt, Date.now())))
+      .where(and(eq(panelSessions.sid, signIn.panelSid), gt(panelSessions.expiresAt, Date.now())))
       .get();
-    return !!signedIn && this.users.byId(s.userId) !== null;
+    return !!signedIn && this.users.byId(signIn.userId) !== null;
   }
 
   /**

@@ -8,7 +8,7 @@ import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { jobs, servers as serverRows, sessions as panelSessions, sites } from '../../src/db/schema.js';
+import { jobs, servers as serverRows, sessions as panelSessions, siteDatabases, sites } from '../../src/db/schema.js';
 import { createFrontDoor } from '../../src/adminer/frontDoor.js';
 import { adminerLockName } from '../../src/adminer/index.js';
 import type { AccessLevel } from '../../shared/access.js';
@@ -31,7 +31,7 @@ async function signedIn() {
     return { authorization: `Bearer ${(res.json() as { token: string }).token}` };
   };
   // Settling a change waits in seconds; here in milliseconds.
-  world.core.adminer.settleTiming = { lookMs: 60, graceMs: 120, pollMs: 20, maxMs: 5_000 };
+  world.core.adminer.settleTiming = { graceMs: 120, pollMs: 20, maxMs: 5_000 };
   return { app, world, headers, keyOf };
 }
 
@@ -63,17 +63,30 @@ interface Seen {
   body: string;
 }
 
+/** A change as the stand-in Adminer runs it: its tag, and what marks it over in PHP. */
+interface ChangeContext {
+  tag: string;
+  done: () => void;
+}
+
 /**
  * What the stand-in Adminer was asked, and its answers: a sign-in, then pages naming the user
- * they were asked for. `/hang` never answers; `change`, when set, answers the changes.
+ * they were asked for. `/hang` never answers; `change`, when set, answers the changes. A tagged
+ * change passes a gate as router.php's does, and /.wpl7/settle answers for it as router.php does.
  */
 function fakeAdminer(world: TestWorld) {
   const seen: Seen[] = [];
   const fake = {
     seen,
-    change: null as ((req: Seen, res: ServerResponse, raw: IncomingMessage) => void) | null,
+    change: null as ((req: Seen, res: ServerResponse, ctx: ChangeContext) => void) | null,
     /** Held until let go: the readiness check of a starting Adminer. */
     starting: null as Promise<void> | null,
+    /** What the gate knows of each tagged change: canceled, started or done. */
+    gate: new Map<string, string>(),
+    /** Held until let go: tagged changes waiting in PHP for a worker, before their gate. */
+    queued: null as Promise<void> | null,
+    /** Called as a change starts waiting (`queued`): where a test cuts its relay. */
+    onQueued: null as ((res: ServerResponse) => void) | null,
   };
   world.docker.adminerHttp = (req, res) => {
     let body = '';
@@ -82,21 +95,47 @@ function fakeAdminer(world: TestWorld) {
       const r = { method: req.method!, url: req.url!, headers: req.headers, body };
       seen.push(r);
       if (req.url?.startsWith('/hang')) return;
+      if (req.url?.startsWith('/.wpl7/settle')) {
+        const tag = new URL(req.url, 'http://adminer').searchParams.get('tag')!;
+        if (req.headers['x-wpl7-login-key'] !== world.core.adminer.containers.loginKey(1)) {
+          res.writeHead(403);
+          return void res.end('{}');
+        }
+        if (!fake.gate.has(tag)) fake.gate.set(tag, 'canceled');
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return void res.end(JSON.stringify({ state: fake.gate.get(tag) }));
+      }
       if (req.method === 'GET' && req.url === '/' && fake.starting) {
         void fake.starting.then(() => res.end('<p>Adminer</p>'));
         return;
       }
-      const params = new URLSearchParams(body);
-      if (req.method === 'POST' && params.has('auth[username]')) {
-        const user = params.get('auth[username]')!;
-        res.writeHead(302, { location: `?server=mariadb&username=${user}&db=${user}`, 'set-cookie': `adminer_sid=s-${user}; path=/; HttpOnly` });
-        res.end();
-        return;
+      const tag = req.headers['x-wpl7-request'] as string | undefined;
+      const run = () => {
+        if (tag) {
+          if (fake.gate.has(tag)) {
+            res.writeHead(409);
+            return void res.end('This change was given up.');
+          }
+          fake.gate.set(tag, 'started');
+          res.on('finish', () => fake.gate.set(tag, 'done'));
+        }
+        const params = new URLSearchParams(body);
+        if (req.method === 'POST' && params.has('auth[username]')) {
+          const user = params.get('auth[username]')!;
+          res.writeHead(302, { location: `?server=mariadb&username=${user}&db=${user}`, 'set-cookie': `adminer_sid=s-${user}; path=/; HttpOnly` });
+          return void res.end();
+        }
+        if (req.method === 'POST' && fake.change && tag) return fake.change(r, res, { tag, done: () => fake.gate.set(tag, 'done') });
+        const user = new URL(req.url!, 'http://adminer').searchParams.get('username') ?? '';
+        res.writeHead(200, { 'content-type': 'text/html', 'set-cookie': 'adminer_version=6; path=/', 'x-powered-by': 'PHP' });
+        res.end(`<h2>${user}</h2>`);
+      };
+      if (tag && fake.queued) {
+        fake.onQueued?.(res);
+        void fake.queued.then(run);
+      } else {
+        run();
       }
-      if (req.method === 'POST' && fake.change) return fake.change(r, res, req);
-      const user = new URL(req.url!, 'http://adminer').searchParams.get('username') ?? '';
-      res.writeHead(200, { 'content-type': 'text/html', 'set-cookie': 'adminer_version=6; path=/', 'x-powered-by': 'PHP' });
-      res.end(`<h2>${user}</h2>`);
     });
   };
   return fake;
@@ -127,25 +166,25 @@ async function frontDoor(world: TestWorld) {
 
 type Door = Awaited<ReturnType<typeof frontDoor>>;
 
-/** The session id the starting page asks about. */
-const sessionIdOf = (page: string) => /\/\.wpl7\/state\?s=([\w%-]+)/.exec(page)![1]!;
+/** The tab id the starting page asks about. */
+const tabIdOf = (page: string) => /\/\.wpl7\/state\?t=([\w%-]+)/.exec(page)![1]!;
 
 /**
  * A database opened from a fresh link the way a browser does it: the link from another site
  * (so with no cookie), then the starting page's own questions with the browser's cookie, if it
  * has one. Returns the cookie the browser then holds, whether it was new, and where Adminer opens.
  */
-async function opened(app: App, headers: Record<string, string>, get: Door, slug = 'alpha', browserCookie?: string) {
-  const link = new URL((await app.inject({ method: 'POST', url: `/api/sites/${slug}/databases/wp_${slug}/adminer`, headers })).json().url as string);
+async function opened(app: App, headers: Record<string, string>, get: Door, slug = 'alpha', browserCookie?: string, db = `wp_${slug}`) {
+  const link = new URL((await app.inject({ method: 'POST', url: `/api/sites/${slug}/databases/${db}/adminer`, headers })).json().url as string);
   const open = await get(`${link.pathname}${link.search}`);
   expect(open.status).toBe(200);
   expect(open.headers['set-cookie']).toBeUndefined();
-  const id = sessionIdOf(open.body);
+  const id = tabIdOf(open.body);
   let cookie = browserCookie;
   let isNew = false;
   let state: { state: string; location?: string; message?: string } = { state: 'starting' };
   for (let i = 0; i < 100 && state.state === 'starting'; i++) {
-    const res = await get(`/.wpl7/state?s=${id}`, { ...(cookie ? { cookie } : {}), 'sec-fetch-site': 'same-origin' });
+    const res = await get(`/.wpl7/state?t=${id}`, { ...(cookie ? { cookie } : {}), 'sec-fetch-site': 'same-origin' });
     if (res.headers['set-cookie']) {
       cookie = String(res.headers['set-cookie']).split(';')[0]!;
       isNew = true;
@@ -188,17 +227,17 @@ describe('Open in Adminer', () => {
     expect(open.body).toContain('Starting Adminer');
     // The link works once.
     expect((await get(`${link.pathname}${link.search}`)).status).toBe(410);
-    // The page's first question claims the session, and gives the browser its key.
-    const id = sessionIdOf(open.body);
-    const first = await get(`/.wpl7/state?s=${id}`, { 'sec-fetch-site': 'same-origin' });
+    // The page's first question claims its tab a session, and gives the browser its key.
+    const id = tabIdOf(open.body);
+    const first = await get(`/.wpl7/state?t=${id}`, { 'sec-fetch-site': 'same-origin' });
     expect(String(first.headers['set-cookie'])).toMatch(/^__Host-wpl7_adminer=[\w-]{40,}; Path=\/; HttpOnly; SameSite=Strict; Secure$/);
     const cookie = String(first.headers['set-cookie']).split(';')[0]!;
-    // Claimed, the session answers only to that browser.
-    expect(JSON.parse((await get(`/.wpl7/state?s=${id}`, { 'sec-fetch-site': 'same-origin' })).body)).toEqual({ state: 'ended' });
+    // A tab that does not exist says so.
+    expect(JSON.parse((await get('/.wpl7/state?t=nothing-like-a-tab', { 'sec-fetch-site': 'same-origin' })).body)).toEqual({ state: 'ended' });
 
     let state: { state: string; location?: string; message?: string } = JSON.parse(first.body);
     for (let i = 0; i < 100 && state.state === 'starting'; i++) {
-      state = JSON.parse((await get(`/.wpl7/state?s=${id}`, { cookie, 'sec-fetch-site': 'same-origin' })).body);
+      state = JSON.parse((await get(`/.wpl7/state?t=${id}`, { cookie, 'sec-fetch-site': 'same-origin' })).body);
       if (state.state === 'starting') await new Promise((r) => setTimeout(r, 10));
     }
     expect(state, state.message).toMatchObject({ state: 'ready', location: '/?server=mariadb&username=wp_alpha&db=wp_alpha' });
@@ -241,47 +280,81 @@ describe('Open in Adminer', () => {
     expect(ended.body).toContain('session has ended');
   });
 
-  it('keeps a tab per site in one browser, and never joins a key the browser was not given by this sign-in', async () => {
+  it('keeps one Adminer sign-in per site for every tab, whatever key of the panel sign-in the browser keeps', async () => {
     const { app, world, headers } = await signedIn();
     addSite(world, 'alpha');
     addSite(world, 'beta');
-    const { seen } = fakeAdminer(world);
+    addSite(world, 'gamma');
+    const alphaSite = world.db.select().from(sites).where(eq(sites.slug, 'alpha')).get()!;
+    world.db.insert(siteDatabases).values({ siteId: alphaSite.id, name: 'alpha_crm', createdAt: Date.now() }).run();
+    world.dbAdmin.databases.add('alpha_crm');
+    const fake = fakeAdminer(world);
+    const signIns = (user: string) => fake.seen.filter((r) => r.method === 'POST' && new URLSearchParams(r.body).get('auth[username]') === user).length;
     const get = await frontDoor(world);
     const alpha = await opened(app, headers, get, 'alpha');
     expect(alpha.isNew).toBe(true);
-    // The second site opens in the same browser: its key serves both, and is not set again.
+    // Another site in the same browser: the key serves both, and is not set again.
     const beta = await opened(app, headers, get, 'beta', alpha.cookie);
     expect(beta.isNew).toBe(false);
-    expect(beta.cookie).toBe(alpha.cookie);
     const own = { cookie: alpha.cookie, 'sec-fetch-site': 'same-origin' };
-    // Each tab's requests go with its own sign-in.
     expect((await get(alpha.location, own)).body).toBe('<h2>wp_alpha</h2>');
-    expect(seen.at(-1)!.headers.cookie).toContain('adminer_sid=s-wp_alpha');
+    expect(fake.seen.at(-1)!.headers.cookie).toContain('adminer_sid=s-wp_alpha');
     expect((await get(beta.location, own)).body).toBe('<h2>wp_beta</h2>');
-    expect(seen.at(-1)!.headers.cookie).toContain('adminer_sid=s-wp_beta');
-    // A site the browser did not open is not reached by naming its user.
-    expect((await get('/?server=mariadb&username=wp_gamma&db=wp_gamma', own)).status).toBe(401);
+    expect(fake.seen.at(-1)!.headers.cookie).toContain('adminer_sid=s-wp_beta');
 
-    // Two tabs opened at once in a browser with no key yet: each gets one, and the tab whose key
-    // the browser did not keep moves to the one it did.
+    // The same site again, and another of its databases: the same Adminer sign-in, so a tab
+    // already open keeps its forms' tokens.
+    const again = await opened(app, headers, get, 'alpha', alpha.cookie);
+    const crm = await opened(app, headers, get, 'alpha', alpha.cookie, 'alpha_crm');
+    expect(again.isNew || crm.isNew).toBe(false);
+    expect(crm.location).toBe('/?server=mariadb&username=wp_alpha&db=alpha_crm');
+    expect(signIns('wp_alpha')).toBe(1);
+    await get(crm.location, own);
+    expect(fake.seen.at(-1)!.headers.cookie).toContain('adminer_sid=s-wp_alpha');
+    // A site this sign-in has not opened is not reached by naming its user.
+    expect((await get('/?server=mariadb&username=wp_gamma&db=wp_gamma', own)).status).toBe(401);
+    // One still signing in, reached from another tab: it waits for it too.
+    let started!: () => void;
+    fake.starting = new Promise((r) => (started = r));
+    const gammaLink = new URL((await app.inject({ method: 'POST', url: '/api/sites/gamma/databases/wp_gamma/adminer', headers })).json().url as string);
+    const gammaTab = tabIdOf((await get(`${gammaLink.pathname}${gammaLink.search}`)).body);
+    await get(`/.wpl7/state?t=${gammaTab}`, own);
+    const waiting = await get('/?server=mariadb&username=wp_gamma&db=wp_gamma', own);
+    expect(waiting.status).toBe(503);
+    expect(waiting.headers.refresh).toBe('2');
+    started();
+    fake.starting = null;
+
+    // Two tabs opened at once in a browser with no key yet: each is given a key, and whichever
+    // the browser keeps reaches both sites, even with both pages gone on to Adminer at once.
     const fresh = await signIn(app);
     const link = async (slug: string) =>
       new URL((await app.inject({ method: 'POST', url: `/api/sites/${slug}/databases/wp_${slug}/adminer`, headers: fresh })).json().url as string);
     const [one, two] = [await link('alpha'), await link('beta')];
-    const idOne = sessionIdOf((await get(`${one.pathname}${one.search}`)).body);
-    const idTwo = sessionIdOf((await get(`${two.pathname}${two.search}`)).body);
-    const keyOne = String((await get(`/.wpl7/state?s=${idOne}`, { 'sec-fetch-site': 'same-origin' })).headers['set-cookie']).split(';')[0]!;
-    const keyTwo = String((await get(`/.wpl7/state?s=${idTwo}`, { 'sec-fetch-site': 'same-origin' })).headers['set-cookie']).split(';')[0]!;
+    const tabOne = tabIdOf((await get(`${one.pathname}${one.search}`)).body);
+    const tabTwo = tabIdOf((await get(`${two.pathname}${two.search}`)).body);
+    const keyOne = String((await get(`/.wpl7/state?t=${tabOne}`, { 'sec-fetch-site': 'same-origin' })).headers['set-cookie']).split(';')[0]!;
+    const keyTwo = String((await get(`/.wpl7/state?t=${tabTwo}`, { 'sec-fetch-site': 'same-origin' })).headers['set-cookie']).split(';')[0]!;
     expect(keyTwo).not.toBe(keyOne);
-    const moved = await get(`/.wpl7/state?s=${idOne}`, { cookie: keyTwo, 'sec-fetch-site': 'same-origin' });
-    expect(JSON.parse(moved.body).state).not.toBe('ended');
-    expect(moved.headers['set-cookie']).toBeUndefined();
+    const ready = async (tab: string) => {
+      for (let i = 0; i < 200; i++) {
+        if (JSON.parse((await get(`/.wpl7/state?t=${tab}`, { cookie: keyTwo, 'sec-fetch-site': 'same-origin' })).body).state === 'ready') return;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      throw new Error(`tab ${tab} never became ready`);
+    };
+    await ready(tabOne);
+    await ready(tabTwo);
+    for (const key of [keyOne, keyTwo]) {
+      expect((await get('/?server=mariadb&username=wp_alpha&db=wp_alpha', { cookie: key, 'sec-fetch-site': 'same-origin' })).body).toBe('<h2>wp_alpha</h2>');
+      expect((await get('/?server=mariadb&username=wp_beta&db=wp_beta', { cookie: key, 'sec-fetch-site': 'same-origin' })).body).toBe('<h2>wp_beta</h2>');
+    }
 
-    // A key from another sign-in - left from before, or planted - is never joined: a new one is given.
+    // A key from another sign-in - left from before, or planted - is never taken over: a new one is given.
     const other = await opened(app, fresh, get, 'alpha', alpha.cookie);
     expect(other.isNew).toBe(true);
     expect(other.cookie).not.toBe(alpha.cookie);
-    // ...and the sessions under the first key are untouched.
+    // ...and the first sign-in's tabs are untouched.
     expect((await get(beta.location, own)).body).toBe('<h2>wp_beta</h2>');
   });
 
@@ -307,7 +380,9 @@ describe('Open in Adminer', () => {
     fake.starting = new Promise((r) => (started = r));
     const get = await frontDoor(world);
     const link = new URL((await app.inject({ method: 'POST', url: '/api/sites/alpha/databases/wp_alpha/adminer', headers })).json().url as string);
-    await get(`${link.pathname}${link.search}`);
+    // The starting page's first question starts Adminer.
+    const tab = tabIdOf((await get(`${link.pathname}${link.search}`)).body);
+    await get(`/.wpl7/state?t=${tab}`, { 'sec-fetch-site': 'same-origin' });
     await waitFor(() => fake.seen.some((r) => r.method === 'GET' && r.url === '/'));
     expect((await app.inject({ method: 'PUT', url: '/api/settings', headers, payload: { adminerEnabled: false } })).statusCode).toBe(200);
     started();
@@ -429,11 +504,13 @@ describe('Open in Adminer', () => {
     const { cookie, location } = await opened(app, headers, get);
     const post = (body: string) => get(location, { cookie, 'sec-fetch-site': 'same-origin', 'content-type': 'application/x-www-form-urlencoded' }, 'POST', body);
 
-    // The relay dies under the change (PHP and its statement go on): its connection is killed.
-    fake.change = (r, res) => {
-      world.dbBrowser.locks.set(adminerLockName(String(r.headers['x-wpl7-request'])), 42);
+    // The relay dies under the change (PHP and its statement go on): its connection is killed,
+    // and PHP's request ends with it.
+    fake.change = (r, res, ctx) => {
+      world.dbBrowser.locks.set(adminerLockName(ctx.tag), 42);
       // The relay's end, as when its `docker exec` stops: no answer comes.
       res.socket?.end();
+      void waitFor(() => !world.dbBrowser.locks.has(adminerLockName(ctx.tag))).then(ctx.done);
     };
     await post('query=DELETE+FROM+wp_options').catch(() => undefined);
     await waitFor(() => world.dbBrowser.killed.includes(42));
@@ -446,6 +523,78 @@ describe('Open in Adminer', () => {
     };
     expect((await post('query=SELECT+1')).status).toBe(200);
     await waitFor(() => world.dbBrowser.killed.includes(43));
+  });
+
+  it('gives a cut-off change up in Adminer when PHP has not started it, so it never runs', async () => {
+    const { app, world, headers } = await signedIn();
+    addSite(world, 'alpha');
+    const fake = fakeAdminer(world);
+    const get = await frontDoor(world);
+    const { cookie, location } = await opened(app, headers, get);
+    const site = world.db.select().from(sites).where(eq(sites.slug, 'alpha')).get()!;
+    const status = (id: number) => world.db.select().from(jobs).where(eq(jobs.id, id)).get()!.status;
+    // PHP has the change whole but no worker for it yet, and its relay goes meanwhile.
+    let dispatch!: () => void;
+    fake.queued = new Promise((r) => (dispatch = r));
+    fake.onQueued = (res) => res.socket?.end();
+    let ran = 0;
+    fake.change = (_r, res) => {
+      ran++;
+      res.end('<p>Query executed OK</p>');
+    };
+    const post = get(location, { cookie, 'sec-fetch-site': 'same-origin', 'content-type': 'application/x-www-form-urlencoded' }, 'POST', 'query=DROP+TABLE+wp_options');
+    post.catch(() => undefined);
+    await waitFor(() => fake.seen.some((r) => r.method === 'POST' && r.headers['x-wpl7-request']));
+    const tag = String(fake.seen.find((r) => r.headers['x-wpl7-request'])!.headers['x-wpl7-request']);
+    // Given up at the gate: the site is let go, and its jobs run.
+    await waitFor(() => fake.gate.get(tag) === 'canceled');
+    const job = world.worker.enqueue('demo', { steps: 1, stepMs: 0 }, site);
+    world.worker.start();
+    try {
+      await waitFor(() => status(job.id) === 'succeeded');
+    } finally {
+      await world.worker.stop();
+    }
+    // A worker comes free at last: the change finds itself given up, and runs nothing.
+    dispatch();
+    await waitFor(() => fake.seen.filter((r) => r.headers['x-wpl7-request'] === tag).length === 1);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(ran).toBe(0);
+  });
+
+  it('keeps the site for a cut-off change PHP has started until it is over, its statement killed', async () => {
+    const { app, world, headers } = await signedIn();
+    addSite(world, 'alpha');
+    const fake = fakeAdminer(world);
+    const get = await frontDoor(world);
+    const { cookie, location } = await opened(app, headers, get);
+    const site = world.db.select().from(sites).where(eq(sites.slug, 'alpha')).get()!;
+    const status = (id: number) => world.db.select().from(jobs).where(eq(jobs.id, id)).get()!.status;
+    // Started, then waiting for its PHP session while its relay goes; it connects later.
+    let connect!: () => void;
+    const connected = new Promise<void>((r) => (connect = r));
+    fake.change = (_r, res, ctx) => {
+      res.socket?.end();
+      void connected.then(async () => {
+        world.dbBrowser.locks.set(adminerLockName(ctx.tag), 44);
+        await waitFor(() => !world.dbBrowser.locks.has(adminerLockName(ctx.tag)));
+        ctx.done();
+      });
+    };
+    const post = get(location, { cookie, 'sec-fetch-site': 'same-origin', 'content-type': 'application/x-www-form-urlencoded' }, 'POST', 'query=DELETE+FROM+wp_options');
+    post.catch(() => undefined);
+    await waitFor(() => [...fake.gate.values()].includes('started'));
+    const job = world.worker.enqueue('demo', { steps: 1, stepMs: 0 }, site);
+    world.worker.start();
+    try {
+      await new Promise((r) => setTimeout(r, 300));
+      expect(status(job.id)).toBe('queued');
+      connect();
+      await waitFor(() => status(job.id) === 'succeeded');
+    } finally {
+      await world.worker.stop();
+    }
+    expect(world.dbBrowser.killed).toContain(44);
   });
 
   it('refuses a change while a job holds the site, and ends the session once the site has moved', async () => {

@@ -5,7 +5,7 @@ import { PassThrough, pipeline } from 'node:stream';
 import type { SiteHold } from '../jobs/worker.js';
 import { AdminerSessionEndedError, type AdminerService } from './index.js';
 import { adminerRequest, BodyTooLargeError } from './relay.js';
-import type { AdminerSession } from './sessions.js';
+import type { AdminerSession, AdminerTab } from './sessions.js';
 
 /**
  * A request body Adminer takes: its import, a gzipped dump counted compressed. Kept small - PHP
@@ -54,7 +54,7 @@ export function createFrontDoor(service: AdminerService, opts: { host: string; s
   const origin = `${opts.secure ? 'https' : 'http'}://${opts.host}`.toLowerCase();
   const inFlight = new Map<number, number>();
 
-  /** The browser's session for a request: the one for the database user its address names. */
+  /** The session a request goes with: its browser key's panel sign-in's, for the database user its address names. */
   const sessionOf = (req: IncomingMessage, url: URL): AdminerSession | null =>
     service.sessions.forRequest(readCookie(req, cookieName), url.searchParams.get('username'));
 
@@ -64,42 +64,48 @@ export function createFrontDoor(service: AdminerService, opts: { host: string; s
     if (!ticket) return page(res, 410, 'This link has been used', 'Each link opens Adminer once, within a minute. Open the database again from the panel.', opts.panelUrl);
     const off = service.unavailable();
     if (off) return page(res, 409, 'Adminer is off', off, opts.panelUrl);
-    let session: AdminerSession;
+    let tab: AdminerTab;
     try {
-      session = service.begin(ticket);
+      tab = service.begin(ticket);
     } catch (err) {
       return page(res, 404, 'Not there any more', err instanceof Error ? err.message : String(err), opts.panelUrl);
     }
     // A page, not a redirect, and no cookie yet: right after a navigation from another site the
     // browser leaves a Strict cookie out, so this request cannot tell which key the browser
-    // holds. The page's own first request claims the session (state()).
-    return startingPage(res, session.id);
+    // holds. The page's own first request does (state()).
+    return startingPage(res, tab.id);
   }
 
   /**
-   * How the tab's session is coming along. The first ask claims it for the browser's key - the
-   * one its cookie holds when that belongs to the same panel session, or a new one it is given:
-   * other tabs' sessions stay. A session already claimed answers only to its own browser's key,
-   * or moves to another key of the same panel session (two tabs opened at once).
+   * How the tab's session is coming along. The first ask claims it one (AdminerService.claim),
+   * with the key the browser's cookie holds, or gives the browser a key. Two tabs opened at once
+   * may each be given one: either stands for the same panel sign-in, so whichever the browser
+   * keeps serves both.
    */
   function state(req: IncomingMessage, res: ServerResponse, url: URL): void {
-    const s = service.sessions.get(url.searchParams.get('s') ?? '');
-    const cookie = readCookie(req, cookieName);
+    const tab = service.sessions.tab(url.searchParams.get('t') ?? '');
     const ended = () => send(res, 200, 'application/json', JSON.stringify({ state: 'ended' }));
-    if (!s) return ended();
-    if (s.browser === '' || (s.browser !== cookie && service.sessions.ownedBy(cookie, s.userId, s.panelSid))) {
-      const { browser, isNew } = service.sessions.claim(s, cookie);
-      if (isNew) res.setHeader('set-cookie', `${cookieName}=${browser}; Path=/; HttpOnly; SameSite=Strict${opts.secure ? '; Secure' : ''}`);
-    } else if (s.browser !== cookie) {
-      return ended();
+    if (!tab) return ended();
+    let s = tab.sessionId ? service.sessions.get(tab.sessionId) : null;
+    if (!tab.sessionId) {
+      try {
+        const claimed = service.claim(tab, readCookie(req, cookieName));
+        s = claimed.session;
+        if (claimed.isNew) res.setHeader('set-cookie', `${cookieName}=${claimed.key}; Path=/; HttpOnly; SameSite=Strict${opts.secure ? '; Secure' : ''}`);
+      } catch {
+        return ended();
+      }
     }
-    send(res, 200, 'application/json', JSON.stringify({ state: s.state, message: s.message, location: service.adminerPath(s) }));
+    if (!s) return ended();
+    send(res, 200, 'application/json', JSON.stringify({ state: s.state, message: s.message, location: service.adminerPath(s, tab.ticket.database) }));
   }
 
   async function proxy(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const s = sessionOf(req, url);
     if (!s) return page(res, 401, 'This Adminer session has ended', 'Open the database again from the panel.', opts.panelUrl);
-    if (s.state !== 'ready') return startingPage(res, s.id);
+    // Another tab's sign-in, not finished yet: this one waits for it too.
+    if (s.state === 'starting') return page(res, 503, 'Starting Adminer…', 'Signing in as the site’s database user.', undefined, { refresh: '2' });
+    if (s.state !== 'ready') return page(res, 502, 'Adminer could not start', s.message ?? 'Open the database again from the panel.', opts.panelUrl);
     const tooLarge = () =>
       page(res, 413, 'Too large', `Adminer takes at most ${ADMINER_MAX_BODY / 1024 / 1024} MB at once. Import bigger dumps on the site's Database tab.`);
     if (Number(req.headers['content-length'] ?? 0) > ADMINER_MAX_BODY) return tooLarge();
@@ -282,7 +288,7 @@ const STYLE =
   'h1{font-size:1.15rem;margin:0 0 .5rem}p{color:#525252}a{color:inherit}';
 
 /** One of the front door's own pages: a heading, a sentence, and the way back to the panel. */
-function page(res: ServerResponse, status: number, title: string, text: string, back?: string): void {
+function page(res: ServerResponse, status: number, title: string, text: string, back?: string, extra: Record<string, string> = {}): void {
   const link = back ? `<p><a href="${escapeHtml(back)}">Back to the panel</a></p>` : '';
   send(
     res,
@@ -290,16 +296,16 @@ function page(res: ServerResponse, status: number, title: string, text: string, 
     'text/html',
     `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)}</title>` +
       `<style>${STYLE}</style><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${link}</html>`,
-    { 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'" },
+    { 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'", ...extra },
   );
 }
 
-/** "Starting Adminer…": asks how its session is coming along, and moves on once it is ready. */
-function startingPage(res: ServerResponse, sessionId: string): void {
+/** "Starting Adminer…": asks how its tab's session is coming along, and moves on once it is ready. */
+function startingPage(res: ServerResponse, tabId: string): void {
   const nonce = randomBytes(16).toString('base64');
   const script =
     'const m=document.getElementById("m");' +
-    `async function tick(){try{const r=await fetch("/.wpl7/state?s=${encodeURIComponent(sessionId)}",{credentials:"same-origin",cache:"no-store"});const s=await r.json();` +
+    `async function tick(){try{const r=await fetch("/.wpl7/state?t=${encodeURIComponent(tabId)}",{credentials:"same-origin",cache:"no-store"});const s=await r.json();` +
     'if(s.state==="ready"){location.replace(s.location);return}' +
     'if(s.state==="failed"){m.textContent=s.message||"Adminer could not start.";return}' +
     'if(s.state==="ended"){m.textContent="This Adminer session has ended. Open the database again from the panel.";return}' +

@@ -92,14 +92,16 @@ export class AdminerContainers {
       image: c.image,
       cmd: ['php', '-S', '127.0.0.1:8080', '-t', '/srv/adminer/empty', '/srv/adminer/router.php'],
       user: '65534:65534',
-      env: { WPL7_LOGIN_KEY: this.loginKey(serverId), PHP_CLI_SERVER_WORKERS: '4' },
+      // Two more PHP workers than the front door sends requests at once: the panel's own
+      // questions (a sign-in, a change's gate) never wait behind four long requests.
+      env: { WPL7_LOGIN_KEY: this.loginKey(serverId), PHP_CLI_SERVER_WORKERS: '6' },
       labels: { 'wpl7.role': 'adminer' },
       binds: [],
       // Adminer's sessions and uploads: in memory, gone when it stops.
       tmpfs: { '/tmp': 'rw,noexec,nosuid,nodev,size=256m,mode=1777' },
       readOnlyRootfs: true,
       networks: [ADMINER_NETWORK],
-      // Four PHP workers; an import holds its upload more than once.
+      // Six PHP workers; an import holds its upload more than once.
       memoryBytes: 512 * 1024 * 1024,
       pidsLimit: 64,
     });

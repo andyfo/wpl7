@@ -131,12 +131,12 @@ CREATE TABLE wp_other.secret_table (s text);
     const url = new URL(link);
     const open = await get(`${url.pathname}${url.search}`, { 'sec-fetch-site': 'cross-site' });
     expect(open.status).toBe(200);
-    const id = /\/\.wpl7\/state\?s=([\w%-]+)/.exec(open.body)![1]!;
-    const claimed = await get(`/.wpl7/state?s=${id}`);
+    const id = /\/\.wpl7\/state\?t=([\w%-]+)/.exec(open.body)![1]!;
+    const claimed = await get(`/.wpl7/state?t=${id}`);
     cookie = String(claimed.headers['set-cookie']).split(';')[0]!;
     let state: { state: string; location?: string; message?: string } = JSON.parse(claimed.body);
     for (let i = 0; i < 240 && state.state === 'starting'; i++) {
-      state = JSON.parse((await get(`/.wpl7/state?s=${id}`, { cookie })).body);
+      state = JSON.parse((await get(`/.wpl7/state?t=${id}`, { cookie })).body);
       if (state.state === 'starting') await new Promise((r) => setTimeout(r, 250));
     }
     expect(state, state.message).toMatchObject({ state: 'ready' });
@@ -150,7 +150,7 @@ CREATE TABLE wp_other.secret_table (s text);
     expect(databases.body).toContain('wp_shop');
     expect(databases.body).not.toContain('wp_other');
     // Its own styles come from the same page.
-    expect((await get('/?file=default.css&version=6.1.2', { cookie })).status).toBe(200);
+    expect((await get(`/?file=default.css&version=${world.config.adminer.version.split('-')[0]}`, { cookie })).status).toBe(200);
 
     // The container: unprivileged, read-only, on its own network, no port published.
     const inspect = JSON.parse(docker('inspect', 'wpl7-adminer').stdout)[0];
@@ -242,6 +242,28 @@ CREATE TABLE wp_other.secret_table (s text);
     expect(processes.filter((p) => /^Z/.test(p.trim()))).toEqual([]);
     expect(processes.filter((p) => /timeout|relay\.php/.test(p) && !/ps -o/.test(p))).toEqual([]);
   }, 120_000);
+
+  it("gives up at Adminer's gate a change it has not started, and tells of one it has", async () => {
+    const key = service.containers.loginKey(1);
+    const ask = async (tag: string) => {
+      const res = await adminerRequest(realDocker, { method: 'POST', path: `/.wpl7/settle?tag=${tag}`, headers: { 'x-wpl7-login-key': key, 'content-length': '0' } });
+      return { status: res.statusCode, body: await readAll(res) };
+    };
+    // Only with the panel's key.
+    const noKey = await adminerRequest(realDocker, { method: 'POST', path: '/.wpl7/settle?tag=engineTagNoKeyxxxxxxx', headers: { 'content-length': '0' } });
+    await readAll(noKey);
+    expect(noKey.statusCode).toBe(403);
+    // Asked first, a change is given up, and refuses to run when PHP gets to it.
+    expect(JSON.parse((await ask('engineTagGivenUpxxxxx')).body)).toEqual({ state: 'canceled' });
+    const late = await adminerRequest(realDocker, { method: 'GET', path: '/', headers: { 'x-wpl7-request': 'engineTagGivenUpxxxxx' } });
+    expect(late.statusCode).toBe(409);
+    expect(await readAll(late)).toMatch(/given up/);
+    // Passed first, a change is started, then done once its request is over.
+    const passed = await adminerRequest(realDocker, { method: 'GET', path: '/', headers: { 'x-wpl7-request': 'engineTagPassedxxxxxx' } });
+    await readAll(passed);
+    expect(passed.statusCode).not.toBe(409);
+    expect(JSON.parse((await ask('engineTagPassedxxxxxx')).body)).toEqual({ state: 'done' });
+  });
 
   it('stops once nobody uses it', async () => {
     expect(await service.containers.stopIdle(0, () => true)).toBe(0);
