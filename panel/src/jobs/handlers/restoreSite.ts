@@ -136,7 +136,7 @@ export async function restoreSiteOnServer(
     await target.docker.removeContainer(site.containerName);
   });
   await target.docker.createSiteContainer(
-    buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, target.row), siteRuntimeFrom(s.settings), {
+    buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, target.row), siteRuntimeFrom(s.settings, site), {
       routing: opts.routing,
     }),
   );

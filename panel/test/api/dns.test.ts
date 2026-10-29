@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { jobs, servers, sites } from '../../src/db/schema.js';
-import { buildSiteContainerSpec, siteRuntimeFrom, siteTlsFor } from '../../src/services/siteSpec.js';
+import { buildSiteContainerSpec, NO_OWN_LIMITS, siteRuntimeFrom, siteTlsFor } from '../../src/services/siteSpec.js';
 import { tokenFilePath } from '../../src/services/traefikDns.js';
 import type { AccessLevel } from '../../shared/access.js';
 import type { DnsStatusDto } from '../../shared/types.js';
@@ -53,7 +53,7 @@ async function addDevSite(w: TestWorld, slug: string, wildcardProvider: string, 
     .get();
   const docker = serverId === 1 ? w.docker : w.remote(serverId).docker;
   await docker.createSiteContainer(
-    buildSiteContainerSpec(w.config, row, [host], { devDomain: w.config.devDomain, wildcardProvider }, siteRuntimeFrom(w.core.settings)),
+    buildSiteContainerSpec(w.config, row, [host], { devDomain: w.config.devDomain, wildcardProvider }, siteRuntimeFrom(w.core.settings, row)),
   );
   docker.containers.set(`wp-${slug}`, 'running');
 }
@@ -204,7 +204,7 @@ describe('Settings -> DNS: a server’s wildcard certificate', () => {
       { slug: 'gamma', phpVersion: '8.3', dbName: 'g', dbUser: 'g', dbPassword: 'x', containerName: 'wp-gamma', tablePrefix: 'wp_' },
       ['gamma.dev.example.test'],
       siteTlsFor(world.core.dns, row),
-      siteRuntimeFrom(world.core.settings),
+      siteRuntimeFrom(world.core.settings, NO_OWN_LIMITS),
     );
     expect(spec.labels['traefik.http.routers.wp-gamma.tls.certresolver']).toBe('letsencrypt-dns');
     expect(spec.labels['traefik.http.routers.wp-gamma.tls.domains[0].sans']).toBe('*.dev.example.test');

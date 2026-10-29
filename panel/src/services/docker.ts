@@ -242,6 +242,18 @@ export interface ContainerLimits {
   pidsLimit?: number;
 }
 
+/**
+ * A site container's CPU cap as its host can take it. Docker refuses a cap above the host's
+ * core count, for a new container and an existing one alike ("range of CPUs is from 0.01 to
+ * 4.00, as there are only 4 CPUs available"), and a site's cap - the default, or its own - is
+ * set without a particular server in mind. On a host with fewer cores, all of them is the same
+ * ceiling. `hostCpus` null (not known): the cap as it is.
+ */
+export function fitCpus<T extends { nanoCpus?: number }>(limits: T, hostCpus: number | null): T {
+  if (!limits.nanoCpus || !hostCpus || limits.nanoCpus <= hostCpus * 1e9) return limits;
+  return { ...limits, nanoCpus: hostCpus * 1e9 };
+}
+
 export interface ContainerConfig {
   /** `Config.Cmd`: what compose's `command:` became. */
   cmd: string[];
@@ -298,8 +310,11 @@ export interface DockerPort {
   /**
    * Change a container's ceilings in place, running or stopped, without restarting it. It
    * cannot lift a CPU cap (see limitsChange) - a container that has to lose one is rebuilt.
+   * A CPU cap above the host's cores is fitted to them (fitCpus), as createSiteContainer does.
    */
   updateContainerLimits(name: string, limits: ContainerLimits): Promise<void>;
+  /** The host's CPU cores, as the daemon counts them; null when it cannot say. */
+  hostCpus(): Promise<number | null>;
   /** Combined stdout+stderr of a container's log, already demultiplexed. */
   containerLogs(name: string, opts?: ContainerLogsOpts): Promise<string>;
   exec(name: string, cmd: string[], opts?: ExecOpts): Promise<RunResult>;
@@ -418,6 +433,8 @@ const EXIT_CONFIRM_MS = 15_000;
  * does, and Docker records the exit a moment later.
  */
 const EXIT_SETTLE_MS = 3_000;
+/** How long DockerService.hostCpus trusts the core count it was given. */
+const HOST_CPUS_TTL_MS = 10 * 60_000;
 /** 124 = `timeout` expired; 128+ = killed by a signal (137 when it had to SIGKILL). */
 const timedOutExit = (exitCode: number, elapsedMs: number, timeoutMs: number): boolean =>
   exitCode === 124 || (exitCode >= 128 && elapsedMs >= timeoutMs);
@@ -475,6 +492,7 @@ export class DockerService implements DockerPort {
 
   async createSiteContainer(spec: SiteContainerSpec): Promise<void> {
     const networks = spec.networks.length > 0 ? spec.networks : [this.proxyNetwork, this.dbNetwork];
+    const { nanoCpus } = fitCpus(spec, spec.nanoCpus ? await this.hostCpus() : null);
     const container = await this.docker.createContainer({
       name: spec.name,
       Image: spec.image,
@@ -486,7 +504,7 @@ export class DockerService implements DockerPort {
         ...siteMemory(spec.memoryBytes ?? 512 * 1024 * 1024),
         // A miner in one site otherwise takes every core on the box, which is felt by every
         // other site on it. PidsLimit is the fork-bomb equivalent.
-        ...(spec.nanoCpus ? { NanoCpus: spec.nanoCpus } : {}),
+        ...(nanoCpus ? { NanoCpus: nanoCpus } : {}),
         ...(spec.pidsLimit ? { PidsLimit: spec.pidsLimit } : {}),
         CapDrop: SITE_CAP_DROP,
         SecurityOpt: SITE_SECURITY_OPT,
@@ -595,13 +613,31 @@ export class DockerService implements DockerPort {
   }
 
   async updateContainerLimits(name: string, limits: ContainerLimits): Promise<void> {
+    const { nanoCpus } = fitCpus(limits, limits.nanoCpus ? await this.hostCpus() : null);
     await this.docker.getContainer(name).update({
       ...siteMemory(limits.memoryBytes),
       // To this endpoint a CPU limit of 0 means "leave it as it is", so it is only sent to set one.
-      ...(limits.nanoCpus ? { NanoCpus: limits.nanoCpus } : {}),
+      ...(nanoCpus ? { NanoCpus: nanoCpus } : {}),
       // Whereas a pids limit of 0 does mean "none", which is how a process cap comes off.
       PidsLimit: limits.pidsLimit ?? 0,
     });
+  }
+
+  /** The host's cores, asked again every ten minutes: they only change with a resize and a reboot. */
+  private cpus: { count: number; at: number } | null = null;
+
+  async hostCpus(): Promise<number | null> {
+    if (this.cpus && Date.now() - this.cpus.at < HOST_CPUS_TTL_MS) return this.cpus.count;
+    try {
+      const { NCPU } = (await this.docker.info()) as { NCPU?: number };
+      if (!NCPU || NCPU < 1) return null;
+      this.cpus = { count: NCPU, at: Date.now() };
+      return NCPU;
+    } catch {
+      // Not knowing is no reason to refuse a container: the cap goes as it is, and Docker says
+      // so if the host has fewer cores.
+      return null;
+    }
   }
 
   /**

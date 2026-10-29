@@ -178,13 +178,14 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
       await server.docker.removeContainer(site.containerName);
       updateSiteRow(s.db, site.id, recreate);
       const { buildSiteContainerSpec, siteRuntimeFrom, siteTlsFor } = await import('../../services/siteSpec.js');
+      const restored = loadSite(s.db, site.id);
       await server.docker.createSiteContainer(
         buildSiteContainerSpec(
           s.config,
-          loadSite(s.db, site.id),
+          restored,
           siteDomains(site),
           siteTlsFor(s.dns, server.row),
-          siteRuntimeFrom(s.settings),
+          siteRuntimeFrom(s.settings, restored),
         ),
       );
     }

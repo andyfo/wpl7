@@ -1,8 +1,8 @@
 // @docs sites/create, sites/move, sites/overview, sites/settings
-import { and, asc, eq, isNotNull } from 'drizzle-orm';
-import type { BackupBeforeUpdates, JobType, SiteCreateBody } from '../../shared/schemas.js';
+import { and, asc, eq, inArray, isNotNull, or } from 'drizzle-orm';
+import type { BackupBeforeUpdates, JobType, SiteCreateBody, SiteLimitsBody } from '../../shared/schemas.js';
 import { isBackupBeforeUpdates } from '../../shared/updateBackups.js';
-import type { SiteDetail, SiteSummary, SiteWpSummary } from '../../shared/types.js';
+import type { SiteDetail, SiteLimits, SiteSummary, SiteWpSummary } from '../../shared/types.js';
 import { jobs as jobsTable, moveCleanups, plugins, sites, type JobRow, type ServerRow, type SiteRow } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { generatePassword, generateSecret } from '../lib/crypto.js';
@@ -12,6 +12,7 @@ import type { JobWorker } from '../jobs/worker.js';
 import { siteScheme } from './labels.js';
 import { assertDomainsFree } from './domainGuard.js';
 import { assertKind, hostedSites, isExternal, type SiteKinds } from '../lib/siteKind.js';
+import { defaultSiteLimits, limitsChange, siteRuntimeFrom, type OwnSiteLimits } from './siteSpec.js';
 
 /** The server a new site goes on: the one asked for, else the default in Settings - and it has to be up. */
 export function resolveTargetServer(s: Pick<CoreServices, 'settings' | 'servers'>, requestedId?: number): ServerRow {
@@ -244,14 +245,35 @@ export class SitesService {
   }
 
   /**
-   * Bring every existing site container to the CPU, memory and process ceilings in Settings:
-   * one server.applySiteLimits per server with sites on it. A server that already has one
-   * waiting to start is not given a second - that one reads the settings when it starts, so
-   * it is returned in its place.
+   * Bring the existing site containers to their CPU, memory and process ceilings: one
+   * server.applySiteLimits per server with sites on it - or, given a site, for its server. A
+   * move under way builds a site's container on its other server from the limits it read when
+   * it started, so that server gets one too, last: the move holds its lane, so it runs once the
+   * move is over, with the site there. A server that already has one waiting to start is not
+   * given a second - that one reads the limits when it starts, so it is returned in its place.
    */
-  applyLimits(): JobRow[] {
-    const serverIds = this.db.selectDistinct({ serverId: sites.serverId }).from(sites).where(hostedSites()).all();
-    return serverIds.map(({ serverId }) => {
+  applyLimits(site?: Pick<SiteRow, 'id' | 'serverId'>): JobRow[] {
+    const hosting = site
+      ? [site.serverId]
+      : this.db
+          .selectDistinct({ serverId: sites.serverId })
+          .from(sites)
+          .where(hostedSites())
+          .all()
+          .map((row) => row.serverId);
+    const movingTo = this.db
+      .select({ serverId: jobsTable.auxServerId })
+      .from(jobsTable)
+      .where(
+        and(
+          eq(jobsTable.type, 'site.move'),
+          inArray(jobsTable.status, ['queued', 'running']),
+          site ? eq(jobsTable.siteId, site.id) : undefined,
+        ),
+      )
+      .all()
+      .flatMap((job) => (job.serverId === null ? [] : [job.serverId]));
+    return [...new Set([...hosting, ...movingTo])].map((serverId) => {
       const waiting = this.db
         .select()
         .from(jobsTable)
@@ -351,6 +373,45 @@ export class SitesService {
       .orderBy(asc(sites.slug))
       .all()
       .flatMap((site) => (isBackupBeforeUpdates(site.value) ? [{ slug: site.slug, value: site.value }] : []));
+  }
+
+  /**
+   * Set one site's own container limits: each left out stays as it is, null puts it back on
+   * Settings. Not a job itself: a container built from now on reads them, and the site's server
+   * gets the server.applySiteLimits that changes the container it has - unless what the
+   * container should have is the same as before, when `job` is null.
+   */
+  setLimits(slug: string, body: SiteLimitsBody): { site: SiteRow; job: JobRow | null } {
+    const site = this.bySlug(slug);
+    if (site.status === 'provisioning' || site.status === 'deleting') {
+      throw conflict(`Site is ${site.status}; wait for it to finish`);
+    }
+    const own: OwnSiteLimits = {
+      cpuLimit: body.cpuLimit === undefined ? site.cpuLimit : body.cpuLimit,
+      memoryLimitMb: body.memoryLimitMb === undefined ? site.memoryLimitMb : body.memoryLimitMb,
+      pidsLimit: body.pidsLimit === undefined ? site.pidsLimit : body.pidsLimit,
+    };
+    const row = this.db
+      .update(sites)
+      .set({ ...own, updatedAt: Date.now() })
+      .where(eq(sites.id, site.id))
+      .returning()
+      .get();
+    const unchanged = limitsChange(siteRuntimeFrom(this.s.settings, site), siteRuntimeFrom(this.s.settings, own)) === 'none';
+    if (unchanged) return { site: row, job: null };
+    // The last is the one that reaches the container: while the site moves, it is the pass on
+    // the server it is moving to.
+    return { site: row, job: this.applyLimits(site).at(-1) ?? null };
+  }
+
+  /** The sites with container limits of their own, by name: null where one follows Settings. */
+  ownSiteLimits(): ({ slug: string } & SiteLimits<number | null>)[] {
+    return this.db
+      .select({ slug: sites.slug, cpuLimit: sites.cpuLimit, memoryLimitMb: sites.memoryLimitMb, pidsLimit: sites.pidsLimit })
+      .from(sites)
+      .where(and(hostedSites(), or(isNotNull(sites.cpuLimit), isNotNull(sites.memoryLimitMb), isNotNull(sites.pidsLimit))))
+      .orderBy(asc(sites.slug))
+      .all();
   }
 
   /** The sites that keep their backups for a time of their own, by name. */
@@ -505,6 +566,10 @@ export class SitesService {
       importSource: this.s.imports.sourceForSite(site.id),
       external: null,
       activeJob: this.activeJob(site),
+      limits: {
+        own: { cpuLimit: site.cpuLimit, memoryLimitMb: site.memoryLimitMb, pidsLimit: site.pidsLimit },
+        defaults: defaultSiteLimits(this.s.settings),
+      },
     };
   }
 
@@ -533,6 +598,7 @@ export class SitesService {
       importSource: null,
       external: this.s.connections.externalDto(site, { wpVersion: this.s.wpInventory.coreVersionOf(site.id) }),
       activeJob: this.activeJob(site),
+      limits: null,
     };
   }
 }

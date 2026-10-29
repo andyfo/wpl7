@@ -14,6 +14,7 @@ import {
   phpUpdateBody,
   siteCreateBody,
   siteDeleteQuery,
+  siteLimitsBody,
   siteMoveBody,
   siteSlugParam,
 } from '../../shared/schemas.js';
@@ -166,6 +167,21 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
       return reply.send(await deps.sites.detail(req.params.slug));
     },
   );
+
+  /**
+   * The site container's own CPU, memory and process limits: each left out stays as it is, null
+   * puts it back on Settings. 202 with the server.applySiteLimits that brings the container to
+   * them; 200 with no job when what the container should have did not change.
+   */
+  r.put('/api/sites/:slug/limits', { schema: { params: slugParams, body: siteLimitsBody } }, async (req, reply) => {
+    const { job } = deps.sites.setLimits(req.params.slug, req.body);
+    const site = await deps.sites.detail(req.params.slug);
+    if (!job) return reply.send({ site, job: null });
+    return reply
+      .status(202)
+      .header('location', `/api/jobs/${job.id}`)
+      .send({ site, job: jobToDto(job, viewerOf(req)) });
+  });
 
   /** Take one site in or out of the offsite copies. Existing copies are left alone. */
   r.put(

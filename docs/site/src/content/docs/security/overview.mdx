@@ -54,8 +54,8 @@ A site container:
 - runs without `NET_RAW`, so it cannot forge packets or poison ARP caches on the networks it shares,
   and with `no-new-privileges`, so setuid programs are not an escalation path.
 - is capped at 2 CPU cores, 512 MB and 512 processes by default, under **Site container limits** in
-  <UiPath href="/docs/panel/settings/">Settings → Sites</UiPath>. A miner or a fork bomb slows only
-  its own site.
+  <UiPath href="/docs/panel/settings/">Settings → Sites</UiPath>, or at limits of its own. A miner or
+  a fork bomb slows only its own site.
 - has its own mail login, and the relay refuses any sender domain that belongs to another site. It
   cannot send DKIM-signed phishing as one of your other customers.
 - cannot turn the panel against its neighbors through its files. A link it plants resolves inside

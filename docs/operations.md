@@ -240,7 +240,8 @@ WordPress gets compromised; the question is what that costs everyone else. A sit
 - runs **without `NET_RAW`** (no packet forging or ARP poisoning on the bridges it shares) and with
   `no-new-privileges`, so Debian's setuid binaries are not an escalation path.
 - is **capped** at 2 CPU cores, 512 MB and 512 processes by default (Settings → Sites → Site
-  container limits), so a miner or a fork bomb is contained to its own site's performance.
+  container limits, or the site's own on its Settings tab), so a miner or a fork bomb is contained
+  to its own site's performance.
 - has its **own mail credential**, and the relay refuses any sender domain belonging to another
   site — so it cannot send DKIM-signed phishing as one of your other customers (docs/mail.md).
 - **cannot turn the panel against its neighbours through its files.** The Files tab and the panel's

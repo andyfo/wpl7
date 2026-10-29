@@ -51,6 +51,9 @@ export function seedSites(world: TestWorld): void {
         containerName: `wp-${site.slug}`,
         mailPassword: 'demo-relay-password',
         diskBytes: site.diskMb * MB,
+        cpuLimit: site.limits?.cpuLimit ?? null,
+        memoryLimitMb: site.limits?.memoryLimitMb ?? null,
+        pidsLimit: site.limits?.pidsLimit ?? null,
         createdAt: createdAt(site),
         updatedAt: createdAt(site),
       })

@@ -26,7 +26,7 @@ import type {
   ServiceState,
   SiteContainerSpec,
 } from '../src/services/docker.js';
-import { SPEC_LABEL, serviceSpecHash } from '../src/services/docker.js';
+import { SPEC_LABEL, fitCpus, serviceSpecHash } from '../src/services/docker.js';
 import { packetLimitFor, type DbAdminPort, type DbInventoryRow } from '../src/services/dbAdmin.js';
 import { FakeDbBrowser } from './dbBrowserFake.js';
 import { hostExec, type ExecPort, type ExecResult } from '../src/lib/exec.js';
@@ -302,9 +302,10 @@ export class FakeDocker implements DockerPort {
     this.bindsByContainer.set(spec.name, spec.binds);
     this.labelsByContainer.set(spec.name, spec.labels);
     this.imageByContainer.set(spec.name, (await this.imageId(spec.image)) ?? spec.image);
+    const { nanoCpus } = fitCpus(spec, this.cpus);
     this.limits.set(spec.name, {
       memoryBytes: spec.memoryBytes ?? 512 * 1024 * 1024,
-      ...(spec.nanoCpus ? { nanoCpus: spec.nanoCpus } : {}),
+      ...(nanoCpus ? { nanoCpus } : {}),
       ...(spec.pidsLimit ? { pidsLimit: spec.pidsLimit } : {}),
     });
     // 'created', not 'exited': a container that has never run is what Docker reports, and
@@ -363,14 +364,20 @@ export class FakeDocker implements DockerPort {
   }
   /** Each site container's ceilings: as created, then as changed in place. */
   limits = new Map<string, ContainerLimits>();
+  /** The host's CPU cores; null = not known, and a CPU cap goes as it is. */
+  cpus: number | null = null;
+  async hostCpus(): Promise<number | null> {
+    return this.cpus;
+  }
   async containerLimits(name: string): Promise<ContainerLimits | null> {
     return this.containers.has(name) ? (this.limits.get(name) ?? { memoryBytes: 0 }) : null;
   }
   async updateContainerLimits(name: string, limits: ContainerLimits): Promise<void> {
     this.record('updateContainerLimits', [name, limits]);
     if (!this.containers.has(name)) throw Object.assign(new Error(`No such container: ${name}`), { statusCode: 404 });
-    // What the real daemon does: an update without a CPU limit keeps the one there is.
-    const nanoCpus = limits.nanoCpus ?? this.limits.get(name)?.nanoCpus;
+    // What the real daemon does: an update without a CPU limit keeps the one there is. One above
+    // the host's cores is fitted to them, as DockerService does.
+    const nanoCpus = fitCpus(limits, this.cpus).nanoCpus ?? this.limits.get(name)?.nanoCpus;
     this.limits.set(name, {
       memoryBytes: limits.memoryBytes,
       ...(nanoCpus ? { nanoCpus } : {}),
