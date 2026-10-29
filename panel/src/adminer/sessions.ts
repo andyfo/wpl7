@@ -19,6 +19,8 @@ export interface AdminerSession extends AdminerTicket {
   /** While its server's Adminer starts and signs in; the tab waits for `ready`. */
   state: 'starting' | 'ready' | 'failed';
   message: string | null;
+  /** A check, under way, that Adminer still holds its sign-in (AdminerService.claim). */
+  checking: Promise<void> | null;
 }
 
 /** A tab that spent a ticket: its starting page asks after it until its session is ready. */
@@ -28,6 +30,8 @@ export interface AdminerTab {
   createdAt: number;
   /** The session it uses, once its page has asked (AdminerService.claim). */
   sessionId: string | null;
+  /** While its session, signed in for another tab, is checked: the page waits. */
+  waiting: boolean;
 }
 
 /** Whose browser a key in a cookie is: the panel sign-in it was given to. */
@@ -63,7 +67,7 @@ export class AdminerSessions {
   openTab(ticket: AdminerTicket): AdminerTab {
     const at = this.now();
     for (const [id, t] of this.tabs) if (at - t.createdAt > TAB_MS) this.tabs.delete(id);
-    const tab: AdminerTab = { id: randomBytes(32).toString('base64url'), ticket, createdAt: at, sessionId: null };
+    const tab: AdminerTab = { id: randomBytes(32).toString('base64url'), ticket, createdAt: at, sessionId: null, waiting: false };
     this.tabs.set(tab.id, tab);
     return tab;
   }
@@ -102,7 +106,7 @@ export class AdminerSessions {
     return null;
   }
 
-  create(fields: Omit<AdminerSession, 'id' | 'jar' | 'createdAt' | 'lastUsed' | 'state' | 'message'>): AdminerSession {
+  create(fields: Omit<AdminerSession, 'id' | 'jar' | 'createdAt' | 'lastUsed' | 'state' | 'message' | 'checking'>): AdminerSession {
     const at = this.now();
     const session: AdminerSession = {
       ...fields,
@@ -112,6 +116,7 @@ export class AdminerSessions {
       lastUsed: at,
       state: 'starting',
       message: null,
+      checking: null,
     };
     this.sessions.set(session.id, session);
     return session;

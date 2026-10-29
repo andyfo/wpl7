@@ -48,6 +48,8 @@ describe.skipIf(!ENABLED)('Adminer against MariaDB, through the front door', () 
   let location = '';
   /** What the front door held of the site, and let go of. */
   const holds = { taken: 0, released: 0 };
+  /** Who the links are for. */
+  let ticket = { userId: 0, panelSid: 'engine-sid', siteId: 0, database: 'wp_shop' };
 
   beforeAll(async () => {
     const taken = docker('ps', '-a', '--format', '{{.Names}}').stdout.split('\n');
@@ -107,7 +109,8 @@ CREATE TABLE wp_other.secret_table (s text);
     door = createFrontDoor(service, { host: 'db.test', secure: false, panelUrl: 'http://panel.test' });
     await new Promise<void>((r) => door.listen(0, '127.0.0.1', r));
     port = (door.address() as AddressInfo).port;
-    link = service.open({ userId: owner.id, panelSid: 'engine-sid', siteId: site.id, database: 'wp_shop' });
+    ticket = { userId: owner.id, panelSid: 'engine-sid', siteId: site.id, database: 'wp_shop' };
+    link = service.open(ticket);
   }, 600_000);
 
   afterAll(() => {
@@ -160,6 +163,39 @@ CREATE TABLE wp_other.secret_table (s text);
     expect(Object.keys(inspect.NetworkSettings.Networks)).toEqual(['wpl7_adminer']);
     expect(inspect.HostConfig.PortBindings ?? {}).toEqual({});
   }, 300_000);
+
+  it("signs the site in again on reopening once Adminer's own Logout has signed it out", async () => {
+    const token = /name=["']token["'] value=["']([^"']+)["']/.exec((await get(location, { cookie })).body)![1]!;
+    const out = await new Promise<number>((resolve, reject) => {
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: location,
+          method: 'POST',
+          headers: { host: 'db.test', cookie, 'sec-fetch-site': 'same-origin', origin: 'http://db.test', 'content-type': 'application/x-www-form-urlencoded' },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode!);
+        },
+      );
+      req.on('error', reject);
+      req.end(new URLSearchParams({ logout: 'Logout', token }).toString());
+    });
+    expect(out).toBe(302);
+    expect((await get(location, { cookie })).body).toContain('wpl7-signed-out');
+    // Opened again from the panel, in the same browser: signed in again.
+    const again = new URL(service.open(ticket));
+    const tab = /\/\.wpl7\/state\?t=([\w%-]+)/.exec((await get(`${again.pathname}${again.search}`, { 'sec-fetch-site': 'cross-site' })).body)![1]!;
+    let state: { state: string; message?: string } = { state: 'starting' };
+    for (let i = 0; i < 240 && state.state === 'starting'; i++) {
+      state = JSON.parse((await get(`/.wpl7/state?t=${tab}`, { cookie })).body);
+      if (state.state === 'starting') await new Promise((r) => setTimeout(r, 250));
+    }
+    expect(state, state.message).toMatchObject({ state: 'ready' });
+    expect((await get(location, { cookie })).body).toContain('wp_options');
+  }, 120_000);
 
   it('refuses a sign-in without the panel’s key, any page but Adminer, and forwarded prefixes', async () => {
     const form = new URLSearchParams({

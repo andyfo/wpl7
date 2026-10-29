@@ -37,10 +37,13 @@ class Wpl7Adminer extends \Adminer\Plugin
         return false;
     }
 
-    /** No sign-in form: a session that ended is opened again from the panel. */
+    /**
+     * No sign-in form: a session that ended - Adminer's Logout, a restart - is opened again from
+     * the panel, which looks for this page's id to know Adminer has signed it out.
+     */
     function loginForm()
     {
-        echo "<p>This Adminer session has ended. Open the database again from the panel.</p>\n";
+        echo "<p id='wpl7-signed-out'>This Adminer session has ended. Open the database again from the panel.</p>\n";
         return true;
     }
 

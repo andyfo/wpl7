@@ -97,6 +97,8 @@ export function createFrontDoor(service: AdminerService, opts: { host: string; s
       }
     }
     if (!s) return ended();
+    // Its session serves other tabs already, and is being checked for this one.
+    if (tab.waiting) return send(res, 200, 'application/json', JSON.stringify({ state: 'starting', message: 'Checking the sign-in…' }));
     send(res, 200, 'application/json', JSON.stringify({ state: s.state, message: s.message, location: service.adminerPath(s, tab.ticket.database) }));
   }
 

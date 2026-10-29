@@ -115,9 +115,46 @@ export class AdminerService {
     if (!session) {
       session = this.sessions.create({ ...tab.ticket, serverId: site.serverId, user: target.user });
       void this.prepare(session, target.password);
+    } else if (session.state === 'ready') {
+      // Signed in for another tab, but Adminer may have signed it out since - its own Logout
+      // button, a restart of its container. The tab waits while that is checked.
+      tab.waiting = true;
+      void this.recheck(session, target.password).finally(() => {
+        tab.waiting = false;
+      });
     }
     tab.sessionId = session.id;
     return { session, key, isNew };
+  }
+
+  /**
+   * Whether Adminer still holds the session's sign-in, signed in again when it does not. Asked by
+   * every reopen of a site, once at a time: tabs still signed in carry on as they were.
+   */
+  private recheck(s: AdminerSession, password: string): Promise<void> {
+    s.checking ??= (async () => {
+      if (await this.signedIn(s)) return;
+      s.state = 'starting';
+      s.message = 'Signing in again…';
+      await this.prepare(s, password);
+    })().finally(() => {
+      s.checking = null;
+    });
+    return s.checking;
+  }
+
+  /** Whether a page of Adminer's, asked with the session's cookies, is one for a signed-in user. */
+  private async signedIn(s: AdminerSession): Promise<boolean> {
+    try {
+      const { docker } = this.servers.handleFor(s.serverId);
+      const res = await adminerRequest(docker, { method: 'GET', path: this.adminerPath(s), headers: { cookie: s.jar.header() } });
+      s.jar.take(res.headers['set-cookie']);
+      const body = await readAll(res);
+      // wpl7.php's page for a signed-out session.
+      return res.statusCode === 200 && !body.includes('wpl7-signed-out');
+    } catch {
+      return false;
+    }
   }
 
   /**
