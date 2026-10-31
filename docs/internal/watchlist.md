@@ -25,13 +25,13 @@ for a reason; remove one once there is nothing left to watch.
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-10-02 05:12 UTC | Both overrides apply to 0.21.12; signatures named |
 | [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-29 09:51 UTC | 2.7.6 is the latest; patch still needed |
 | [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-10-29 09:51 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12; CVE-2026-115560 unfixed, mitigated by upload progress off |
-| [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
+| [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-10-31 14:54 UTC | nftables backend still experimental |
 | [Docker: the build cache and image names, as the nightly clean-up reads them](#docker-the-build-cache-and-image-names-as-the-nightly-clean-up-reads-them) | Medium | 2026-10-27 17:47 UTC | Docker 29.9.2: both prune parameters trim, `all` would remove shared layers first |
 | [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
 | [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-10-04 18:10 UTC | `latest` is v5.1.0; hostname logic as relied on |
-| [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-09-30 07:23 UTC | Both answer as expected |
-| [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-09-30 09:51 UTC | All six as listed |
-| [AI assistants' address lists](#ai-assistants-address-lists) | Medium | 2026-09-30 10:46 UTC | All 12 lists pass the checks |
+| [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-10-31 14:54 UTC | Both answer as expected |
+| [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-10-31 14:54 UTC | All six as listed |
+| [AI assistants' address lists](#ai-assistants-address-lists) | Medium | 2026-10-31 14:54 UTC | All 13 lists pass the checks; Google and Perplexity moved theirs |
 | [Traefik: the Cloudflare token from a file](#traefik-the-cloudflare-token-from-a-file) | Medium | 2026-10-07 11:05 UTC | lego v5.5.2 reads the file; Traefik keeps the client |
 | [Cloudflare: API tokens as the panel takes them](#cloudflare-api-tokens-as-the-panel-takes-them) | Medium | 2026-10-04 18:36 UTC | Formats and permissions as validated |
 | [Cloudflare's and Jetpack's address lists](#cloudflares-and-jetpacks-address-lists) | Low | 2026-09-30 07:23 UTC | All three answer |
@@ -197,9 +197,11 @@ for a reason; remove one once there is nothing left to watch.
 ## Docker: the firewall backend
 
 - **Priority:** Medium
-- **Last checked:** 2026-09-30 07:23 UTC. Docker Engine 29.8.1 (2026-09-15) is the latest. Its
+- **Last checked:** 2026-10-31 14:54 UTC. Docker Engine 29.9.2 (2026-10-20) is the latest. Its
   [nftables backend](https://docs.docker.com/engine/network/firewall-nftables/) is still marked
-  experimental, so the default is iptables (iptables-nft on Ubuntu).
+  experimental, so the default is iptables (iptables-nft on Ubuntu). The releases since 29.8.1
+  change neither the default nor where ports are forwarded: their firewall notes are about
+  firewalld zones and a leftover `DOCKER-INGRESS` chain.
 - **The problem:** blocked addresses are dropped by a table of our own, `inet wpl7`, hooked at
   `prerouting` priority -310, before Docker forwards the published ports (docs/security.md).
   This was tested on 2026-09-29 only with the iptables backend. That run used an Ubuntu 26.04
@@ -304,11 +306,12 @@ for a reason; remove one once there is nothing left to watch.
 ## wordpress.org's checksum lists
 
 - **Priority:** Medium
-- **Last checked:** 2026-09-30 07:23 UTC. Both answered 200 in the shape the panel reads:
-  - `https://api.wordpress.org/core/checksums/1.0/?version=7.1.2&locale=en_US` gives an md5 per
+- **Last checked:** 2026-10-31 14:54 UTC. Both answered 200 in the shape the panel reads:
+  - `https://api.wordpress.org/core/checksums/1.0/?version=7.1.4&locale=en_US` gives an md5 per
     file.
   - `https://downloads.wordpress.org/plugin-checksums/akismet/5.7.2.json` gives an md5 and a
     sha256 per file.
+  No scan in the panel says they could not be fetched.
 - **The problem:** malware scans hold WordPress and directory plugins to these lists
   (`panel/src/services/integrityManifests.ts`), and neither is a documented, versioned API.
 - **Check:** fetch both. In the panel, look for scans that say "wordpress.org's checksums could
@@ -319,12 +322,14 @@ for a reason; remove one once there is nothing left to watch.
 ## Search engines' crawler host names
 
 - **Priority:** Medium
-- **Last checked:** 2026-09-30 09:51 UTC. Google's page lists `googlebot.com` for its common
-  crawlers and `google.com` for the special-case ones (AdsBot); `googleusercontent.com` is for
-  its user-triggered fetchers only. These resolved, and pointed back:
-  `crawl-66-249-66-1.googlebot.com`, `msnbot-157-55-39-1.search.msn.com` (from `bingbot.json`),
-  `baiduspider-220-181-108-100.crawl.baidu.com`, `petalbot-114-119-132-10.petalsearch.com` and
-  `5-255-231-1.spider.yandex.com`. Apple's page names `*.applebot.apple.com`.
+- **Last checked:** 2026-10-31 14:54 UTC. Google's page lists `crawl-….googlebot.com` and
+  `geo-crawl-….geo.googlebot.com` for its common crawlers, `rate-limited-proxy-….google.com` for
+  the special-case ones (AdsBot), and `….gae.googleusercontent.com` or `google-proxy-….google.com`
+  for its user-triggered fetchers. `googlebot.com` and `google.com` cover the first three. These
+  resolved, and pointed back: `crawl-66-249-66-1.googlebot.com`,
+  `msnbot-157-55-39-1.search.msn.com` (from `bingbot.json`),
+  `baiduspider-220-181-108-100.crawl.baidu.com`, `petalbot-114-119-132-10.petalsearch.com`,
+  `5-255-231-1.spider.yandex.com` and `17-241-219-1.applebot.apple.com`.
 - **The problem:** attack detection never blocks a crawler it verified: reverse DNS under the
   engine's domain, confirmed forward (`CRAWLERS` in `panel/src/lib/crawlerVerify.ts`). A domain
   anyone can get a name under is a way past detection. Every Google Cloud machine answers to
@@ -340,13 +345,21 @@ for a reason; remove one once there is nothing left to watch.
 ## AI assistants' address lists
 
 - **Priority:** Medium
-- **Last checked:** 2026-09-30 10:46 UTC. All 12 lists answered and passed the panel's checks
-  (1,014 ranges once merged), each named on its company's bot page: OpenAI's four (GPTBot,
+- **Last checked:** 2026-10-31 14:54 UTC. All 13 lists answered and passed the panel's checks
+  (1,097 ranges once merged), each named on its company's bot page: OpenAI's four (GPTBot,
   OAI-SearchBot, ChatGPT-User, OAI-AdsBot), Anthropic's one (ClaudeBot, Claude-User,
-  Claude-SearchBot), Google's user-triggered fetchers and agents (Gemini Notebook,
-  `Google-Agent`), Perplexity's two, Mistral's two and DuckDuckGo's DuckAssistBot. The widest
-  ranges are Google's `136.122.0.0/16` and ChatGPT-User's `9.129.0.0/17`, the latter in
-  Microsoft's address space.
+  Claude-SearchBot), Google's three user-triggered lists (Gemini Notebook, `Google-Agent`),
+  Perplexity's two, Mistral's two and DuckDuckGo's DuckAssistBot. Two lists had moved:
+  - Google's are now under `/static/crawling/ipranges/`. The old fetchers URL redirects, but the
+    old agents URL still answered with a copy from 2026-03-03: 4 ranges against 20, with a
+    `2001:4860:c::/48` that Google has since narrowed to /124s. `RANGE_SOURCES` now reads the new
+    paths, and `user-triggered-fetchers-google.json` (the Google-owned fetchers,
+    `google-proxy-….google.com`), which Google's page names with the other two.
+  - Perplexity's page names `www.perplexity.ai`; the `.com` URLs redirect there.
+  Mistral's page has a `MistralAI-Training` crawler with no published addresses, so there is no
+  list to add. The widest ranges are Google's `136.122.0.0/16` and ChatGPT-User's
+  `9.129.0.0/16`, the latter in Microsoft's address space. It was a /17 at the last check and is
+  now at `AI_WIDEST`: one more doubling and the refresh refuses OpenAI's lists.
 - **The problem:** attack detection and blocking by hand leave these addresses alone
   (`AI_SOURCES` in `panel/src/services/proxyRanges.ts`; the copies shipped are in
   `panel/src/services/aiRanges.ts`). The panel refreshes the lists weekly and keeps the last
