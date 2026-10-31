@@ -112,8 +112,9 @@ export const RANGE_SOURCES: Record<RangeSource, SourceSpec> = {
   googleAgents: {
     label: "Google's fetchers and agents (Gemini)",
     urls: [
-      'https://developers.google.com/static/search/apis/ipranges/user-triggered-fetchers.json',
-      'https://developers.google.com/static/search/apis/ipranges/user-triggered-agents.json',
+      'https://developers.google.com/static/crawling/ipranges/user-triggered-fetchers.json',
+      'https://developers.google.com/static/crawling/ipranges/user-triggered-fetchers-google.json',
+      'https://developers.google.com/static/crawling/ipranges/user-triggered-agents.json',
     ],
     format: 'prefixes',
     minRanges: 100,
@@ -123,7 +124,7 @@ export const RANGE_SOURCES: Record<RangeSource, SourceSpec> = {
   },
   perplexity: {
     label: "Perplexity's bots",
-    urls: ['https://www.perplexity.com/perplexitybot.json', 'https://www.perplexity.com/perplexity-user.json'],
+    urls: ['https://www.perplexity.ai/perplexitybot.json', 'https://www.perplexity.ai/perplexity-user.json'],
     format: 'prefixes',
     minRanges: 3,
     widest: AI_WIDEST,
