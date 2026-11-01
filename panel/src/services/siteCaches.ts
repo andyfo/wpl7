@@ -273,18 +273,18 @@ export async function applySiteCaches(
   const stale = nginx !== oldNginx || wpCache !== oldWpCache;
   if (stale) {
     await clearSiteCaches(server, site);
-    clearAgainSoon(server, s, site);
+    await clearAgainSoon(server, s, site);
   }
   return { reloaded, cleared: stale };
 }
 
-function clearAgainSoon(server: Pick<ServerHandle, 'docker'>, s: RuntimeServices, site: SiteRow): void {
+async function clearAgainSoon(server: Pick<ServerHandle, 'docker'>, s: RuntimeServices, site: SiteRow): Promise<void> {
   const again = () =>
     clearSiteCaches(server, site).catch((err: unknown) => {
       s.log.warn(`Page cache of "${site.slug}": a second clear failed: ${err instanceof Error ? err.message : String(err)}`);
     });
-  // A timer in a test outlives the world it was made for.
-  if (s.config.nodeEnv === 'test') void again();
+  // A timer in a test outlives the world it was made for, and could land on what comes next.
+  if (s.config.nodeEnv === 'test') await again();
   else setTimeout(again, OLD_RULES_LINGER_MS).unref();
 }
 

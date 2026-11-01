@@ -1936,8 +1936,9 @@ if (strpos($_SERVER['REQUEST_URI'] ?? '', '/t/login-late/') === 0) add_action('t
 
     it('a 90-second request, on both paths', async () => {
       const [cachedPath, directPath] = await Promise.all([
-        ask('/t/sleep/90/cached/', { maxTime: 110 }),
-        ask('/t/sleep/90/direct/', { maxTime: 110, cookie: 'wordpress_no_cache=1' }),
+        // Room to spare: the requests of the tests before may still hold workers for a while.
+        ask('/t/sleep/90/cached/', { maxTime: 170 }),
+        ask('/t/sleep/90/direct/', { maxTime: 170, cookie: 'wordpress_no_cache=1' }),
       ]);
       expect([cachedPath.status, cachedPath.cache]).toEqual([200, 'MISS']);
       expect([directPath.status, directPath.cache]).toEqual([200, 'BYPASS']);
@@ -2469,9 +2470,9 @@ if (strpos($_SERVER['REQUEST_URI'] ?? '', '/t/login-late/') === 0) add_action('t
     it('10 workers at 512 MB and 2 CPUs: requests that only wait don’t queue behind each other', async () => {
       await Promise.all(Array.from({ length: 10 }, (_, n) => ask(`/t/page/warming-${n}/`)));
       const started = Date.now();
-      await Promise.all(Array.from({ length: 10 }, (_, n) => ask(`/t/sleep/3/ten-${n}/`)));
-      // Five workers would take at least 6 seconds.
-      expect(Date.now() - started).toBeLessThan(5_500);
+      await Promise.all(Array.from({ length: 10 }, (_, n) => ask(`/t/sleep/6/ten-${n}/`)));
+      // Five workers would take at least 12 seconds. A runner with two cores needs the room.
+      expect(Date.now() - started).toBeLessThan(11_000);
     });
 
     it('the pool size from the panel’s file is in force: 2 workers make 4 one-second requests take 2 seconds', async () => {

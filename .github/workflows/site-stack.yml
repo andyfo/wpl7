@@ -39,7 +39,15 @@ jobs:
           mkdir -p "$RUNNER_TEMP/old"
           git archive 028ea18 deploy/wordpress-image | tar -x -C "$RUNNER_TEMP/old"
           docker build --pull --build-arg PHP_TAG=php8.4 -t wpl7-wordpress:php8.4-stack1 "$RUNNER_TEMP/old/deploy/wordpress-image"
-      - run: npx vitest run test/engine/siteStack.test.ts test/engine/siteSwitch.test.ts test/engine/siteHardening.test.ts
+      # This one builds the image, the way the panel does, and leaves it for the other two.
+      - name: A real site on the image
+        run: npx vitest run test/engine/siteStack.test.ts
+        working-directory: panel
+        env:
+          WPL7_ENGINE_TESTS: '1'
+      # One file at a time: some of what these check takes real time, on a runner with two cores.
+      - name: Moving a site to it, and PHP in uploads
+        run: npx vitest run --no-file-parallelism test/engine/siteSwitch.test.ts test/engine/siteHardening.test.ts
         working-directory: panel
         env:
           WPL7_ENGINE_TESTS: '1'
