@@ -164,10 +164,22 @@ const OLD_RULES_LINGER_MS = 3000;
 
 type RuntimeServices = { config: Config; settings: CacheSettingsReader; log: { warn(message: string): void } };
 
+/**
+ * Docker Desktop's file sharing can show a file that was just replaced at its old size for a moment,
+ * and nginx then refuses it for being cut short. A server's bind mount has no such delay, so all this
+ * costs there is that a real refusal comes two seconds later.
+ */
+const RELOAD_TRIES = 3;
+
 async function reload(server: Pick<ServerHandle, 'docker'>, container: string, service: 'nginx' | 'php' | 'redis'): Promise<string | null> {
-  const res = await server.docker.exec(container, ['wpl7-reload', service], { timeoutMs: 45_000 });
-  if (res.exitCode === 0) return null;
-  return (`${res.stderr}\n${res.stdout}`.trim().split('\n').slice(-3).join(' ') || `exit code ${res.exitCode}`).slice(0, 300);
+  let said = '';
+  for (let attempt = 1; attempt <= RELOAD_TRIES; attempt++) {
+    const res = await server.docker.exec(container, ['wpl7-reload', service], { timeoutMs: 45_000 });
+    if (res.exitCode === 0) return null;
+    said = (`${res.stderr}\n${res.stdout}`.trim().split('\n').slice(-3).join(' ') || `exit code ${res.exitCode}`).slice(0, 300);
+    if (attempt < RELOAD_TRIES) await new Promise((r) => setTimeout(r, 1000));
+  }
+  return said;
 }
 
 async function restore(server: Pick<ServerHandle, 'files'>, file: string, previous: string | null): Promise<void> {

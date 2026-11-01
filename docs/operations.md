@@ -227,8 +227,9 @@ Container logs rotate automatically (json-file, 10 MB × 3, set in /etc/docker/d
 
 `MARIADB_POOL_SIZE=auto` is an eighth of the server's memory, 256 MB to 4 GB, worked out by the
 container's start command at every start, so it follows a resized VM. Any other value is used as it is.
-`setup.sh` turned the old default `256M` into `auto` once (`WPL7_BUFFER_POOL_MOVED` in `.env` says it has),
-and a 256M set after that stays. Changing it recreates `wpl7-mariadb`: a few seconds without the
+`setup.sh` adds the key to an existing `.env`, as `auto`, or as the size someone had set in the old
+`MARIADB_BUFFER_POOL`. That old key stays, for a rollback to the old compose file, which reads it.
+Changing the new one recreates `wpl7-mariadb`: a few seconds without the
 database for every site on that server.
 
 ## Panel state

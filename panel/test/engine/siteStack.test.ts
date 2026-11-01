@@ -501,7 +501,9 @@ const clearCache = () => shell(`find ${PAGE_CACHE_DIR_IN_CONTAINER} -type f -del
 
 /** Stored: the first request fills the cache, and the second gets the very same bytes. */
 async function expectStored(url: string, opts: AskOpts = {}): Promise<Answer> {
-  const first = await ask(url, opts);
+  // A clear can land on the first one: the watcher on the root .htaccess goes by its own clock.
+  let first = await ask(url, opts);
+  if (first.skipped === 'cleared while rendering') first = await ask(url, opts);
   const second = await ask(url, opts);
   expect([first.cache, second.cache], `${url} (${first.status}, skipped: ${first.skipped})`).toEqual(['MISS', 'HIT']);
   expect(second.body).toBe(first.body);
@@ -612,6 +614,20 @@ async function apply(choice: RuntimeChoice, ...services: StackService[]): Promis
   writeRuntime(choice);
   await seenByContainer();
   for (const service of services) await reload(service);
+}
+
+/**
+ * Redis on or off. Docker Desktop's file sharing can go on showing a removed file, or none yet, to a
+ * test of that one path after a listing has shown otherwise, so wpl7-reload is asked until it has
+ * happened. A server's bind mount has no such delay.
+ */
+async function redisTo(on: boolean): Promise<void> {
+  writeRuntime(on ? { redis: true } : {});
+  await seenByContainer();
+  await waitFor(`Redis to ${on ? 'start' : 'stop'}`, async () => {
+    await inSite(['wpl7-reload', 'redis']);
+    return (await inSite(['test', '-S', REDIS_SOCKET_IN_CONTAINER])).status === (on ? 0 : 1);
+  }, 15_000, 500);
 }
 
 /** What ensureSiteMountSources writes before a container is created, from the same renderers. */
@@ -2552,7 +2568,7 @@ if (strpos($_SERVER['REQUEST_URI'] ?? '', '/t/login-late/') === 0) add_action('t
     });
 
     it('Redis off leaves the site working, on the plugin’s own graceful path, and it comes back', async () => {
-      await apply({}, 'redis');
+      await redisTo(false);
       expect((await inSite(['test', '-e', REDIS_SOCKET_IN_CONTAINER])).status).not.toBe(0);
       await clearCache();
       const page = await expectStored('/');
@@ -2564,16 +2580,16 @@ if (strpos($_SERVER['REQUEST_URI'] ?? '', '/t/login-late/') === 0) add_action('t
       expect(status.status).not.toBe(0);
       expect(status.stderr).toContain('Error establishing a Redis connection');
 
-      await apply({ redis: true }, 'redis');
+      await redisTo(true);
       expect(await wp('redis', 'status')).toMatch(/^Status:\s*Connected$/m);
     });
 
     it('wp redis disable works with Redis down, so switching it off can’t get stuck', async () => {
-      await apply({}, 'redis');
+      await redisTo(false);
       await wp('redis', 'disable');
       expect((await inSite(['test', '-e', '/var/www/html/wp-content/object-cache.php'])).status).not.toBe(0);
       expect((await ask('/t/page/redis-disabled/')).status).toBe(200);
-      await apply({ redis: true }, 'redis');
+      await redisTo(true);
       await wp('redis', 'enable');
       expect(await wp('redis', 'status')).toMatch(/^Status:\s*Connected$/m);
     });
@@ -3241,7 +3257,7 @@ echo json_encode([
       await expectBackOnOldImage(/^the check on the new setup failed: it answered HTTP 500$/, newId);
       const log = logOf(done.id).join('\n');
       expect(log).toContain(`.htaccess:`);
-      expect(log).toContain(`${BARE_LINE}: moved to .user.ini`);
+      expect(log).toContain('php_value max_input_vars: moved to .user.ini');
       expect(log).toMatch(/\.htaccess files put back: \d+ lines?\./);
       expect(log).toContain(`The temporary name ${ROLLBACK_TAG} is gone.`);
       expect(log).not.toContain('The site answers on the new setup');
@@ -3372,7 +3388,7 @@ echo json_encode([
         expect(done.status, `${done.error ?? ''}\n${logOf(job.id).join('\n')}`).toBe('succeeded');
         await routed();
 
-        expect(logOf(job.id).join('\n')).toContain(`${BARE_LINE}: moved to .user.ini`);
+        expect(logOf(job.id).join('\n')).toContain('php_value max_input_vars: moved to .user.ini');
         for (const [file, text] of moved) expect(await fileInMoved(file), file).toBe(text);
         expect((await viaEdge('/')).status).toBe(200);
         expect(await checked()).toMatchObject({ sapi: 'fpm-fcgi', maxInputVars: '4321', prepend: '/var/www/html/wordfence-waf.php', firewall: true, memory: '256M', basedir: '' });
@@ -3386,6 +3402,18 @@ echo json_encode([
 
       describe('its caches, through the panel', () => {
         const asRedis = ['redis-cli', '-s', REDIS_SOCKET_IN_CONTAINER];
+
+        // This store went Off at the switch, for its Geolocate setting. It goes back to that after,
+        // because what comes next expects it.
+        beforeAll(async () => {
+          await wpMoved('option', 'update', 'woocommerce_default_customer_address', 'base');
+          await w.deps.sites.setCache(SLUG_MOVED, { page: 'default' });
+        }, 120_000);
+
+        afterAll(async () => {
+          await wpMoved('option', 'update', 'woocommerce_default_customer_address', 'geolocation');
+          await w.deps.sites.setCache(SLUG_MOVED, { page: 'off' });
+        }, 120_000);
 
         it('says through Check a URL what the cache does with a page', async () => {
           const check = (url: string) => checkSiteUrl(handle(), w.config, fresh(), url);
@@ -3427,7 +3455,11 @@ echo json_encode([
           const off = await runJob(objectCache(false));
           expect(off.status, off.error ?? '').toBe('succeeded');
           expect(fresh().objectCache).toBe(0);
-          expect((await inMoved(['test', '-e', REDIS_SOCKET_IN_CONTAINER])).status).not.toBe(0);
+          // See redisTo: Docker Desktop's file sharing can keep showing the file for a moment.
+          await waitFor('Redis to stop', async () => {
+            await inMoved(['wpl7-reload', 'redis']);
+            return (await inMoved(['test', '-S', REDIS_SOCKET_IN_CONTAINER])).status !== 0;
+          }, 15_000, 500);
           expect((await viaEdge('/')).status).toBe(200);
         });
       });
@@ -3459,7 +3491,7 @@ echo json_encode([
         async function expectAtHome(log: string): Promise<void> {
           await routed();
           expect(await movedDocker.containerStack(MOVED)).toEqual({ imageId: newId, stack: 2 });
-          expect(log).toContain(`${BARE_LINE}: moved to .user.ini`);
+          expect(log).toContain('php_value max_input_vars: moved to .user.ini');
           for (const [file, text] of moved) expect(await fileInMoved(file), file).toBe(text);
           const home = await viaEdge('/');
           // The panel's word for this site, whatever the archive's nginx file said.

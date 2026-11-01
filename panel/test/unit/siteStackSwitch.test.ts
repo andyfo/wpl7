@@ -183,6 +183,18 @@ describe('the stack of a container follows its image', () => {
     expect(spec.labels[portLabel(site.slug)]).toBe('80');
   });
 
+  it('refuses to move a site using the object cache to a server still on the old image, and says why', async () => {
+    const w = await makeWorld();
+    const site = await createSite(w);
+    w.db.update(sites).set({ objectCache: 1 }).where(eq(sites.id, site.id)).run();
+    const target = w.addSshServer('target', { real: true, publicIp: '203.0.113.9' });
+    target.docker.stackOf(TAG, 1);
+    const done = await runJob(w, w.deps.sites.move(site.slug, { targetServerId: target.id }).id);
+    expect(done.status).toBe('failed');
+    expect(done.error).toMatch(/no object cache yet/);
+    expect(w.docker.containers.get(site.containerName)).toBe('running');
+  });
+
   it('moves a stack 1 site onto stack 2 by going to a server that has it', async () => {
     const w = await makeWorld({ exec: hostExec });
     w.docker.stackOf(TAG, 1);
@@ -194,6 +206,21 @@ describe('the stack of a container follows its image', () => {
     expect(spec.labels[SITE_STACK_LABEL]).toBe('2');
     expect(spec.labels[portLabel(site.slug)]).toBe('8080');
     expect(fs.existsSync(path.join(target.root!, 'sites', site.slug, 'config', 'runtime', 'nginx-site.conf'))).toBe(true);
+  });
+
+  it('keeps a site whose move failed on its old image through a restore that recreates its container', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await siteOnOldImage(w);
+    vi.spyOn(w.docker, 'startContainer').mockRejectedValueOnce(new Error('no'));
+    expect((await runJob(w, w.deps.sites.reconcile(site.slug).id)).status).toBe('failed');
+    const backup = await w.core.backup.create(rowOf(w, site), 'manual', {});
+    const manifestPath = path.join(backup.path, 'manifest.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(manifestPath, 'utf8')), tablePrefix: 'other_' }));
+    const job = w.worker.enqueue('backup.restore', { backupId: backup.id, skipPreRestoreBackup: true }, { id: site.id, slug: site.slug, serverId: 1 });
+    const done = await runJob(w, job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(specs(w).at(-1)).toMatchObject({ image: OLD_ID });
+    expect(specs(w).at(-1)!.labels).not.toHaveProperty(SITE_STACK_LABEL);
   });
 
   it('follows the image a restore recreates a container on', async () => {

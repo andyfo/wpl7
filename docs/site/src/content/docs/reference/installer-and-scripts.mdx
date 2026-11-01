@@ -115,8 +115,9 @@ What it does:
   memory and no swap.
 - Writes `deploy/.env` from `deploy/.env.example` on the first run, with generated database and
   session secrets.
-- Adds `MARIADB_POOL_SIZE` to an existing `deploy/.env`, as `auto`, or as the size someone had set in the old `MARIADB_BUFFER_POOL`. The old key stays, for a rollback.
-  Any other value stays, and so does a 256M set after that.
+- Adds `MARIADB_POOL_SIZE` to an existing `deploy/.env`: `auto`, or the size someone had set in the
+  old `MARIADB_BUFFER_POOL`, unless that was the old default of `256M`. The old key stays, because a
+  rollback to the old compose file reads it.
 - Creates the `wpl7-panel` user on a worker, or when `--panel-key` is given.
 - Pulls the site images for the PHP versions in `WP_PHP_VERSIONS`.
 - Calls `migrate-rename.sh` when it finds the old `ceo-server` stack.
