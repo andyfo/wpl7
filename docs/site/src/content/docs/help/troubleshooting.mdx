@@ -13,6 +13,10 @@ sources:
   - panel/src/services/accountRecovery.ts
   - panel/src/services/twoFactor.ts
   - panel/src/db/seed.ts
+  - panel/src/services/siteCaches.ts
+  - panel/src/services/siteMigration.ts
+  - deploy/wordpress-image/apache-site.conf
+  - deploy/wordpress-image/nginx.conf
   - panel/src/services/ftp.ts
   - panel/src/services/security.ts
   - panel/src/services/firewallSync.ts
@@ -129,6 +133,76 @@ server went down during the switch, the banner on the site's **Overview** offers
 `docker logs wp-<slug>` shows the PHP error, usually a plugin that does not support the new
 version. See [Site settings](/docs/sites/settings/).
 
+### A page answers 502 from nginx
+
+nginx's error page has `nginx` at the bottom. A plain `Bad Gateway` comes from Traefik instead, and
+`docker logs wpl7-traefik` is the place to look. nginx writes why to the site's log:
+
+```bash
+docker logs --tail 50 wp-<slug>
+```
+
+| The log says | Cause and fix |
+|---|---|
+| `upstream sent too big header` | A page's response headers pass 32 KB in total, usually long `Link`, CSP or `Set-Cookie` headers. Find the plugin that sends them. |
+| `connect() failed` | Apache is not answering. A line above says which service `exited by itself`. The container restarts by itself, so look for what keeps stopping it. |
+
+### A folder answers 500 after the move to PHP-FPM
+
+Read the site's log, as above.
+
+| The log says | Cause and fix |
+|---|---|
+| `Invalid command 'php_value'`, or `'php_flag'` | A `.htaccess` has a PHP setting, such as one a plugin wrote after the move. Put it in `.user.ini` in the same folder: `php_value memory_limit 256M` becomes `memory_limit = 256M`. |
+| `PHP Fatal error: Failed opening required` | A `.user.ini` loads a file that is not there, with `auto_prepend_file`. Comment that line out with `;`. |
+
+PHP reads a `.user.ini` again within 5 minutes. `php_flag engine off` has no setting to move to, so
+deny PHP files in that folder instead. One response header of 8 KB or more also gives a 500, and a
+plugin sending one has to send less. See
+[Change a PHP setting](/docs/sites/settings/#change-a-php-setting).
+
+### A file answers 403, or sends its source, after the move
+
+PHP runs only in files named `.php`. A `.htaccess` line that hands another file to PHP, with
+`AddHandler`, `AddType`, `SetHandler` or `ForceType`, no longer does. The file answers 403. With a
+handler Apache does not have, such as cPanel's `ea-php`, it is sent as it is, source included. The
+move's job log names each line. Rename the file to `.php`, and remove the line.
+
+### A site says it still runs the old PHP setup
+
+The site could not move to PHP-FPM, and the banner on its **Overview** says why. Its job log has the
+rest. Fix the cause, then choose **Retry**. See
+[Updating WPL7](/docs/panel/updating/#if-a-site-cannot-move).
+
+### A page is not cached, or should not be
+
+**Check a URL** in the site's **Caching** card says what happened, and why. To ask as a visitor would:
+
+```bash
+curl -sI https://northwindbakery.example/ | grep -i x-cache
+```
+
+`X-Cache-Status: HIT` is a stored page. `BYPASS` went past the cache, and `MISS` came from PHP. With
+either, `X-Cache-Skipped` gives the reason. [Caching](/docs/sites/caching/#check-a-url) lists them.
+A browser signed in to WordPress always gets `BYPASS`, because of its cookie.
+
+### Visitors see an old page
+
+The panel cannot see edits in Adminer, FTP and SFTP changes to theme PHP files, or what runs in the
+terminal. Choose **Clear cache** on the site's **Overview** tab. A page expires by itself at its keep
+time, 10 hours at most.
+
+### Pages from PHP wait, while stored pages are fast
+
+All of the site's PHP workers are busy, and the rest wait their turn. Slow downloads through PHP and
+calls to slow services each hold a worker. More memory or CPU for the site gives it more workers,
+as [Site settings](/docs/sites/settings/#set-resource-limits) shows.
+
+### The site's log says `[crit] unlink()`
+
+nginx writes this when a page it wants to expire is already gone, because a clear removed it. It is
+harmless, and needs nothing.
+
 ### The container will not start: "not a directory"
 
 Docker made a directory where the container mounts a file, which can happen to a container
@@ -143,9 +217,10 @@ older panel read that as stopped on purpose. Choose **Start**.
 ### An upload is too large
 
 A site's PHP limits are in `/srv/sites/<slug>/config/uploads.ini`, 64 MB by default. Edit the
-file, then choose **Restart** on the site. Traefik ends a request that takes over 60 seconds to
-arrive, so the **Files** tab uploads in chunks. A file too large for WordPress's media uploader
-can go up there instead, up to 2 GiB.
+file, then choose **Restart** on the site. A 413 from nginx means the request passed its ceiling: 1 GB,
+or `post_max_size` in that file plus 16 MB when that is more. Traefik ends a request that takes over
+60 seconds to arrive, so the **Files** tab uploads in chunks. A file too large for WordPress's media
+uploader can go up there instead, up to 2 GiB.
 
 ### A site hosted elsewhere shows Plugin unreachable
 

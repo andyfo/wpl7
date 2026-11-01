@@ -27,6 +27,7 @@ One command turns a fresh Ubuntu server into a WPL7 host. The
 - At least 2 GB of memory, and more as you add sites.
 - A public IPv4 address with ports 80 and 443 open, also in the provider's firewall.
   Let's Encrypt checks domains over port 80.
+- UDP port 443 open in the provider's firewall, for HTTP/3. Without it, browsers stay on HTTP/2.
 - A domain whose DNS you can edit.
 - Outbound access to GitHub, `ghcr.io`, Docker Hub and the Ubuntu and Docker package
   repositories.
@@ -113,12 +114,12 @@ The full list is in [Installer and scripts](/docs/reference/installer-and-script
 |---|---|
 | Packages | Installs `ca-certificates`, `curl`, `gnupg`, `git`, `ufw`, `jq`, `openssl` and `nftables`. |
 | Docker | Installs Docker CE with its compose plugin from Docker's repository. Writes `/etc/docker/daemon.json` with log rotation and `live-restore`. |
-| Firewall | UFW denies incoming traffic except SSH, rate-limited, and ports 80 and 443. Existing rules stay. |
+| Firewall | UFW denies incoming traffic except SSH, rate-limited, ports 80 and 443, and UDP port 443. Existing rules stay. |
 | Blocked addresses | Installs the `wpl7-firewall` helper and its systemd unit, which load blocked addresses into the nftables table `inet wpl7`. |
 | Logs and caches | Limits the system journal to 500 MB. Has apt empty its package cache once a week. |
 | Swap | Adds a 2 GB `/swapfile` when memory is under 4 GB and no swap is active. |
 | Directories | Creates `/srv` with `sites`, `backups`, `mysql`, `traefik`, `panel`, `plugins`, `mail` and `wpl7-firewall`. |
-| Configuration | Writes `/opt/wpl7/deploy/.env`, mode `0600`, with generated database and session secrets. |
+| Configuration | Writes `/opt/wpl7/deploy/.env`, mode `0600`, with generated database and session secrets. `MARIADB_BUFFER_POOL=auto` gives MariaDB an eighth of the server's memory, from 256 MB to 4 GB. |
 | SSH | Creates the panel's SSH key and adds it to root's `authorized_keys`, for the web terminal and for updates. No user account is created. |
 | Containers | Starts Traefik, MariaDB, the mail relay, the DKIM signer and the panel. Pulls the site images for PHP 8.2 to 8.5. |
 
@@ -167,7 +168,8 @@ fresh Ubuntu 26.04 VPS itself. [Add a server](/docs/servers/add/) says what that
 - Only Ubuntu 26.04 on x86-64. On another processor, such as ARM, the installer stops. On another
   Ubuntu release, `setup.sh` warns and carries on.
 - The installer refuses a directory that already holds an install.
-- Docker publishes ports past UFW: 80 and 443, plus the FTP ports while a site has an FTP login.
+- Docker publishes ports past UFW: 80 and 443, UDP 443, plus the FTP ports while a site has an FTP
+  login.
 - The generated password is printed once. Editing `PANEL_ADMIN_PASSWORD` in `.env` later
   changes nothing.
 - An install from a checkout cannot use the update button in the panel.

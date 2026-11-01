@@ -1,4 +1,4 @@
-// @docs reference/limits
+// @docs help/troubleshooting, security/overview, sites/settings
 import type { SiteRow } from '../db/schema.js';
 import type { JobContext } from '../jobs/context.js';
 import type { ServerHandle } from '../servers/registry.js';

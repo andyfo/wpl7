@@ -22,13 +22,24 @@ for a reason; remove one once there is nothing left to watch.
 | [Reminders: Cloudflare token lifetime](#reminders-cloudflare-token-lifetime) | Medium | 2026-10-13 08:35 UTC | User and account verification endpoints expose status and optional expiry |
 | [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-10-29 09:51 UTC | Open upstream, fix #13958 awaiting review; worked around |
 | [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-10-29 09:51 UTC | 0.21.15 is the latest; same definitions as the pinned 0.21.12 |
-| [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-10-02 05:12 UTC | Both overrides apply to 0.21.12; signatures named |
+| [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-11-01 09:08 UTC | Both overrides still match in 0.21.15, the latest; `@preg_replace` is still 22c684e7; engine test not run at this check |
 | [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-29 09:51 UTC | 2.7.6 is the latest; patch still needed |
 | [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-10-29 09:51 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12; CVE-2026-115560 unfixed, mitigated by upload progress off |
+| [phpredis: the pinned 6.3.0](#phpredis-the-pinned-630) | Medium | 2026-11-01 09:08 UTC | 6.3.0 is the latest on PECL and GitHub |
+| [Redis in the site image](#redis-in-the-site-image) | Medium | 2026-11-01 09:08 UTC | Debian's 5:8.0.2-3+deb13u3; three open issues on trixie, none reachable here; `LICENSE.txt` still offers AGPLv3 |
+| [The Redis Object Cache plugin: its constants and `wp redis`](#the-redis-object-cache-plugin-its-constants-and-wp-redis) | Medium | 2026-11-01 09:08 UTC | 3.0.0 is the latest; all seven constants and `status`, `enable`, `disable` are in its code |
+| [The cache plugins' clear hooks](#the-cache-plugins-clear-hooks) | Medium | 2026-11-01 09:08 UTC | Every hook is in the latest releases: WP Rocket 3.24, W3 Total Cache 2.11.0, WP Super Cache 3.1.4, LiteSpeed Cache 7.9.2, Autoptimize 3.1.17, Elementor 4.3.5, WooCommerce 11.2.1 |
+| [The built-in cache rules' cookies and parameters](#the-built-in-cache-rules-cookies-and-parameters) | Medium | 2026-11-01 09:08 UTC | Every name is in the latest code or WP Rocket 3.24's lists; `wp_is_mobile()` tests the same words |
+| [Debian's nginx and Apache, as the page cache relies on them](#debians-nginx-and-apache-as-the-page-cache-relies-on-them) | Low | 2026-11-01 09:08 UTC | nginx 1.26.3-3+deb13u10 and Apache 2.4.69-1~deb13u1 on trixie-security, as tested; engine test not run at this check |
+| [PHP-FPM: `[PATH=]` and `[HOST=]` in a `.user.ini`](#php-fpm-path-and-host-in-a-userini) | Low | 2026-11-01 09:08 UTC | No upstream issue found; `php_ini_parser_cb` unchanged in its handling; not re-run at this check |
+| [PHP-FPM: the status line, and a header with no colon](#php-fpm-the-status-line-and-a-header-with-no-colon) | Low | 2026-11-01 09:08 UTC | `sapi_cgi_send_headers` on master still sends the stored status line first |
+| [Download Monitor and Complianz, as the page cache's design relies on them](#download-monitor-and-complianz-as-the-page-caches-design-relies-on-them) | Low | 2026-11-01 09:08 UTC | Download Monitor 5.3.6 and Complianz 7.5.6 as relied on; Cookiebot 4.7.5 reads its cookie in PHP |
+| [Cloudflare's request headers](#cloudflares-request-headers) | Low | 2026-11-01 09:08 UTC | Default and visitor location headers are on the list; `CF-Worker`, `CF-Connecting-O2O` and two managed transforms' are not |
 | [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
 | [Docker: the build cache and image names, as the nightly clean-up reads them](#docker-the-build-cache-and-image-names-as-the-nightly-clean-up-reads-them) | Medium | 2026-10-27 17:47 UTC | Docker 29.9.2: both prune parameters trim, `all` would remove shared layers first |
 | [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
 | [Docker: a signal counts as stopping a container by hand](#docker-a-signal-counts-as-stopping-a-container-by-hand) | Medium | 2026-11-01 06:30 UTC | Docker 28.1.1: after `docker kill --signal USR1`, a container with `unless-stopped` that exits stays down |
+| [Docker: removing an image only a stopped container uses](#docker-removing-an-image-only-a-stopped-container-uses) | Low | 2026-11-01 09:08 UTC | Engine 29.9.2 is the latest, and what `untagImage` was measured on |
 | [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-10-04 18:10 UTC | `latest` is v5.1.0; hostname logic as relied on |
 | [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-09-30 07:23 UTC | Both answer as expected |
 | [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-09-30 09:51 UTC | All six as listed |
@@ -39,12 +50,11 @@ for a reason; remove one once there is nothing left to watch.
 | [Ubuntu's `nftables.service`](#ubuntus-nftablesservice) | Low | 2026-09-29 | Disabled by default on 26.04 |
 | [The docs site's toolchain and its screenshot image](#the-docs-sites-toolchain-and-its-screenshot-image) | Low | 2026-10-07 07:33 UTC | Starlight 0.42.5, Astro 7.3.6, Playwright 1.63.0, oxipng 10.2.1 are the latest; the `braces` and `postcss-selector-parser` advisories have no fix the site can take |
 | [The demo world's WordPress and plugin versions](#the-demo-worlds-wordpress-and-plugin-versions) | Medium | 2026-10-06 06:19 UTC | WordPress 7.1.2 and the newest plugins of the demo's date; Contact Form 7 6.2 left out |
-| [The site image's Apache modules for the docs' cache times](#the-site-images-apache-modules-for-the-docs-cache-times) | Low | 2026-10-07 06:49 UTC | `expires` on, `headers` off; the docs use `expires` |
 | [concurrently's pinned shell-quote](#concurrentlys-pinned-shell-quote) | Low | 2026-10-07 07:33 UTC | concurrently 10.0.5 pins 1.9.0; overridden to `^1.11.0` |
 | [The DKIM signer's image: x86-64 only](#the-dkim-signers-image-x86-64-only) | Low | 2026-10-07 11:05 UTC | Every tag is amd64 only |
 | [setup-php: PHP 7.0 in CI](#setup-php-php-70-in-ci) | Low | 2026-10-07 15:07 UTC | `v2` is the newest major, 2.37.2 the latest release; 7.0 and 8.5 supported |
 | [The migration plugin's floor: WordPress 5.0 and PHP 7.0](#the-migration-plugins-floor-wordpress-50-and-php-70) | Medium | 2026-10-07 15:07 UTC | PHP 7.0 on 0.58% of sites, WordPress before 5.0 on 2.6%; CI installs 7.0 |
-| [The WordPress image's entrypoint, as an import relies on it](#the-wordpress-images-entrypoint-as-an-import-relies-on-it) | Medium | 2026-10-07 14:53 UTC | Seeds only an empty folder; writes wp-config.php only when absent |
+| [The WordPress image's entrypoint, as an import and `wpl7-start` rely on it](#the-wordpress-images-entrypoint-as-an-import-and-wpl7-start-rely-on-it) | Medium | 2026-11-01 09:08 UTC | Acts on a `php-fpm` first argument; seeds only an empty folder; writes wp-config.php only when absent |
 | [WPL7 Connect's floor: WordPress 5.2 and PHP 7.0](#wpl7-connects-floor-wordpress-52-and-php-70) | Medium | 2026-10-09 15:55 UTC | PHP 7.0 on 0.58% of sites, WordPress before 5.2 on 3.1%; the Docker test passes on 5.2 with PHP 7.1 |
 | [WordPress's upgrader, as WPL7 Connect drives it](#wordpresss-upgrader-as-wpl7-connect-drives-it) | Medium | 2026-10-09 15:55 UTC | 7.1.3 is the latest; trunk's one change since is to skins, which WPL7 Connect leaves to WordPress |
 | [WordPress 7.2: sudo mode and Application Passwords](#wordpress-72-sudo-mode-and-application-passwords) | Medium | 2026-10-09 15:55 UTC | On the roadmap only; Beta 1 is due 2026-10-20 |
@@ -110,9 +120,11 @@ for a reason; remove one once there is nothing left to watch.
 ## AMWScan: WPL7's tuning of it
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-02 05:12 UTC. On the pinned 0.21.12 both exploit overrides apply
-  (AMWScan's patterns are exactly the ones replaced), `@preg_replace` is signature 22c684e7,
-  and every signature finding of the engine test is read back to its own id.
+- **Last checked:** 2026-11-01 09:08 UTC. v0.21.15 is still the latest release. In its `exploits.json`,
+  `str_replace_eval` and `execution2` are exactly the patterns the overrides replace, and
+  `@preg_replace` is still in its signatures, as 22c684e7. Its definitions are the same 2026.09.08.1
+  as the pinned 0.21.12. The engine test, which needs Docker, was not run at this check: on 2026-10-02
+  every signature finding on 0.21.12 was read back to its own id.
 - **The problem:** `panel/src/services/scanTuning.ts` works around AMWScan in four ways
   (docs/security.md, "What the scanner is not asked to say"): two exploit patterns that reach
   too far (`str_replace_eval`, `execution2`) are replaced through its local-rules folder; the
@@ -174,7 +186,7 @@ for a reason; remove one once there is nothing left to watch.
   until the next regular release, which will carry the fix and the full advisory. The site image
   already sets it off. The 2026-10-26 news, Windows builds with Brotli 1.2.1 for CVE-2026-111497,
   leaves the PHP versions unchanged.
-- **The problem:** a site's PHP is whatever its `wordpress:php<X.Y>-apache` base had when the site
+- **The problem:** a site's PHP is whatever its `wordpress:php<X.Y>-fpm` base had when the site
   image was built. A stale base, cached on a server or in CI, ships an old PHP without anyone
   noticing, and a running container keeps its image until it is rebuilt.
 - **What we do about it:** `deploy/wordpress-image/Dockerfile` refuses to build on a PHP below the
@@ -187,13 +199,225 @@ for a reason; remove one once there is nothing left to watch.
   since the last check. Then the versions the official images carry:
   `curl -s https://raw.githubusercontent.com/docker-library/php/master/versions.json`.
 - **When it changes:**
-  - **A security release:** once `wordpress:php<X.Y>-apache` carries it, raise that branch's floor
+  - **A security release:** once `wordpress:php<X.Y>-fpm` carries it, raise that branch's floor
     in the Dockerfile and cut a release. CI builds the site images on the new base, and updated
     installs rebuild their sites on them.
   - **A new PHP branch offered (`WP_PHP_VERSIONS`):** give it a floor too. A branch missing from the
     table is not checked.
   - **An advisory with a configuration mitigation:** weigh putting it in the site image, as the
     upload progress setting is.
+
+## phpredis: the pinned 6.3.0
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-01 09:08 UTC. PECL's `latest.txt` and `stable.txt` and GitHub's latest release all say
+  6.3.0, from 2025-11-06. It builds and loads on the PHP 8.2, 8.4 and 8.5 the site image was tested on.
+- **The problem:** `deploy/wordpress-image/Dockerfile` pins `pecl install redis-6.3.0`, the client the
+  object cache plugin talks to Redis with. A release can carry a fix the image needs, and a new PHP
+  branch needs a version that builds on it.
+- **Check:** `curl -s https://pecl.php.net/rest/r/redis/latest.txt`, and
+  `gh release list -R phpredis/phpredis --limit 3` for what changed.
+- **When it changes:** move the pin in the Dockerfile, and the version on
+  `docs/site/src/content/docs/reference/third-party.mdx`. Build the image for the oldest and newest PHP
+  on offer and run `WPL7_ENGINE_TESTS=1 npx vitest run test/engine/siteStack.test.ts`: `wp redis status`
+  has to say connected.
+
+## Redis in the site image
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-01 09:08 UTC. trixie-security has `redis` 5:8.0.2-3+deb13u3, which the image installs.
+  Debian's tracker has three issues open on trixie, no DSA for any. CVE-2026-92925 is in the cluster bus,
+  and cluster mode is off here. CVE-2026-82677 and CVE-2026-82631 are from valkey's reports, marked minor,
+  and Debian's notes say they need a loaded module, and none is loaded here. `LICENSE.txt` on `unstable`
+  still offers RSALv2, SSPLv1 or AGPLv3. Redis's own latest is 8.10.3, and forky has 8.0.6.
+- **The problem:** the image takes Debian's `redis-server`, with Debian's fixes, and Redis itself no longer
+  supports 8.0. That is acceptable because Redis has no port (`port 0`) and a socket only www-data can use,
+  so only the site's own PHP reaches it, and a hole in it gives nothing PHP doesn't already have. WPL7 runs
+  it unmodified under AGPLv3, one of the three licenses it offers, and says so on
+  `docs/site/src/content/docs/reference/third-party.mdx`.
+- **Check:** the trixie column of <https://security-tracker.debian.org/tracker/source-package/redis>,
+  `curl -s 'https://qa.debian.org/madison.php?package=redis&table=debian&s=trixie,trixie-security&text=on'`,
+  and `curl -s https://raw.githubusercontent.com/redis/redis/unstable/LICENSE.txt | head -4`.
+- **When it changes:**
+  - **An open issue a local socket can reach, with no Debian fix coming:** look at Redis's own apt repo
+    (`packages.redis.io`), at the cost of a third-party source and signing key in the image build.
+  - **Debian stops backporting, or the image moves to the next Debian release:** the same look, and rerun
+    the object cache's part of the engine test.
+  - **A release no longer offers AGPLv3:** stay on the last one that does, and tell the user. Valkey is the
+    alternative, and needs a look at the Redis Object Cache plugin too.
+
+## The Redis Object Cache plugin: its constants and `wp redis`
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-01 09:08 UTC. 3.0.0, from 2026-09-18, is the latest on wordpress.org. Its code reads all seven
+  constants, and `includes/cli/class-commands.php` has `status`, `enable` and `disable`. Its drop-in still
+  names itself "Redis Object Cache Drop-In".
+- **The problem:** the `site.objectCache` job (`panel/src/jobs/handlers/caches.ts`) installs whatever
+  wordpress.org has when someone switches the object cache on, then runs `wp redis enable` and looks for
+  `Status: Connected` in `wp redis status`. `REDIS_CONSTANTS` in `panel/src/services/wpCachePhp.ts` sets
+  `WP_REDIS_SCHEME`, `WP_REDIS_PATH`, `WP_REDIS_CLIENT`, `WP_REDIS_GRACEFUL`, `WP_REDIS_MAXTTL`,
+  `WP_REDIS_DISABLE_BANNERS` and `WP_REDIS_DISABLE_COMMENT`. If `WP_REDIS_DISABLE_COMMENT` stopped working,
+  its HTML comment would be frozen into stored pages. If `WP_REDIS_GRACEFUL` did, a Redis that is down would
+  take the site with it. `cacheDto` in `panel/src/services/sites.ts` tells its drop-in from another plugin's
+  by the title.
+- **Check:** `curl -s 'https://api.wordpress.org/plugins/info/1.2/?action=plugin_information&request%5Bslug%5D=redis-cache' | jq .version`.
+  For a new version, grep its zip for the seven names and read `includes/cli/class-commands.php`.
+- **When it changes:** adapt the constants and the job, and run
+  `WPL7_ENGINE_TESTS=1 npx vitest run test/engine/siteStack.test.ts`, which uses the real plugin. Run a
+  malware scan over its new drop-in once: 3.0.0 was clean on AMWScan 0.21.12.
+
+## The cache plugins' clear hooks
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-01 09:08 UTC. Each is fired in the latest release's own code:
+  - WP Rocket 3.24, `inc/functions/files.php`: `after_rocket_clean_domain`, `after_rocket_clean_cache_dir`,
+    `after_rocket_clean_minify`.
+  - W3 Total Cache 2.11.0, `CacheFlush_Locally.php`: `w3tc_flush_all`, `w3tc_flush_posts`,
+    `w3tc_flush_after_minify`.
+  - WP Super Cache 3.1.4, `wp-cache-phase2.php`: `wp_cache_cleared`.
+  - LiteSpeed Cache 7.9.2, `src/purge.cls.php`: `litespeed_purged_all`, `litespeed_purged_all_lscache`,
+    `litespeed_purged_all_cssjs`.
+  - Autoptimize 3.1.17, `classes/autoptimizeCache.php`: `autoptimize_action_cachepurged`, from shutdown at
+    priority 11.
+  - Elementor 4.3.5, `core/files/manager.php`: `elementor/core/files/clear_cache`.
+  - WooCommerce 11.2.1, `includes/wc-stock-functions.php` and
+    `includes/data-stores/class-wc-product-data-store-cpt.php`: `woocommerce_product_set_stock`,
+    `woocommerce_variation_set_stock`, `woocommerce_product_set_stock_status`,
+    `woocommerce_variation_set_stock_status`.
+- **The problem:** `wp-cache.php` (`WP_CACHE_CODE` in `panel/src/services/wpCachePhp.ts`) clears the page
+  cache when one of these fires. A stored page pointing at CSS a plugin just deleted is a broken page. A
+  renamed action breaks nothing that shows: pages only stay stale until their keep time. The engine test
+  fires them with `do_action`, and only WooCommerce runs for real.
+- **Check:** for each plugin, the latest version from
+  `https://api.wordpress.org/plugins/info/1.2/?action=plugin_information&request%5Bslug%5D=<slug>`, its zip
+  in an empty folder, and a grep for `do_action` with the name. For WP Rocket,
+  `gh release list -R wp-media/wp-rocket --limit 3`, then that tag's `inc/functions/files.php`.
+- **When it changes:** add the new action to `$changes` in `WP_CACHE_CODE` and keep the old one while
+  releases that fire it are in use. Update the versions in its comments and here.
+
+## The built-in cache rules' cookies and parameters
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-01 09:08 UTC. Read in the latest code:
+  - WooCommerce 11.2.1: `woocommerce_items_in_cart`, `woocommerce_cart_hash`, `wp_woocommerce_session_`,
+    the option `woocommerce_default_customer_address` with `geolocation` and `geolocation_ajax`, and the
+    `?v=` of `WC_Cache_Helper::geolocation_ajax_redirect`.
+  - Easy Digital Downloads 3.7.3: `edd_items_in_cart`.
+  - Polylang 3.9.1: `pll_language`.
+  - WooCommerce Multilingual 5.6.3: `wcml_client_currency`, `wcml_client_currency_language` and
+    `wcml_client_country`, as WP Rocket 3.24 lists them. They are cookies only when something picks its cookie
+    store through `wcml_user_store_strategy`, as WP Rocket does. By default it keeps them in WooCommerce's
+    session, whose cookie skips the cache.
+  - CURCY 2.2.20: `wmc_current_currency`, `wmc_current_currency_old`.
+  - WOOCS 1.5.6: `woocs_current_currency`.
+  - From WP Rocket 3.24's lists, because the plugins aren't on wordpress.org: Aelia's
+    `aelia_cs_selected_currency`, `aelia_customer_country`, `aelia_customer_state`, `aelia_tax_exempt`, the
+    Currency Converter Widget's `woocommerce_current_currency`, and WPML's `wp-wpml_current_language`.
+  - WordPress 7.1.4: `wp_is_mobile()` tests the hint, then `Mobile`, `Android`, `Silk/`, `Kindle`,
+    `BlackBerry`, `Opera Mini` and `Opera Mobi`, which the phones copy repeats.
+- **The problem:** `CACHE_RULE_GROUPS` and `HARMLESS_COOKIES` in `panel/shared/cacheRules.ts` are on for
+  every site. A visitor with a cookie nothing knows can't store a page, but can get one. So a cart cookie that
+  was renamed gives a visitor the page without their cart, and a renamed currency cookie shows them the
+  default currency. `plugins` marks a group **In use** by a plugin's folder name.
+- **Check:** for each plugin, its latest zip in an empty folder, and a grep for each name. For WP Rocket's
+  lists, `inc/3rd-party/plugins/ecommerce/` and `inc/functions/i18n.php` at its latest tag. For the phones,
+  `wp_is_mobile` in `wp-includes/vars.php`.
+- **When it changes:** add the new name to its group, with its id, and keep the old one while releases that
+  use it are around. `runtimeChangedSinceLastApply` brings a release's new rules to every site at the next
+  boot, and the page cache clears. Anything new gets the same check, in the plugin's own code.
+
+## Debian's nginx and Apache, as the page cache relies on them
+
+- **Priority:** Low
+- **Last checked:** 2026-11-01 09:08 UTC. trixie-security has nginx 1.26.3-3+deb13u10 and apache2 2.4.69-1~deb13u1, the
+  versions the engine test last passed on. The test needs Docker, and was not run at this check.
+- **The problem:** the page cache leans on behaviour no one promises to keep:
+  - nginx: `X-Accel-Expires` outranks `Cache-Control`, and with no `proxy_cache_valid` a response without it
+    is not stored. `proxy_ignore_headers Vary` stores regardless of `Vary`. Deleting a cache file counts as a
+    purge: a missing one is a miss, with a harmless `[crit] unlink()` in the log. The mark file
+    `generation.0000000000` lives through nginx's start-up scan because nginx names a page being written that
+    way, with ten digits after a dot.
+  - Apache: `CGIPassAuth` hands PHP the Authorization header, `SetEnv ap_trust_cgilike_cl 1` keeps PHP's
+    `Content-Length`, and `req_novary()` in `ProxyFCGISetEnvIf` adds no `Vary`, which would stop nginx storing
+    every page. The event MPM closes idle connections when its workers are busy, which is why nginx keeps none
+    open to it. The Dockerfile removes Debian's `mpm_event.conf` and `deflate.conf`.
+- **Check:** `curl -s 'https://qa.debian.org/madison.php?package=nginx&table=debian&s=trixie,trixie-security&text=on'`,
+  the same for `apache2`. For a new version, build the image and run
+  `WPL7_ENGINE_TESTS=1 npx vitest run test/engine/siteStack.test.ts`, which pins each of these.
+- **When it changes:** the test names what moved. Fix it in `deploy/wordpress-image/` or
+  `panel/src/services/siteStack.ts`. When the image moves to the next Debian release, read nginx's `CHANGES` and
+  Apache's `CHANGES_2.4` for these names, and run `panel/scripts/site-load-test.ts` against the old image.
+
+## PHP-FPM: `[PATH=]` and `[HOST=]` in a `.user.ini`
+
+- **Priority:** Low
+- **Last checked:** 2026-11-01 09:08 UTC. A search of php-src's issues finds nothing about it. On master,
+  `php_parse_user_ini_file` still hands a `.user.ini` to `php_ini_parser_cb`, which still makes a persistent
+  array for such a section. The crash was tried on PHP 8.4 when the move to PHP-FPM was built, and needs
+  Docker to try again, so it was not re-run at this check.
+- **The problem:** PHP-FPM's workers crash on such a section in a `.user.ini`, an empty one too: a 503 for
+  every script below it. mod_php never read the file, so one left by another host can hold one.
+- **What we do about it:** `clean_user_ini` in `panel/src/services/siteMigration.ts` comments out the section
+  and what is under it, at the move to PHP-FPM and whenever files arrive from elsewhere.
+- **Check:** `gh api -X GET search/issues -f q='repo:php/php-src ".user.ini" PATH section'`. Then in the site
+  image for the newest PHP, write `[PATH=/x]` to a `.user.ini` beside a PHP file, and ask for it through PHP-FPM.
+- **When it changes:** once every branch on offer survives such a section, change the reason `clean_user_ini`
+  gives. What is under one was meant for another path or host, so it still goes.
+
+## PHP-FPM: the status line, and a header with no colon
+
+- **Priority:** Low
+- **Last checked:** 2026-11-01 09:08 UTC. `sapi_cgi_send_headers` in `sapi/fpm/fpm/fpm_main.c` on master still sends
+  `SG(sapi_headers).http_status_line` when a status line is set, before it looks at the response code.
+- **The problem:** PHP-FPM sends the status line a page set first, and mod_php the code it set last. WordPress
+  calls `status_header(200)` on every page it finds, so `http_response_code(403)` from a theme or a plugin went
+  out as a 200. Apache also answers a 500 to a header line with no colon, which mod_php passed over.
+- **What we do about it:** `FIX_HEADERS` in `panel/src/services/wpCachePhp.ts` registers a
+  `header_register_callback` that corrects both on WordPress's pages. A plain script keeps them, and a plugin
+  registering its own callback replaces this one. `docs/site/src/content/docs/sites/settings.mdx` says so under
+  Limits.
+- **Check:** read `sapi_cgi_send_headers` on master, and PHP's `NEWS` since the last check for FPM and `Status`.
+- **When it changes:** when every branch on offer sends the last code, `FIX_HEADERS` can drop the status half
+  and the limit can go.
+
+## Download Monitor and Complianz, as the page cache's design relies on them
+
+- **Priority:** Low
+- **Last checked:** 2026-11-01 09:08 UTC. Download Monitor 5.3.6 answers from `parse_request` at priority 0
+  (`src/DownloadHandler.php`), reads `HTTP_REFERER` for its hotlink check, `HTTP_DLM_XHR_REQUEST` and
+  `HTTP_RANGE`. Complianz 7.5.6 reads consent cookies in PHP (`cmplz_has_consent` in `functions.php`), and its
+  `websitescan/class-wsc-scanner.php` stops when `SERVER_ADDR` is `127.0.0.1`. Cookiebot 4.7.5 reads
+  `CookieConsent` in `src/lib/Cookie_Consent.php`.
+- **The problem:** three choices rest on these. nginx holds the `Referer` back on the path that may store a page,
+  and `wp-cache.php` hands it to what runs before `template_redirect`, where Download Monitor's check is. A
+  `Range` skips the cache, because its addresses have no file extension. Consent cookies are not in
+  `HARMLESS_COOKIES`, because a page drawn for someone who agreed would reach someone who refused. Apache hands PHP
+  the address nginx was reached on, because of that `SERVER_ADDR` test.
+- **Check:** each plugin's latest zip in an empty folder, and a grep for those names.
+- **When it changes:**
+  - **Download Monitor reads the Referer later:** give it back later in `wpl7_cache_start`, or say on
+    `docs/site/src/content/docs/sites/caching.mdx` that its hotlink check needs a skip rule.
+  - **Complianz and Cookiebot stop drawing by consent in PHP:** the cookies could go back on the harmless list,
+    which would let more visitors store pages. That is an offer to the user, not a duty.
+
+## Cloudflare's request headers
+
+- **Priority:** Low
+- **Last checked:** 2026-11-01 09:08 UTC. Cloudflare's [header list](https://developers.cloudflare.com/fundamentals/reference/http-headers/)
+  and [managed transforms](https://developers.cloudflare.com/rules/transform/managed-transforms/reference/).
+  `CLOUDFLARE_HEADERS` has what it adds by default, and the visitor location transform's. Not on it:
+  `CF-Worker` on a Worker's subrequests, `CF-Connecting-O2O` for SSL for SaaS, the bot protection transform's
+  `cf-bot-score`, `cf-verified-bot`, `cf-ja3-hash` and `cf-ja4`, the TLS client transform's `cf-cert-*`, and
+  what the leaked credentials and malicious uploads transforms add.
+- **The problem:** PHP refuses to store a page for a request with a header it doesn't know
+  (`wpl7_cache_unknown_request_header` in `panel/src/services/wpCachePhp.ts`), and nginx blanks
+  `CLOUDFLARE_HEADERS` (`panel/src/services/siteStack.ts`) on the path that may store. So a site behind Cloudflare
+  with one of those on stores no page, and its pages say `X-Cache-Skipped: request header <name>`. It is slower,
+  and nothing is wrong to see.
+- **Check:** both pages above, against `CLOUDFLARE_HEADERS`.
+- **When it changes:** add the header to `CLOUDFLARE_HEADERS`, unless PHP should have it, as the country has
+  through `X-Wpl7-Country`. Those not on the list today are proposed: Workers and the transforms are a choice a
+  site makes, and none has been reported.
 
 ## Docker: the firewall backend
 
@@ -291,6 +515,24 @@ for a reason; remove one once there is nothing left to watch.
   lifts the cap. Then `updateContainerLimits` can send it, `limitsChange` loses `recreate`, and
   the "restarts each site once" sentences go from Settings, the site's Container limits card and
   `docs/site/src/content/docs/sites/settings.mdx`.
+
+## Docker: removing an image only a stopped container uses
+
+- **Priority:** Low
+- **Last checked:** 2026-11-01 09:08 UTC. Engine 29.9.2, from 2026-10-20, is still the latest. `untagImage`'s comment in
+  `panel/src/services/docker.ts` was measured on it with both image stores: with only a stopped or never started
+  container using the image, `docker rmi -f` of its last name deletes it on the classic overlay2 store, and
+  keeps it on the containerd store. Not measured again at this check, because it needs Docker.
+- **The problem:** a site moving to PHP-FPM keeps its old image under a temporary name, `wpl7-rollback:<slug>`,
+  to go back to. A stopped container can still start after such a delete, but no container can be made from that
+  image any more, and a site's way back is exactly that.
+- **What we do about it:** `untagImage` forces only when a running container uses the image. Otherwise the name
+  stays, which costs nothing while the image is in use, and the nightly clean-up tries again
+  (`dropRollbackNames` in `panel/src/services/dockerCleanup.ts`).
+- **Check:** the Engine's release notes since the last check for image removal. To measure: `docker create` from
+  an image with one tag, `docker rmi -f` that tag, then `docker create` from its id, on each store.
+- **When it changes:** if the classic store keeps it too, or every install has moved to the containerd store,
+  `untagImage` can force every time, and the stopped-container branch can go.
 
 ## boky/postfix: how the relay picks its hostname
 
@@ -520,23 +762,6 @@ for a reason; remove one once there is nothing left to watch.
   in `docs/site` and look at the shots. The `screenshots` job retakes the committed ones on the
   pull request.
 
-## The site image's Apache modules for the docs' cache times
-
-- **Priority:** Low
-- **Last checked:** 2026-10-07 06:49 UTC. The official image's Dockerfile, `latest/php8.3/apache` and
-  `latest/php8.5/apache`, runs `a2enmod rewrite expires` and `a2enmod remoteip`. It does not
-  enable `headers`, and `deploy/wordpress-image/Dockerfile` enables nothing more.
-- **The problem:** the docs' must-use plugin (`docs/site/hosting/wpl7-docs.php`) writes
-  `/docs/.htaccess`. Its cache times use `mod_headers` where a server has it, and `mod_expires`
-  where it does not, as on a WPL7 site. With neither, pages carry no cache time and browsers
-  guess one from a file's age. A page kept past an update then asks for styles and scripts the
-  update deleted.
-- **Check:** for each PHP version WPL7 builds,
-  `gh api repos/docker-library/wordpress/contents/latest/php8.3/apache/Dockerfile --jq .content | base64 -d | grep a2enmod`.
-- **When it changes:** `headers` turning up needs nothing: the plugin's `mod_headers` block takes
-  over. If `expires` goes, enable it in `deploy/wordpress-image/Dockerfile` with `a2enmod expires`,
-  then check that `/docs/` answers with `Cache-Control: max-age=300`.
-
 ## concurrently's pinned shell-quote
 
 - **Priority:** Low
@@ -614,26 +839,34 @@ for a reason; remove one once there is nothing left to watch.
   - **A new PHP release:** make it the matrix's upper end, and run the plugin on a real WordPress
     with that PHP and `WP_DEBUG_LOG` on (the official image has a `php8.x-apache` tag for each).
 
-## The WordPress image's entrypoint, as an import relies on it
+## The WordPress image's entrypoint, as an import and `wpl7-start` rely on it
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-07 14:53 UTC. `docker-entrypoint.sh` on docker-library/wordpress's
-  default branch copies WordPress into `/var/www/html` only when neither `index.php` nor
-  `wp-includes/version.php` is there, and writes `wp-config.php` from `wp-config-docker.php` only
-  when there is none (`! -s`), then chowns it to `www-data`. `wp-config-docker.php` reads the
-  table prefix from `WORDPRESS_TABLE_PREFIX` and ends with the `/* That's all, stop editing!` line.
-- **The problem:** an import (`panel/src/jobs/handlers/import.ts`) moves an old site's files into
-  the site folder without a `wp-config.php` and starts the container: the image must leave those
-  files alone and write a `wp-config.php` of its own, with the site's prefix, which the import then
-  adds the carried settings to with `wp config set` (placed above the "stop editing" line). The image
-  copies its own `.htaccess` only into an empty folder, which is why the finish job writes
-  WordPress's standard one when the old site had none.
+- **Last checked:** 2026-11-01 09:08 UTC. `docker-entrypoint.sh` on docker-library/wordpress's default branch acts
+  only when its first argument starts with `apache2` or is `php-fpm`. It then copies WordPress into
+  `/var/www/html` only when neither `index.php` nor `wp-includes/version.php` is there, and writes
+  `wp-config.php` from `wp-config-docker.php` only when there is none (`! -s`), then chowns it to
+  `www-data`. `wp-config-docker.php` reads the table prefix from `WORDPRESS_TABLE_PREFIX` and ends with
+  the `/* That's all, stop editing!` line.
+- **The problem:** the site image is the fpm variant, whose services `wpl7-start` starts itself. So it
+  runs the entrypoint once as `docker-entrypoint.sh php-fpm -t`: the first argument gets the seeding and
+  `wp-config.php` done, and `-t` only tests PHP-FPM's configuration and returns. An import
+  (`panel/src/jobs/handlers/import.ts`) moves an old site's files into the site folder without a
+  `wp-config.php` and starts the container: the image must leave those files alone and write a
+  `wp-config.php` of its own, with the site's prefix, which the import then adds the carried settings
+  to with `wp config set` (placed above the "stop editing" line). The image copies its own `.htaccess`
+  only into an empty folder, which is why the finish job writes WordPress's standard one when the old
+  site had none.
 - **Check:** `gh api repos/docker-library/wordpress/contents/docker-entrypoint.sh --jq .content | base64 -d`
-  around the `index.php` and `wp-config.php` tests, and
+  around the first `if`, and the `index.php` and `wp-config.php` tests, and
   `gh api repos/docker-library/wordpress/contents/wp-config-docker.php --jq .content | base64 -d | grep -n 'table_prefix\|stop editing'`.
-- **When it changes:** if the image starts seeding a folder that has WordPress in it, the import must
-  write its files after the first start instead of before. If it stops writing `wp-config.php`, the
-  finish job has to write one itself. Then run the import's Docker test (`panel/test/e2e/import/`).
+- **When it changes:**
+  - **It stops acting on `php-fpm`:** `wpl7-start` has to run it with whatever it takes instead. A new
+    site would otherwise get an empty folder. Run `WPL7_ENGINE_TESTS=1 npx vitest run test/engine/siteStack.test.ts`.
+  - **It starts seeding a folder that has WordPress in it:** the import must write its files after the
+    first start instead of before.
+  - **It stops writing `wp-config.php`:** the finish job has to write one itself. Then run the import's
+    Docker test (`panel/test/e2e/import/`).
 
 ## WPL7 Connect's floor: WordPress 5.2 and PHP 7.0
 

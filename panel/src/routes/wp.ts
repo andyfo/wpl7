@@ -295,6 +295,8 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
     async (req) => {
       const { site, server } = await requireRunningSite(req.params.slug);
       await server.wp.maintenance(site.containerName, req.body.enabled);
+      // The stored pages would otherwise go on being served as if nothing had happened.
+      await clearAfterChange(deps, site);
       return { enabled: req.body.enabled };
     },
   );

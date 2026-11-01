@@ -47,6 +47,7 @@ import { DockerService, type ConnectOpts, type NetworkSpec, type SiteContainerSp
 import { mailLogin, renderMsmtprc } from '../../src/services/mailAuth.js';
 import { renderApacheHardening, renderWpConfigHardening } from '../../src/services/siteHardening.js';
 import { sweepSiteImages } from '../../src/services/siteImages.js';
+import { checkSiteUrl, clearSiteCaches } from '../../src/services/siteCaches.js';
 import { undoSiteMigration } from '../../src/services/siteMigration.js';
 import { EGRESS_NETWORK as PANEL_EGRESS_NETWORK, siteNetworkName } from '../../src/services/siteNetwork.js';
 import { DEFAULT_UPLOADS_INI, buildSiteContainerSpec, siteContainerSpec, siteImage, sitePaths, siteRollbackImage, siteRuntimeFrom } from '../../src/services/siteSpec.js';
@@ -3383,6 +3384,54 @@ echo json_encode([
         expect(await movedDocker.containerStack(MOVED)).toEqual({ imageId: newId, stack: 2 });
       });
 
+      describe('its caches, through the panel', () => {
+        const asRedis = ['redis-cli', '-s', REDIS_SOCKET_IN_CONTAINER];
+
+        it('says through Check a URL what the cache does with a page', async () => {
+          const check = (url: string) => checkSiteUrl(handle(), w.config, fresh(), url);
+          expect(await check('/')).toEqual({ state: 'cached', reason: null, status: 200 });
+          expect(await check('/wp-admin/')).toMatchObject({ state: 'skipped', reason: 'path /wp-admin/*' });
+          expect(await check('/?anything=1')).toMatchObject({ state: 'skipped', reason: 'query string' });
+          expect(await check('/no-such-page/')).toMatchObject({ state: 'cached', status: 404 });
+        });
+
+        it('applies a rule in the running container, and clears', async () => {
+          const check = (url: string) => checkSiteUrl(handle(), w.config, fresh(), url);
+          await w.deps.sites.setCache(SLUG_MOVED, { own: [{ kind: 'skip', match: 'path', value: '/no-cache-here/*' }] });
+          expect(await check('/no-cache-here/page/')).toMatchObject({ state: 'skipped', reason: 'path /no-cache-here/*' });
+          await w.deps.sites.setCache(SLUG_MOVED, { page: 'off' });
+          expect(await check('/')).toMatchObject({ state: 'off' });
+          await w.deps.sites.setCache(SLUG_MOVED, { page: 'default', own: [] });
+          expect(await check('/')).toMatchObject({ state: 'cached' });
+        });
+
+        it('empties the page cache with the panel’s clear', async () => {
+          const cached = async () => (await inMoved(['find', PAGE_CACHE_DIR_IN_CONTAINER, '-type', 'f', '!', '-name', 'generation.*'], asSite)).stdout.toString('utf8').trim();
+          await checkSiteUrl(handle(), w.config, fresh(), '/');
+          expect(await cached()).not.toBe('');
+          expect(await clearSiteCaches(handle(), fresh())).toBe(true);
+          expect(await cached()).toBe('');
+        });
+
+        it('switches the object cache on with its job, and a clear flushes it, and off again', async () => {
+          const objectCache = (on: boolean) => w.worker.enqueue('site.objectCache', { siteId, on }, { id: siteId, slug: SLUG_MOVED, serverId: 1 }).id;
+          const on = await runJob(objectCache(true));
+          expect(on.status, on.error ?? '').toBe('succeeded');
+          expect(fresh().objectCache).toBe(1);
+          expect(await wpMoved('redis', 'status')).toMatch(/Status: Connected/);
+
+          await must(inMoved([...asRedis, 'SET', 'wpl7-engine', 'stored'], asSite), 'a key in Redis');
+          await clearSiteCaches(handle(), fresh());
+          expect((await inMoved([...asRedis, 'EXISTS', 'wpl7-engine'], asSite)).stdout.toString('utf8').trim()).toBe('0');
+
+          const off = await runJob(objectCache(false));
+          expect(off.status, off.error ?? '').toBe('succeeded');
+          expect(fresh().objectCache).toBe(0);
+          expect((await inMoved(['test', '-e', REDIS_SOCKET_IN_CONTAINER])).status).not.toBe(0);
+          expect((await viaEdge('/')).status).toBe(200);
+        });
+      });
+
       describe('arriving on a server that has never had the site', () => {
         const job = () => w.db.select().from(jobs).all().at(-1)!.id;
 
@@ -3482,7 +3531,4 @@ echo json_encode([
     });
   });
 
-  // These need services/siteCaches.ts's calls, which come in the next stage.
-  describe.todo("Check a URL's answers, through the panel's own call");
-  describe.todo('A clear after a restore, through the panel: page cache files and Redis FLUSHALL');
 });

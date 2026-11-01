@@ -40,7 +40,9 @@ site back to that version, if the panel still offers it. A backup whose tables h
 gives the site that prefix: that happens when a site restores a backup of a deleted site that had
 the same name.
 
-Last, it starts the site. If the site's address changed since the backup, WordPress's URLs are
+Last, it starts the site. Before that, it checks the PHP settings in the files that came back,
+because an old backup can hold lines PHP-FPM cannot use. See
+[Change a PHP setting](/docs/sites/settings/#change-a-php-setting). If the site's address changed since the backup, WordPress's URLs are
 rewritten to the current one, and the site's [recipes](/docs/plugins/recipes/) run for the new
 address. A site that does not answer afterwards is a warning in the log, not a failed job.
 

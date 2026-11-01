@@ -1,4 +1,4 @@
-// @docs sites/caching
+// @docs reference/architecture, sites/caching, sites/settings
 import type { ContainerLimits } from './docker.js';
 import { HARMLESS_COOKIES, cachePathRegex, cacheRegexEscape, cacheRuleReason, usableCacheRules, type CacheRule, type SiteCacheRules } from '../../shared/cacheRules.js';
 

@@ -29,6 +29,11 @@ On the stable channel, the same settings are cards on one long page, without the
 **Site defaults** prefill the New site wizard: PHP version, language, admin email and, with several
 servers, the server. An API request that leaves out the admin email uses this one too.
 
+<Since v="0.3.3" /> **Page cache** and **Keep pages for**, in the same card, apply to every site that
+follows them. A save reaches those sites at once, and empties their page caches. **Page cache** is on
+by default, and **Keep pages for** is 10 hours, which is also the most. A site can say otherwise in
+its **Caching** card. See [Caching](/docs/sites/caching/).
+
 **Site container limits** cap each site's CPU, memory and processes. Saved changes reach every site
 at once, without a restart, except lifting the CPU cap, which restarts each site once. A site can
 set its own on its **Settings** tab. See [Site settings](/docs/sites/settings/#give-a-site-its-own-limits).
@@ -38,6 +43,8 @@ set its own on its **Settings** tab. See [Site settings](/docs/sites/settings/#g
 | **CPU cores per site** | 2 |
 | **Memory per site (MB)** | 512 |
 | **Processes per site** | 512 |
+
+**Processes per site** is at least 64, because a site runs nginx, Apache and PHP. 0 means uncapped.
 
 **FTP & SFTP** allows or stops FTP and SFTP logins on every server, and sets their ports. See
 [FTP and SFTP logins](/docs/sites/ftp-sftp/).
@@ -135,6 +142,7 @@ button that applies a new version. See [Updating WPL7](/docs/panel/updating/).
 
 ## Related
 
+- [Caching](/docs/sites/caching/)
 - [Updating WPL7](/docs/panel/updating/)
 - [Cloudflare DNS](/docs/integrations/cloudflare/)
 - [Configuration](/docs/reference/configuration/)

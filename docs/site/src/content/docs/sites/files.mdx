@@ -35,6 +35,10 @@ An entry's actions are behind its three dots, or a right-click on its row: **Dow
   with **Go to line** and **Save anyway**.
 - A save only replaces the version you opened. If someone changed the file meanwhile, choose
   **Overwrite with mine** or **Load theirs (discard mine)**.
+- A `.htaccess` saved with a `php_value` or `php_flag` line shows a warning, because such a line gives
+  a 500. See [Change a PHP setting](/docs/sites/settings/#change-a-php-setting).
+
+A change made on this tab empties the site's [caches](/docs/sites/caching/).
 
 ## Upload and download
 

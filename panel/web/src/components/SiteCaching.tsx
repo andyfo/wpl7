@@ -99,6 +99,7 @@ export function SiteCachingCard({ site }: { site: SiteDetail }) {
   return (
     <Card title="Caching">
       <div className="space-y-5">
+        {site.stack === 1 && <p className="text-sm text-amber-800">This site still runs the old PHP setup. These settings apply once it has moved.</p>}
         <div>
           <div className="mb-1 text-sm font-medium text-neutral-700">Page cache</div>
           <Segmented

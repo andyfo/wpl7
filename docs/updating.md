@@ -223,6 +223,14 @@ version is the one serving the page; there is nothing to go back to. You get a r
 log, a row in the history on **Settings → Updates** saying which step failed and why, and a
 **Re-run** button for once you have fixed it.
 
+**New site images** reach sites by themselves. At its next start and hourly, the panel queues one
+`site.reconcile` for every site container that runs an older image than its server has
+(`services/siteImages.ts`). A release whose image is stack 2 moves those sites to PHP-FPM that way
+(docs/architecture.md, "Moving a site"): one recreate per site, and the page cache turning on for every
+site that follows the default. Its changed `docker-compose.yml` also makes `setup.sh` recreate Traefik and
+`wpl7-mariadb` once, so sites answer 504 until the panel has re-attached them, and go a few seconds
+without the database.
+
 The record of all of this is the `system_updates` table, and the Updates page shows the most
 recent entry. It is there so that "did the reconciles ever run?" is a question with an
 answer six months later.

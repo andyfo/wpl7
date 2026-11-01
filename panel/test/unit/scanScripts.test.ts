@@ -160,6 +160,19 @@ describe.skipIf(!HAS_PHP)('the check, in the site image', () => {
     ]);
   });
 
+  it('reports a .user.ini that loads a file, wherever it is, apart from Wordfence at the top', () => {
+    const { root, input } = makeSite();
+    const put = (rel: string, text: string) => {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.writeFileSync(path.join(root, rel), text);
+    };
+    put('.user.ini', `auto_prepend_file = "${root}/wordfence-waf.php"\nmemory_limit = 512M\n`);
+    put('wp-content/themes/shop/.user.ini', "auto_prepend_file = '/var/www/html/wp-content/themes/shop/logo.png'\n");
+    put('wp-content/themes/plain/.user.ini', '; auto_prepend_file = /tmp/x\nauto_append_file = none\nmemory_limit = 512M\n');
+    const found = check(root, input).findings.filter((f) => f.kind === 'user-ini-load');
+    expect(found.map((f) => `${f.path} ${f.detail}`)).toEqual(["wp-content/themes/shop/.user.ini auto_prepend_file = '/var/www/html/wp-content/themes/shop/logo.png'"]);
+  });
+
   it('never follows a link, and reports the ones that leave the site or sit among WordPress files', () => {
     const { root, input } = makeSite();
     fs.symlinkSync('/etc/passwd', path.join(root, 'wp-content/uploads/notes.txt'));

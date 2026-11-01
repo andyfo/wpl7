@@ -143,6 +143,23 @@ function enabling_line(string $text): ?string {
 }
 
 /**
+ * What a .user.ini makes PHP load with every request. PHP-FPM reads these, in any folder, so it is
+ * a way to keep a backdoor in a file that looks like anything. Wordfence's firewall, at the site's
+ * top, is the one that is expected: its own guard files are checked as themselves.
+ */
+function loading_line(string $text): ?string {
+    foreach (preg_split('/\r?\n/', $text) as $raw) {
+        $line = trim($raw);
+        if ($line === '' || $line[0] === ';' || $line[0] === '#') continue;
+        if (!preg_match('/^auto_(?:prepend|append)_file\s*=\s*(.*)$/i', $line, $m)) continue;
+        $value = trim($m[1], " \t\"'");
+        if ($value === '' || strcasecmp($value, 'none') === 0 || $value === ROOT . '/wordfence-waf.php') continue;
+        return substr($line, 0, 200);
+    }
+    return null;
+}
+
+/**
  * The package a path belongs to, when there is a published list to hold it to: WordPress's
  * own folders and top level, and plugins the panel has checksums for. Null otherwise.
  */
@@ -307,6 +324,13 @@ function check(array $input): void {
                 if ($hash === null) { $unread($rel); continue; }
                 if (!in_array($hash, $panel[$rel], true)) $finding('panel-modified', $rel, ['sha256' => $hash]);
                 continue;
+            }
+
+            if ($lower === '.user.ini' && !str_starts_with($rel, 'wp-content/uploads/')) {
+                $text = head_of($abs, 65536);
+                if ($text === null) { $unread($rel); continue; }
+                $line = loading_line($text);
+                if ($line !== null) $finding('user-ini-load', $rel, ['sha256' => $sha($rel), 'detail' => $line]);
             }
 
             if (str_starts_with($rel, 'wp-content/uploads/')) {

@@ -226,6 +226,11 @@ nothing to roll back to: unlike the PHP switch, this job rebuilds from the same 
 from, so the "previous" container is the same container. The rollback that does exist covers Docker
 refusing to create or start the replacement.
 
+A site still on stack 1 whose image is now stack 2 moves to PHP-FPM here, and that move does check the
+site and put the old container back (docs/architecture.md, "Moving a site"). **Recreate container** and
+`POST /api/sites/:slug/reconcile` try a failed move again on the same image; `reconcile-all` and the
+image sweep do not.
+
 Run it per site (**Recreate container** on the site page) or across the fleet
 (`POST /api/sites/reconcile-all`, one job per site, serialized per server). It is idempotent, so
 running it on an already-current site costs one container restart and changes nothing else. A

@@ -1,4 +1,4 @@
-// @docs sites/caching
+// @docs help/troubleshooting, sites/caching
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { noCacheRules, parseSiteCacheRules, siteKeepSeconds, type SiteCacheRules } from '../../shared/cacheRules.js';
@@ -295,16 +295,25 @@ export async function clearSiteCaches(server: Pick<ServerHandle, 'docker'>, site
   return true;
 }
 
+/** A job's deadline is over by the time it clears, and a server that went away must not hold its lane. */
+const CLEAR_PATIENCE_MS = 90_000;
+
 /**
  * The same after something changed what visitors see. Never a reason to fail what caused it: a
  * page stays stale for at most its keep time, and there is a button.
  */
 export async function clearAfterChange(s: { servers: { handleFor(id: number): Pick<ServerHandle, 'docker'> }; log: { warn(message: string): void } }, site: SiteRow): Promise<void> {
   if (isExternal(site)) return;
+  let timer: NodeJS.Timeout | undefined;
+  const patience = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('its server did not answer in time')), CLEAR_PATIENCE_MS);
+  });
   try {
-    await clearSiteCaches(s.servers.handleFor(site.serverId), site);
+    await Promise.race([clearSiteCaches(s.servers.handleFor(site.serverId), site), patience]);
   } catch (err) {
     s.log.warn(`Could not clear the caches of "${site.slug}": ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -376,7 +385,8 @@ export async function checkSiteUrl(server: Pick<ServerHandle, 'docker'>, config:
     if (cache() !== 'HIT') return { state: 'not-stored', reason: reason() ?? 'not a WordPress page', status: answer.status };
   }
   if (cache() === 'STALE') return { state: 'stale', reason: null, status: answer.status };
-  return { state: 'cached', reason: null, status: answer.status };
+  if (cache() === 'HIT' || cache() === 'REVALIDATED') return { state: 'cached', reason: null, status: answer.status };
+  return { state: 'not-stored', reason: 'no answer from the page cache', status: answer.status };
 }
 
 // ---------------------------------------------------------------------------

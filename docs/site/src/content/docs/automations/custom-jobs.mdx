@@ -104,6 +104,8 @@ and `wp/rest` in the [API reference](/docs/integrations/api-reference/).
 - A started command cannot be canceled. Only its time limit stops it.
 - A `wp godmode` command that waits on a chat is refused.
 - Scheduled backups count toward the backup retention, so frequent runs push out older backups.
+- A shell command, a WP-CLI command that changes something and a REST request other than GET empty
+  the site's [caches](/docs/sites/caching/) each time they run.
 
 ## Related
 

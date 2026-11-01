@@ -19,6 +19,8 @@ export const IN_MAINTENANCE = new Set(['cedar-stone']);
 
 function siteAnswer(slug: string, cmd: string[]): RunResult | null {
   const line = cmd.join(' ');
+  // Check a URL, on the Caching card.
+  if (cmd[0] === 'curl') return ok('HTTP/1.1 200 OK\r\nX-Cache-Status: HIT\r\n\r\n');
   if (cmd[0] === 'wp' && cmd[1] === 'core' && cmd[2] === 'version') return ok(`${INVENTORY[slug]?.core ?? WORDPRESS}\n`);
   if (cmd[0] === 'wp' && cmd[1] === 'maintenance-mode' && (cmd[2] === 'status' || cmd[2] === 'is-active')) {
     return IN_MAINTENANCE.has(slug) ? ok('Maintenance mode is active.\n') : { stdout: '', stderr: '', exitCode: 1 };

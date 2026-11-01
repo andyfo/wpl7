@@ -403,13 +403,15 @@ function wpl7_cache_other_spelling(string $own_path): bool {
 /**
  * Only a request with no header nginx doesn't know may store a page, as with cookies. PHP sees the
  * rest, as it always did, so a plugin's own header goes on working. It can't end up in what everyone
- * gets. The list here is what nginx leaves on this path: services/siteStack.ts.
+ * gets. The list here is what nginx leaves on this path: services/siteStack.ts. Cloudflare adds more
+ * headers each year, for bots and for clients' certificates, and those nginx doesn't know of say nothing
+ * a page draws: the ones it might are blanked there.
  */
 function wpl7_cache_unknown_request_header(): ?string {
     foreach ($_SERVER as $name => $value) {
         // Empty ones are a .htaccess copying a header that wasn't sent, as WordPress's own rule does.
         if (strncmp((string) $name, 'HTTP_', 5) !== 0 || $value === '') continue;
-        if (preg_match('/^HTTP_(?:HOST|CONNECTION|UPGRADE|COOKIE|USER_AGENT|ACCEPT|ACCEPT_LANGUAGE|ACCEPT_ENCODING|SEC_CH_UA_MOBILE|X_WPL7_[A-Z_]+|X_FORWARDED_(?:FOR|PROTO|HOST|PORT|SERVER)|X_REAL_IP|MOD_REWRITE|CF_IPCOUNTRY)$/', (string) $name) !== 1) {
+        if (preg_match('/^HTTP_(?:HOST|CONNECTION|UPGRADE|COOKIE|USER_AGENT|ACCEPT|ACCEPT_LANGUAGE|ACCEPT_ENCODING|SEC_CH_UA_MOBILE|X_WPL7_[A-Z_]+|X_FORWARDED_(?:FOR|PROTO|HOST|PORT|SERVER)|X_REAL_IP|MOD_REWRITE|CF_[A-Z0-9_]+)$/', (string) $name) !== 1) {
             return strtolower(str_replace('_', '-', substr((string) $name, 5)));
         }
     }

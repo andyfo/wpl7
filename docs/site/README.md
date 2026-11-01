@@ -209,7 +209,7 @@ fails with a link to open it by hand.
 
 ## Generated pages
 
-Six pages are written from the code, not by hand. Each is a plain Markdown file (`.md`), and the
+Seven pages are written from the code, not by hand. Each is a plain Markdown file (`.md`), and the
 line under its front matter names the script that wrote it, the files it read, and a hash of
 everything below that line.
 
@@ -221,12 +221,13 @@ everything below that line.
 | `reference/job-types.md` | `gen-job-types.ts` | `panel/shared/jobTypes.ts`, and the `enqueue()` calls in `panel/src` for lanes and starters |
 | `reference/security-levels.md` | `gen-levels.ts` | `panel/shared/security.ts` and `panel/shared/access.ts` |
 | `help/changelog.md` | `gen-changelog.ts` | `src/data/releases.json` |
+| `reference/limits.md` | `gen-limits.ts` | The `## Limits` section of every other page. To change a limit, change its page |
 
 Do not edit them: `docs:map` fails on a page whose hash no longer matches. Change the source and
 run the generators. They import panel modules, so `panel/node_modules` must be installed.
 
 ```bash
-npm run docs:generate    # all six pages
+npm run docs:generate    # all seven pages
 npm run docs:releases    # first, to refresh src/data/releases.json from GitHub for the changelog
 ```
 

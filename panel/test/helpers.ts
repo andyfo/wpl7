@@ -237,7 +237,7 @@ export class FakeDocker implements DockerPort {
   /** The id a tag points at; one not set here is `sha256:<tag>`. Set one to move a tag onto a new image. */
   imageIds = new Map<string, string>();
   /** The image id each container was created from, as `listManaged` reports it. */
-  private imageByContainer = new Map<string, string>();
+  imageByContainer = new Map<string, string>();
   /**
    * The PHP release in each image (its `PHP_VERSION`), by image id; an image not here does not
    * say. A container runs the one of the image it was created from. `phpOf` sets one by tag.

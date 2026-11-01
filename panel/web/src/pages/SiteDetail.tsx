@@ -328,7 +328,8 @@ function OverviewTab({ slug }: { slug: string }) {
       {s.importSource?.connected && s.importSource.status === 'done' && <ImportedBanner slug={slug} source={s.importSource} />}
       {s.stackSwitchError && (
         <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
-          <p>This site still runs the old PHP setup: {s.stackSwitchError}.</p>
+          <p className="font-medium">This site still runs the old PHP setup.</p>
+          <p className="mt-1">{s.stackSwitchError[0]!.toUpperCase() + s.stackSwitchError.slice(1)}.</p>
           <div className="mt-2">
             <Button small {...containerAction('reconcile')}>
               Retry

@@ -1,4 +1,4 @@
-// @docs sites/create, sites/move, sites/overview, sites/settings
+// @docs sites/caching, sites/create, sites/move, sites/overview, sites/settings
 import { and, asc, eq, inArray, isNotNull, or } from 'drizzle-orm';
 import type { BackupBeforeUpdates, JobType, SiteCacheBody, SiteCreateBody, SiteLimitsBody } from '../../shared/schemas.js';
 import { CACHE_RULE_GROUPS, cacheGroupInUse, cacheOffProblem, parseSiteCacheRules, withCacheRuleIds } from '../../shared/cacheRules.js';
@@ -605,7 +605,7 @@ export class SitesService {
       groupsInUse: CACHE_RULE_GROUPS.filter((group) => cacheGroupInUse(group, installed)).map((group) => group.id),
       object: site.objectCache === 1,
       objectBlocked: stack === 1 ? oldSetup : !site.objectCache && foreign ? `Another object cache is installed: ${foreign.title}.` : null,
-      liveBlocked: stack === 1 ? oldSetup : containerState === 'running' ? null : 'The site is not running.',
+      liveBlocked: stack === 1 ? oldSetup : stack === 2 && containerState === 'running' ? null : 'The site is not running.',
     };
   }
 

@@ -69,6 +69,9 @@ every length counted again. A length that is off by one byte would empty the who
 the first error. Each statement shows its rows, or how many rows it changed. **Recent queries**
 keeps what you ran, in this browser.
 
+A change on this tab empties the site's [caches](/docs/sites/caching/). A single `SELECT`, `SHOW`,
+`DESCRIBE` or `EXPLAIN` does not.
+
 <Screenshot name="site-database-sql" alt="The SQL view with a query and its result" />
 
 ## Export and import

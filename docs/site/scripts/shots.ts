@@ -154,6 +154,22 @@ export const SHOTS: Shot[] = [
   },
   { name: 'site-settings', what: 'A site’s Settings tab: PHP version, domains, delete', path: '/sites/northwind-bakery', theme: 'light', prepare: tab('Settings') },
   {
+    name: 'site-caching',
+    what: 'A site’s Caching card: the page cache, how long pages stay, the object cache and Check a URL',
+    path: '/sites/northwind-bakery',
+    theme: 'light',
+    prepare: steps(tab('Settings'), scrollTo('Caching')),
+  },
+  {
+    name: 'site-caching-rules',
+    what: 'A site’s Caching card with its rules open: the built-in groups and the form for a rule of its own',
+    path: '/sites/northwind-bakery',
+    theme: 'light',
+    prepare: steps(tab('Settings'), scrollTo('Caching'), async (page) => {
+      await page.locator('summary', { hasText: /^Rules$/ }).click();
+    }),
+  },
+  {
     name: 'site-limits',
     what: 'A site’s container limits: memory of its own, CPU and processes on the defaults',
     path: '/sites/northwind-bakery',

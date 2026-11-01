@@ -286,6 +286,7 @@ describe('POST /api/sites/:slug/cache/clear and /check', () => {
     ['something WordPress did not make', [page(200, 'X-Cache-Status: MISS'), page(200, 'X-Cache-Status: MISS')], { state: 'not-stored', reason: 'not a WordPress page', status: 200 }],
     ['the cache switched off', [page(200, 'X-Cache-Status: BYPASS\r\nX-Cache-Skipped: off')], { state: 'off', reason: null, status: 200 }],
     ['the last good copy', [page(200, 'X-Cache-Status: STALE')], { state: 'stale', reason: null, status: 200 }],
+    ['no word from the cache', [page(200, 'Server: nginx')], { state: 'not-stored', reason: 'no answer from the page cache', status: 200 }],
   ])('%s', async (_what, answers, expected) => {
     const { w, call } = await world();
     w.docker.execQueue.push(...answers);

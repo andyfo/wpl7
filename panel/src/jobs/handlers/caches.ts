@@ -1,4 +1,4 @@
-// @docs sites/caching
+// @docs reference/third-party, sites/caching
 import { z } from 'zod';
 import type { SiteRow } from '../../db/schema.js';
 import type { ServerHandle } from '../../servers/registry.js';

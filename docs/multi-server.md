@@ -58,7 +58,7 @@ add the key to your VPS provider account *before* creating the VPS so it gets ba
    workers are given build mode instead and compile their site images from the pushed
    Dockerfile — there is no panel container on a worker to build, and nothing there derives a
    panel version,
-3. runs `setup.sh --role=worker --non-interactive`: Docker, UFW 22/80/443, the `/srv` layout,
+3. runs `setup.sh --role=worker --non-interactive`: Docker, UFW 22/80/443 and 443/udp, the `/srv` layout,
    the `wpl7-wordpress` images, the stack via the `docker-compose.worker.yml` overlay (no panel
    container), and the `wpl7-panel` user,
 4. verifies the result exactly like manual registration below,
