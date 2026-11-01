@@ -591,7 +591,7 @@ export class SitesService {
     const components = [...this.s.wpInventory.componentsFor(site.id).values()];
     const installed = components.filter((c) => c.kind === 'plugin').map((c) => c.slug);
     // Redis Object Cache's own drop-in counts as nothing in the way: `wp redis enable` takes it over.
-    const foreign = components.find((c) => c.kind === 'plugin' && c.status === 'dropin' && c.slug === 'object-cache' && !/redis object cache/i.test(c.title));
+    const foreign = components.find((c) => c.kind === 'plugin' && c.status === 'dropin' && c.slug === 'object-cache.php' && !/redis object cache/i.test(c.title));
     const oldSetup = 'This site still runs the old PHP setup.';
     return {
       page: site.pageCache === 'on' || site.pageCache === 'off' ? site.pageCache : 'default',

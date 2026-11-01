@@ -154,7 +154,7 @@ deleted, nothing of the site is left: no files, no database and no backup.
 | One response header line | 8 KB. Past it, a 500 |
 | All response headers | 32 KB. Past it, a 502 |
 | One PHP request | About an hour, at most 80 minutes |
-| Running requests at a stop or a recreate | 5 seconds |
+| Running requests at a stop | 5 seconds. **Recreate container** ends them at once |
 
 - `php_value` and `php_flag` in a `.htaccess` give a 500 for its folder, and do nothing inside
   `<IfModule mod_php.c>`. Use `.user.ini`.

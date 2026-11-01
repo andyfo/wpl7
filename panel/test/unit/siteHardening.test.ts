@@ -122,10 +122,16 @@ describe('what the files say', () => {
     }
   });
 
+  it('refuses .user.ini at every level: the old image has no such line of its own', () => {
+    for (const level of [LEVEL_PRESETS.off, LEVEL_PRESETS.strict]) {
+      expect(hardeningFiles(level.container).apache).toContain('<Files ".user.ini">\n    Require all denied\n</Files>');
+    }
+  });
+
   it('Strict adds no installs from wp-admin; Off adds nothing at all', () => {
     expect(renderWpConfigHardening(LEVEL_PRESETS.strict.container)).toContain("define('DISALLOW_FILE_MODS', true)");
     const off = hardeningFiles(LEVEL_PRESETS.off.container);
-    expect(off.apache).not.toMatch(/^[^#\n]/m);
+    expect(off.apache).not.toMatch(/Directory|LocationMatch/);
     expect(off.php).not.toContain('define(');
   });
 

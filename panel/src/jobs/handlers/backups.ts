@@ -176,11 +176,14 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
         const { ensureSiteImage } = await import('./sites.js');
         await ensureSiteImage(ctx, server, s.config, recreate.phpVersion);
       }
+      const { failedSwitchToKeep } = await import('./sites.js');
+      // A site that could not move to the new PHP setup stays where it is, unless it is changing PHP.
+      const stayOn = recreate.phpVersion ? null : await failedSwitchToKeep(server, s, site);
       await server.docker.removeContainer(site.containerName);
       updateSiteRow(s.db, site.id, recreate);
       const { siteContainerSpec, siteRuntimeFrom } = await import('../../services/siteSpec.js');
       const restored = loadSite(s.db, site.id);
-      await server.docker.createSiteContainer(await siteContainerSpec(s, server, restored, siteDomains(site), siteRuntimeFrom(s.settings, restored)));
+      await server.docker.createSiteContainer(await siteContainerSpec(s, server, restored, siteDomains(site), siteRuntimeFrom(s.settings, restored), stayOn ? { from: stayOn } : {}));
     }
 
     // After that recreate: it can be what takes the site to stack 2. A backup can be older than that.

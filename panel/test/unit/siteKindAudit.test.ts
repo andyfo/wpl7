@@ -42,7 +42,6 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   'jobs/handlers/wp.ts': { wpScanAll: both('external sites are scanned in a group of their own (isExternal)') },
   'jobs/schedulers.ts': {
     backupTick: both('connected external sites are backed up too'),
-    defineTasks: hosted('hostedSites()'),
     siteLimitsTick: both("only asks whether a site lifts a CPU cap of its own, and whether a deferred site's lane is free"),
     wpCronTick: hosted("'running'"),
     wpScanIsDue: both('connected external sites are scanned too'),
@@ -64,6 +63,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     sitesCountFor: hosted('hostedSites()'),
     externalCountFor: both('counts the external sites a server keeps the backups of'),
   },
+  'services/siteCaches.ts': { sweepSiteRuntime: hosted('hostedSites()') },
   'services/reminders.ts': { siteRows: both('reads domains, PHP versions and reminder links for both hosted and external sites; never invokes a container') },
   'services/alerts.ts': { vulnerabilities: both('alerts are for every site') },
   'services/backup.ts': {

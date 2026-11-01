@@ -12,6 +12,8 @@ import { currentActor, withoutActor } from './actor.js';
 import { JobContext } from './context.js';
 import { SECRET_PAYLOAD_KEYS, SITE_INTERRUPTING_JOBS, getRegistry, jobDeadline } from './registry.js';
 import { clearAfterChange, wpCliOnlyReads } from '../services/siteCaches.js';
+import { migrateArrivedFiles } from '../services/siteMigration.js';
+import { isExternal } from '../lib/siteKind.js';
 import { summarizeJob } from './summaries.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -75,6 +77,12 @@ const SITE_CONTENT_JOBS: ReadonlySet<JobType> = new Set<JobType>([
   'files.extract',
   'site.malwareScan',
 ]);
+
+/**
+ * Jobs that put a package's own files back: an update or a reinstall can bring a bare php_flag in a
+ * plugin's .htaccess, which is a 500 for that folder until it is moved.
+ */
+const PACKAGE_JOBS: ReadonlySet<JobType> = new Set<JobType>(['wp.coreUpdate', 'wp.pluginTask', 'wp.themeTask', 'wp.bulkTask', 'wp.reinstall']);
 
 /** Whether this job, as it went, changed anything of its site's. */
 function changedSiteContent(type: JobType, payload: Record<string, unknown>, result: unknown): boolean {
@@ -606,7 +614,11 @@ export class JobWorker {
     const siteId = job.siteId ?? (typeof payload.siteId === 'number' ? payload.siteId : null);
     if (siteId === null) return;
     const site = this.db.select().from(sites).where(eq(sites.id, siteId)).get();
-    if (site) await clearAfterChange(this.services, site);
+    if (!site) return;
+    if (PACKAGE_JOBS.has(job.type as JobType) && !isExternal(site)) {
+      await migrateArrivedFiles(ctx, this.services.servers.handleFor(site.serverId), this.services, site);
+    }
+    await clearAfterChange(this.services, site);
   }
 
   /**

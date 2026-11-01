@@ -35,7 +35,7 @@ map: what runs, what it is called, where it keeps its files, and what can reach 
 | Container | Image | What it does |
 |---|---|---|
 | `wpl7-traefik` | `traefik:v3.7` | Takes ports 80 and 443, with UDP 443 for HTTP/3, gets certificates, routes each hostname to its site, applies [site protection](/docs/reference/glossary/#site-protection) and writes the access log |
-| `wpl7-mariadb` | `mariadb:11.4` | The database server, with one user per site and that site's databases. Its buffer pool is an eighth of the server's memory, from 256 MB to 4 GB, unless `MARIADB_BUFFER_POOL` says otherwise |
+| `wpl7-mariadb` | `mariadb:11.4` | The database server, with one user per site and that site's databases. Its buffer pool is an eighth of the server's memory, from 256 MB to 4 GB, unless `MARIADB_POOL_SIZE` says otherwise |
 | `wpl7-mail` | `boky/postfix` | The mail [relay](/docs/reference/glossary/#relay): takes every site's mail, queues it and delivers it |
 | `wpl7-dkim` | `instrumentisto/opendkim` | Signs outgoing mail for the relay |
 | `wpl7-panel` | `ghcr.io/andyfo/wpl7/panel` | The API, the web interface and the job queue. On the panel's server only |

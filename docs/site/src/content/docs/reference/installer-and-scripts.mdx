@@ -115,7 +115,7 @@ What it does:
   memory and no swap.
 - Writes `deploy/.env` from `deploy/.env.example` on the first run, with generated database and
   session secrets.
-- Turns the old default `MARIADB_BUFFER_POOL=256M` in an existing `deploy/.env` into `auto`, once.
+- Adds `MARIADB_POOL_SIZE` to an existing `deploy/.env`, as `auto`, or as the size someone had set in the old `MARIADB_BUFFER_POOL`. The old key stays, for a rollback.
   Any other value stays, and so does a 256M set after that.
 - Creates the `wpl7-panel` user on a worker, or when `--panel-key` is given.
 - Pulls the site images for the PHP versions in `WP_PHP_VERSIONS`.
@@ -141,7 +141,7 @@ Open UDP 443 there. Without it, browsers stay on HTTP/2, and nothing else change
 
 ### MariaDB's buffer pool
 
-`MARIADB_BUFFER_POOL` in `deploy/.env` sets MariaDB's buffer pool. `auto`, the default, is worked out
+`MARIADB_POOL_SIZE` in `deploy/.env` sets MariaDB's buffer pool. `auto`, the default, is worked out
 at every start: an eighth of the server's memory, from 256 MB to 4 GB. Any other value, such as `2G`,
 is used as it is. Run `setup.sh` after you change it, which restarts MariaDB.
 

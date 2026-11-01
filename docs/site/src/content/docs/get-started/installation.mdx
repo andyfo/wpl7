@@ -119,7 +119,7 @@ The full list is in [Installer and scripts](/docs/reference/installer-and-script
 | Logs and caches | Limits the system journal to 500 MB. Has apt empty its package cache once a week. |
 | Swap | Adds a 2 GB `/swapfile` when memory is under 4 GB and no swap is active. |
 | Directories | Creates `/srv` with `sites`, `backups`, `mysql`, `traefik`, `panel`, `plugins`, `mail` and `wpl7-firewall`. |
-| Configuration | Writes `/opt/wpl7/deploy/.env`, mode `0600`, with generated database and session secrets. `MARIADB_BUFFER_POOL=auto` gives MariaDB an eighth of the server's memory, from 256 MB to 4 GB. |
+| Configuration | Writes `/opt/wpl7/deploy/.env`, mode `0600`, with generated database and session secrets. `MARIADB_POOL_SIZE=auto` gives MariaDB an eighth of the server's memory, from 256 MB to 4 GB. |
 | SSH | Creates the panel's SSH key and adds it to root's `authorized_keys`, for the web terminal and for updates. No user account is created. |
 | Containers | Starts Traefik, MariaDB, the mail relay, the DKIM signer and the panel. Pulls the site images for PHP 8.2 to 8.5. |
 

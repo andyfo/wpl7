@@ -1,11 +1,14 @@
 // @docs help/troubleshooting, sites/caching
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { and, eq, inArray } from 'drizzle-orm';
 import { noCacheRules, parseSiteCacheRules, siteKeepSeconds, type SiteCacheRules } from '../../shared/cacheRules.js';
 import type { SiteCacheCheck } from '../../shared/types.js';
 import type { Config } from '../config.js';
-import type { SiteRow } from '../db/schema.js';
-import { isExternal } from '../lib/siteKind.js';
+import type { Db } from '../db/index.js';
+import { jobs, sites, type ServerRow, type SiteRow } from '../db/schema.js';
+import type { JobWorker } from '../jobs/worker.js';
+import { hostedSites, isExternal } from '../lib/siteKind.js';
 import type { ServerHandle } from '../servers/registry.js';
 import { fitCpus, type DockerPort } from './docker.js';
 import { siteScheme } from './labels.js';
@@ -406,14 +409,39 @@ function runtimeDigest(): string {
   return hash.digest('hex');
 }
 
+const runtimeDigestKey = (serverId: number) => `${RUNTIME_DIGEST_KEY}.${serverId}`;
+
+/** Every site on this server has had what this panel renders: a job did it, with nothing left out. */
+export function markRuntimeApplied(settings: { setRaw(key: string, value: unknown): void }, serverId: number): void {
+  settings.setRaw(runtimeDigestKey(serverId), runtimeDigest());
+}
+
 /**
- * Whether this panel renders runtime files differently from the one that last applied them. A release
- * improves the built-in rules, and a site that didn't touch them is meant to get that, not only at its
- * next restart. At boot rather than in an update hook: a box that builds from its own checkout gets no
- * hooks. The caller queues the work and then calls the function this returns.
+ * A release improves the built-in rules, and a site that didn't touch them is meant to get that, not
+ * only at its next restart. So the servers still on what an older panel rendered get the job that
+ * brings their sites along. It marks a server when it has done so, and until then this tries again,
+ * on the next sweep: a server that was away, or a job that failed, must not miss a release for good.
+ * From the boot and hourly sweep rather than an update hook: a box that builds from its own checkout
+ * gets no hooks.
  */
-export function runtimeChangedSinceLastApply(settings: { getRaw(key: string): unknown; setRaw(key: string, value: unknown): void }): (() => void) | null {
+export function sweepSiteRuntime(
+  s: { db: Db; settings: { getRaw(key: string): unknown }; servers: { listRows(): Pick<ServerRow, 'id' | 'status'>[] } },
+  worker: { enqueue: JobWorker['enqueue'] },
+): number[] {
   const digest = runtimeDigest();
-  if (settings.getRaw(RUNTIME_DIGEST_KEY) === digest) return null;
-  return () => settings.setRaw(RUNTIME_DIGEST_KEY, digest);
+  const hosting = new Set(s.db.selectDistinct({ serverId: sites.serverId }).from(sites).where(hostedSites()).all().map((row) => row.serverId));
+  const queued: number[] = [];
+  for (const server of s.servers.listRows()) {
+    if (!hosting.has(server.id) || server.status === 'unreachable' || server.status === 'provisioning') continue;
+    if (s.settings.getRaw(runtimeDigestKey(server.id)) === digest) continue;
+    const waiting = s.db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(eq(jobs.type, 'server.applySiteLimits'), eq(jobs.serverId, server.id), inArray(jobs.status, ['queued', 'running'])))
+      .get();
+    if (waiting) continue;
+    worker.enqueue('server.applySiteLimits', { serverId: server.id }, undefined, { serverId: server.id });
+    queued.push(server.id);
+  }
+  return queued;
 }

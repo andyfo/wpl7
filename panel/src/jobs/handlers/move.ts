@@ -6,7 +6,7 @@ import { backups, moveCleanups, sites, type MoveCleanupRow } from '../../db/sche
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
-import { sitePaths } from '../../services/siteSpec.js';
+import { sitePaths, siteImage } from '../../services/siteSpec.js';
 import { removeSiteNetwork } from '../../services/siteNetwork.js';
 import { loadSite, siteDomains, siteUrl, startSiteContainer, updateSiteRow, writeSiteJson } from './shared.js';
 import { ensureSiteImage, wildcardCovers } from './sites.js';
@@ -53,6 +53,10 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
   }
   const source = s.servers.handleFor(p.sourceServerId);
   const target = s.servers.handleFor(p.targetServerId);
+  // Its drop-in would stay behind with no Redis to talk to, and no wp-cache.php to say what to do then.
+  if (site.objectCache === 1 && (await target.docker.imageStack(siteImage(site.phpVersion))) === 1) {
+    throw new Error(`"${target.name}" has no object cache yet, because it still has the old site image. Update that server first, or switch this site's object cache off.`);
+  }
   const paths = sitePaths(s.config, site.slug);
   const domains = siteDomains(site);
   const primary = domains[0]!;

@@ -121,13 +121,13 @@ describe('the helper', () => {
     expect(migrations(w.docker).map((opts) => [opts.image, opts.labels!['wpl7.migration']])).toEqual([[siteImage(site.phpVersion), 'migrate']]);
   });
 
-  it('does nothing for a stack 1 container, whose mod_php reads those lines', async () => {
+  it('only puts lines back for a stack 1 container, whose mod_php reads them', async () => {
     const w = await makeWorld();
     allStack1(w.docker);
     const site = await createSite(w);
     w.docker.calls.length = 0;
     await migrateArrivedFiles(new JobContext(w.worker.enqueue('demo', {}).id, {}, w.db), w.servers.handleFor(1), w.core, site);
-    expect(migrations(w.docker)).toEqual([]);
+    expect(migrations(w.docker).map((o) => o.labels!['wpl7.migration'])).toEqual(['undo']);
   });
 
   it('does nothing without a container: nothing says what the files are for yet', async () => {
@@ -189,7 +189,7 @@ describe.skipIf(!HAS_PHP)('a restore', () => {
     expect(starts[0]!.userIni).toContain("max_input_vars = '4321'");
     expect(starts[0]!.userIni).toContain(NOT_USED);
     expect(order(w.docker, ['stopContainer', 'runEphemeral', 'startContainer'])).toEqual(['stopContainer', 'runEphemeral', 'startContainer']);
-    expect(logOf(w, job.id).join('\n')).toContain(`.htaccess:1: ${LINE}: moved to .user.ini`);
+    expect(logOf(w, job.id).join('\n')).toContain('.htaccess:1: php_value max_input_vars: moved to .user.ini');
   });
 
   it('on stack 1: the lines stay, because mod_php reads them, and the switch moves them when it comes', async () => {
@@ -198,7 +198,7 @@ describe.skipIf(!HAS_PHP)('a restore', () => {
     useRealMigration(w.docker);
     const { site, wordpress, backup } = await restorable(w);
     expect((await runJob(w, restore(w, site, backup.id).id)).status).toBe('succeeded');
-    expect(migrations(w.docker)).toEqual([]);
+    expect(migrations(w.docker).map((o) => o.labels!['wpl7.migration'])).toEqual(['undo']);
     expect(fileOf(wordpress, '.htaccess')).toBe(`${LINE}\n`);
     expect(fileOf(wordpress, '.user.ini')).toBe(LEFTOVER);
   });
@@ -266,7 +266,7 @@ describe.skipIf(!HAS_PHP)('the arrival of a move', () => {
     // The source is what a move that fails falls back on, and mod_php still reads it there.
     expect(fileOf(wordpress, '.htaccess')).toBe(`${LINE}\n`);
     expect(fileOf(wordpress, '.user.ini')).toBe(LEFTOVER);
-    expect(logOf(w, job.id).join('\n')).toContain(`.htaccess:1: ${LINE}: moved to .user.ini`);
+    expect(logOf(w, job.id).join('\n')).toContain('.htaccess:1: php_value max_input_vars: moved to .user.ini');
   });
 
   it('on stack 1: the lines stay as they are', async () => {
@@ -274,7 +274,7 @@ describe.skipIf(!HAS_PHP)('the arrival of a move', () => {
     const { site, target, targetWordpress } = await moving(w, 1);
     allStack1(target.docker);
     expect((await runJob(w, w.deps.sites.move(site.slug, { targetServerId: target.id }).id)).status).toBe('succeeded');
-    expect(migrations(target.docker)).toEqual([]);
+    expect(migrations(target.docker).map((o) => o.labels!['wpl7.migration'])).toEqual(['undo']);
     expect(fileOf(targetWordpress, '.htaccess')).toBe(`${LINE}\n`);
   });
 
@@ -318,7 +318,7 @@ describe.skipIf(!HAS_PHP)('an import', () => {
     // Run once, ahead of the first start: the rest of the job adds no such files.
     expect(migrations(w.docker)).toHaveLength(1);
     const finish = w.db.select().from(jobs).where(eq(jobs.type, 'site.importFinish')).get()!;
-    expect(logOf(w, finish.id).join('\n')).toContain(`.htaccess:1: ${LINE}: moved to .user.ini`);
+    expect(logOf(w, finish.id).join('\n')).toContain('.htaccess:1: php_value max_input_vars: moved to .user.ini');
   });
 
   it('on stack 1: they stay', async () => {
@@ -328,7 +328,7 @@ describe.skipIf(!HAS_PHP)('an import', () => {
     w.core.imports.start(world.id, CHOICES);
     const row = await settle(w, world.id);
     expect(row.status, row.lastError ?? '').toBe('done');
-    expect(migrations(w.docker)).toEqual([]);
+    expect(migrations(w.docker).map((o) => o.labels!['wpl7.migration'])).toEqual(['undo']);
     expect(fileOf(sitePaths(w.config, 'willow').wordpress, '.htaccess')).toBe(`${LINE}\n`);
   });
 
@@ -366,7 +366,7 @@ describe.skipIf(!HAS_PHP)('an import', () => {
       expect(w.db.select().from(jobs).where(eq(jobs.id, job.id)).get()!.status, log.join('\n')).toBe('succeeded');
       expect(starts[0]!.htaccess).toBe(`${MOVED}\n`);
       expect(starts[0]!.userIni).toContain(NOT_USED);
-      expect(log.join('\n')).toContain(`.htaccess:1: ${LINE}: moved to .user.ini`);
+      expect(log.join('\n')).toContain('.htaccess:1: php_value max_input_vars: moved to .user.ini');
       expect(migrations(w.docker)).toHaveLength(1);
     });
 
@@ -376,7 +376,7 @@ describe.skipIf(!HAS_PHP)('an import', () => {
       const job = w.core.imports.refresh(id);
       await settle(w, id);
       expect(w.db.select().from(jobs).where(eq(jobs.id, job.id)).get()!.status, logOf(w, job.id).join('\n')).toBe('succeeded');
-      expect(migrations(w.docker)).toEqual([]);
+      expect(migrations(w.docker).map((o) => o.labels!['wpl7.migration'])).toEqual(['undo']);
       expect(fileOf(wordpress, '.htaccess')).toBe(`${LINE}\n`);
     });
 
@@ -420,7 +420,7 @@ describe.skipIf(!HAS_PHP)('a site with no container left', () => {
     await w.docker.removeContainer(site.containerName);
     w.docker.calls.length = 0;
     expect((await runJob(w, w.deps.sites.reconcile(site.slug).id)).status).toBe('succeeded');
-    expect(migrations(w.docker)).toEqual([]);
+    expect(migrations(w.docker).map((o) => o.labels!['wpl7.migration'])).toEqual(['undo']);
     expect(fileOf(wordpress, '.htaccess')).toBe(`${LINE}\n`);
   });
 

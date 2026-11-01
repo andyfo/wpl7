@@ -111,7 +111,7 @@ publish.
 
 ## Set MariaDB's memory
 
-MariaDB keeps data and indexes in its buffer pool. `MARIADB_BUFFER_POOL` in `deploy/.env` sets its
+MariaDB keeps data and indexes in its buffer pool. `MARIADB_POOL_SIZE` in `deploy/.env` sets its
 size. `auto`, the default, is an eighth of the server's memory, from 256 MB to 4 GB, worked out at
 every start, so it follows a resized server. Any other value, such as `2G`, is used as it is. Run
 `setup.sh` after you change it, which restarts MariaDB.

@@ -79,7 +79,8 @@ export function SiteCachingCard({ site }: { site: SiteDetail }) {
   const cache = site.cache;
   if (!cache) return null;
 
-  const save = (body: Record<string, unknown>) => {
+  /** Resolves to whether it saved: the error itself is shown here. */
+  const save = (body: Record<string, unknown>): Promise<boolean> => {
     setSaving(true);
     setError(null);
     return api<{ site: SiteDetail; job: JobDto | null }>(`/api/sites/${site.slug}/cache`, { method: 'PUT', body })
@@ -89,8 +90,12 @@ export function SiteCachingCard({ site }: { site: SiteDetail }) {
           follow(res.job, { refresh: [['site', site.slug]] });
           setObjectJob(res.job.id);
         }
+        return true;
       })
-      .catch(setError)
+      .catch((err: unknown) => {
+        setError(err);
+        return false;
+      })
       .finally(() => setSaving(false));
   };
   const switching = objectJob !== null && snapshots.get(objectJob)?.refreshed !== true;
@@ -162,7 +167,7 @@ export function SiteCachingCard({ site }: { site: SiteDetail }) {
   );
 }
 
-type CardParts = { cache: NonNullable<SiteDetail['cache']>; saving: boolean; save: (body: Record<string, unknown>) => Promise<unknown> };
+type CardParts = { cache: NonNullable<SiteDetail['cache']>; saving: boolean; save: (body: Record<string, unknown>) => Promise<boolean> };
 
 function BuiltInGroups({ cache, saving, save }: CardParts) {
   const off = new Set(cache.off);
@@ -263,7 +268,7 @@ function OwnRules({ cache, saving, save }: CardParts) {
           <Button
             variant="secondary"
             disabled={rule.value === '' || problem !== null || saving}
-            onClick={() => void save({ own: [...cache.own, rule] }).then(() => setValue(''))}
+            onClick={() => void save({ own: [...cache.own, rule] }).then((saved) => saved && setValue(''))}
           >
             Add rule
           </Button>

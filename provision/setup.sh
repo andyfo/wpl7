@@ -287,21 +287,24 @@ if [ -n "$MAIL_HOSTNAME_ARG" ]; then
   wpl7_mail_hostname_set "$ENV_FILE" "$SRV_ROOT/mail/relay.env" "$MAIL_HOSTNAME_ARG"
 fi
 
+# MariaDB's buffer pool used to be a fixed size in MARIADB_BUFFER_POOL, 256M by default, and every
+# .env from then says so. That key stays as it is, because a rollback to the old compose file reads
+# it, and "auto" there would stop MariaDB from starting. The new key starts out as auto, or as the
+# size someone chose back then.
+if [ -z "$(env_value MARIADB_POOL_SIZE)" ]; then
+  old_pool="$(env_value MARIADB_BUFFER_POOL)"
+  if [ -n "$old_pool" ] && [ "$old_pool" != "256M" ]; then
+    set_env_value MARIADB_POOL_SIZE "$old_pool"
+  else
+    set_env_value MARIADB_POOL_SIZE auto
+  fi
+fi
+
 # Which release this install runs, as recorded by whoever put the bundle here: install.sh for
 # a fresh main server, the panel for a worker server. Those keys - the version, the tag the
 # images were published under, the registry - are the one thing this script cannot derive and
 # will not invent, and a worker has no checkout to derive them from either.
 #
-# MariaDB's buffer pool used to be a fixed 256M, and every .env from then says so. Once, that old
-# default becomes "auto". A size set from then on is the operator's, 256M included.
-if [ -z "$(env_value WPL7_BUFFER_POOL_MOVED)" ]; then
-  if [ "$(env_value MARIADB_BUFFER_POOL)" = "256M" ]; then
-    set_env_value MARIADB_BUFFER_POOL auto
-    echo "MARIADB_BUFFER_POOL is now auto: an eighth of this server's memory, between 256M and 4G."
-  fi
-  set_env_value WPL7_BUFFER_POOL_MOVED 1
-fi
-
 # Applied whether or not .env already exists, and consumed once. That is deliberate: on a
 # worker, "Update" means "make this machine match the panel", so a re-run has to be able to
 # move the version forward. Nothing else writes this file, and it is removed as soon as it

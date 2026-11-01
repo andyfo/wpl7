@@ -609,6 +609,7 @@ export class FakeDocker implements DockerPort {
   }
   async imageStack(ref: string): Promise<SiteStack> {
     if (this.imageStacks.has(ref)) return this.imageStacks.get(ref)!;
+    if (ref.startsWith('sha256:')) return 2;
     const id = await this.imageId(ref);
     return id ? (this.imageStacks.get(id) ?? 2) : 1;
   }

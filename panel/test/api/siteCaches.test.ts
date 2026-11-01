@@ -7,7 +7,7 @@ import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { jobs, siteWpComponents, sites, type SiteRow } from '../../src/db/schema.js';
-import { runtimeChangedSinceLastApply, wpCliOnlyReads } from '../../src/services/siteCaches.js';
+import { markRuntimeApplied, sweepSiteRuntime, wpCliOnlyReads } from '../../src/services/siteCaches.js';
 import { siteImage, sitePaths } from '../../src/services/siteSpec.js';
 import { makeApp, makeWorld, waitFor, type TestWorld } from '../helpers.js';
 
@@ -252,7 +252,7 @@ describe('the object cache', () => {
 
   it('names another object cache the inventory found', async () => {
     const { w, site, call } = await world();
-    w.db.insert(siteWpComponents).values({ siteId: site.id, kind: 'plugin', slug: 'object-cache', title: 'Some Other Cache', status: 'dropin', version: '1', updateState: 'none', autoUpdate: 0, seenAt: Date.now() } as never).run();
+    w.db.insert(siteWpComponents).values({ siteId: site.id, kind: 'plugin', slug: 'object-cache.php', title: 'Some Other Cache', status: 'dropin', version: '1', updateState: 'none', autoUpdate: 0, seenAt: Date.now() } as never).run();
     expect((await call('GET', '')).json().cache.objectBlocked).toMatch(/Some Other Cache/);
   });
 
@@ -368,6 +368,20 @@ describe('what empties the caches', () => {
     expect(w.docker.cacheClears).toEqual([site.containerName, site.containerName]);
   });
 
+  it('maintenance mode, either way: stored pages would go on being served', async () => {
+    const { w, site, call } = await world();
+    expect((await call('PUT', '/wp/maintenance', { enabled: true })).statusCode).toBe(200);
+    expect(w.docker.cacheClears).toEqual([site.containerName]);
+  });
+
+  it('a plugin update: and what it brought is checked for PHP lines first', async () => {
+    const { w, site } = await world();
+    const job = w.worker.enqueue('wp.pluginTask', { siteId: site.id, slug: 'hello', action: 'update', backupFirst: false } as never, { id: site.id, slug: site.slug, serverId: site.serverId });
+    await runJob(w, job.id);
+    expect(w.docker.calls.some((c) => c.method === 'runEphemeral' && (c.args[0] as { labels?: Record<string, string> }).labels?.['wpl7.migration'] === 'migrate')).toBe(true);
+    expect(w.docker.cacheClears).toEqual([site.containerName]);
+  });
+
   it('nothing for a stopped site: its start empties them', async () => {
     const { w, site } = await world();
     w.docker.containers.set(site.containerName, 'exited');
@@ -410,14 +424,30 @@ describe('wpCliOnlyReads', () => {
 });
 
 describe('a panel update that renders a site differently', () => {
-  it('asks once per release, and the files are rewritten', async () => {
-    const w = await makeWorld();
-    const first = runtimeChangedSinceLastApply(w.core.settings);
-    expect(first).not.toBeNull();
-    first!();
-    expect(runtimeChangedSinceLastApply(w.core.settings)).toBeNull();
-    w.core.settings.setRaw('site.runtimeDigest', 'an older panel');
-    expect(runtimeChangedSinceLastApply(w.core.settings)).not.toBeNull();
+  it('queues the job until a server has had it with nothing left out', async () => {
+    const { w, site } = await world();
+    const jobsOf = () => w.db.select().from(jobs).where(eq(jobs.type, 'server.applySiteLimits')).all();
+    expect(sweepSiteRuntime(w.core, w.worker)).toEqual([site.serverId]);
+    // One waiting is enough.
+    expect(sweepSiteRuntime(w.core, w.worker)).toEqual([]);
+    expect(jobsOf()).toHaveLength(1);
+
+    const done = await runJob(w, jobsOf()[0]!.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(sweepSiteRuntime(w.core, w.worker)).toEqual([]);
+
+    // An older panel applied them.
+    w.core.settings.setRaw(`site.runtimeDigest.${site.serverId}`, 'an older panel');
+    expect(sweepSiteRuntime(w.core, w.worker)).toEqual([site.serverId]);
     expect(siteImage('8.3')).toContain('8.3');
+    markRuntimeApplied(w.core.settings, site.serverId);
+  });
+
+  it('takes a rule saved while the job was on its way', async () => {
+    const { w, site, call, nginxFile } = await world();
+    const job = w.worker.enqueue('server.applySiteLimits', { serverId: site.serverId }, undefined, { serverId: site.serverId });
+    expect((await call('PUT', '/cache', { own: [{ kind: 'skip', match: 'path', value: '/members/*' }] })).statusCode).toBe(200);
+    await runJob(w, job.id);
+    expect(nginxFile()).toContain('path /members/*');
   });
 });

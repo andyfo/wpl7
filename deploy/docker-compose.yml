@@ -111,13 +111,13 @@ services:
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
       MARIADB_AUTO_UPGRADE: "1"
     # Worked out at every start, so the buffer pool follows a resized server: an eighth of its
-    # memory, 256 MB to 4 GB. Any value but "auto" in MARIADB_BUFFER_POOL is used as it is. The first
+    # memory, 256 MB to 4 GB. Any value but "auto" in MARIADB_POOL_SIZE is used as it is. The first
     # line of /proc/meminfo is the host's total, in kB: this container has no memory limit of its own.
     entrypoint:
       - bash
       - -c
       - |
-        pool='${MARIADB_BUFFER_POOL:-auto}'
+        pool='${MARIADB_POOL_SIZE:-auto}'
         if [ "$$pool" = auto ]; then
           read -r _ kb _ < /proc/meminfo
           mb=$$((kb / 1024 / 8))

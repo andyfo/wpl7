@@ -9,8 +9,7 @@ import { defaultSiteLimits } from '../services/siteSpec.js';
 import { sweepLegacyRename } from '../services/legacyRename.js';
 import { sweepHardening } from '../services/siteHardening.js';
 import { sweepSiteImages } from '../services/siteImages.js';
-import { runtimeChangedSinceLastApply } from '../services/siteCaches.js';
-import { hostedSites } from '../lib/siteKind.js';
+import { sweepSiteRuntime } from '../services/siteCaches.js';
 import { sweepPhpReleases } from '../services/phpReleases.js';
 import { sweepWildcardSites } from '../services/wildcardSites.js';
 import { FIRST_CHECK_DELAY_MS } from '../services/updates.js';
@@ -461,16 +460,6 @@ export class Schedulers {
           // endpoints have just been repaired is serving again before its reconcile takes
           // its container away.
           if (how === 'boot') await sweepLegacyRename(s, this.worker);
-          // A release that renders a site's runtime files differently: its improved rules are for
-          // the sites running now, not only for their next restart.
-          if (how === 'boot') {
-            const applied = runtimeChangedSinceLastApply(s.settings);
-            if (applied) {
-              const hosting = s.db.selectDistinct({ serverId: sites.serverId }).from(sites).where(hostedSites()).all();
-              for (const { serverId } of hosting) this.worker.enqueue('server.applySiteLimits', { serverId }, undefined, { serverId });
-              applied();
-            }
-          }
           // Containers built before the protection mounts: at boot for the same reason, then
           // hourly for the ones that were busy or on a server that was away. Once every
           // container carries the mounts, this is one container list per server an hour.
@@ -482,6 +471,8 @@ export class Schedulers {
             this.hardeningSweptAt = Date.now();
             await sweepHardening(s, this.worker);
             await sweepSiteImages(s, this.worker);
+            // A release that renders a site's runtime files differently.
+            sweepSiteRuntime(s, this.worker);
             await sweepPhpReleases(s);
             // Its own trigger is Settings -> DNS; this is for the sites that were busy then.
             await sweepWildcardSites(s, this.worker);

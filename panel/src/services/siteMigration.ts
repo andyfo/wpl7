@@ -282,7 +282,9 @@ function read_htaccess(array $lines): array {
                 $scope = $section;
             }
         }
-        $entry = ['line' => $first, 'last' => $i, 'text' => $text, 'words' => $words, 'directive' => $directive, 'inert' => $inert, 'live' => $live, 'scope' => $scope];
+        // What the job log says of the line: a value can hold a password.
+        $shown = $setting && count($words) >= 2 ? $words[0] . ' ' . $words[1] : $text;
+        $entry = ['line' => $first, 'last' => $i, 'text' => $text, 'shown' => $shown, 'words' => $words, 'directive' => $directive, 'inert' => $inert, 'live' => $live, 'scope' => $scope];
         if (!$setting) {
             $entries[] = ['kind' => 'handler'] + $entry;
             continue;
@@ -406,6 +408,14 @@ function harm(string $key, string $value, string $folder, bool $ran): ?string {
         return is_file($file) && is_readable($file) ? null : 'the file it names is not here';
     }
     if ($key === 'session.save_handler' && $value === 'files') return null;
+    // Off in the image. On, every warning reaches visitors, and a stored page keeps it for hours.
+    if (!$ran && ($key === 'display_errors' || $key === 'display_startup_errors') && !in_array(strtolower($value), ['0', 'off', 'false', 'no', 'none', 'stderr'], true)) {
+        return 'it would show PHP\'s errors to visitors';
+    }
+    // PHP refuses such a name, and every page that starts a session comes out blank.
+    if (!$ran && $key === 'session.name' && (ctype_digit($value) || preg_match('/[=,; \t\r\n\x0b\x0c]/', $value) === 1)) {
+        return 'PHP refuses such a name';
+    }
     if (isset(HOST_SETTINGS[$key])) {
         if (!$ran) return HOST_SETTINGS[$key];
         return path_is_here($key, $value) ? null : 'the path it names is not here';
@@ -420,7 +430,8 @@ function harm(string $key, string $value, string $folder, bool $ran): ?string {
 
 function not_used(array &$ini, int $i, string $text, string $why): void {
     $ini['lines'][$i] = comment_out($ini['lines'][$i], INI_UNUSED);
-    $ini['changes'][] = [$ini['path'], $i + 1, $text . ': commented out, ' . $why];
+    // The setting's name, not its value: a session path can hold a password, and this goes in the job log.
+    $ini['changes'][] = [$ini['path'], $i + 1, trim(explode('=', $text, 2)[0]) . ': commented out, ' . $why];
 }
 
 /**
@@ -430,17 +441,23 @@ function not_used(array &$ini, int $i, string $text, string $why): void {
 function clean_user_ini(array &$ini): void {
     $inSpecial = false;
     foreach ($ini['lines'] as $i => $line) {
-        $text = trim(without_eol($line));
+        $text = trim(preg_replace('/^\xEF\xBB\xBF/', '', without_eol($line)));
         if ($text === '' || $text[0] === ';') continue;
         if ($text[0] === '[') {
             // PHP-FPM's workers crash on these in a .user.ini, an empty one too (a 503 on every
-            // script below it, tried on 8.4). What is under one was meant for one path or host.
-            $inSpecial = preg_match('/^\[[ \t]*(?:path|host)/i', $text) === 1;
+            // script below it, tried on 8.4), quoted or not. What is under one was meant for one
+            // path or host.
+            $inSpecial = preg_match('/^\[[ \t]*["\']?[ \t]*(?:path|host)/i', $text) === 1;
             if ($inSpecial) not_used($ini, $i, $text, 'PHP-FPM\'s workers crash on such a section');
             continue;
         }
         if ($inSpecial) {
             not_used($ini, $i, $text, 'it was in a section PHP-FPM\'s workers crash on');
+            continue;
+        }
+        // PHP stops reading a file at a line it can't parse, and what is moved here goes after it.
+        if (@parse_ini_string($text . "\n", false, INI_SCANNER_NORMAL) === false) {
+            not_used($ini, $i, $text, 'PHP stops reading the file at a line like this');
             continue;
         }
         if (preg_match('/^([^=\s]+)\s*=(.*)$/s', $text, $m) !== 1) continue;
@@ -464,7 +481,7 @@ function ini_access(string $name): ?int {
 
 function leave(array $e, array &$ini, string $why): string {
     if ($e['inert']) $ini['add'][] = INI_LEFT . $e['text'];
-    say('warn', $ini['htaccess'], $e['line'] + 1, $e['text'] . ': not moved to .user.ini, ' . $why);
+    say('warn', $ini['htaccess'], $e['line'] + 1, $e['shown'] . ': not moved to .user.ini, ' . $why);
     return 'left';
 }
 
@@ -505,8 +522,8 @@ function settle(int $index, array $e, array &$ini): string {
     $ini['add'][] = $name . ' = ' . $text;
     $ini['added'][] = $index;
     // php_admin_* can't be changed at run time, and a .user.ini doesn't stop that where PHP allows it.
-    if ($e['admin'] && ($access & 1) !== 0) say('warn', $ini['htaccess'], $e['line'] + 1, $e['text'] . ': a script can now change this with ini_set, which php_admin_* did not allow');
-    if ($e['inert']) $ini['changes'][] = [$ini['htaccess'], $e['line'] + 1, $e['text'] . ': set in .user.ini; this line stays, and does nothing now'];
+    if ($e['admin'] && ($access & 1) !== 0) say('warn', $ini['htaccess'], $e['line'] + 1, $e['shown'] . ': a script can now change this with ini_set, which php_admin_* did not allow');
+    if ($e['inert']) $ini['changes'][] = [$ini['htaccess'], $e['line'] + 1, $e['shown'] . ': set in .user.ini; this line stays, and does nothing now'];
     return 'moved';
 }
 
@@ -659,16 +676,16 @@ function migrate_folder(string $dir): void {
             if ($e['inert']) continue;
             $fate = $fates[$i] ?? $fates[$winners[$e['name']]];
             $lines[$e['line']] = comment_out($lines[$e['line']], $fate === 'moved' ? MOVED_MARK : NOT_MOVED_MARK);
-            if ($fate === 'moved') $changes[] = [$htPath, $at, $e['text'] . ': moved to .user.ini'];
-            elseif ($fate === 'unknown') $changes[] = [$htPath, $at, $e['text'] . ': commented out, this PHP has no such setting, so it did nothing'];
-            else $changes[] = [$htPath, $at, $e['text'] . ': commented out'];
+            if ($fate === 'moved') $changes[] = [$htPath, $at, $e['shown'] . ': moved to .user.ini'];
+            elseif ($fate === 'unknown') $changes[] = [$htPath, $at, $e['shown'] . ': commented out, this PHP has no such setting, so it did nothing'];
+            else $changes[] = [$htPath, $at, $e['shown'] . ': commented out'];
         } elseif (engine_is_on($e)) {
             if ($e['inert']) continue;
             $lines[$e['line']] = comment_out($lines[$e['line']], NOT_MOVED_MARK);
             $changes[] = [$htPath, $at, $e['text'] . ': commented out, PHP-FPM has no such setting. PHP runs here unless a folder above has a deny.'];
         } elseif ($e['inert']) {
             if ($e['scope'] === null) $denyLater ??= $e;
-            else say('warn', $htPath, $at, $e['text'] . ': it is inside ' . $e['scope']['label'] . ' in a block for mod_php, and does nothing now. PHP runs in those files: deny them if it should not.');
+            else say('warn', $htPath, $at, $e['shown'] . ': it is inside ' . $e['scope']['label'] . ' in a block for mod_php, and does nothing now. PHP runs in those files: deny them if it should not.');
         } else {
             // A deny in place of the line, where it can be read in context. It runs on both setups.
             $indent = indent_of($lines[$e['line']]);
@@ -908,7 +925,7 @@ export async function migrateSiteForStack2(ctx: JobContext<unknown>, server: Ser
  * arrival of a move. An old backup or another host brings back what Apache now refuses, and a
  * .user.ini written for a server this isn't. Called once the container is what it is going to be
  * and before it starts, so that no request meets those lines, and what decides is that container:
- * on stack 1 they are what mod_php reads, and they move with the site when it does.
+ * on stack 1 they are what mod_php reads, so they go back to how it reads them.
  *
  * Here a failure is only a warning. At the switch there is an old container to go back to; here the
  * site's files and database have already been replaced, and it is better up with one folder answering
@@ -916,7 +933,10 @@ export async function migrateSiteForStack2(ctx: JobContext<unknown>, server: Ser
  */
 export async function migrateArrivedFiles(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, site: SiteRow): Promise<void> {
   try {
-    if ((await siteContainerStack(server.docker, site.containerName)) !== 2) return;
+    const stack = await siteContainerStack(server.docker, site.containerName);
+    // A stack 2 site arriving on a server still on the old image: mod_php wants its lines back.
+    if (stack === 1) await undoSiteMigration(ctx, server, s, site);
+    if (stack !== 2) return;
     ctx.info('Checking the PHP settings in the files that came in…');
     await migrateSiteForStack2(ctx, server, s, site);
   } catch (err) {

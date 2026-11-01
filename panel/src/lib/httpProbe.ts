@@ -9,6 +9,8 @@ export interface ProbeAttempt {
   ok: boolean;
   status: number | null;
   ms: number;
+  /** It said its body is empty. Still an answer to the uptime check; not to a move's. */
+  empty?: boolean;
 }
 
 /**
@@ -29,8 +31,8 @@ export function httpProbeOnce(url: string, hostHeader: string, timeoutMs = 8000)
   const secure = target.protocol === 'https:';
   const started = Date.now();
   return new Promise((resolve) => {
-    const done = (status: number | null) =>
-      resolve({ ok: status !== null && isUp(status), status, ms: Date.now() - started });
+    const done = (status: number | null, empty = false) =>
+      resolve({ ok: status !== null && isUp(status), status, ms: Date.now() - started, ...(empty ? { empty } : {}) });
     const req = (secure ? https : http).request(
       {
         protocol: target.protocol,
@@ -48,7 +50,7 @@ export function httpProbeOnce(url: string, hostHeader: string, timeoutMs = 8000)
       },
       (res) => {
         res.resume(); // drain so the socket can be released
-        done(res.statusCode ?? null);
+        done(res.statusCode ?? null, res.statusCode === 200 && res.headers['content-length'] === '0');
       },
     );
     req.on('timeout', () => req.destroy(new Error('probe timed out')));

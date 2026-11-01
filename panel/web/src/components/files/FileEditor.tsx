@@ -23,6 +23,21 @@ type Loaded =
   | { status: 'not-utf8'; preview: string }
   | { status: 'text'; text: string; bom: boolean; eol: LineEndings; etag: string; size: number };
 
+/**
+ * A php_value or php_flag Apache would refuse. Inside <IfModule mod_php…> it is harmless, and that is
+ * how most plugins write it. An old-setup site's mod_php reads them, but its server gets the new setup
+ * with its next update, so the note is true soon enough.
+ */
+function hasBarePhpSetting(text: string): boolean {
+  let inBlock = 0;
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*<IfModule\b/i.test(line) && (inBlock > 0 || /php/i.test(line))) inBlock++;
+    else if (/^\s*<\/IfModule>/i.test(line) && inBlock > 0) inBlock--;
+    else if (inBlock === 0 && /^\s*php_(?:admin_)?(?:value|flag)\b/i.test(line)) return true;
+  }
+  return false;
+}
+
 type Problem =
   | { kind: 'conflict' }
   | { kind: 'syntax'; message: string; line: number | null }
@@ -112,7 +127,7 @@ export default function FileEditor({
         savedDoc.current = doc;
         setDirty(!view.state.doc.eq(doc));
         setSavedAt(Date.now());
-        setPhpInHtaccess(/(^|\/)\.htaccess$/.test(path) && /^[ \t]*php_(?:admin_)?(?:value|flag)\b/im.test(doc.toString()));
+        setPhpInHtaccess(/(^|\/)\.htaccess$/.test(path) && hasBarePhpSetting(doc.toString()));
         onSaved();
         view.focus();
       } catch (err) {

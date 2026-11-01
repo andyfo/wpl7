@@ -642,15 +642,17 @@ export async function replaceContainer(
   run: boolean,
 ): Promise<ReplacedContainer> {
   const name = next.site.containerName;
-  const old = await server.docker.containerStack(name);
-  const tag = siteImage(next.site.phpVersion);
+  let old = await server.docker.containerStack(name);
   // Set when this site has already failed to move to the image the tag names: going through that
   // again would only fail a change of domains or a new database password for a reason of its own.
-  let stayOn: { imageId: string; stack: SiteStack } | undefined;
-  if (old?.stack === 1 && (await server.docker.imageStack(tag)) === 2) {
-    if (loadSite(s.db, row.id).stackSwitchImage === (await server.docker.imageId(tag))) {
-      ctx.warn('This site stays on the old PHP setup, because it could not move to the new one. Retry on its page tries again.');
-      stayOn = old;
+  const stayOn = next.site.phpVersion === row.phpVersion ? await failedSwitchToKeep(server, s, row) : null;
+  if (stayOn) {
+    ctx.warn('This site stays on the old PHP setup, because it could not move to the new one. Retry on its page tries again.');
+  } else if (old?.stack === 1 && (await server.docker.imageStack(siteImage(next.site.phpVersion))) === 2) {
+    // Made by a panel from before stack 2 on an image from after it: nothing reaches it, so there
+    // is nothing to go back to, only files that may still have to move.
+    if ((await server.docker.imageStack(old.imageId)) === 2) {
+      old = null;
     } else {
       await switchToStack2(ctx, server, s, runtime, row, next, previous, run, old.imageId);
       return { previous: old, switched: true };
@@ -685,6 +687,23 @@ export async function replaceContainer(
     throw err;
   }
   return { previous: old, switched: false };
+}
+
+/**
+ * The old container of a site that has failed to move to the image its tag names now, while that
+ * is still so. Whatever recreates such a container builds it on the same old image: only a newer
+ * image, or someone pressing Retry, tries the move again.
+ */
+export async function failedSwitchToKeep(
+  server: Pick<ServerHandle, 'docker'>,
+  s: Pick<CoreServices, 'db'>,
+  row: SiteRow,
+): Promise<{ imageId: string; stack: SiteStack } | null> {
+  const failedOn = loadSite(s.db, row.id).stackSwitchImage;
+  if (failedOn === null) return null;
+  const old = await server.docker.containerStack(row.containerName);
+  if (old?.stack !== 1) return null;
+  return failedOn === (await server.docker.imageId(siteImage(row.phpVersion))) ? old : null;
 }
 
 /** Why a site's page cache stays off from the moment it moves: shown on its Caching card. */
@@ -783,8 +802,9 @@ async function switchToStack2(
 
     failing = 'the old container could not be removed';
     ctx.info('Replacing the container…');
-    await docker.removeContainer(name);
+    // Before the call: over SSH, a remove that worked can still come back as a failure.
     removed = true;
+    await docker.removeContainer(name);
     failing = 'the new container could not be created';
     await docker.createSiteContainer(await siteContainerSpec(s, server, next.site, next.domains, runtime));
 
@@ -873,6 +893,8 @@ async function siteAnswers(server: ServerHandle, s: CoreServices, container: str
     return { ok: state === 'running', saw: `its container is ${state}` };
   }
   const attempt = await probeSiteAttempt(server, container, host, timeoutMs, MOVE_CHECK_ATTEMPT_MS);
+  // A blank 200 is a broken site too: a bad session.name in a .user.ini gives one on every PHP page.
+  if (attempt.ok && attempt.empty) return { ok: false, saw: 'it answered with an empty page' };
   return { ok: attempt.ok, saw: attempt.status === null ? 'nothing answered' : `it answered HTTP ${attempt.status}` };
 }
 
@@ -1116,9 +1138,9 @@ export async function siteUpdateDomains(
     assertDomainsFree(s, newList, { excludeSiteId: site.id, allowDevHostname: site.devHostname });
   } catch (err) {
     ctx.error('A domain in this request was claimed by another site while certificates were issuing.');
-    await server.docker.removeContainer(site.containerName);
-    await server.docker.createSiteContainer(await siteContainerSpec(s, server, site, oldDomains, siteRuntimeFrom(s.settings, site)));
-    if (wasRunning) await startSiteContainer(server, s, site, ctx);
+    await replaceContainer(ctx, server, s, siteRuntimeFrom(s.settings, site), site, { site, domains: oldDomains }, { site, domains: transition }, wasRunning).catch((putBackErr: unknown) =>
+      ctx.error(`Could not put the old domains back: ${errMsg(putBackErr)}. "Recreate container" on the site page rebuilds it.`),
+    );
     throw err;
   }
 

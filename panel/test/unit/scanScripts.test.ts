@@ -173,6 +173,24 @@ describe.skipIf(!HAS_PHP)('the check, in the site image', () => {
     expect(found.map((f) => `${f.path} ${f.detail}`)).toEqual(["wp-content/themes/shop/.user.ini auto_prepend_file = '/var/www/html/wp-content/themes/shop/logo.png'"]);
   });
 
+  it('takes what the panel moved in a plugin for its own, unless it switches something on', () => {
+    const { root, input } = makeSite();
+    const plugin = path.join(root, 'wp-content/plugins/hello');
+    fs.mkdirSync(plugin, { recursive: true });
+    const original = 'php_flag engine off\n';
+    fs.writeFileSync(path.join(plugin, '.htaccess'), '# Replaced by a deny by WPL7: php_flag engine off\nRequire all denied\n');
+    fs.writeFileSync(path.join(plugin, '.user.ini'), "; Moved from .htaccess by WPL7: php_value memory_limit 512M\nmemory_limit = '512M'\n");
+    const withPlugin = {
+      ...(input as object),
+      plugins: { ...(input as { plugins?: object }).plugins, hello: { version: '1.0', files: { '.htaccess': [crypto.createHash('sha256').update(original).digest('hex')] } } },
+    };
+    const about = (result: { findings: { path: string }[] }) => result.findings.filter((f) => f.path.startsWith('wp-content/plugins/hello/'));
+    expect(about(check(root, withPlugin))).toEqual([]);
+
+    fs.writeFileSync(path.join(plugin, '.htaccess'), '# Moved to .user.ini by WPL7: php_value a b\nAddHandler application/x-httpd-php .jpg\n');
+    expect(about(check(root, withPlugin)).map((f) => f.path)).toEqual(['wp-content/plugins/hello/.htaccess']);
+  });
+
   it('never follows a link, and reports the ones that leave the site or sit among WordPress files', () => {
     const { root, input } = makeSite();
     fs.symlinkSync('/etc/passwd', path.join(root, 'wp-content/uploads/notes.txt'));

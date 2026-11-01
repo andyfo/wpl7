@@ -350,7 +350,7 @@ describe.skipIf(!CAN_RUN)('a php_value or php_flag in a .htaccess', () => {
     const r = simple.result();
     expect(r.read('.htaccess')).toBe(`# BEGIN WordPress\nRewriteEngine On\n# END WordPress\n${MOVED}php_value memory_limit 512M\n`);
     expect(r.read('.user.ini')).toBe(`${INI_MOVED}php_value memory_limit 512M\nmemory_limit = '512M'\n`);
-    expect(r.changes.map((c) => [c.path, c.line, c.what])).toEqual([['.htaccess', 4, 'php_value memory_limit 512M: moved to .user.ini']]);
+    expect(r.changes.map((c) => [c.path, c.line, c.what])).toEqual([['.htaccess', 4, 'php_value memory_limit: moved to .user.ini']]);
     expect(r.warnings).toEqual([]);
   });
 
@@ -839,7 +839,7 @@ describe.skipIf(!CAN_RUN)("cPanel's generated files", () => {
     });
     // 30 s is under the site's 120, 8M under its 64M, and the sessions folder is on another host.
     const left = r.warnings.filter((w) => w.what.includes('not moved'));
-    expect(left.map((w) => w.what.split(' ')[1])).toEqual(['max_execution_time', 'post_max_size', 'session.save_path']);
+    expect(left.map((w) => w.what.split(':')[0]!.split(' ')[1])).toEqual(['max_execution_time', 'post_max_size', 'session.save_path']);
     // The handler line is a warning that still stands, and nothing else is said again.
     expect(r.second.warnings.map((w) => w.line)).toEqual([4]);
   });
@@ -854,7 +854,7 @@ describe.skipIf(!CAN_RUN)("cPanel's generated files", () => {
   it("its .user.ini: limits under the site's own go, and the rest stays", () => {
     const r = userIni.result();
     expect(r.ini('.user.ini')).toEqual({ display_errors: '', 'session.gc_maxlifetime': '1440', 'zlib.output_compression': '1' });
-    expect(r.changes.map((c) => c.what.split(' ')[0])).toEqual(['max_execution_time', 'max_input_time', 'max_input_vars', 'memory_limit', 'post_max_size', 'session.save_path', 'upload_max_filesize']);
+    expect(r.changes.map((c) => c.what.split(':')[0])).toEqual(['max_execution_time', 'max_input_time', 'max_input_vars', 'memory_limit', 'post_max_size', 'session.save_path', 'upload_max_filesize']);
     expect(r.read('.user.ini')).toContain(`${INI_UNUSED}session.save_path = "/var/cpanel/php/sessions/ea-php73"\n`);
     expect(r.read('.user.ini')).toContain('[PHP]\ndisplay_errors = Off\n');
     expect(r.afterUndo('.user.ini')).toBe(r.read('.user.ini'));
@@ -999,7 +999,7 @@ describe.skipIf(!CAN_RUN)('a .user.ini that was already there', () => {
     expect(check()).toBe(kept);
   });
 
-  const others = '; a comment about memory_limit = 1M\n\n;error_log = /x\n  ; indented comment\n[PHP]\ndisplay_errors = On\ndate.timezone = "Europe/Berlin"\nshort_open_tag = Off\nzlib.output_compression = On\nasp_tags = Off\nengine = off\n# memory_limit = 1M\n';
+  const others = '; a comment about memory_limit = 1M\n\n;error_log = /x\n  ; indented comment\n[PHP]\ndisplay_errors = Off\ndate.timezone = "Europe/Berlin"\nshort_open_tag = Off\nzlib.output_compression = On\nasp_tags = Off\nengine = off\n# memory_limit = 1M\n';
   const everythingElse = S.add({ '.user.ini': others });
   it('keeps everything else, comments and blank lines and all', () => {
     const r = everythingElse.result();
@@ -1016,8 +1016,8 @@ describe.skipIf(!CAN_RUN)('a .user.ini that was already there', () => {
   it('reports each line, and only the lines it changed', () => {
     const r = each.result();
     expect(r.changes.map((c) => [c.path, c.line])).toEqual([['.user.ini', 2], ['.user.ini', 4]]);
-    expect(r.changes[0]!.what).toBe("memory_limit = 64M: commented out, it is lower than the site's own limit, 256M");
-    expect(r.changes[1]!.what).toBe('error_log = /x/y: commented out, errors go to the container log here');
+    expect(r.changes[0]!.what).toBe("memory_limit: commented out, it is lower than the site's own limit, 256M");
+    expect(r.changes[1]!.what).toBe('error_log: commented out, errors go to the container log here');
   });
 
   const sections = S.add({ '.user.ini': 'date.timezone = UTC\n[PATH=/var/www/html/x]\nmemory_limit = 1G\n[PHP]\nlog_errors = On\n[host=example.com]\nshort_open_tag = On\n[ HOST=example.org]\n' });
@@ -1028,10 +1028,31 @@ describe.skipIf(!CAN_RUN)('a .user.ini that was already there', () => {
   });
 
   const broken = S.add({ '.user.ini': 'date.timezone = UTC\nbad = /x/err(1).log\n', '.htaccess': 'php_value memory_limit 512M\n' });
-  it('warns about a syntax error, because PHP stops reading there and what is moved goes after it', () => {
+  it('comments out a line PHP cannot read, because it stops there and what is moved goes after it', () => {
     const r = broken.result();
-    expect(r.warnings.map((w) => [w.path, w.line])).toEqual([['.user.ini', 0]]);
-    expect(r.warnings[0]!.what).toContain('syntax error');
+    expect(r.read('.user.ini')).toContain(`${INI_UNUSED}bad = /x/err(1).log\n`);
+    expect(r.ini('.user.ini')).toEqual({ 'date.timezone': 'UTC', memory_limit: '512M' });
+    expect(r.warnings).toEqual([]);
+  });
+
+  const quotedSections = S.add({ '.user.ini': '\uFEFF[PATH=/x]\nmemory_limit = 1G\n["HOST=y"]\nlog_errors = On\n' });
+  it("finds the sections PHP-FPM's workers crash on behind a byte-order mark, or in quotes", () => {
+    const text = quotedSections.result().read('.user.ini');
+    expect(text.match(new RegExp(INI_UNUSED, 'g'))).toHaveLength(4);
+  });
+
+  const showing = S.add({ '.user.ini': 'display_errors = On\ndisplay_startup_errors = 1\nsession.name = 12345\nsession.name = a,b\n' });
+  it('comments out what shows errors to visitors, and a session name PHP refuses', () => {
+    const r = showing.result();
+    expect(r.changes.map((c) => c.what.split(':')[0])).toEqual(['display_errors', 'display_startup_errors', 'session.name', 'session.name']);
+  });
+
+  const secret = S.add({ '.htaccess': 'php_value session.save_path "tcp://user:hunter2@cache.example.com:6379"\n', '.user.ini': "session.save_path = 'tcp://other:hunter3@cache.example.com'\n" });
+  it('names a setting in its report, and never prints a value that can hold a password', () => {
+    const r = secret.result();
+    const said = JSON.stringify([...r.changes, ...r.warnings]);
+    expect(said).toContain('session.save_path');
+    expect(said).not.toContain('hunter');
   });
 
   const itsOwn = addHtaccess('php_value memory_limit 64M\nphp_value session.save_path /tmp\nphp_value session.save_handler files\n');
@@ -1041,7 +1062,7 @@ describe.skipIf(!CAN_RUN)('a .user.ini that was already there', () => {
 
   const noLimitOwn = noMemoryLimit.add({ '.user.ini': 'memory_limit = 1G\n' });
   it('says plainly when the site has no limit of its own to be lower than', () => {
-    expect(noLimitOwn.result().changes[0]!.what).toBe('memory_limit = 1G: commented out, the site has no such limit of its own');
+    expect(noLimitOwn.result().changes[0]!.what).toBe('memory_limit: commented out, the site has no such limit of its own');
   });
 
   it('does comment out what it moved once its file has gone', () => {
@@ -1248,7 +1269,7 @@ describe.skipIf(!CAN_LOCK_FILES)('a file it cannot read or write', () => {
     expect(read(root, 'b/.htaccess')).toBe(`${MOVED}php_value memory_limit 400M\n`);
     expect(res.warnings.map((w) => w.path)).toEqual(['a/.htaccess']);
     expect(res.warnings[0]!.what).toContain('could not be written');
-    expect(res.warnings[0]!.what).toContain('php_value memory_limit 300M');
+    expect(res.warnings[0]!.what).toContain('php_value memory_limit');
     // Its setting has moved already, and the next run finishes the job.
     expect(iniAsPhpReadsIt(root, 'a/.user.ini')).toEqual({ memory_limit: '300M' });
     fs.chmodSync(path.join(root, 'a/.htaccess'), 0o644);
@@ -1705,8 +1726,8 @@ describe('running it in the site', () => {
     const log = jobLog();
     await migrateSiteForStack2(log.ctx, handle, w.core, site);
     expect(read(wordpress, '.htaccess')).toBe(`${MOVED}php_value memory_limit 512M\nAddHandler application/x-httpd-php .html\n`);
-    expect(log.info.join('\n')).toContain('.htaccess:1: php_value memory_limit 512M: moved to .user.ini');
-    expect(log.info.join('\n')).toContain("upload_max_filesize = 2M: commented out, it is lower than the site's own limit, 64M");
+    expect(log.info.join('\n')).toContain('.htaccess:1: php_value memory_limit: moved to .user.ini');
+    expect(log.info.join('\n')).toContain("upload_max_filesize: commented out, it is lower than the site's own limit, 64M");
     expect(log.warn.join('\n')).toContain('.htaccess:2: AddHandler application/x-httpd-php .html: files named .html now answer 403');
     await undoSiteMigration(log.ctx, handle, w.core, site);
     expect(read(wordpress, '.htaccess')).toBe(htaccess);

@@ -143,6 +143,17 @@ function enabling_line(string $text): ?string {
 }
 
 /**
+ * A plugin's .htaccess whose PHP lines the panel moved (services/siteMigration.ts), or the .user.ini
+ * it moved them to: not the file the plugin shipped, and nothing wrong with it either, as long as
+ * it switches nothing on. Reinstalling would only bring back what had to be moved.
+ */
+function moved_by_panel(string $abs): bool {
+    $text = head_of($abs, 65536);
+    if ($text === null || preg_match('/^[ \t]*[#;] (?:Moved|Not moved|Not used|Replaced)[^\n]* by WPL7/m', $text) !== 1) return false;
+    return enabling_line($text) === null;
+}
+
+/**
  * What a .user.ini makes PHP load with every request. PHP-FPM reads these, in any folder, so it is
  * a way to keep a backdoor in a file that looks like anything. Wordfence's firewall, at the site's
  * top, is the one that is expected: its own guard files are checked as themselves.
@@ -361,10 +372,12 @@ function check(array $input): void {
                     $hash = @hash_file('sha256', $abs);
                     if ($hash === false) { $unread($rel); continue; }
                     if (in_array($hash, $hashes, true)) { $count('plugin:' . $slug, 'verified'); continue; }
+                    if ($lower === '.htaccess' && moved_by_panel($abs)) { $count('plugin:' . $slug, 'verified'); continue; }
                     $count('plugin:' . $slug, 'modified');
                     if ($vouchOnly) { $unvouched($slug, $rel); continue; }
                     $finding('plugin-modified', $rel, $package + ['sha256' => $hash]);
                 } else {
+                    if ($lower === '.user.ini' && moved_by_panel($abs)) continue;
                     $count('plugin:' . $slug, 'extra');
                     if ($vouchOnly) continue;
                     // Reported when it can run; a stray image or log file only keeps the

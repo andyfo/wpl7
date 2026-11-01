@@ -637,6 +637,18 @@ describe('moving to stack 2', () => {
     expect((await w.deps.sites.detail(site.slug)).stackSwitchError).toMatch(/could not start: no/);
   });
 
+  it('does not claim a change of PHP on its old image: a failed one tries the move again', async () => {
+    const w = await makeWorld();
+    const site = await siteOnOldImage(w);
+    vi.spyOn(w.docker, 'startContainer').mockRejectedValueOnce(new Error('no'));
+    expect((await runJob(w, w.deps.sites.reconcile(site.slug).id)).status).toBe('failed');
+    w.docker.imageIds.set(siteImage('8.4'), NEW_ID);
+    const done = await runJob(w, w.deps.sites.changePhp(site.slug, '8.4').id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(specs(w).at(-1)!.image).toBe(siteImage('8.4'));
+    expect(specs(w).at(-1)!.labels[SITE_STACK_LABEL]).toBe('2');
+  });
+
   it('tries again when someone asks, and clears the error when it works', async () => {
     const w = await makeWorld();
     const site = await siteOnOldImage(w);
@@ -654,6 +666,43 @@ describe('moving to stack 2', () => {
   });
 
   describe('the image sweep', () => {
+    it('repairs a container a panel from before stack 2 made on the new image', async () => {
+      const w = await makeWorld();
+      const site = await createSite(w);
+      // What the old panel builds: Apache's port, no stack label, on the image the tag names now.
+      w.docker.labelsByContainer.set(site.containerName, { 'wpl7.managed': 'true', 'wpl7.role': 'wordpress', 'wpl7.site': site.slug });
+      expect(await sweepSiteImages(w.core, w.worker)).toEqual({ queued: [site.slug], busy: [] });
+      const job = w.db.select().from(jobs).where(eq(jobs.type, 'site.reconcile')).all().at(-1)!;
+      w.docker.calls.length = 0;
+      const done = await runJob(w, job.id);
+      expect(done.status, done.error ?? '').toBe('succeeded');
+      expect(specs(w).at(-1)!.labels[SITE_STACK_LABEL]).toBe('2');
+      // Nothing to go back to: it never worked.
+      expect(w.docker.calls.some((c) => c.method === 'tagImage')).toBe(false);
+      expect(await sweepSiteImages(w.core, w.worker)).toEqual({ queued: [], busy: [] });
+    });
+
+    it('brings back a running site whose container is gone, or never started', async () => {
+      const w = await makeWorld();
+      const site = await createSite(w);
+      w.docker.containers.delete(site.containerName);
+      expect(await sweepSiteImages(w.core, w.worker)).toEqual({ queued: [site.slug], busy: [] });
+      const job = w.db.select().from(jobs).where(eq(jobs.type, 'site.reconcile')).all().at(-1)!;
+      expect((await runJob(w, job.id)).status).toBe('succeeded');
+      expect(w.docker.containers.get(site.containerName)).toBe('running');
+
+      w.docker.containers.set(site.containerName, 'created');
+      expect(await sweepSiteImages(w.core, w.worker)).toEqual({ queued: [site.slug], busy: [] });
+    });
+
+    it('leaves a stopped site without a container alone', async () => {
+      const w = await makeWorld();
+      const site = await createSite(w);
+      w.db.update(sites).set({ status: 'stopped' }).where(eq(sites.id, site.id)).run();
+      w.docker.containers.delete(site.containerName);
+      expect(await sweepSiteImages(w.core, w.worker)).toEqual({ queued: [], busy: [] });
+    });
+
     it('leaves a failed site alone while the tag names the image it failed on, and tries a new one', async () => {
       const w = await makeWorld();
       const site = await siteOnOldImage(w);
@@ -882,8 +931,8 @@ describe.skipIf(!HAS_PHP)('the real script in the job that moves a site', () => 
     expect(read('.user.ini')).toContain('; Not used by WPL7: auto_prepend_file');
 
     const log = logOf(w, job.id).join('\n');
-    expect(log).toContain('.htaccess:6: php_value max_input_vars 4321: moved to .user.ini');
-    expect(log).toContain('open_basedir = /home/olduser/public_html: commented out');
+    expect(log).toContain('.htaccess:6: php_value max_input_vars: moved to .user.ini');
+    expect(log).toContain('open_basedir: commented out');
     expect(log).toMatch(/PHP settings: \d+ changes?, \d+ warnings?, in \d+ folders?\./);
   });
 
@@ -893,8 +942,9 @@ describe.skipIf(!HAS_PHP)('the real script in the job that moves a site', () => 
     const job = w.deps.sites.reconcile(site.slug);
     expect((await runJob(w, job.id)).status).toBe('succeeded');
     const lines = w.db.select().from(jobLogs).where(eq(jobLogs.jobId, job.id)).all();
-    const quoted = lines.find((l) => l.message.includes('php_value max_input_vars 4321'))!;
-    expect(quoted.withoutOutput).not.toContain('4321');
+    const quoted = lines.find((l) => l.message.includes('php_value max_input_vars'))!;
+    expect(quoted.message).not.toContain('4321');
+    expect(quoted.withoutOutput).not.toContain('max_input_vars');
     expect(quoted.withoutOutput).toContain('.htaccess:6');
   });
 

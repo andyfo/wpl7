@@ -51,6 +51,9 @@ const HEADER = [
  */
 export function renderApacheHardening(policy: Pick<ContainerPolicy, 'blockPhpInUploads'>): string {
   const lines = HEADER.map((l) => `# ${l}`);
+  // PHP-FPM's image refuses this file itself. The older image has no such line, and after a move that
+  // failed, or to a server still on it, the file can hold what a .htaccess used to keep to itself.
+  lines.push('', '<Files ".user.ini">', '    Require all denied', '</Files>');
   if (policy.blockPhpInUploads) {
     lines.push(
       '',
