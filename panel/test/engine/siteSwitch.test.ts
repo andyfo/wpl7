@@ -76,9 +76,16 @@ async function must(args: string[], input?: string): Promise<string> {
 const wp = (...args: string[]) => must(['exec', '-u', '33:33', '-e', 'HOME=/tmp', '-w', '/var/www/html', CONTAINER, 'wp', ...args]);
 const readInSite = (file: string) => must(['exec', CONTAINER, 'cat', file]);
 
-/** What a page answers from inside the container, on Apache's port or nginx's. */
-const pageStatus = (port: number) =>
-  must(['exec', CONTAINER, 'curl', '-sS', '-o', '/dev/null', '-w', '%{http_code}', '-H', `Host: ${HOST}`, '-H', 'X-Forwarded-Proto: https', `http://127.0.0.1:${port}/wp-login.php`]);
+/**
+ * What a page answers from inside the container, on Apache's port or nginx's. Under test a switch
+ * only checks that the container runs, so right after one nothing may listen yet: curl's exit 7.
+ */
+async function pageStatus(port: number): Promise<string> {
+  const curl = ['exec', CONTAINER, 'curl', '-sS', '-o', '/dev/null', '-w', '%{http_code}', '-H', `Host: ${HOST}`, '-H', 'X-Forwarded-Proto: https', `http://127.0.0.1:${port}/wp-login.php`];
+  const deadline = Date.now() + 60_000;
+  while ((await dockerCli(curl)).status === 7 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 500));
+  return must(curl);
+}
 
 /** Build an image with an id of its own from a Dockerfile, and answer that id. */
 async function build(tag: string, dockerfile: string): Promise<string> {
