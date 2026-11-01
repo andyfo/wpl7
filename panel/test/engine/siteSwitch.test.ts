@@ -196,7 +196,7 @@ describe.skipIf(!ENABLED)('a site moving to stack 2, on real Docker', { timeout:
     // A build without BuildKit leaves a nameless image for each of its steps, all with this label.
     await dockerCli(['image', 'prune', '-f', '--filter', `label=wpl7.engine.switch=${process.pid}`]);
     fs.rmSync(root, { recursive: true, force: true });
-  });
+  }, 180_000);
 
   it('starts as a stack 1 container on an old image, with a real store on it', async () => {
     const replaced = await recreate();

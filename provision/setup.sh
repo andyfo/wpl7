@@ -144,6 +144,7 @@ ufw default allow outgoing >/dev/null
 for port in $SSH_PORTS; do ufw limit "$port/tcp" >/dev/null; done
 ufw allow 80/tcp >/dev/null
 ufw allow 443/tcp >/dev/null
+ufw allow 443/udp >/dev/null
 ufw --force enable >/dev/null
 fi
 # Note: Docker-published ports bypass UFW; only Traefik publishes (80/443), which are allowed anyway.
@@ -291,6 +292,16 @@ fi
 # images were published under, the registry - are the one thing this script cannot derive and
 # will not invent, and a worker has no checkout to derive them from either.
 #
+# MariaDB's buffer pool used to be a fixed 256M, and every .env from then says so. Once, that old
+# default becomes "auto". A size set from then on is the operator's, 256M included.
+if [ -z "$(env_value WPL7_BUFFER_POOL_MOVED)" ]; then
+  if [ "$(env_value MARIADB_BUFFER_POOL)" = "256M" ]; then
+    set_env_value MARIADB_BUFFER_POOL auto
+    echo "MARIADB_BUFFER_POOL is now auto: an eighth of this server's memory, between 256M and 4G."
+  fi
+  set_env_value WPL7_BUFFER_POOL_MOVED 1
+fi
+
 # Applied whether or not .env already exists, and consumed once. That is deliberate: on a
 # worker, "Update" means "make this machine match the panel", so a re-run has to be able to
 # move the version forward. Nothing else writes this file, and it is removed as soon as it

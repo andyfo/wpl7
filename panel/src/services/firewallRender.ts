@@ -131,6 +131,11 @@ export function renderNft(plan: NftPlan, now: number): string {
     '\t\tip6 saddr @block6 tcp dport { 80, 443 } drop',
     '\t\tip saddr @timed4 tcp dport { 80, 443 } drop',
     '\t\tip6 saddr @timed6 tcp dport { 80, 443 } drop',
+    // HTTP/3, or a blocked address would get back in over QUIC.
+    '\t\tip saddr @block4 udp dport 443 drop',
+    '\t\tip6 saddr @block6 udp dport 443 drop',
+    '\t\tip saddr @timed4 udp dport 443 drop',
+    '\t\tip6 saddr @timed6 udp dport 443 drop',
     '\t}',
     '}',
     '',
