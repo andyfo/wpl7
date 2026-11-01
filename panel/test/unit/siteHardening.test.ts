@@ -102,6 +102,26 @@ describe('what the files say', () => {
     expect(extra).not.toContain('DISALLOW_FILE_MODS');
   });
 
+  it('takes away PHP-FPM’s handler in uploads, and refuses what that would otherwise show', () => {
+    const apache = renderApacheHardening({ blockPhpInUploads: true });
+    // Only where proxy_fcgi is loaded, so a stack 1 Apache has nothing new to do with this file.
+    const part = /<IfModule proxy_fcgi_module>[\s\S]*?<\/IfModule>/.exec(apache)![0];
+    expect(part).toContain('SetHandler none');
+    expect(part).toContain('Require all denied');
+    // Inside the folder's section, beside the switch for mod_php.
+    expect(apache.indexOf('<Directory ')).toBeLessThan(apache.indexOf('<IfModule proxy_fcgi_module>'));
+    expect(apache.indexOf('<IfModule proxy_fcgi_module>')).toBeLessThan(apache.indexOf('</Directory>'));
+  });
+
+  it('refuses the same file names in that part as the <LocationMatch> does', () => {
+    const apache = renderApacheHardening({ blockPhpInUploads: true });
+    const files = new RegExp(/<FilesMatch "\(\?i\)(.+)">/.exec(apache)![1]!, 'i');
+    const location = new RegExp(/<LocationMatch "\(\?i\)(.+)">/.exec(apache)![1]!, 'i');
+    for (const name of ['shell.php', 'x.PHP7', 'a.phtml', 'a.phar', 'a.pht', 'a.phps', 'a.php.jpg', 'a.php5.png', 'photo.jpg', 'phpinfo.txt', 'a.phpx']) {
+      expect(files.test(name), name).toBe(location.test(`/wp-content/uploads/${name}`));
+    }
+  });
+
   it('Strict adds no installs from wp-admin; Off adds nothing at all', () => {
     expect(renderWpConfigHardening(LEVEL_PRESETS.strict.container)).toContain("define('DISALLOW_FILE_MODS', true)");
     const off = hardeningFiles(LEVEL_PRESETS.off.container);

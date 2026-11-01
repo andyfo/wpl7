@@ -399,6 +399,19 @@ export interface SiteCacheRules {
   offReason: string | null;
 }
 
+/**
+ * Why a list of built-in groups and rules to switch off can't be taken; null when it can. An id
+ * that means nothing would be kept and quietly do nothing, and a locked group has a reason.
+ */
+export function cacheOffProblem(off: readonly string[]): string | null {
+  for (const id of off) {
+    const group = CACHE_RULE_GROUPS.find((g) => g.id === id || g.rules.some((r) => r.id === id));
+    if (!group) return `No built-in group or rule is called "${id}"`;
+    if (group.lockedReason) return `${group.label} can't be switched off. ${group.lockedReason}`;
+  }
+  return null;
+}
+
 /** A site that changed nothing. */
 export const noCacheRules = (): SiteCacheRules => ({ keepSeconds: null, off: [], own: [], offReason: null });
 

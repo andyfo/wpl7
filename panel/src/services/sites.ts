@@ -1,8 +1,9 @@
 // @docs sites/create, sites/move, sites/overview, sites/settings
 import { and, asc, eq, inArray, isNotNull, or } from 'drizzle-orm';
-import type { BackupBeforeUpdates, JobType, SiteCreateBody, SiteLimitsBody } from '../../shared/schemas.js';
+import type { BackupBeforeUpdates, JobType, SiteCacheBody, SiteCreateBody, SiteLimitsBody } from '../../shared/schemas.js';
+import { CACHE_RULE_GROUPS, cacheGroupInUse, cacheOffProblem, parseSiteCacheRules, withCacheRuleIds } from '../../shared/cacheRules.js';
 import { isBackupBeforeUpdates } from '../../shared/updateBackups.js';
-import type { SiteDetail, SiteLimits, SiteSummary, SiteWpSummary } from '../../shared/types.js';
+import type { SiteCacheDto, SiteDetail, SiteLimits, SiteSummary, SiteWpSummary } from '../../shared/types.js';
 import { jobs as jobsTable, moveCleanups, plugins, sites, type JobRow, type ServerRow, type SiteRow } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { generatePassword, generateSecret } from '../lib/crypto.js';
@@ -12,6 +13,7 @@ import type { JobWorker } from '../jobs/worker.js';
 import { siteScheme } from './labels.js';
 import { assertDomainsFree } from './domainGuard.js';
 import { assertKind, hostedSites, isExternal, type SiteKinds } from '../lib/siteKind.js';
+import { RuntimeRefusedError, applySiteCaches, effectivePageCache, siteContainerStack } from './siteCaches.js';
 import { defaultSiteLimits, limitsChange, siteRuntimeFrom, type OwnSiteLimits } from './siteSpec.js';
 
 /** The server a new site goes on: the one asked for, else the default in Settings - and it has to be up. */
@@ -28,6 +30,9 @@ export function resolveTargetServer(s: Pick<CoreServices, 'settings' | 'servers'
   }
   return server;
 }
+
+/** A backup reads the files and the database, and a save here reloads nothing it depends on. */
+const CACHE_SAFE_JOBS = new Set(['backup.create']);
 
 export class SitesService {
   constructor(
@@ -224,7 +229,7 @@ export class SitesService {
     if (site.status === 'provisioning' || site.status === 'deleting') {
       throw conflict(`Site is ${site.status}; wait for it to finish`);
     }
-    return this.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug, serverId: site.serverId });
+    return this.worker.enqueue('site.reconcile', { siteId: site.id, retrySwitch: true }, { id: site.id, slug, serverId: site.serverId });
   }
 
   /** Reconcile every site, newest last so a fleet-wide pass is predictable in the job list. */
@@ -522,8 +527,11 @@ export class SitesService {
     const summary = this.toSummary(site);
     if (isExternal(site)) return this.externalDetail(site, summary);
     let containerState: SiteDetail['containerState'];
+    let stack: SiteDetail['stack'] = null;
     try {
-      containerState = await this.s.servers.handleFor(site.serverId).docker.containerState(site.containerName);
+      const { docker } = this.s.servers.handleFor(site.serverId);
+      containerState = await docker.containerState(site.containerName);
+      stack = await siteContainerStack(docker, site.containerName);
     } catch (err) {
       // The registry still answers when the hosting server cannot be reached: the metadata,
       // backups and recovery actions are exactly what an operator needs at that moment.
@@ -570,7 +578,85 @@ export class SitesService {
         own: { cpuLimit: site.cpuLimit, memoryLimitMb: site.memoryLimitMb, pidsLimit: site.pidsLimit },
         defaults: defaultSiteLimits(this.s.settings),
       },
+      stack,
+      // A restore or a move can put it on stack 2 by another way than the switch, which is the only
+      // thing that clears this. A container on stack 2 has nothing left to report.
+      stackSwitchError: stack === 2 ? null : site.stackSwitchError,
+      cache: this.cacheDto(site, stack, containerState),
     };
+  }
+
+  private cacheDto(site: SiteRow, stack: SiteDetail['stack'], containerState: SiteDetail['containerState']): SiteCacheDto {
+    const rules = parseSiteCacheRules(site.cacheRules);
+    const components = [...this.s.wpInventory.componentsFor(site.id).values()];
+    const installed = components.filter((c) => c.kind === 'plugin').map((c) => c.slug);
+    // Redis Object Cache's own drop-in counts as nothing in the way: `wp redis enable` takes it over.
+    const foreign = components.find((c) => c.kind === 'plugin' && c.status === 'dropin' && c.slug === 'object-cache' && !/redis object cache/i.test(c.title));
+    const oldSetup = 'This site still runs the old PHP setup.';
+    return {
+      page: site.pageCache === 'on' || site.pageCache === 'off' ? site.pageCache : 'default',
+      pageOn: effectivePageCache(this.s.settings, site),
+      pageDefault: this.s.settings.get('sitePageCache') ?? true,
+      offReason: rules.offReason,
+      keepSeconds: rules.keepSeconds,
+      keepDefaultSeconds: Number(this.s.settings.get('sitePageCacheSeconds')),
+      off: rules.off,
+      own: rules.own,
+      groupsInUse: CACHE_RULE_GROUPS.filter((group) => cacheGroupInUse(group, installed)).map((group) => group.id),
+      object: site.objectCache === 1,
+      objectBlocked: stack === 1 ? oldSetup : !site.objectCache && foreign ? `Another object cache is installed: ${foreign.title}.` : null,
+      liveBlocked: stack === 1 ? oldSetup : containerState === 'running' ? null : 'The site is not running.',
+    };
+  }
+
+  /**
+   * A site's caches. Rules, keep time and the page cache's switch take effect here and now, in the
+   * running container; the object cache queues a job, because it installs a plugin.
+   *
+   * The site is held meanwhile, so that this doesn't reload a container a job is replacing, and a
+   * save that didn't make it to the container leaves the row as it was.
+   */
+  async setCache(slug: string, body: SiteCacheBody): Promise<{ job: JobRow | null }> {
+    const site = this.bySlug(slug);
+    if (site.status === 'provisioning' || site.status === 'deleting') {
+      throw conflict(`Site is ${site.status}; wait for it to finish`);
+    }
+    const problem = body.off ? cacheOffProblem(body.off) : null;
+    if (problem) throw badRequest(problem, [{ path: 'off', message: problem }]);
+    const server = this.s.servers.handleFor(site.serverId);
+    if (body.object === true && (await siteContainerStack(server.docker, site.containerName)) === 1) {
+      throw conflict('This site still runs the old PHP setup, which has no object cache.');
+    }
+
+    const { object, page, keepSeconds, off, own } = body;
+    if (page !== undefined || keepSeconds !== undefined || off !== undefined || own !== undefined) {
+      const rules = parseSiteCacheRules(site.cacheRules);
+      const changes = {
+        pageCache: page === undefined ? site.pageCache : page === 'default' ? null : page,
+        cacheRules: JSON.stringify({
+          keepSeconds: keepSeconds === undefined ? rules.keepSeconds : keepSeconds,
+          off: off ?? rules.off,
+          own: own ? withCacheRuleIds(own) : rules.own,
+          // It said why the cache is off, until someone chooses.
+          offReason: page === undefined ? rules.offReason : null,
+        }),
+      };
+      const release = this.worker.holdSite(site, CACHE_SAFE_JOBS);
+      try {
+        const row = this.db.update(sites).set({ ...changes, updatedAt: Date.now() }).where(eq(sites.id, site.id)).returning().get();
+        try {
+          await applySiteCaches(server, this.s, row);
+        } catch (err) {
+          this.db.update(sites).set({ pageCache: site.pageCache, cacheRules: site.cacheRules, updatedAt: Date.now() }).where(eq(sites.id, site.id)).run();
+          if (err instanceof RuntimeRefusedError) throw conflict(err.message);
+          throw err;
+        }
+      } finally {
+        release();
+      }
+    }
+    if (object === undefined || object === (site.objectCache === 1)) return { job: null };
+    return { job: this.worker.enqueue('site.objectCache', { siteId: site.id, on: object }, { id: site.id, slug, serverId: site.serverId }) };
   }
 
   /** The job holding the site, for its page to show: a new site's `site.create`, among others. */
@@ -599,6 +685,9 @@ export class SitesService {
       external: this.s.connections.externalDto(site, { wpVersion: this.s.wpInventory.coreVersionOf(site.id) }),
       activeJob: this.activeJob(site),
       limits: null,
+      stack: null,
+      stackSwitchError: null,
+      cache: null,
     };
   }
 }

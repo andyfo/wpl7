@@ -55,6 +55,11 @@ export const JOB_TYPE_INFO = {
     description: "Recreates the site's container on another PHP version. Files and database stay as they are.",
     category: 'sites',
   },
+  'site.objectCache': {
+    label: 'Switch object cache',
+    description: "Starts Redis in the site's container and installs the Redis Object Cache plugin, or stops it again.",
+    category: 'sites',
+  },
   'site.reconcile': {
     label: 'Recreate site container',
     description:
@@ -234,7 +239,7 @@ export const JOB_TYPE_INFO = {
   'server.applySiteLimits': {
     label: 'Apply container limits',
     description:
-      'Brings every site container on the server to its CPU, memory and process limits - its own, or else those in Settings - in place, without a restart. Lifting a CPU cap is the exception: those sites each get a "Recreate site container" job.',
+      'Brings every site container on the server to its CPU, memory and process limits - its own, or else those in Settings - and its caches to what Settings says, in place, without a restart. Lifting a CPU cap is the exception: those sites each get a "Recreate site container" job.',
     category: 'servers',
   },
   'server.relocateBackups': {

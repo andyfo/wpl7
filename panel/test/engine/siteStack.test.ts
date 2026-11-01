@@ -19,6 +19,11 @@
  * WPL7_ENGINE_PHP=8.2 picks what to build (8.4 by default).
  * WPL7_ENGINE_KEEP=1 leaves the site running at the end, to look at it or to measure it. It prints
  * what to remove afterwards.
+ *
+ * The last part moves a second real site from the image before all this (WPL7_ENGINE_OLD_SITE_IMAGE,
+ * by default wpl7-wordpress:php<version>-stack1, built from git history when this Docker has none) to
+ * this one, by the panel's own image sweep and job. It does have a real Traefik: that is what a move
+ * is checked through. Its header says what in it isn't real.
  */
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -27,29 +32,41 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type CacheRule } from '../../shared/cacheRules.js';
+import { parseSiteCacheRules, type CacheRule } from '../../shared/cacheRules.js';
 import type { Config } from '../../src/config.js';
+import { backups, jobLogs, jobs, sites, type SiteRow } from '../../src/db/schema.js';
+import { JobContext } from '../../src/jobs/context.js';
 import { WORDPRESS_HTACCESS } from '../../src/jobs/handlers/import.js';
-import { DockerService } from '../../src/services/docker.js';
+import { restoreSiteOnServer, type ProtectionHold, type StagedSiteSource } from '../../src/jobs/handlers/restoreSite.js';
+import { startSiteContainer } from '../../src/jobs/handlers/shared.js';
+import { GEOLOCATE_OFF_REASON } from '../../src/jobs/handlers/sites.js';
+import { hostExec, type ExecPort } from '../../src/lib/exec.js';
+import { DockerService, type ConnectOpts, type NetworkSpec, type SiteContainerSpec } from '../../src/services/docker.js';
 import { mailLogin, renderMsmtprc } from '../../src/services/mailAuth.js';
 import { renderApacheHardening, renderWpConfigHardening } from '../../src/services/siteHardening.js';
-import { siteNetworkName } from '../../src/services/siteNetwork.js';
-import { DEFAULT_UPLOADS_INI, buildSiteContainerSpec, sitePaths } from '../../src/services/siteSpec.js';
+import { sweepSiteImages } from '../../src/services/siteImages.js';
+import { undoSiteMigration } from '../../src/services/siteMigration.js';
+import { EGRESS_NETWORK as PANEL_EGRESS_NETWORK, siteNetworkName } from '../../src/services/siteNetwork.js';
+import { DEFAULT_UPLOADS_INI, buildSiteContainerSpec, siteContainerSpec, siteImage, sitePaths, siteRollbackImage, siteRuntimeFrom } from '../../src/services/siteSpec.js';
 import {
   FPM_SOCKET_IN_CONTAINER,
   PAGE_CACHE_DIR_IN_CONTAINER,
   REDIS_SOCKET_IN_CONTAINER,
   SITE_STACK_LABEL,
+  SITE_STACK_PORT,
   renderFpmPool,
   renderNginxSite,
   renderPhpIni,
   renderRedisConf,
   stackSizing,
 } from '../../src/services/siteStack.js';
-import { DEFAULT_PERMALINK_STRUCTURE } from '../../src/services/wp.js';
+import { MAIL_CONTAINER, MARIADB_CONTAINER, TRAEFIK_CONTAINER } from '../../src/services/stack.js';
+import { DEFAULT_PERMALINK_STRUCTURE, WpService } from '../../src/services/wp.js';
 import { renderWpCachePhp } from '../../src/services/wpCachePhp.js';
 import { sendWpRest } from '../../src/services/wpRest.js';
+import { makeTestConfig, makeWorld, waitFor as waitUntil, type TestWorld } from '../helpers.js';
 
 const ENABLED = process.env.WPL7_ENGINE_TESTS === '1';
 const KEEP = process.env.WPL7_ENGINE_KEEP === '1';
@@ -2820,11 +2837,652 @@ if (strpos($_SERVER['REQUEST_URI'] ?? '', '/t/login-late/') === 0) add_action('t
     });
   });
 
-  // These need the rollout (jobs/handlers/sites.ts, replaceContainer) and the .htaccess migration
-  // script, which come in the next stage; Check a URL needs services/siteCaches.ts.
-  describe.todo('Upgrade: a stack 1 container switches to stack 2, and back to its own image by id when the probe fails');
-  describe.todo('.htaccess migration: no 500 after it, the setting applies from .user.ini, engine off is still enforced, undo puts it back');
-  describe.todo('A plain Geolocate store stays Off at the switch, and a root .htaccess limiting who can see the site too');
+  /**
+   * A real site from before all this, moved the way every site will be: an update moves the image's
+   * tag, the image sweep sees that, and queues site.reconcile, which goes through replaceContainer.
+   *
+   * Real: both images; a real Traefik of the version the panel's stack pins, reading the labels of each
+   * container, and the panel's own check of the site through it, so that an answer is an answer;
+   * WordPress and MariaDB; WooCommerce and Wordfence from wordpress.org, Wordfence's firewall set up by
+   * its own code; the sweep, the jobs, the panel's Docker service and its files; the migration script in
+   * its throwaway container; a backup and a restore with real archives.
+   *
+   * Stand-ins, all of them:
+   * - the panel's database is a test world's, with the real schema, and its worker runs in this process;
+   * - the panel's names for its infrastructure lead to this test's containers, so that a stack on this
+   *   Docker is left alone: Traefik is the one here, MariaDB and the mail relay the ones above (the
+   *   relay is a small PHP listener, and the panel's login sync with it fails, which a job only warns about);
+   * - the way out is this test's own network, for the same reason;
+   * - TLS_MODE=none, so Traefik's plain entrypoint and no certificates: labels, routing and answers are the same;
+   * - tar writing an archive, and chown, run as root in a throwaway container: a panel is root on
+   *   its server, and a test runner isn't;
+   * - a restore's database half is the test world's fake, so MariaDB keeps what it has: it is the
+   *   files that are at stake here;
+   * - the second time this site is on the old image is this test's doing. No panel goes back once it has
+   *   moved, but it is the same store on another setting, and one WooCommerce install less;
+   * - a move's arrival and an import's are the real restoreSiteOnServer on this same Docker, which is
+   *   playing a server that has never had the site. The jobs around it, with the transfer and the pull,
+   *   are in test/unit/siteArrivals.test.ts, with real tar and the real script, and no real Docker.
+   *
+   * What it can't see: amd64 and a real SSH server. What a real check can't reach, a create that fails
+   * and a stopped site, is in test/engine/siteSwitch.test.ts.
+   */
+  describe('a real site moving from mod_php to PHP-FPM, by the panel’s own sweep and job', { timeout: 600_000 }, () => {
+    const SLUG_MOVED = `enginemove${process.pid}`;
+    const MOVED = `wp-${SLUG_MOVED}`;
+    const HOST_MOVED = 'move.example.com';
+    const NETWORK_MOVED = siteNetworkName(SLUG_MOVED);
+    const PHP_MOVED = `move${process.pid}`;
+    const TAG_MOVED = siteImage(PHP_MOVED);
+    const ROLLBACK_TAG = siteRollbackImage(SLUG_MOVED);
+    const EDGE = `wpl7-engine-site-edge-${process.pid}`;
+    const BROKEN_IMAGE = `wpl7-engine-site-broken:${process.pid}`;
+    const OLD_IMAGE = process.env.WPL7_ENGINE_OLD_SITE_IMAGE ?? `wpl7-wordpress:php${PHP}-stack1`;
+    /** The last commit with the image from before stack 2. */
+    const LAST_OLD_IMAGE_COMMIT = '028ea18';
+    const REPO = fileURLToPath(new URL('../../..', import.meta.url));
+    const movedRoot = path.join(fs.realpathSync(os.tmpdir()), `wpl7-site-moved-${process.pid}`);
+
+    /** What each folder of the site ran with, as PHP sees it. */
+    const CHECK_PHP = String.raw`<?php
+header('Content-Type: application/json');
+echo json_encode([
+    'sapi' => PHP_SAPI,
+    'maxInputVars' => ini_get('max_input_vars'),
+    'uploadMax' => ini_get('upload_max_filesize'),
+    'strictSessions' => ini_get('session.use_strict_mode'),
+    'memory' => ini_get('memory_limit'),
+    'prepend' => ini_get('auto_prepend_file'),
+    'basedir' => ini_get('open_basedir'),
+    'firewall' => defined('WFWAF_AUTO_PREPEND') && WFWAF_AUTO_PREPEND,
+]);
+`;
+    const BARE_LINE = 'php_value max_input_vars 4321';
+    const SOURCE_ONLY = 'only-in-the-source';
+    const SECRET_PHP = `<?php /* ${SOURCE_ONLY} */ echo 'php-' . 'ran';\n`;
+    /** What another host left, which mod_php never read: PHP-FPM would. */
+    const OLD_HOST_INI = "; Wordfence WAF\nauto_prepend_file = '/home/olduser/public_html/wordfence-waf.php'\n; END Wordfence WAF\nopen_basedir = /home/olduser/public_html:/tmp\nmemory_limit = 64M\n";
+    /** The .htaccess files that have to come back byte for byte. */
+    const HTACCESS_FILES = ['.htaccess', 'settings/.htaccess', 'crlf/.htaccess'];
+    /** Real WordPress files for Traefik's first answer: says nothing about PHP. */
+    const STATIC_FILE = '/wp-includes/images/blank.gif';
+    const FAILS_ON_FPM = 'wp-content/mu-plugins/wpl7-engine-fails-on-fpm.php';
+    /**
+     * A home page that takes longer than the panel's usual check waits, as a store's can. Only for that
+     * check, so that nothing else here has to wait: its answer is what a move goes by.
+     */
+    const SLOW_FOR_THE_CHECK = 'wp-content/mu-plugins/wpl7-engine-slow-for-the-check.php';
+    const STALE_RUNTIME_FILES = ['nginx-site.conf', 'redis.conf', 'from-another-version.conf'];
+    /** What the panel writes there for this site: no object cache. */
+    const RUNTIME_FILES = ['nginx-site.conf', 'php-fpm-pool.conf', 'php.ini', 'wp-cache.php'];
+
+    /**
+     * A server's Docker, on a Docker that may have a real stack on it (see above). Everything else is
+     * the panel's own service.
+     */
+    class MovedDocker extends DockerService {
+      private readonly theirs = new Map([
+        [TRAEFIK_CONTAINER, EDGE],
+        [MARIADB_CONTAINER, DATABASE],
+        [MAIL_CONTAINER, RELAY],
+      ]);
+
+      override containerState(name: string) {
+        return super.containerState(this.theirs.get(name) ?? name);
+      }
+
+      override containerNetworks(name: string) {
+        return super.containerNetworks(this.theirs.get(name) ?? name);
+      }
+
+      override connectContainer(network: string, container: string, opts?: ConnectOpts) {
+        return super.connectContainer(network, this.theirs.get(container) ?? container, opts);
+      }
+
+      override async ensureNetwork(spec: NetworkSpec) {
+        if (spec.name === PANEL_EGRESS_NETWORK) return { outcome: 'existing' as const, detached: [] };
+        return super.ensureNetwork(spec);
+      }
+
+      override createSiteContainer(spec: SiteContainerSpec) {
+        return super.createSiteContainer({ ...spec, networks: [NETWORK_MOVED, EGRESS_NETWORK] });
+      }
+    }
+
+    const movedDocker = new MovedDocker('wpl7_proxy', 'wpl7_db');
+    let w: TestWorld;
+    let siteId = 0;
+    let oldId = '';
+    let newId = '';
+    let brokenId = '';
+    let edgePort = 0;
+    let postId = '';
+    let backupId = 0;
+    /** What the site's files were before anything moved them. */
+    const before = new Map<string, string>();
+    /** And what they are once the panel has. */
+    const moved = new Map<string, string>();
+
+    const fresh = (): SiteRow => w.db.select().from(sites).where(eq(sites.id, siteId)).get()!;
+    const jobRow = (id: number) => w.db.select().from(jobs).where(eq(jobs.id, id)).get()!;
+    const logOf = (id: number) => w.db.select().from(jobLogs).where(eq(jobLogs.jobId, id)).all().map((line) => line.message);
+    const handle = () => w.servers.handleFor(1);
+    const inMoved = (command: string[], opts: { user?: string; input?: string | Buffer } = {}) =>
+      run('docker', ['exec', ...(opts.input === undefined ? [] : ['-i']), ...(opts.user ? ['-u', opts.user] : []), MOVED, ...command], opts.input);
+    const wpMoved = (...args: string[]) => must(dockerCli('exec', '-u', '33:33', '-e', 'HOME=/tmp', '-w', '/var/www/html', MOVED, 'wp', ...args), `wp ${args.join(' ')}`);
+    const writeInMoved = (file: string, content: string) => must(inMoved(['sh', '-c', 'mkdir -p "$(dirname "$1")" && cat > "$1"', 'sh', `/var/www/html/${file}`], { ...asSite, input: content }), `writing ${file}`);
+    const inspectMoved = (format: string) => must(dockerCli('inspect', '-f', format, MOVED), 'inspect');
+    const portLabel = () => inspectMoved(`{{index .Config.Labels "traefik.http.services.${MOVED}.loadbalancer.server.port"}}`);
+
+    /** A file as it is in the site, every byte of it. */
+    async function fileInMoved(file: string): Promise<string> {
+      const done = await inMoved(['cat', `/var/www/html/${file}`]);
+      if (done.status !== 0) throw new Error(`reading ${file} failed: ${done.stderr}`);
+      return done.stdout.toString('utf8');
+    }
+
+    /** A request the way a visitor makes it: to Traefik, for the site's name. */
+    async function viaEdge(url: string, opts: AskOpts = {}): Promise<Answer> {
+      const [command, ...args] = curlArgs(url, { host: HOST_MOVED, proto: null, port: edgePort, ...opts });
+      const done = await run(command!, args);
+      if (done.status !== 0) throw new Error(`curl ${url} through Traefik failed (${done.status}): ${done.stderr}`);
+      return parseAnswer(done.stdout);
+    }
+
+    /** Traefik goes by Docker's events, so it finds a new container a moment after it starts. */
+    const routed = () => waitFor('Traefik to reach the site', async () => (await viaEdge(STATIC_FILE)).status === 200, 60_000, 250);
+
+    interface Checked {
+      sapi: string;
+      maxInputVars: string;
+      uploadMax: string;
+      strictSessions: string;
+      memory: string;
+      prepend: string;
+      basedir: string;
+      firewall: boolean;
+    }
+
+    async function checked(folder = ''): Promise<Checked> {
+      const answer = await viaEdge(`${folder}/check.php`);
+      expect(answer.status, `${folder}/check.php: ${answer.body.slice(0, 300)}`).toBe(200);
+      return answer.json as Checked;
+    }
+
+    const buildImage = async (tag: string, dockerfile: string) => {
+      await must(run('docker', ['build', '-q', '-t', tag, '-'], dockerfile), `building ${tag}`);
+      return must(dockerCli('image', 'inspect', '-f', '{{.Id}}', tag), 'image id');
+    };
+
+    /** What an update does: the tag goes to another image, and the one it left may have no name now. */
+    const moveTag = (id: string) => must(dockerCli('tag', id, TAG_MOVED), 'moving the tag');
+
+    const namesOf = async (id: string): Promise<string[] | null> => {
+      const done = await dockerCli('image', 'inspect', '-f', '{{json .RepoTags}}', id);
+      return done.status === 0 ? (JSON.parse(done.stdout.toString('utf8')) as string[]) : null;
+    };
+
+    async function runJob(id: number) {
+      w.worker.start();
+      await waitUntil(() => !['queued', 'running'].includes(jobRow(id).status), 400_000);
+      await w.worker.stop();
+      return jobRow(id);
+    }
+
+    /** The hourly sweep finds the tag has moved, and the job it queues runs. */
+    async function sweepAndRun() {
+      expect(await sweepSiteImages(w.core, w.worker)).toEqual({ queued: [SLUG_MOVED], busy: [] });
+      return runJob(w.db.select().from(jobs).where(eq(jobs.type, 'site.reconcile')).all().at(-1)!.id);
+    }
+
+    /** The same site on its old image, with its files as they were, and with what mod_php reads put back. */
+    async function expectBackOnOldImage(reason: RegExp, failedOn: string): Promise<void> {
+      await routed();
+      expect(await movedDocker.containerStack(MOVED)).toEqual({ imageId: oldId, stack: 1 });
+      expect(await inspectMoved('{{.Image}}')).toBe(oldId);
+      expect(await inspectMoved(`{{index .Config.Labels "${SITE_STACK_LABEL}"}}`)).toBe('');
+      expect(await portLabel()).toBe('80');
+
+      expect(await must(inMoved(['apache2ctl', '-M']), 'modules')).toContain('php_module');
+      const php = await checked();
+      expect(php).toMatchObject({ sapi: 'apache2handler', maxInputVars: '4321', firewall: true });
+      expect((await viaEdge('/')).status).toBe(200);
+
+      for (const file of HTACCESS_FILES) expect(await fileInMoved(file), file).toBe(before.get(file));
+      // The deny stays: it does the same job under mod_php, with a 403 for the source it used to send.
+      const noPhp = await viaEdge('/no-php/secret.php');
+      expect(noPhp.status).toBe(403);
+      expect(noPhp.body).not.toContain(SOURCE_ONLY);
+
+      // Still there, with no name, kept by the container that runs it: nothing else could undo this.
+      expect(await namesOf(oldId)).toEqual([]);
+      expect(await movedDocker.imageId(ROLLBACK_TAG)).toBeNull();
+      expect(fresh().stackSwitchError).toMatch(reason);
+      expect(fresh().stackSwitchImage).toBe(failedOn);
+      expect((await w.deps.sites.detail(SLUG_MOVED)).stack).toBe(1);
+    }
+
+    beforeAll(async () => {
+      if ((await dockerCli('image', 'inspect', OLD_IMAGE)).status !== 0) {
+        const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-old-image-'));
+        await must(run('sh', ['-c', 'git -C "$1" archive "$2" deploy/wordpress-image | tar -x -C "$3"', 'sh', REPO, LAST_OLD_IMAGE_COMMIT, folder]), 'the old image’s files');
+        await dockerService.buildImage(OLD_IMAGE, path.join(folder, 'deploy/wordpress-image'), { PHP_TAG: `php${PHP}` });
+        fs.rmSync(folder, { recursive: true, force: true });
+      }
+      // Built here so that its id is this test's alone, and nothing else keeps it alive.
+      oldId = await buildImage(TAG_MOVED, `FROM ${OLD_IMAGE}\nLABEL wpl7.engine.move=${process.pid}\n`);
+      newId = await must(dockerCli('image', 'inspect', '-f', '{{.Id}}', IMAGE), 'image id');
+      // A real stack 2 image whose nginx can't start. Its PHP works, so the migration still runs.
+      brokenId = await buildImage(BROKEN_IMAGE, `FROM ${IMAGE}\nLABEL wpl7.engine.move=${process.pid}\nRUN sed -i '1i this is not nginx;' /etc/nginx/nginx.conf\n`);
+
+      const compose = fs.readFileSync(path.join(REPO, 'deploy/docker-compose.yml'), 'utf8');
+      const traefik = /^\s*image:\s*(traefik:\S+)/m.exec(compose)![1]!;
+      await must(
+        dockerCli(
+          'run', '-d', '--name', EDGE, '-p', '127.0.0.1::80', '-v', '/var/run/docker.sock:/var/run/docker.sock:ro', traefik,
+          '--log.level=ERROR', '--providers.docker=true', '--providers.docker.exposedbydefault=false',
+          // Only this site: there may be others on this Docker.
+          `--providers.docker.constraints=Label(\`wpl7.site\`,\`${SLUG_MOVED}\`)`,
+          '--entrypoints.web.address=:80',
+        ),
+        'Traefik',
+      );
+      edgePort = Number((await must(dockerCli('port', EDGE, '80/tcp'), 'its port')).split(':').pop());
+
+      await must(
+        run('docker', ['exec', '-i', DATABASE, 'mariadb', '-uroot', '-pengine-root'], `CREATE DATABASE wp_moved CHARACTER SET utf8mb4; CREATE USER 'wp_moved'@'%' IDENTIFIED BY '${DB_PASSWORD}'; GRANT ALL PRIVILEGES ON wp_moved.* TO 'wp_moved'@'%';`),
+        'the database',
+      );
+
+      fs.mkdirSync(movedRoot, { recursive: true });
+      const moveConfig = makeTestConfig({ SRV_ROOT: movedRoot });
+      /** See above: root on the server, for what can't do without. */
+      const asRoot = async (cmd: string, args: string[]) => {
+        const done = await dockerCli('run', '--rm', '-v', `${movedRoot}:${movedRoot}`, '--entrypoint', cmd, IMAGE, ...args);
+        return { stdout: done.stdout.toString('utf8'), stderr: done.stderr, exitCode: done.status };
+      };
+      const exec: ExecPort = {
+        run: (cmd, args, opts) => (cmd === 'chown' || (cmd === 'tar' && args.includes('-czf')) ? asRoot(cmd, args) : hostExec.run(cmd, args, opts)),
+        runWithInput: (cmd, args, input, opts) => hostExec.runWithInput(cmd, args, input, opts),
+        runToStream: (cmd, args, stdout, opts) => hostExec.runToStream(cmd, args, stdout, opts),
+      };
+      w = await makeWorld({ config: moveConfig, exec });
+      // A live panel's checks, rather than a test's, which go by the container's state.
+      Object.assign(w.core.config, { nodeEnv: 'production', probeTimeoutMs: 30_000 });
+      Object.assign(handle(), { docker: movedDocker, wp: new WpService(movedDocker), probeUrlFor: () => `http://127.0.0.1:${edgePort}/` });
+
+      const now = Date.now();
+      siteId = w.db
+        .insert(sites)
+        .values({
+          slug: SLUG_MOVED,
+          title: 'Moved',
+          serverId: 1,
+          domains: JSON.stringify([HOST_MOVED]),
+          phpVersion: PHP_MOVED,
+          status: 'running',
+          dbName: 'wp_moved',
+          dbUser: 'wp_moved',
+          dbPassword: DB_PASSWORD,
+          mailPassword: MAIL_PASSWORD,
+          containerName: MOVED,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .returning()
+        .get().id;
+
+      fs.mkdirSync(sitePaths(moveConfig, SLUG_MOVED).wordpress, { recursive: true });
+      // The job that repairs a site with no container, on the only image there is: stack 1.
+      const first = await runJob(w.deps.sites.reconcile(SLUG_MOVED).id);
+      expect(first.status, first.error ?? '').toBe('succeeded');
+      expect(await movedDocker.containerStack(MOVED)).toEqual({ imageId: oldId, stack: 1 });
+      await waitFor('WordPress’s files', async () => (await inMoved(['test', '-f', '/var/www/html/wp-config.php'])).status === 0, 180_000, 500);
+      await must(inMoved(['chown', '33:33', '/var/www/html']), 'the folder');
+      await wpMoved('core', 'install', `--url=http://${HOST_MOVED}`, '--title=Moved', `--admin_user=${ADMIN}`, `--admin_password=${ADMIN_PASSWORD}`, '--admin_email=boss@example.com', '--skip-email');
+      await wpMoved('rewrite', 'structure', DEFAULT_PERMALINK_STRUCTURE);
+      await wpMoved('rewrite', 'flush', '--hard');
+      await wpMoved('plugin', 'install', 'woocommerce', '--activate');
+      await wpMoved('option', 'update', 'woocommerce_default_customer_address', 'geolocation');
+      postId = await wpMoved('post', 'create', '--post_title=Written on mod_php', '--post_status=publish', '--porcelain');
+      await wpMoved('option', 'update', 'wpl7_engine_marker', 'still here');
+      // Wordfence's firewall, by its own code, as it sets itself up on Apache with mod_php. That is
+      // the block in the .htaccess, with the file it names. The firewall runs from those alone, so its
+      // plugin goes off again: until it has a licence it looks up the site's name on every page, and a
+      // name like this one can take 16 s to come back empty, which is a test of DNS and not of this.
+      await wpMoved('plugin', 'install', 'wordfence', '--activate');
+      await wpMoved(
+        'eval',
+        "require_once ABSPATH . 'wp-admin/includes/file.php'; define('FS_METHOD', 'direct'); WP_Filesystem(); global $wp_filesystem; wfWAFAutoPrependHelper::helper('apache-mod_php')->performInstallation($wp_filesystem);",
+      );
+      await wpMoved('plugin', 'deactivate', 'wordfence');
+
+      await must(inMoved(['sh', '-c', 'printf "%s\\n" "$1" >> /var/www/html/.htaccess', 'sh', BARE_LINE], asSite), 'the bare line');
+      await writeInMoved('.user.ini', OLD_HOST_INI);
+      await writeInMoved('check.php', CHECK_PHP);
+      await writeInMoved('settings/.htaccess', 'php_value upload_max_filesize 77M\nphp_flag session.use_strict_mode on\n');
+      await writeInMoved('settings/check.php', CHECK_PHP);
+      await writeInMoved('crlf/.htaccess', 'php_value upload_max_filesize 55M\r\nOptions -Indexes\r\n');
+      await writeInMoved('crlf/check.php', CHECK_PHP);
+      await writeInMoved('no-php/.htaccess', 'php_flag engine off\n');
+      await writeInMoved('no-php/secret.php', SECRET_PHP);
+      await writeInMoved('no-php/note.txt', 'not PHP');
+      // The form WPForms and Wordfence write theirs in. Nothing in the block changes, and the deny comes after it.
+      await writeInMoved('no-php-in-block/.htaccess', '<IfModule mod_php.c>\n\tphp_flag engine off\n</IfModule>\n');
+      await writeInMoved('no-php-in-block/secret.php', SECRET_PHP);
+      for (const file of HTACCESS_FILES) before.set(file, await fileInMoved(file));
+
+      // What an archive can hold of the folder the panel writes: a file it wouldn't write for this site
+      // now, one from another version, and one nginx would refuse. Nothing on stack 1 reads them.
+      const runtime = sitePaths(moveConfig, SLUG_MOVED).runtimeDir;
+      for (const file of STALE_RUNTIME_FILES) fs.writeFileSync(path.join(runtime, file), 'this is not nginx;\n');
+      backupId = (await w.core.backup.create(fresh(), 'manual', {})).id;
+      for (const file of STALE_RUNTIME_FILES) fs.rmSync(path.join(runtime, file));
+      await routed();
+    }, 1_200_000);
+
+    afterAll(async () => {
+      if (KEEP) {
+        process.stderr.write(`Left running as well: docker rm -f -v ${MOVED} ${EDGE}; docker network rm ${NETWORK_MOVED}; docker rmi -f ${TAG_MOVED} ${BROKEN_IMAGE} ${ROLLBACK_TAG}; rm -rf ${movedRoot}\n`);
+        return;
+      }
+      await w?.worker.stop();
+      await dockerCli('rm', '-f', '-v', MOVED, EDGE);
+      await dockerCli('network', 'disconnect', '-f', NETWORK_MOVED, DATABASE);
+      await dockerCli('network', 'disconnect', '-f', NETWORK_MOVED, RELAY);
+      await dockerCli('network', 'rm', NETWORK_MOVED);
+      await dockerCli('rmi', '-f', TAG_MOVED, BROKEN_IMAGE, ROLLBACK_TAG);
+      // Once a tag has moved off an image nothing else names it, and a build without BuildKit leaves
+      // a nameless image for each of its steps. All of them have this label, and nothing else does.
+      await dockerCli('image', 'prune', '-f', '--filter', `label=wpl7.engine.move=${process.pid}`);
+      // Files the site's user made, in a folder the runner doesn't own on every system.
+      await dockerCli('run', '--rm', '-v', `${movedRoot}:/moved`, '--entrypoint', 'find', IMAGE, '/moved', '-mindepth', '1', '-delete');
+      fs.rmSync(movedRoot, { recursive: true, force: true });
+    }, 180_000);
+
+    it('starts on stack 1: mod_php reads the .htaccess, and has never read the .user.ini', async () => {
+      expect(await portLabel()).toBe('80');
+      expect((await viaEdge('/')).status).toBe(200);
+      expect(await checked()).toEqual({
+        sapi: 'apache2handler',
+        maxInputVars: '4321',
+        uploadMax: '64M',
+        strictSessions: '0',
+        memory: '256M',
+        prepend: '/var/www/html/wordfence-waf.php',
+        basedir: '',
+        firewall: true,
+      });
+      expect(await checked('/settings')).toMatchObject({ uploadMax: '77M', strictSessions: '1' });
+      expect(await checked('/crlf')).toMatchObject({ uploadMax: '55M' });
+      // mod_php's way of not running a file is to send it as it is.
+      for (const folder of ['/no-php', '/no-php-in-block']) {
+        const answer = await viaEdge(`${folder}/secret.php`);
+        expect(answer.body, folder).not.toBe('php-ran');
+        expect(answer.body, folder).toContain(SOURCE_ONLY);
+      }
+      // Wordfence's own block, as it wrote it: three of them, of which only one has ever been read here.
+      expect(before.get('.htaccess')).toMatch(/# Wordfence WAF\n<IfModule mod_php5\.c>[\s\S]*<IfModule mod_php\.c>\n\tphp_value auto_prepend_file '\/var\/www\/html\/wordfence-waf\.php'\n<\/IfModule>[\s\S]*# END Wordfence WAF/);
+    });
+
+    it('goes back to the same image by id from a site that answers 500 only under PHP-FPM', async () => {
+      // What a site can do that nothing can foresee, and only the check finds.
+      await writeInMoved(FAILS_ON_FPM, "<?php if (PHP_SAPI === 'fpm-fcgi') { http_response_code(500); exit('not on PHP-FPM'); }\n");
+      await writeInMoved(SLOW_FOR_THE_CHECK, `<?php if (($_SERVER['HTTP_USER_AGENT'] ?? '') === '${PROBE}' && ($_SERVER['REQUEST_URI'] ?? '') === '/') { sleep(9); }\n`);
+      expect((await viaEdge('/')).status).toBe(200);
+
+      await moveTag(newId);
+      expect(await namesOf(oldId)).toEqual([]);
+      const done = await sweepAndRun();
+
+      expect(done.status).toBe('failed');
+      expect(done.error).toBe('This site still runs the old PHP setup: the check on the new setup failed: it answered HTTP 500.');
+      await expectBackOnOldImage(/^the check on the new setup failed: it answered HTTP 500$/, newId);
+      const log = logOf(done.id).join('\n');
+      expect(log).toContain(`.htaccess:`);
+      expect(log).toContain(`${BARE_LINE}: moved to .user.ini`);
+      expect(log).toMatch(/\.htaccess files put back: \d+ lines?\./);
+      expect(log).toContain(`The temporary name ${ROLLBACK_TAG} is gone.`);
+      expect(log).not.toContain('The site answers on the new setup');
+    });
+
+    it('asked real WooCommerce before it tried: a store on plain Geolocate has its Off, with the reason, even when the move then fails', () => {
+      const site = fresh();
+      expect(site.pageCache).toBe('off');
+      expect(parseSiteCacheRules(site.cacheRules).offReason).toBe(GEOLOCATE_OFF_REASON);
+    });
+
+    it('leaves it alone while the tag names the image it failed on', async () => {
+      expect(await sweepSiteImages(w.core, w.worker)).toEqual({ queued: [], busy: [] });
+    });
+
+    it('tries again on a new image, and goes back the same way from one whose nginx does not start', async () => {
+      await must(inMoved(['rm', '-f', `/var/www/html/${FAILS_ON_FPM}`], asSite), 'the plugin');
+      await moveTag(brokenId);
+      const done = await sweepAndRun();
+
+      expect(done.status).toBe('failed');
+      // Traefik's own answer, once the container has gone from under it.
+      expect(done.error).toMatch(/^This site still runs the old PHP setup: the check on the new setup failed: (it answered HTTP \d+|nothing answered)\.$/);
+      await expectBackOnOldImage(/^the check on the new setup failed: /, brokenId);
+    });
+
+    describe('once it moves', () => {
+      beforeAll(async () => {
+        // As a site that never tried: this is the switch that has to decide.
+        w.db.update(sites).set({ pageCache: null, cacheRules: null }).where(eq(sites.id, siteId)).run();
+        await moveTag(newId);
+        const done = await sweepAndRun();
+        expect(done.status, done.error ?? '').toBe('succeeded');
+        expect((JSON.parse(done.result!) as { changed: string[] }).changed).toContain('moved to PHP-FPM');
+        await routed();
+        await must(inMoved(['rm', '-f', `/var/www/html/${SLOW_FOR_THE_CHECK}`], asSite), 'the plugin');
+        for (const file of [...HTACCESS_FILES, '.user.ini']) moved.set(file, await fileInMoved(file));
+      }, 600_000);
+
+      it('runs on the new image and answers through nginx, with nothing left of the old one', async () => {
+        expect(await movedDocker.containerStack(MOVED)).toEqual({ imageId: newId, stack: 2 });
+        expect(await inspectMoved(`{{index .Config.Labels "${SITE_STACK_LABEL}"}}`)).toBe('2');
+        expect(await portLabel()).toBe(String(SITE_STACK_PORT));
+        expect(fresh()).toMatchObject({ stackSwitchError: null, stackSwitchImage: null });
+        expect(await w.deps.sites.detail(SLUG_MOVED)).toMatchObject({ stack: 2, stackSwitchError: null });
+        const home = await viaEdge('/');
+        expect(home.status).toBe(200);
+        expect(home.cache).toBe('BYPASS');
+        // The temporary name went, and with it the image: nothing runs it now, and it had no other name.
+        expect(await movedDocker.imageId(ROLLBACK_TAG)).toBeNull();
+        expect(await namesOf(oldId)).toBeNull();
+      });
+
+      it('has every post and option it had', async () => {
+        expect(await wpMoved('post', 'get', postId, '--field=post_title')).toBe('Written on mod_php');
+        expect(await wpMoved('option', 'get', 'wpl7_engine_marker')).toBe('still here');
+        await wpMoved('plugin', 'is-active', 'woocommerce');
+        const url = new URL(await wpMoved('post', 'url', postId));
+        const page = await viaEdge(url.pathname);
+        expect(page.status).toBe(200);
+        expect(page.body).toContain('Written on mod_php');
+      });
+
+      it('a bare php_value is no 500 any more, and its setting applies from .user.ini', async () => {
+        expect(await checked()).toMatchObject({ sapi: 'fpm-fcgi', maxInputVars: '4321' });
+        expect(moved.get('.htaccess')).toContain(`# Moved to .user.ini by WPL7: ${BARE_LINE}`);
+        expect(moved.get('.user.ini')).toContain("max_input_vars = '4321'");
+        expect(await checked('/settings')).toMatchObject({ sapi: 'fpm-fcgi', uploadMax: '77M', strictSessions: '1' });
+        expect(await checked('/crlf')).toMatchObject({ uploadMax: '55M' });
+        // Its other line ending, untouched, for the undo and for anyone reading the file.
+        expect(moved.get('crlf/.htaccess')).toBe('# Moved to .user.ini by WPL7: php_value upload_max_filesize 55M\r\nOptions -Indexes\r\n');
+      });
+
+      it.each(['/no-php', '/no-php-in-block'])('PHP stays off in %s: it does not run, and its source is not shown', async (folder) => {
+        const answer = await viaEdge(`${folder}/secret.php`);
+        expect(answer.status).toBe(403);
+        expect(answer.body).not.toContain('php-ran');
+        expect(answer.body).not.toContain(SOURCE_ONLY);
+        expect(answer.body).not.toContain('<?php');
+      });
+
+      it('what isn’t PHP in such a folder is still served', async () => {
+        expect((await viaEdge('/no-php/note.txt')).body).toBe('not PHP');
+      });
+
+      it('Wordfence’s block stays word for word, and its real firewall still runs on every request', async () => {
+        expect(await checked()).toMatchObject({ prepend: '/var/www/html/wordfence-waf.php', firewall: true });
+        const block = /# Wordfence WAF[\s\S]*?# END Wordfence WAF/.exec(before.get('.htaccess')!)![0];
+        expect(moved.get('.htaccess')).toContain(block);
+        expect(moved.get('.user.ini')).toContain("auto_prepend_file = '/var/www/html/wordfence-waf.php'");
+      });
+
+      it('a .user.ini from another host no longer takes the site down: its paths and its lower limit are out', async () => {
+        const php = await checked();
+        expect(php.basedir).toBe('');
+        expect(php.memory).toBe('256M');
+        const ini = moved.get('.user.ini')!;
+        expect(ini).toContain('; Not used by WPL7: open_basedir = /home/olduser/public_html:/tmp');
+        expect(ini).toContain("; Not used by WPL7: auto_prepend_file = '/home/olduser/public_html/wordfence-waf.php'");
+        expect(ini).toContain('; Not used by WPL7: memory_limit = 64M');
+        // Not served, either way.
+        expect((await viaEdge('/.user.ini')).status).toBe(403);
+      });
+
+      it('which it would: the same lines, left where nothing moved them, are a 500 and a refusal', async () => {
+        await writeInMoved('leftover-prepend/.user.ini', "auto_prepend_file = '/home/olduser/public_html/wordfence-waf.php'\n");
+        await writeInMoved('leftover-prepend/check.php', CHECK_PHP);
+        await writeInMoved('leftover-basedir/.user.ini', 'open_basedir = /home/olduser/public_html:/tmp\n');
+        await writeInMoved('leftover-basedir/check.php', CHECK_PHP);
+        await writeInMoved('leftover-line/.htaccess', `${BARE_LINE}\n`);
+        await writeInMoved('leftover-line/check.php', CHECK_PHP);
+        expect((await viaEdge('/leftover-prepend/check.php')).status).toBe(500);
+        expect((await viaEdge('/leftover-basedir/check.php')).status).toBe(403);
+        expect((await viaEdge('/leftover-line/check.php')).status).toBe(500);
+      });
+
+      it('a store on plain Geolocate stays Off at the switch, with its reason, and nginx goes by that', async () => {
+        const site = fresh();
+        expect(site.pageCache).toBe('off');
+        expect(parseSiteCacheRules(site.cacheRules).offReason).toBe(GEOLOCATE_OFF_REASON);
+        const home = await viaEdge('/');
+        expect([home.status, home.cache, home.skipped]).toEqual([200, 'BYPASS', 'off']);
+      });
+
+      it('an old backup brings it all back, and a real restore moves it again before the site starts', async () => {
+        const job = w.worker.enqueue('backup.restore', { backupId, skipPreRestoreBackup: true }, { id: siteId, slug: SLUG_MOVED, serverId: 1 });
+        const done = await runJob(job.id);
+        expect(done.status, `${done.error ?? ''}\n${logOf(job.id).join('\n')}`).toBe('succeeded');
+        await routed();
+
+        expect(logOf(job.id).join('\n')).toContain(`${BARE_LINE}: moved to .user.ini`);
+        for (const [file, text] of moved) expect(await fileInMoved(file), file).toBe(text);
+        expect((await viaEdge('/')).status).toBe(200);
+        expect(await checked()).toMatchObject({ sapi: 'fpm-fcgi', maxInputVars: '4321', prepend: '/var/www/html/wordfence-waf.php', firewall: true, memory: '256M', basedir: '' });
+        expect(await checked('/settings')).toMatchObject({ uploadMax: '77M' });
+        expect((await viaEdge('/no-php/secret.php')).status).toBe(403);
+        // What the panel writes is what it says now, and the store's Off with it: not the archive's.
+        expect(fresh().pageCache).toBe('off');
+        expect((await viaEdge('/')).skipped).toBe('off');
+        expect(await movedDocker.containerStack(MOVED)).toEqual({ imageId: newId, stack: 2 });
+      });
+
+      describe('arriving on a server that has never had the site', () => {
+        const job = () => w.db.select().from(jobs).all().at(-1)!.id;
+
+        /** That server: no container and no files. The database is the world's fake, so MariaDB keeps what it has. */
+        async function asIfNeverHere(): Promise<void> {
+          await movedDocker.removeContainer(MOVED);
+          await must(dockerCli('run', '--rm', '-v', `${movedRoot}:${movedRoot}`, '--entrypoint', 'rm', IMAGE, '-rf', sitePaths(w.config, SLUG_MOVED).root), 'the site’s files');
+        }
+
+        const arrive = async (source: StagedSiteSource, opts: { requireWpConfig: boolean; probed: boolean }) => {
+          const protection: ProtectionHold = { release: null };
+          const said = logOf(job()).length;
+          await restoreSiteOnServer(new JobContext(job(), {}, w.db), w.core, handle(), fresh(), [HOST_MOVED], source, {
+            routing: true,
+            requireWpConfig: opts.requireWpConfig,
+            protection,
+            // Nothing in a test's way: the same check a move goes by, or none, as for an import.
+            probe: opts.probed ? { host: HOST_MOVED, timeoutMs: 30_000, message: 'Probing the site…' } : null,
+          });
+          protection.release?.();
+          return logOf(job()).slice(said).join('\n');
+        };
+
+        /** What arrived runs as a site that has always been on stack 2. */
+        async function expectAtHome(log: string): Promise<void> {
+          await routed();
+          expect(await movedDocker.containerStack(MOVED)).toEqual({ imageId: newId, stack: 2 });
+          expect(log).toContain(`${BARE_LINE}: moved to .user.ini`);
+          for (const [file, text] of moved) expect(await fileInMoved(file), file).toBe(text);
+          const home = await viaEdge('/');
+          // The panel's word for this site, whatever the archive's nginx file said.
+          expect([home.status, home.cache, home.skipped]).toEqual([200, 'BYPASS', 'off']);
+          expect(await checked()).toMatchObject({ sapi: 'fpm-fcgi', maxInputVars: '4321', prepend: '/var/www/html/wordfence-waf.php', firewall: true, basedir: '', memory: '256M' });
+          expect(await checked('/settings')).toMatchObject({ uploadMax: '77M', strictSessions: '1' });
+          expect((await viaEdge('/no-php/secret.php')).status).toBe(403);
+          expect(await wpMoved('option', 'get', 'wpl7_engine_marker')).toBe('still here');
+        }
+
+        it('a move: an archive from when it was on stack 1 has its lines moved, and none of its runtime folder stays', async () => {
+          const backup = w.db.select().from(backups).where(eq(backups.id, backupId)).get()!;
+          await asIfNeverHere();
+          const log = await arrive({ kind: 'archive', filesTarGz: path.join(backup.path, 'files.tar.gz'), dbSqlGz: path.join(backup.path, 'db.sql.gz') }, { requireWpConfig: true, probed: true });
+          await expectAtHome(log);
+          const runtime = (await must(inMoved(['ls', '-A', '/etc/wpl7-runtime']), 'the folder')).split('\n').sort();
+          expect(runtime).toEqual(RUNTIME_FILES);
+          // A redis.conf is what starts Redis, and the archive had one.
+          expect((await must(inMoved(['ps', '-eo', 'comm']), 'ps'))).not.toContain('redis');
+        });
+
+        it('an import: another host’s tree has its lines moved before the first start, which writes its wp-config.php', async () => {
+          const backup = w.db.select().from(backups).where(eq(backups.id, backupId)).get()!;
+          const staging = path.join(movedRoot, 'staging');
+          fs.mkdirSync(staging, { recursive: true });
+          const untar = await hostExec.run('tar', ['-xzf', path.join(backup.path, 'files.tar.gz'), '-C', staging]);
+          expect(untar.exitCode, untar.stderr).toBe(0);
+          fs.rmSync(path.join(staging, 'wordpress', 'wp-config.php'));
+          await asIfNeverHere();
+          const log = await arrive({ kind: 'tree', wordpressDir: path.join(staging, 'wordpress'), dbSqlGz: path.join(backup.path, 'db.sql.gz') }, { requireWpConfig: false, probed: false });
+          await waitFor('the image to write wp-config.php', async () => (await inMoved(['test', '-s', '/var/www/html/wp-config.php'])).status === 0);
+          await expectAtHome(log);
+          expect(await fileInMoved('wp-config.php')).toContain("getenv_docker('WORDPRESS_DB_HOST'");
+        });
+      });
+
+      it('a store on Geolocate with page caching stays on: its pages are stored from the first', async () => {
+        // This test's own way back to stack 1, with its lines where mod_php wants them (see above).
+        const site = fresh();
+        const ctx = new JobContext(w.db.select().from(jobs).all().at(-1)!.id, {}, w.db);
+        const again = await buildImage(TAG_MOVED, `FROM ${OLD_IMAGE}\nLABEL wpl7.engine.move=${process.pid}\nLABEL wpl7.engine.again=1\n`);
+        await undoSiteMigration(ctx, handle(), w.core, site);
+        await movedDocker.removeContainer(MOVED);
+        await movedDocker.createSiteContainer(await siteContainerSpec(w.core, handle(), site, [HOST_MOVED], siteRuntimeFrom(w.core.settings, site)));
+        await startSiteContainer(handle(), w.core, site, ctx);
+        expect(await movedDocker.containerStack(MOVED)).toEqual({ imageId: again, stack: 1 });
+        await routed();
+        expect(await checked()).toMatchObject({ sapi: 'apache2handler', maxInputVars: '4321' });
+
+        await wpMoved('option', 'update', 'woocommerce_default_customer_address', 'geolocation_ajax');
+        w.db.update(sites).set({ pageCache: null, cacheRules: null }).where(eq(sites.id, siteId)).run();
+        await moveTag(newId);
+        const done = await sweepAndRun();
+        expect(done.status, done.error ?? '').toBe('succeeded');
+        await routed();
+        expect(fresh()).toMatchObject({ pageCache: null, cacheRules: null });
+        // A second move over the first one's files, line for line.
+        for (const [file, text] of moved) expect(await fileInMoved(file), file).toBe(text);
+
+        const home = await viaEdge('/');
+        expect([home.status, home.skipped]).toEqual([307, 'status 307']);
+        const hash = new URL(home.get('location')!).searchParams.get('v');
+        expect(hash).toBeTruthy();
+        const first = await viaEdge(`/?v=${hash}`);
+        const second = await viaEdge(`/?v=${hash}`);
+        expect([first.status, first.cache, second.cache], first.skipped).toEqual([200, 'MISS', 'HIT']);
+        expect(second.body).toBe(first.body);
+      });
+    });
+  });
+
+  // These need services/siteCaches.ts's calls, which come in the next stage.
   describe.todo("Check a URL's answers, through the panel's own call");
   describe.todo('A clear after a restore, through the panel: page cache files and Redis FLUSHALL');
 });

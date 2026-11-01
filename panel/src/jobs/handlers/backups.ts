@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { backups, siteDatabases, type BackupRow, type SiteRow } from '../../db/schema.js';
 import { manifestDatabases } from '../../services/backup.js';
+import { migrateArrivedFiles } from '../../services/siteMigration.js';
 import { JobCanceledError } from '../../lib/errors.js';
 import { TABLE_PREFIX_RE, backupTypes } from '../../../shared/schemas.js';
 import type { CoreServices } from '../../services/index.js';
@@ -177,18 +178,13 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
       }
       await server.docker.removeContainer(site.containerName);
       updateSiteRow(s.db, site.id, recreate);
-      const { buildSiteContainerSpec, siteRuntimeFrom, siteTlsFor } = await import('../../services/siteSpec.js');
+      const { siteContainerSpec, siteRuntimeFrom } = await import('../../services/siteSpec.js');
       const restored = loadSite(s.db, site.id);
-      await server.docker.createSiteContainer(
-        buildSiteContainerSpec(
-          s.config,
-          restored,
-          siteDomains(site),
-          siteTlsFor(s.dns, server.row),
-          siteRuntimeFrom(s.settings, restored),
-        ),
-      );
+      await server.docker.createSiteContainer(await siteContainerSpec(s, server, restored, siteDomains(site), siteRuntimeFrom(s.settings, restored)));
     }
+
+    // After that recreate: it can be what takes the site to stack 2. A backup can be older than that.
+    await migrateArrivedFiles(ctx, server, s, loadSite(s.db, site.id));
 
     ctx.info('Starting site…');
     await startSiteContainer(server, s, site, ctx);

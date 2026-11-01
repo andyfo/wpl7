@@ -2,8 +2,9 @@
 import path from 'node:path';
 import type { Config } from '../config.js';
 import type { ServerRow, SiteRow } from '../db/schema.js';
+import { MIN_PIDS_CAP } from '../../shared/schemas.js';
 import type { SiteLimits } from '../../shared/types.js';
-import type { ContainerLimits, SiteContainerSpec } from './docker.js';
+import type { ContainerLimits, DockerPort, SiteContainerSpec } from './docker.js';
 import type { DnsService } from './dns.js';
 import { traefikLabels } from './labels.js';
 import type { PanelSettings } from './settings.js';
@@ -21,6 +22,16 @@ import { RUNTIME_DIR_IN_CONTAINER, SITE_STACK_LABEL, SITE_STACK_PORT, WP_CACHE_P
 export const SITE_IMAGE_REPO = 'wpl7-wordpress';
 
 export const siteImage = (phpVersion: string) => `${SITE_IMAGE_REPO}:php${phpVersion}`;
+
+/**
+ * A name that keeps a site's old image while it moves to another stack: once its container has
+ * gone, an image whose tag has moved on has no name and nothing using it, which is what the
+ * housekeeping removes. A repository of its own, so the housekeeping counts it as nobody's, and
+ * nothing that reads the site images' tags takes it for a PHP version.
+ */
+export const SITE_ROLLBACK_REPO = 'wpl7-rollback';
+
+export const siteRollbackImage = (slug: string) => `${SITE_ROLLBACK_REPO}:${slug}`;
 
 export const WORDPRESS_CONFIG_EXTRA = [
   // Behind Traefik's TLS termination WP would otherwise see is_ssl()=false -> redirect loop.
@@ -83,7 +94,8 @@ export function siteRuntimeFrom(settings: RuntimeSettingsReader, own: OwnSiteLim
   return {
     memoryBytes: memMb * 1024 * 1024,
     ...(cpu > 0 ? { nanoCpus: Math.round(cpu * 1e9) } : {}),
-    ...(pids > 0 ? { pidsLimit: pids } : {}),
+    // A limit saved before MIN_PIDS_CAP existed would put the site in a restart loop.
+    ...(pids > 0 ? { pidsLimit: Math.max(pids, MIN_PIDS_CAP) } : {}),
   };
 }
 
@@ -168,16 +180,17 @@ export function buildSiteContainerSpec(
    * before `wp core install` has created OUR administrator.
    *
    * stack: what the image runs (services/siteStack.ts), which has to match it: a container needs
-   * nginx's port, and the folder of runtime files, only from an image that has nginx.
+   * nginx's port, and the folder of runtime files, only from an image that has nginx. There is no
+   * default, and only siteContainerSpec calls this: it is what knows the image.
    * image: a particular image, by tag or id, in place of the site's PHP tag.
    */
-  opts: { routing?: boolean; stack?: SiteStack; image?: string } = {},
+  opts: { routing?: boolean; stack: SiteStack; image?: string },
 ): SiteContainerSpec {
   const [primary, ...aliases] = domains;
   if (!primary) throw new Error('site has no domains');
   const p = sitePaths(config, site.slug);
   const routing = opts.routing ?? true;
-  const stack = opts.stack ?? 1;
+  const { stack } = opts;
 
   return {
     name: site.containerName,
@@ -232,4 +245,32 @@ export function buildSiteContainerSpec(
     ...(runtime.nanoCpus ? { nanoCpus: runtime.nanoCpus } : {}),
     ...(runtime.pidsLimit ? { pidsLimit: runtime.pidsLimit } : {}),
   };
+}
+
+/** What buildSiteContainerSpec needs to know about a site (a row, or a row with in-memory edits). */
+export type SpecSite = Parameters<typeof buildSiteContainerSpec>[1];
+
+/**
+ * The container a site gets on a server, from what the image there runs. Every container is built
+ * through this, so none can come out with the port or the mounts of another stack: a server that
+ * has not had its update yet keeps getting containers its images can run, and one that has gets the
+ * new kind. The stack is read at the last moment, after ensureSiteImage if the caller runs that.
+ *
+ * `from` puts a particular image back, by id: what a container ran before it was replaced, whose
+ * stack is known, and whose tag may have moved on since.
+ */
+export async function siteContainerSpec(
+  s: { config: Config; dns: Pick<DnsService, 'wildcardProvider'> },
+  server: { docker: Pick<DockerPort, 'imageStack'>; row: Pick<ServerRow, 'devDomain' | 'dnsProvider'> },
+  site: SpecSite,
+  domains: string[],
+  runtime: SiteRuntime,
+  opts: { routing?: boolean; from?: { imageId: string; stack: SiteStack } } = {},
+): Promise<SiteContainerSpec> {
+  const stack = opts.from?.stack ?? (await server.docker.imageStack(siteImage(site.phpVersion)));
+  return buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), runtime, {
+    routing: opts.routing,
+    stack,
+    image: opts.from?.imageId,
+  });
 }

@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useMeta } from '../api/hooks';
 import { Button, Card, ErrorNote, Field, inputClass, Tabs, Toggle, useTabParam } from '../components/ui';
+import { KEEP_CHOICES, keepLabel } from '../components/SiteCaching';
 import { CronField } from '../components/CronField';
 import { LocaleSelect } from '../components/LocaleSelect';
 import { UpdatesCard } from '../components/UpdatesCard';
@@ -15,6 +16,7 @@ import type { ScanOnFinding, TrustedProxiesSetting } from '../../../shared/secur
 import {
   backupBeforeUpdatesValues,
   MAX_BACKUP_KEEP_DAYS,
+  MIN_PIDS_CAP,
   SITE_LIMIT_RANGES,
   siteLimitProblem,
   type BackupBeforeUpdates,
@@ -51,6 +53,8 @@ interface PanelSettings {
   siteCpuLimit: number;
   siteMemoryLimitMb: number;
   sitePidsLimit: number;
+  sitePageCache: boolean;
+  sitePageCacheSeconds: number;
   wpScanIntervalHours: number;
   vulnerabilityFeed: boolean;
   ftpEnabled: boolean;
@@ -114,6 +118,8 @@ const SETTING_TAB: Record<keyof PanelSettings, TabId> = {
   siteCpuLimit: 'sites',
   siteMemoryLimitMb: 'sites',
   sitePidsLimit: 'sites',
+  sitePageCache: 'sites',
+  sitePageCacheSeconds: 'sites',
   ftpEnabled: 'sites',
   ftpSftpPort: 'sites',
   ftpOfferFtps: 'sites',
@@ -410,6 +416,16 @@ function SitesTab({ s, set, meta, ownSiteLimits }: TabProps) {
             <input className={inputClass} type="email" placeholder="you@example.com" value={s.defaultAdminEmail ?? ''}
               onChange={(e) => set('defaultAdminEmail', e.target.value)} />
           </Field>
+          <Field label="Page cache" hint="For sites that follow the default. A site can say otherwise on its Settings tab.">
+            <Toggle checked={s.sitePageCache} label={s.sitePageCache ? 'On' : 'Off'} onChange={(on) => set('sitePageCache', on)} />
+          </Field>
+          <Field label="Keep pages for" width="sm" hint="A site can set a shorter time.">
+            <select className={inputClass} value={s.sitePageCacheSeconds} onChange={(e) => set('sitePageCacheSeconds', Number(e.target.value))}>
+              {[...new Set([...KEEP_CHOICES, s.sitePageCacheSeconds])].sort((a, b) => a - b).map((seconds) => (
+                <option key={seconds} value={seconds}>{keepLabel(seconds)}</option>
+              ))}
+            </select>
+          </Field>
           {(meta?.multiServer ?? false) && (
             <Field label="Default server" hint="Where new sites deploy unless picked explicitly.">
               <select
@@ -443,7 +459,7 @@ function SitesTab({ s, set, meta, ownSiteLimits }: TabProps) {
               max={SITE_LIMIT_RANGES.memoryLimitMb.max} step={128} value={s.siteMemoryLimitMb}
               onChange={(e) => set('siteMemoryLimitMb', Number(e.target.value))} />
           </Field>
-          <Field label="Processes per site" hint="Apache needs a few hundred. 0 = uncapped.">
+          <Field label="Processes per site" hint={`At least ${MIN_PIDS_CAP}: a site runs nginx, Apache and PHP. 0 = uncapped.`}>
             <input className={inputClass} type="number" min={SITE_LIMIT_RANGES.pidsLimit.min} max={SITE_LIMIT_RANGES.pidsLimit.max}
               step={64} value={s.sitePidsLimit} onChange={(e) => set('sitePidsLimit', Number(e.target.value))} />
           </Field>

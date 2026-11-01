@@ -28,6 +28,7 @@ import { execLane } from '../jobs/lanes.js';
 import { maskRestRoute } from '../jobs/summaries.js';
 import type { RunResult } from '../services/docker.js';
 import { godmodeAnswer } from '../services/wp.js';
+import { clearAfterChange, wpCliOnlyReads } from '../services/siteCaches.js';
 import type { AppDeps } from './deps.js';
 import type { SiteRow } from '../db/schema.js';
 import type { ServerHandle } from '../servers/registry.js';
@@ -352,6 +353,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
     }
     try {
       const res = await backend.run(command.args, { stdin: command.stdin, timeoutMs: SYNC_WP_MS });
+      if (!wpCliOnlyReads(command.args)) await clearAfterChange(deps, site);
       return { stdout: res.stdout, stderr: res.stderr, exitCode: res.exitCode };
     } finally {
       backend.close();
@@ -576,6 +578,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
       backend.close();
     }
     audit(req, 'wpRest', site.slug, 'request', { ...what, status: res.status });
+    if (request.method !== 'GET') await clearAfterChange(deps, site);
     if (res.status === null) throw badGateway(`The site did not answer: ${res.error ?? 'no answer came back'}`);
     return res;
   });

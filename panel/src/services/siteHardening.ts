@@ -43,6 +43,11 @@ const HEADER = [
  * pattern is the one the site's Traefik rule uses (services/securityConfig.ts), so a request
  * that got past Traefik - enforcement off, a visitor on the server's own network - meets the
  * same answer here.
+ *
+ * `php_admin_flag` means nothing without mod_php. A stack 2 container has PHP-FPM behind
+ * proxy_fcgi instead, and with no PHP engine to switch off the second half takes the handler away.
+ * That alone would send the file as it is, source and any passwords in it, so it is refused as
+ * well. The module test leaves a stack 1 container's Apache with nothing new to do.
  */
 export function renderApacheHardening(policy: Pick<ContainerPolicy, 'blockPhpInUploads'>): string {
   const lines = HEADER.map((l) => `# ${l}`);
@@ -53,6 +58,12 @@ export function renderApacheHardening(policy: Pick<ContainerPolicy, 'blockPhpInU
       '<Directory "/var/www/html/wp-content/uploads">',
       '    <IfModule php_module>',
       '        php_admin_flag engine off',
+      '    </IfModule>',
+      '    <IfModule proxy_fcgi_module>',
+      '        <FilesMatch "(?i)\\.ph(p[0-9]?|tml|ar|t|ps)(\\.|$)">',
+      '            SetHandler none',
+      '            Require all denied',
+      '        </FilesMatch>',
       '    </IfModule>',
       '</Directory>',
       '<LocationMatch "(?i)^/wp-content/uploads/.*\\.ph(p[0-9]?|tml|ar|t|ps)([./]|$)">',

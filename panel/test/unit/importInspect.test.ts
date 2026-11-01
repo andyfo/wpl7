@@ -106,6 +106,21 @@ describe('inspecting a report', () => {
     expect(found.find((w) => w.code === 'open-basedir')!.message).toBe('open_basedir limits what the plugin can read.');
   });
 
+  it('says what becomes of a .user.ini and a php.ini: PHP-FPM reads the one, not the other', () => {
+    const codes = (report: Record<string, unknown>) => inspect(report, true).warnings.map((w) => w.code);
+    expect(codes({})).not.toContain('user-ini');
+    expect(codes({})).not.toContain('php-ini');
+    const both = inspect({ user_ini: true, php_ini: true }, true).warnings;
+    const userIni = both.find((w) => w.code === 'user-ini')!;
+    expect(userIni.blocking).toBeFalsy();
+    expect(userIni.message).toContain('.user.ini applies here');
+    expect(userIni.message).toContain('paths from the old host');
+    expect(userIni.message).not.toContain('php.ini');
+    expect(both.find((w) => w.code === 'php-ini')!.message).toBe('PHP settings in php.ini are not used here.');
+    expect(codes({ php_ini: true })).not.toContain('user-ini');
+    expect(codes({ user_ini: true })).not.toContain('php-ini');
+  });
+
   it('suggests what of the old host to leave behind', () => {
     const { suggestions } = inspect({
       dropins: ['object-cache.php', 'advanced-cache.php', 'maintenance.php'],

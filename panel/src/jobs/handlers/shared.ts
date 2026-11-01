@@ -6,6 +6,7 @@ import { sites, type ServerRow, type SiteRow } from '../../db/schema.js';
 import type { Config } from '../../config.js';
 import type { JobContext } from '../context.js';
 import { siteScheme } from '../../services/labels.js';
+import { writeSiteRuntimeFiles } from '../../services/siteCaches.js';
 import { DEFAULT_UPLOADS_INI, sitePaths } from '../../services/siteSpec.js';
 import { ensureSiteNetwork } from '../../services/siteNetwork.js';
 import { mailLogin, renderMsmtprc, type SenderOwner } from '../../services/mailAuth.js';
@@ -13,7 +14,7 @@ import type { CoreServices } from '../../services/index.js';
 import type { FilesPort } from '../../lib/files.js';
 import type { ContainerState } from '../../services/docker.js';
 import type { ServerHandle } from '../../servers/registry.js';
-import { httpProbe } from '../../lib/httpProbe.js';
+import { httpProbe, httpProbeAttempts, type ProbeAttempt } from '../../lib/httpProbe.js';
 import type { RecipeHook } from '../../../shared/recipes.js';
 import type { HookVars, RecipeOutcome } from '../../services/licenses.js';
 import { isExternal, type SiteKinds } from '../../lib/siteKind.js';
@@ -103,7 +104,7 @@ export async function waitForWordPressFiles(
 }
 
 /**
- * Probe the site, retrying for up to `timeoutMs` — Apache needs a few seconds after
+ * Probe the site, retrying for up to `timeoutMs` — its services need a few seconds after
  * container start. Inside the stack this hits the site container directly; otherwise it
  * goes through Traefik with the site's Host header (see lib/httpProbe for why this is
  * not `fetch`, and why a 404 counts as down).
@@ -118,6 +119,11 @@ export async function probeSite(
   timeoutMs = 30_000,
 ): Promise<boolean> {
   return httpProbe(server.probeUrlFor(containerName), hostHeader, timeoutMs);
+}
+
+/** `probeSite`, for a caller who has to say what the site answered. `attemptTimeoutMs`: how long one try may take. */
+export function probeSiteAttempt(server: ServerHandle, containerName: string, hostHeader: string, timeoutMs = 30_000, attemptTimeoutMs?: number): Promise<ProbeAttempt> {
+  return httpProbeAttempts(server.probeUrlFor(containerName), hostHeader, timeoutMs, { attemptTimeoutMs });
 }
 
 export async function writeSiteJson(server: ServerHandle, config: Config, site: SiteRow): Promise<void> {
@@ -169,8 +175,8 @@ export async function writeSiteRelayConfig(
   });
 }
 
-/** What the mount helpers need: where the files go, and the protection they carry. */
-export type MountServices = Pick<CoreServices, 'config' | 'security'>;
+/** What the mount helpers need: where the files go, the protection they carry, and the site's caches. */
+export type MountServices = Pick<CoreServices, 'config' | 'security' | 'settings' | 'db'>;
 
 /**
  * Make every file the site container bind-mounts exist, as a file, before Docker is asked
@@ -193,7 +199,8 @@ export type MountServices = Pick<CoreServices, 'config' | 'security'>;
  * run before every start, which is the only placement that actually holds - a call site
  * that forgets is a site that can be destroyed by a routine action. The same placement is
  * what makes the site's hardening files (services/siteHardening.ts) follow its protection
- * as it is now, whatever an older archive or a move brought along.
+ * as it is now, whatever an older archive or a move brought along, and the runtime files its
+ * caches are made of (services/siteCaches.ts) follow its settings.
  */
 export async function ensureSiteMountSources(
   server: ServerHandle,
@@ -215,6 +222,10 @@ export async function ensureSiteMountSources(
   if (!(await server.files.exists(p.uploadsIni))) await server.files.writeFile(p.uploadsIni, DEFAULT_UPLOADS_INI);
   await writeSiteRelayConfig(server, s.config, site, ctx);
   await s.security.prepareHardening(server, site);
+  // Read here rather than taken from the caller: a job holds the row it began with, which can be
+  // an hour old by now, and a cache setting changed since must not be put back by this start.
+  const current = s.db.select().from(sites).where(eq(sites.id, site.id)).get();
+  if (current) await writeSiteRuntimeFiles(server, s, current, ctx);
 }
 
 /**

@@ -75,6 +75,10 @@ export interface PanelSettings {
   siteMemoryLimitMb: number;
   /** Process/thread ceiling per site container (fork-bomb guard). 0 = uncapped. */
   sitePidsLimit: number;
+  /** Whether a site keeps a page cache, unless it says otherwise (`sites.page_cache`). */
+  sitePageCache: boolean;
+  /** How long a site keeps a page, unless it has a time of its own (`sites.cache_rules`). */
+  sitePageCacheSeconds: number;
   defaultPhpVersion: string;
   defaultLocale: string;
   /**
@@ -194,6 +198,8 @@ const KEY_MAP: Record<keyof PanelSettings, string> = {
   siteCpuLimit: 'site.cpuLimit',
   siteMemoryLimitMb: 'site.memoryLimitMb',
   sitePidsLimit: 'site.pidsLimit',
+  sitePageCache: 'site.pageCache',
+  sitePageCacheSeconds: 'site.pageCacheSeconds',
   defaultPhpVersion: 'site.defaultPhpVersion',
   defaultLocale: 'site.defaultLocale',
   defaultAdminEmail: 'site.defaultAdminEmail',

@@ -20,6 +20,10 @@ import { siteImage } from './siteSpec.js';
  * sites that were busy. One `site.reconcile` per site, in its server's lane, each with its own
  * rollback, as the hardening sweep does. A site whose tag is missing on its server is left
  * alone: there is nothing to rebuild it onto.
+ *
+ * So is a site that went back to its old container from the image the tag names now: every hour
+ * it would be taken down to fail the same way. It tries again by itself once there is a newer
+ * image, so no site stays behind for good, and its page offers a Retry before that.
  */
 export async function sweepSiteImages(
   s: CoreServices,
@@ -40,7 +44,7 @@ export async function sweepSiteImages(
         const tag = siteImage(site.phpVersion);
         if (!current.has(tag)) current.set(tag, await docker.imageId(tag));
         const id = current.get(tag);
-        if (!id || id === container.imageId) continue;
+        if (!id || id === container.imageId || id === site.stackSwitchImage) continue;
         queueReconcile(worker, site, sweep);
       }
     } catch (err) {

@@ -190,7 +190,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       {
         method: 'POST',
         path: '/api/sites/:slug/reconcile',
-        summary: 'Re-apply the isolation policy (network, capabilities, limits, mail credential)',
+        summary: 'Re-apply the isolation policy (network, capabilities, limits, mail credential); retries a failed PHP-FPM move',
         job: true,
         level: 'manage',
       },
@@ -204,10 +204,35 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       },
       {
         method: 'PUT',
+        path: '/api/sites/:slug/cache',
+        summary: 'Set the site\'s page cache, how long it keeps pages, its rules, and its object cache',
+        input:
+          '{page?: default|on|off, object?: boolean, keepSeconds?: number|null, off?: string[], own?: rule[]} - each left out = unchanged. keepSeconds: at most 36000, null follows Settings. off: ids of built-in groups and rules to switch off; the whole list. own: the site\'s own rules, {kind: skip|copy|keep|ignore, match: path|cookie|query|agent|postType, value, seconds?}; the whole list',
+        returns: '{site: SiteDetail, job} - job: the site.objectCache when the object cache changes; 200 and null otherwise',
+        job: true,
+        level: 'manage',
+      },
+      {
+        method: 'POST',
+        path: '/api/sites/:slug/cache/clear',
+        summary: 'Empty the site\'s page cache, and Redis when it runs',
+        returns: '{cleared: boolean}',
+        level: 'manage',
+      },
+      {
+        method: 'POST',
+        path: '/api/sites/:slug/cache/check',
+        summary: 'Ask for a page as a visitor with no cookies would, and say what the page cache did with it',
+        input: '{path} - starting with /',
+        returns: '{state: cached|stale|skipped|not-stored|off, reason, status} - reason: the rule or the page\'s own words',
+        level: 'manage',
+      },
+      {
+        method: 'PUT',
         path: '/api/sites/:slug/limits',
         summary: 'Set the site container\'s own CPU, memory and process limits, or put them back on the panel\'s settings',
         input:
-          '{cpuLimit?, memoryLimitMb?, pidsLimit?} - each a number, or null for Settings\' value; left out = unchanged. CPU in cores; 0 = uncapped, for CPU and processes',
+          '{cpuLimit?, memoryLimitMb?, pidsLimit?} - each a number, or null for Settings\' value; left out = unchanged. CPU in cores; 0 = uncapped, for CPU and processes; a process limit is at least 64',
         returns:
           '{site: SiteDetail, job} - job: the server.applySiteLimits that changes the container in place (lifting a CPU cap recreates it); 200 and null when nothing it runs with changed',
         job: true,

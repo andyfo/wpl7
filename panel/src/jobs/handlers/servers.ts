@@ -3,6 +3,7 @@ import { PassThrough, Readable, Writable } from 'node:stream';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { servers, sites } from '../../db/schema.js';
+import { applySiteCaches } from '../../services/siteCaches.js';
 import type { CoreServices } from '../../services/index.js';
 import type { JobContext } from '../context.js';
 import { PluginSyncService } from '../../services/pluginSync.js';
@@ -122,6 +123,11 @@ export async function serverApplySiteLimits(
         );
         ctx.info(`${site.slug}: a CPU cap only comes off with a new container - recreating it (job #${job.id}).`);
         recreating.push(site.slug);
+      }
+      // PHP's workers and Redis follow the memory limit, and the caches follow Settings.
+      const applied = await applySiteCaches(handle, s, site, ctx);
+      if (applied.reloaded.length > 0 || applied.cleared) {
+        ctx.info(`${site.slug}: ${[...applied.reloaded.map((name) => `${name} reloaded`), ...(applied.cleared ? ['page cache cleared'] : [])].join(', ')}.`);
       }
     } catch (err) {
       ctx.warn(`${site.slug}: ${err instanceof Error ? err.message : String(err)}`);

@@ -7,6 +7,7 @@ import Docker from 'dockerode';
 import { collectDemuxed, demuxBuffer, demuxToStreams } from '../lib/demux.js';
 import { badGateway, timedOut } from '../lib/errors.js';
 import { phpReleaseOf } from '../lib/phpRelease.js';
+import { stackFromLabels, type SiteStack } from './siteStack.js';
 
 export interface RunResult {
   stdout: string;
@@ -309,6 +310,11 @@ export interface DockerPort {
   /** The image reference a container was created from; null when it does not exist. */
   containerImage(name: string): Promise<string | null>;
   /**
+   * What a container runs: the id of the image it was created from, which the tag it was made with
+   * may have moved off since, and the stack its label says. Null when it does not exist.
+   */
+  containerStack(name: string): Promise<{ imageId: string; stack: SiteStack } | null>;
+  /**
    * The PHP release a container runs (`PHP_VERSION`, which it took from its image when it was
    * created); null when it does not exist or its image does not say.
    */
@@ -348,6 +354,12 @@ export interface DockerPort {
   imageId(tag: string): Promise<string | null>;
   /** The PHP release in an image, by tag or id (`PHP_VERSION`); null when there is no such image or it does not say. */
   imagePhpVersion(ref: string): Promise<string | null>;
+  /**
+   * What an image runs, by tag or id (services/siteStack.ts): its `wpl7.stack` label. An image with
+   * no label predates it and is stack 1, and so is one that is not there, which no container can
+   * be made from anyway.
+   */
+  imageStack(ref: string): Promise<SiteStack>;
   /** Every `repository:tag` this daemon has of a repository, such as `wpl7-wordpress`. */
   imageTags(repository: string): Promise<string[]>;
   /**
@@ -360,6 +372,12 @@ export interface DockerPort {
   tagImage(source: string, target: string): Promise<void>;
   /** Untag, and remove if nothing else uses it. An image that does not exist is not an error. */
   removeImage(ref: string): Promise<void>;
+  /**
+   * Take a name off an image and never the image off a container, which `removeImage` refuses to
+   * do alone when it is the image's last name. False: the name stays, because only a container
+   * that isn't running uses the image, and Docker can't be trusted with that (the function says why).
+   */
+  untagImage(tag: string): Promise<boolean>;
   /** Remove untagged images carrying all these labels (`key=value`): what a build left behind. */
   pruneImages(labels: string[]): Promise<void>;
   /** Every image on the server, intermediate build steps aside. */
@@ -593,6 +611,16 @@ export class DockerService implements DockerPort {
     try {
       const info = (await this.docker.getContainer(name).inspect()) as { Config?: { Image?: string } };
       return info.Config?.Image ?? null;
+    } catch (err) {
+      if (isStatusError(err, 404)) return null;
+      throw err;
+    }
+  }
+
+  async containerStack(name: string): Promise<{ imageId: string; stack: SiteStack } | null> {
+    try {
+      const info = (await this.docker.getContainer(name).inspect()) as { Image: string; Config?: { Labels?: Record<string, string> | null } };
+      return { imageId: info.Image, stack: stackFromLabels(info.Config?.Labels) };
     } catch (err) {
       if (isStatusError(err, 404)) return null;
       throw err;
@@ -1048,6 +1076,15 @@ export class DockerService implements DockerPort {
     }
   }
 
+  async imageStack(ref: string): Promise<SiteStack> {
+    try {
+      return stackFromLabels((await this.docker.getImage(ref).inspect()).Config?.Labels);
+    } catch (err) {
+      if (isStatusError(err, 404)) return 1;
+      throw err;
+    }
+  }
+
   async imageTags(repository: string): Promise<string[]> {
     const images = await this.docker.listImages({ filters: { reference: [repository] } });
     // RepoTags holds every name of the image: a pulled site image is also its registry tag.
@@ -1089,6 +1126,37 @@ export class DockerService implements DockerPort {
     } catch (err) {
       if (!isStatusError(err, 404)) throw err;
     }
+  }
+
+  /**
+   * Measured on Docker 29.9.2 with both image stores, removing an image's last name while a
+   * container uses it: Docker refuses without force. With force a running container keeps the image.
+   * With only a stopped or never started container, the containerd store keeps it too, but the
+   * classic overlay2 store deletes it. That container can still start, but no container can be made
+   * from that image any more, and a site's way back is exactly that. So force is only for a running
+   * container, and otherwise the name stays: it costs nothing while the image is in use.
+   */
+  async untagImage(tag: string): Promise<boolean> {
+    const image = this.docker.getImage(tag);
+    try {
+      await image.remove();
+      return true;
+    } catch (err) {
+      if (isStatusError(err, 404)) return true;
+      if (!isStatusError(err, 409)) throw err;
+    }
+    let id: string;
+    try {
+      id = (await image.inspect()).Id;
+    } catch (err) {
+      // An image built on this one refused the delete after the name had gone.
+      if (isStatusError(err, 404)) return true;
+      throw err;
+    }
+    const containers = await this.docker.listContainers({ all: true });
+    if (!containers.some((c) => c.ImageID === id && c.State === 'running')) return false;
+    await image.remove({ force: true });
+    return true;
   }
 
   async pruneImages(labels: string[]): Promise<void> {

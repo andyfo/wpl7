@@ -98,27 +98,24 @@ const STACK_1_UNROUTED = {
 };
 
 describe('a stack 1 container', () => {
-  it('comes out as it did before there were stacks, whatever the call says', () => {
+  it('comes out as it did before there were stacks', () => {
     const domains = ['example.com', 'www.example.com'];
-    const expected = JSON.stringify(STACK_1_ROUTED);
-    expect(JSON.stringify(buildSiteContainerSpec(config, site, domains, tls, runtime))).toBe(expected);
-    expect(JSON.stringify(buildSiteContainerSpec(config, site, domains, tls, runtime, {}))).toBe(expected);
-    expect(JSON.stringify(buildSiteContainerSpec(config, site, domains, tls, runtime, { stack: 1 }))).toBe(expected);
+    expect(JSON.stringify(buildSiteContainerSpec(config, site, domains, tls, runtime, { stack: 1 }))).toBe(JSON.stringify(STACK_1_ROUTED));
   });
 
   it('stays the same with no router', () => {
-    const spec = buildSiteContainerSpec(config, site, ['demo.dev.example.com'], tls, { memoryBytes: 268_435_456 }, { routing: false });
+    const spec = buildSiteContainerSpec(config, site, ['demo.dev.example.com'], tls, { memoryBytes: 268_435_456 }, { routing: false, stack: 1 });
     expect(JSON.stringify(spec)).toBe(JSON.stringify(STACK_1_UNROUTED));
   });
 
   it('has no stack label, which is what makes it stack 1', () => {
-    const spec = buildSiteContainerSpec(config, site, ['example.com'], tls, runtime);
+    const spec = buildSiteContainerSpec(config, site, ['example.com'], tls, runtime, { stack: 1 });
     expect(spec.labels).not.toHaveProperty(SITE_STACK_LABEL);
     expect(stackFromLabels(spec.labels)).toBe(1);
   });
 
   it('takes a particular image and nothing else with it', () => {
-    const spec = buildSiteContainerSpec(config, site, ['example.com', 'www.example.com'], tls, runtime, { image: 'sha256:abc' });
+    const spec = buildSiteContainerSpec(config, site, ['example.com', 'www.example.com'], tls, runtime, { stack: 1, image: 'sha256:abc' });
     expect(JSON.stringify(spec)).toBe(JSON.stringify({ ...STACK_1_ROUTED, image: 'sha256:abc' }));
   });
 });

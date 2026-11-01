@@ -65,22 +65,35 @@ export function isUp(status: number): boolean {
   return status < 400 || status === 401 || status === 403;
 }
 
-/** Retry `httpProbeOnce` until it succeeds or `timeoutMs` elapses (0 = a single attempt). */
+/**
+ * Retry `httpProbeOnce` until it succeeds or `timeoutMs` elapses (0 = a single attempt). Answers
+ * with the last attempt, which says what came back when nothing good did.
+ */
+export async function httpProbeAttempts(
+  url: string,
+  hostHeader: string,
+  timeoutMs: number,
+  opts: { attemptTimeoutMs?: number; intervalMs?: number } = {},
+): Promise<ProbeAttempt> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const attempt = await httpProbeOnce(url, hostHeader, opts.attemptTimeoutMs ?? 8000);
+    if (attempt.ok) return attempt;
+    // >= not >: with timeoutMs 0 (the test setting) a failure inside the same millisecond
+    // would otherwise sleep and retry instead of returning immediately.
+    if (Date.now() >= deadline) return attempt;
+    await new Promise((r) => setTimeout(r, opts.intervalMs ?? 2000));
+  }
+}
+
+/** The same, for a caller who only wants to know whether it answered. */
 export async function httpProbe(
   url: string,
   hostHeader: string,
   timeoutMs: number,
   opts: { attemptTimeoutMs?: number; intervalMs?: number } = {},
 ): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const attempt = await httpProbeOnce(url, hostHeader, opts.attemptTimeoutMs ?? 8000);
-    if (attempt.ok) return true;
-    // >= not >: with timeoutMs 0 (the test setting) a failure inside the same millisecond
-    // would otherwise sleep and retry instead of returning immediately.
-    if (Date.now() >= deadline) return false;
-    await new Promise((r) => setTimeout(r, opts.intervalMs ?? 2000));
-  }
+  return (await httpProbeAttempts(url, hostHeader, timeoutMs, opts)).ok;
 }
 
 /** What a probe of a site hosted elsewhere found. `certExpiresAt`: when its TLS certificate expires. */

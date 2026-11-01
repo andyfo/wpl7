@@ -8,13 +8,16 @@ import type { ServerHandle } from '../../servers/registry.js';
 import type { Config } from '../../config.js';
 import type { JobContext } from '../context.js';
 import {
-  buildSiteContainerSpec,
+  siteContainerSpec,
   siteImage,
   sitePaths,
+  siteRollbackImage,
   siteRuntimeFrom,
-  siteTlsFor,
   type SiteRuntime,
+  type SpecSite,
 } from '../../services/siteSpec.js';
+import type { SiteStack } from '../../services/siteStack.js';
+import { migrateArrivedFiles, migrateSiteForStack2, undoSiteMigration } from '../../services/siteMigration.js';
 import {
   ensureSiteNetwork,
   legacySiteNetworkName,
@@ -32,6 +35,7 @@ import {
   ensureSiteMountSources,
   loadSite,
   probeSite,
+  probeSiteAttempt,
   restartSiteContainer,
   rewriteWordPressUrls,
   runLicenseHook,
@@ -46,11 +50,9 @@ import {
 } from './shared.js';
 import { requireRunning } from './wp.js';
 import { isExternal } from '../../lib/siteKind.js';
+import { parseSiteCacheRules } from '../../../shared/cacheRules.js';
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
-
-/** What buildSiteContainerSpec needs to know about a site (a row, or a row with in-memory edits). */
-export type SpecSite = Parameters<typeof buildSiteContainerSpec>[1];
 
 // ---------------------------------------------------------------------------
 
@@ -125,9 +127,7 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
     // is switched on further down, once the expected administrator verifiably exists.
     ctx.info('Creating and starting container (unrouted until WordPress is installed)…');
     ctx.pushCompensation('remove container', () => server.docker.removeContainer(site.containerName));
-    await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings, site), { routing: false }),
-    );
+    await server.docker.createSiteContainer(await siteContainerSpec(s, server, site, domains, siteRuntimeFrom(s.settings, site), { routing: false }));
     await startSiteContainer(server, s, site, ctx);
 
     ctx.info('Waiting for WordPress files…');
@@ -224,9 +224,7 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
     releaseProtection = s.security.pin(server.id, site.id);
     await s.security.kick(server.id);
     await server.docker.removeContainer(site.containerName);
-    await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings, site)),
-    );
+    await server.docker.createSiteContainer(await siteContainerSpec(s, server, site, domains, siteRuntimeFrom(s.settings, site)));
     await startSiteContainer(server, s, site, ctx);
 
     ctx.info('Verifying site responds…');
@@ -607,11 +605,26 @@ export async function siteRestart(ctx: JobContext<z.infer<typeof siteIdPayload>>
 
 // ---------------------------------------------------------------------------
 
+/** What replaceContainer took away, for a caller that has to be able to put it back itself. */
+export interface ReplacedContainer {
+  /** The image the old container ran, by id, and the stack it was; null when there was none. */
+  previous: { imageId: string; stack: SiteStack } | null;
+  /** It has just moved to stack 2, and when it should run, it has answered already. */
+  switched: boolean;
+}
+
 /**
  * Replace a site's container with one built from `next`. When creating or starting the
  * replacement fails, the `previous` spec is put back (and started when the site should be
  * running) before the error is rethrown - a Docker hiccup must never leave the site with no
  * container at all.
+ *
+ * What goes back is what the old container ran: its own image, by id, and its own stack, read
+ * before anything is removed. The tag the site's spec names may have moved since that container
+ * was made, and the image sweep replaces a container exactly because it has, so a rollback by
+ * tag would "restore" the very image that just failed. With no old container there is only the tag.
+ *
+ * Going from stack 1 to stack 2 takes more than a new container: see switchToStack2.
  *
  * `row` is the registry row behind both specs; `next`/`previous` only differ from it in the
  * PHP version or the domain list. It is what the bind-mounted files are written from, which
@@ -627,24 +640,39 @@ export async function replaceContainer(
   next: { site: SpecSite; domains: string[] },
   previous: { site: SpecSite; domains: string[] },
   run: boolean,
-): Promise<void> {
+): Promise<ReplacedContainer> {
   const name = next.site.containerName;
+  const old = await server.docker.containerStack(name);
+  const tag = siteImage(next.site.phpVersion);
+  // Set when this site has already failed to move to the image the tag names: going through that
+  // again would only fail a change of domains or a new database password for a reason of its own.
+  let stayOn: { imageId: string; stack: SiteStack } | undefined;
+  if (old?.stack === 1 && (await server.docker.imageStack(tag)) === 2) {
+    if (loadSite(s.db, row.id).stackSwitchImage === (await server.docker.imageId(tag))) {
+      ctx.warn('This site stays on the old PHP setup, because it could not move to the new one. Retry on its page tries again.');
+      stayOn = old;
+    } else {
+      await switchToStack2(ctx, server, s, runtime, row, next, previous, run, old.imageId);
+      return { previous: old, switched: true };
+    }
+  }
   await ensureSiteMountSources(server, s, row, ctx);
   // Idempotent, and the reason a site created before per-site networking gets one the first
   // time anything recreates its container.
   await ensureSiteNetwork(server.docker, next.site.slug);
   await server.docker.removeContainer(name);
   try {
-    await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, next.site, next.domains, siteTlsFor(s.dns, server.row), runtime),
-    );
+    await server.docker.createSiteContainer(await siteContainerSpec(s, server, next.site, next.domains, runtime, stayOn ? { from: stayOn } : {}));
+    // With no old container there is nothing to say what these files were last run on. They may
+    // well be a stack 1 site's: a switch that could not put its old container back leaves just that.
+    if (!old) await migrateArrivedFiles(ctx, server, s, { ...row, phpVersion: next.site.phpVersion });
     if (run) await startSiteContainer(server, s, row, ctx);
   } catch (err) {
     ctx.error(`Replacing the container failed (${errMsg(err)}); putting the previous one back…`);
     try {
       await server.docker.removeContainer(name);
       await server.docker.createSiteContainer(
-        buildSiteContainerSpec(s.config, previous.site, previous.domains, siteTlsFor(s.dns, server.row), runtime),
+        await siteContainerSpec(s, server, previous.site, previous.domains, runtime, old ? { from: old } : {}),
       );
       if (run) await startSiteContainer(server, s, row, ctx);
       ctx.info('Previous container restored.');
@@ -656,6 +684,196 @@ export async function replaceContainer(
     }
     throw err;
   }
+  return { previous: old, switched: false };
+}
+
+/** Why a site's page cache stays off from the moment it moves: shown on its Caching card. */
+export const GEOLOCATE_OFF_REASON = "WooCommerce's Geolocate setting changes prices by country at the same address, so pages can't be stored.";
+
+/**
+ * A WooCommerce store set to plain Geolocate shows prices by the visitor's country at one and the
+ * same address, with no cookie to skip on, so a stored page would show one country's prices to all.
+ * Such a store gets the one explicit Off there is, and its card says why. Only a site that hasn't
+ * chosen: an On it asked for is its own. wp-cache.php refuses to store such a page at run time too,
+ * which is why a check that can't be made here counts for nothing.
+ */
+async function keepGeolocateStoreOff(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, row: SiteRow): Promise<void> {
+  const current = loadSite(s.db, row.id);
+  if (current.pageCache !== null) return;
+  try {
+    const skip = ['--skip-plugins', '--skip-themes'];
+    const active = await server.wp.run(row.containerName, ['plugin', 'is-active', 'woocommerce', ...skip], 30_000);
+    if (active.exitCode !== 0) return;
+    if ((await server.wp.optionGet(row.containerName, 'woocommerce_default_customer_address', { skipExtensions: true })) !== 'geolocation') return;
+  } catch {
+    return;
+  }
+  const rules = parseSiteCacheRules(current.cacheRules);
+  updateSiteRow(s.db, row.id, { pageCache: 'off', cacheRules: JSON.stringify({ ...rules, offReason: GEOLOCATE_OFF_REASON }) });
+  ctx.warn(`The page cache stays off for this site. ${GEOLOCATE_OFF_REASON}`);
+}
+
+/** What a failed step says about itself, one line of it. */
+const failedStep = (what: string, err: unknown): string => `${what}: ${errMsg(err).split('\n')[0]!.slice(0, 300)}`;
+
+/**
+ * Move a site from Apache with mod_php to nginx, Apache and PHP-FPM. replaceContainer sends a stack
+ * 1 site here when its image has become stack 2, so whatever recreates the container of a running
+ * site does this: the image sweep, a change of PHP or of domains, a new database password.
+ *
+ * A site that doesn't come up on the new setup goes back to the container it had, on its own image
+ * by id, and keeps working the way it did: the job fails saying why, and the site's page says it
+ * too. From then on it stays on that image, through whatever else recreates its container, until
+ * there is another image to try, or someone presses Retry (siteReconcile's retrySwitch).
+ *
+ * The old image gets a name first, because nothing else can be undone without it: it may have none
+ * by now, and then nothing keeps it once its container has gone. The name comes off at the end
+ * (dropRollbackName), on every path but one: when the old container could not be put back, that
+ * image is what somebody would need.
+ */
+async function switchToStack2(
+  ctx: JobContext<unknown>,
+  server: ServerHandle,
+  s: CoreServices,
+  runtime: SiteRuntime,
+  row: SiteRow,
+  next: { site: SpecSite; domains: string[] },
+  previous: { site: SpecSite; domains: string[] },
+  run: boolean,
+  oldImageId: string,
+): Promise<void> {
+  const { docker } = server;
+  const name = next.site.containerName;
+  const failedOn = await docker.imageId(siteImage(next.site.phpVersion));
+  const rollbackTag = siteRollbackImage(next.site.slug);
+  const host = next.domains[0]!;
+  ctx.info('Moving this site from Apache with mod_php to nginx, Apache and PHP-FPM. If it does not come up on them, its old container comes back.');
+
+  const running = (await docker.containerState(name)) === 'running';
+  // Only a site that answers now can be said to have stopped answering. A broken site is not the
+  // new setup's fault, and would otherwise be kept on the old PHP for as long as it stays broken.
+  // It gets as long as the check afterwards: taking a site that had a bad moment for a broken one
+  // costs it its way back.
+  const before = run && running ? await siteAnswers(server, s, name, host, s.config.probeTimeoutMs) : null;
+  const answeredBefore = before?.ok === true;
+  if (running) await keepGeolocateStoreOff(ctx, server, s, row);
+
+  await ensureSiteMountSources(server, s, row, ctx);
+  await ensureSiteNetwork(docker, next.site.slug);
+
+  // Its script runs in the image the site is going to, which is there for certain and has the PHP
+  // whose rules it has to follow. The old PHP's tag may have gone long ago.
+  const toMigrate = { ...row, phpVersion: next.site.phpVersion };
+  let tagged = false;
+  let migrated = false;
+  let removed = false;
+  let oldNameStillNeeded = false;
+  let failing = '';
+  try {
+    failing = 'the old image could not be kept for going back';
+    await docker.tagImage(oldImageId, rollbackTag);
+    tagged = true;
+    ctx.info(`The old image is kept as ${rollbackTag} until this is over.`);
+
+    failing = 'the PHP settings in its .htaccess files could not be moved';
+    ctx.info('Moving the PHP settings in the .htaccess files…');
+    // Before the call: one that fails half-way has changed some of them.
+    migrated = true;
+    await migrateSiteForStack2(ctx, server, s, toMigrate);
+
+    failing = 'the old container could not be removed';
+    ctx.info('Replacing the container…');
+    await docker.removeContainer(name);
+    removed = true;
+    failing = 'the new container could not be created';
+    await docker.createSiteContainer(await siteContainerSpec(s, server, next.site, next.domains, runtime));
+
+    if (run) {
+      failing = 'the new container could not start';
+      await startSiteContainer(server, s, row, ctx);
+      ctx.info('Checking that the site answers…');
+      const answer = await siteAnswers(server, s, name, host, s.config.probeTimeoutMs);
+      if (!answer.ok && answeredBefore) {
+        failing = 'the check on the new setup failed';
+        throw new Error(answer.saw);
+      }
+      if (!answer.ok) {
+        const earlier = before ? ` (${before.saw})` : '';
+        ctx.warn(`The site did not answer before this move${earlier} and does not now (${answer.saw}), so it stays on the new setup.`);
+      }
+      else ctx.info('The site answers on the new setup.');
+    } else {
+      ctx.info('The site is stopped, so it stays stopped, and has not been checked on the new setup.');
+    }
+    updateSiteRow(s.db, row.id, { stackSwitchError: null, stackSwitchImage: null });
+  } catch (err) {
+    const why = failedStep(failing, err);
+    ctx.error(`This site could not move: ${why}.`);
+    if (migrated) {
+      ctx.info('Putting the .htaccess files back…');
+      // Nothing here may stop the old container from coming back.
+      await undoSiteMigration(ctx, server, s, toMigrate).catch((undoErr: unknown) => ctx.error(`Could not put the .htaccess files back: ${errMsg(undoErr)}.`));
+    }
+    let notBack: string | null = null;
+    if (removed) {
+      ctx.info('Putting the old container back, on its own image…');
+      try {
+        await docker.removeContainer(name);
+        await docker.createSiteContainer(
+          await siteContainerSpec(s, server, previous.site, previous.domains, runtime, { from: { imageId: oldImageId, stack: 1 } }),
+        );
+        if (run) await startSiteContainer(server, s, row, ctx);
+        ctx.info('The old container is back.');
+      } catch (restoreErr) {
+        notBack = failedStep('the old container could not be put back', restoreErr);
+        oldNameStillNeeded = true;
+      }
+    }
+    updateSiteRow(s.db, row.id, { stackSwitchError: notBack ? `${why}, and ${notBack}` : why, stackSwitchImage: failedOn });
+    if (notBack) {
+      throw new Error(
+        `This site could not move to the new PHP setup (${why}), and ${notBack}. ` +
+          `It has no container right now - "Recreate container" on the site page rebuilds it.`,
+      );
+    }
+    throw new Error(`This site still runs the old PHP setup: ${why}.`);
+  } finally {
+    if (tagged) await dropRollbackName(ctx, docker, rollbackTag, oldNameStillNeeded);
+  }
+}
+
+/** Take the temporary name off the old image. Never a reason to fail: the housekeeping tries again. */
+async function dropRollbackName(ctx: JobContext<unknown>, docker: ServerHandle['docker'], tag: string, stillNeeded: boolean): Promise<void> {
+  if (stillNeeded) {
+    ctx.info(`The old image stays as ${tag}, until the nightly clean-up finds nothing needs it.`);
+    return;
+  }
+  try {
+    if (await docker.untagImage(tag)) ctx.info(`The temporary name ${tag} is gone.`);
+    else ctx.info(`The old image keeps the name ${tag} while only a stopped container uses it. The nightly clean-up takes it off when it can.`);
+  } catch (err) {
+    ctx.warn(`Could not remove the temporary name ${tag} (${errMsg(err)}). The nightly clean-up tries again.`);
+  }
+}
+
+/**
+ * How long one look at a site may take when a move hangs on it. The usual check gives up after 8 s,
+ * but a slow home page is an answer, and all the more on a new setup whose OPcache is cold. Taken for
+ * no answer, it would send back a site that was fine, or cost a slow site its way back.
+ */
+const MOVE_CHECK_ATTEMPT_MS = 30_000;
+
+/**
+ * Whether a site answers, and what the check saw when it doesn't. No live HTTP in unit tests: the
+ * container state is the gate there, as in the handlers below.
+ */
+async function siteAnswers(server: ServerHandle, s: CoreServices, container: string, host: string, timeoutMs: number): Promise<{ ok: boolean; saw: string }> {
+  if (s.config.nodeEnv === 'test') {
+    const state = await server.docker.containerState(container);
+    return { ok: state === 'running', saw: `its container is ${state}` };
+  }
+  const attempt = await probeSiteAttempt(server, container, host, timeoutMs, MOVE_CHECK_ATTEMPT_MS);
+  return { ok: attempt.ok, saw: attempt.status === null ? 'nothing answered' : `it answered HTTP ${attempt.status}` };
 }
 
 export const siteChangePhpPayload = z.object({
@@ -691,10 +909,10 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
   // then short-circuited by the "already runs" check above.
   const candidate: SpecSite = { ...site, phpVersion: newVersion };
   ctx.info(`Recreating container with PHP ${newVersion} (files and database untouched)…`);
-  await replaceContainer(ctx, server, s, siteRuntimeFrom(s.settings, site), site, { site: candidate, domains }, { site, domains }, shouldRun);
+  const replaced = await replaceContainer(ctx, server, s, siteRuntimeFrom(s.settings, site), site, { site: candidate, domains }, { site, domains }, shouldRun);
 
   let up = true;
-  if (shouldRun) {
+  if (shouldRun && !replaced.switched) {
     // No live HTTP in unit tests; the container state is the gate there (as in the move handler).
     up =
       s.config.nodeEnv === 'test'
@@ -705,7 +923,7 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
     ctx.error(`Site is not responding on PHP ${newVersion}; rolling back to PHP ${oldVersion}.`);
     await server.docker.removeContainer(site.containerName);
     await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings, site)),
+      await siteContainerSpec(s, server, site, domains, siteRuntimeFrom(s.settings, site), replaced.previous ? { from: replaced.previous } : {}),
     );
     await startSiteContainer(server, s, site, ctx);
     throw new Error(`PHP ${newVersion} switch failed the smoke check; rolled back to ${oldVersion}`);
@@ -718,7 +936,11 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
 
 // ---------------------------------------------------------------------------
 
-export const siteReconcilePayload = z.object({ siteId: z.number().int() });
+export const siteReconcilePayload = z.object({
+  siteId: z.number().int(),
+  /** Someone asked for this: a site whose move to stack 2 failed tries again, on the same image. */
+  retrySwitch: z.boolean().optional(),
+});
 
 /**
  * Bring one site up to the current isolation policy.
@@ -731,15 +953,22 @@ export const siteReconcilePayload = z.object({ siteId: z.number().int() });
  * predates per-site mail auth, writes its msmtp config, creates its network, and recreates
  * the container from the current spec.
  *
- * There is no rollback on a failed smoke check, and there is nothing to roll back TO: the
- * `next` and `previous` specs handed to replaceContainer are the same site row, so putting
- * "the previous one" back would rebuild the identical container. replaceContainer's rollback
- * covers the other failure - Docker refusing to create or start the replacement. A container
- * that starts and then does not answer is left in place with a warning, so this job can
- * finish successfully on a site that is still not serving.
+ * A container that doesn't come up goes back to what it was, in two ways. Docker refusing to create
+ * or start the replacement puts the old one back, on its own image (replaceContainer), and so does
+ * a site moving to stack 2 that then doesn't answer (switchToStack2). For a site that stays on its
+ * stack there is no such check: the same row and the same image, or a newer one the site has to
+ * move to anyway, so a container that starts and then does not answer is left in place with a
+ * warning, and this job can finish successfully on a site that is still not serving.
+ *
+ * A site whose move failed tries again when someone asks: this job is what Retry and Recreate
+ * container on its page run. A sweep's reconcile leaves such a site on its old image.
  */
 export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcilePayload>>, s: CoreServices): Promise<void> {
   let site = loadSite(s.db, ctx.payload.siteId);
+  if (ctx.payload.retrySwitch && site.stackSwitchImage !== null) {
+    updateSiteRow(s.db, site.id, { stackSwitchImage: null });
+    site = loadSite(s.db, site.id);
+  }
   const server = s.servers.handleFor(site.serverId);
   const domains = siteDomains(site);
   const changed: string[] = [];
@@ -764,7 +993,7 @@ export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcile
   const state = await server.docker.containerState(site.containerName);
   const shouldRun = shouldSiteRun(state, site);
   ctx.info('Recreating the container with the current isolation policy…');
-  await replaceContainer(
+  const replaced = await replaceContainer(
     ctx,
     server,
     s,
@@ -774,6 +1003,7 @@ export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcile
     { site, domains },
     shouldRun,
   );
+  if (replaced.switched) changed.push('moved to PHP-FPM');
 
   const after = await server.docker.containerNetworks(site.containerName);
   if (before.join() !== after.join()) changed.push(`networks ${before.join('+') || 'none'} -> ${after.join('+')}`);
@@ -785,13 +1015,15 @@ export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcile
     changed.push(`removed ${legacySiteNetworkName(site.slug)}`);
   }
 
-  if (shouldRun) {
+  if (replaced.switched && shouldRun) {
+    // That move has just asked the site, with more patience, and said what it found.
+  } else if (shouldRun) {
     const up =
       s.config.nodeEnv === 'test'
         ? (await server.docker.containerState(site.containerName)) === 'running'
         : await probeSite(server, site.containerName, domains[0]!, s.config.probeTimeoutMs);
-    // Not fatal and not rolled back - see the note on this function for why there is no
-    // earlier container to return to. The job's own log is where this has to be visible.
+    // Not fatal and not rolled back - see the note on this function. The job's own log is where
+    // this has to be visible.
     if (!up) ctx.warn('Site did not answer the smoke check after reconciling; check its container logs.');
     else ctx.info('Site answered after reconciling.');
   } else {
@@ -885,9 +1117,7 @@ export async function siteUpdateDomains(
   } catch (err) {
     ctx.error('A domain in this request was claimed by another site while certificates were issuing.');
     await server.docker.removeContainer(site.containerName);
-    await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, oldDomains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings, site)),
-    );
+    await server.docker.createSiteContainer(await siteContainerSpec(s, server, site, oldDomains, siteRuntimeFrom(s.settings, site)));
     if (wasRunning) await startSiteContainer(server, s, site, ctx);
     throw err;
   }

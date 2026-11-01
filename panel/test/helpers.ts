@@ -30,6 +30,7 @@ import type {
 } from '../src/services/docker.js';
 import { SPEC_LABEL, fitCpus, serviceSpecHash } from '../src/services/docker.js';
 import { APACHE_RELOAD_COMMAND } from '../src/services/security.js';
+import { CLEAR_PAGE_CACHE, FLUSH_REDIS } from '../src/services/siteCaches.js';
 import { packetLimitFor, type DbAdminPort, type DbInventoryRow } from '../src/services/dbAdmin.js';
 import { FakeDbBrowser } from './dbBrowserFake.js';
 import { hostExec, type ExecPort, type ExecResult } from '../src/lib/exec.js';
@@ -104,6 +105,7 @@ import { buildServer } from '../src/server.js';
 import { SCRIPTS as SITE_FILE_SCRIPTS } from '../src/services/siteFilesScripts.js';
 import { REMOVE_UNCHANGED_SCRIPT } from '../src/jobs/handlers/importRefresh.js';
 import { sitePaths } from '../src/services/siteSpec.js';
+import { stackFromLabels, type SiteStack } from '../src/services/siteStack.js';
 
 /**
  * Every test gets a database of its own, but not a migration run of its own: the migrations run
@@ -181,6 +183,10 @@ function isRelayAuthCommand(cmd: string[]): boolean {
   return /saslpasswd2|sasldblistusers2|sasldb2/.test(line) || /^postfix reload$/.test(line);
 }
 
+/** WP-CLI's look at whether a site is a WooCommerce store on plain Geolocate (replaceContainer). */
+const isActiveWooCommerce = (cmd: string[]) => cmd[0] === 'wp' && cmd[1] === 'plugin' && cmd[2] === 'is-active' && cmd[3] === 'woocommerce';
+const isCustomerAddressOption = (cmd: string[]) => cmd[0] === 'wp' && cmd[1] === 'option' && cmd[2] === 'get' && cmd[3] === 'woocommerce_default_customer_address';
+
 /**
  * Container paths the site image has a regular FILE at. A bind mount whose source is a
  * directory cannot be laid over one, which is how a site loses its container (see
@@ -237,6 +243,11 @@ export class FakeDocker implements DockerPort {
    * say. A container runs the one of the image it was created from. `phpOf` sets one by tag.
    */
   imagePhp = new Map<string, string>();
+  /**
+   * What each image runs, by image id; `stackOf` sets one by tag. An image not here is stack 2,
+   * which is what every server has after this update. A test about stack 1 says so.
+   */
+  imageStacks = new Map<string, SiteStack>();
   execQueue: RunResult[] = [];
   /** Scripted container logs, keyed by container name (mail-log ingest reads these). */
   logs = new Map<string, string>();
@@ -254,6 +265,22 @@ export class FakeDocker implements DockerPort {
   relayHostnames: { live: string; fallback: string } | null = { live: 'mail.example.test', fallback: 'mail.example.test' };
   /** What `apache2ctl -t` in a site container says; override to have Apache refuse a file. */
   apacheCheck: RunResult = { stdout: '', stderr: 'Syntax OK', exitCode: 0 };
+  /**
+   * The customer location setting of a site's WooCommerce, for the look at it when a site moves to
+   * stack 2: null = no WooCommerce active. Infrastructure again, so it never eats a scripted answer.
+   */
+  wooCustomerAddress: string | null = null;
+  /** Set to have that look fail the way a broken site does. */
+  wooCheckFails = false;
+  /**
+   * What the script that moves a site's .htaccess PHP lines says (services/siteMigration.ts) unless
+   * `ephemeral` answers it: infrastructure too. A site with nothing to move.
+   */
+  migrationResult: RunResult = {
+    stdout: `${JSON.stringify({ t: 'summary', folders: 1, files: 0, written: 0, changes: 0, warnings: 0 })}\n`,
+    stderr: '',
+    exitCode: 0,
+  };
   /**
    * The administrators `wp user list --role=administrator` finds in every site, oldest first. The
    * panel looks them up on its own - to act as one when it changes a plugin or a theme - so, like
@@ -353,6 +380,11 @@ export class FakeDocker implements DockerPort {
     const id = this.containers.has(name) ? this.imageByContainer.get(name) : undefined;
     return id ? (this.imagePhp.get(id) ?? null) : null;
   }
+  /** A container a test only named in `containers`, with no spec behind it, says nothing. */
+  async containerStack(name: string): Promise<{ imageId: string; stack: SiteStack } | null> {
+    const imageId = this.containers.has(name) ? this.imageByContainer.get(name) : undefined;
+    return imageId ? { imageId, stack: stackFromLabels(this.labelsByContainer.get(name)) } : null;
+  }
   /**
    * How each container was started. Traefik defaults to what deploy/docker-compose.yml starts it
    * with: the DNS resolver on Cloudflare, the token read from the panel's file.
@@ -414,11 +446,32 @@ export class FakeDocker implements DockerPort {
     // Apache's own check before a reload of a site's protection (services/security.ts):
     // infrastructure again, answered here rather than from the queue.
     if (cmd[0] === 'apache2ctl') return this.apacheCheck;
+    // A site's caches: infrastructure again. Every job that changes content clears, whatever a
+    // test has lined up for it.
+    if (cmd.join(' ') === CLEAR_PAGE_CACHE.join(' ')) {
+      this.cacheClears.push(name);
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+    if (cmd.join(' ') === FLUSH_REDIS.join(' ')) {
+      this.redisFlushes.push(name);
+      return { stdout: 'OK\n', stderr: '', exitCode: 0 };
+    }
+    if (cmd[0] === 'wpl7-reload') {
+      const refused = this.reloadRefusals.get(cmd[1]!);
+      if (refused) return { stdout: '', stderr: refused, exitCode: 1 };
+      this.reloads.push({ name, service: cmd[1]! });
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
     if (cmd.join(' ') === APACHE_RELOAD_COMMAND.join(' ')) {
       this.signals.push({ name, signal: 'SIGUSR1' });
       return { stdout: '', stderr: '', exitCode: 0 };
     }
     if (isAdministratorList(cmd)) return { stdout: JSON.stringify(this.administrators), stderr: '', exitCode: 0 };
+    if (isActiveWooCommerce(cmd) || isCustomerAddressOption(cmd)) {
+      if (this.wooCheckFails) throw new Error('wp-cli could not load the site');
+      if (this.wooCustomerAddress === null) return { stdout: '', stderr: '', exitCode: 1 };
+      return { stdout: isCustomerAddressOption(cmd) ? `${this.wooCustomerAddress}\n` : '', stderr: '', exitCode: 0 };
+    }
     return this.answer(opts);
   }
 
@@ -533,6 +586,7 @@ export class FakeDocker implements DockerPort {
       return { stdout: '', stderr: '', exitCode: 0 };
     }
     if (this.ephemeral) return this.ephemeral(opts);
+    if (opts.labels?.['wpl7.migration']) return this.migrationResult;
     return this.execQueue.shift() ?? this.execDefault;
   }
   async imageExists(tag: string): Promise<boolean> {
@@ -549,6 +603,15 @@ export class FakeDocker implements DockerPort {
     const id = this.imagePhp.has(ref) ? ref : await this.imageId(ref);
     return id ? (this.imagePhp.get(id) ?? null) : null;
   }
+  /** Say what the image a tag names now runs. */
+  stackOf(tag: string, stack: SiteStack): void {
+    this.imageStacks.set(this.imageIds.get(tag) ?? `sha256:${tag}`, stack);
+  }
+  async imageStack(ref: string): Promise<SiteStack> {
+    if (this.imageStacks.has(ref)) return this.imageStacks.get(ref)!;
+    const id = await this.imageId(ref);
+    return id ? (this.imageStacks.get(id) ?? 2) : 1;
+  }
   async imageTags(repository: string): Promise<string[]> {
     return [...this.images].filter((tag) => tag.startsWith(`${repository}:`));
   }
@@ -562,7 +625,15 @@ export class FakeDocker implements DockerPort {
   }
   async tagImage(source: string, target: string): Promise<void> {
     this.record('tagImage', [source, target]);
-    if (!this.images.has(source)) throw Object.assign(new Error(`No such image: ${source}`), { statusCode: 404 });
+    // By id: any image a tag names, or a container was made from, even one its tag has moved off.
+    const byId = source.startsWith('sha256:');
+    const known = byId
+      ? [...this.images].some((tag) => (this.imageIds.get(tag) ?? `sha256:${tag}`) === source) ||
+        [...this.imageByContainer.values()].includes(source) ||
+        this.untaggedImages.some((image) => image.id === source)
+      : this.images.has(source);
+    if (!known) throw Object.assign(new Error(`No such image: ${source}`), { statusCode: 404 });
+    if (byId) this.imageIds.set(target, source);
     this.images.add(target);
   }
   async removeImage(ref: string): Promise<void> {
@@ -578,6 +649,17 @@ export class FakeDocker implements DockerPort {
       this.untaggedImages = this.untaggedImages.filter((image) => image.id !== ref);
     }
     this.images.delete(ref);
+  }
+  /** What real Docker was measured to do, by each image store: see DockerService.untagImage. */
+  async untagImage(tag: string): Promise<boolean> {
+    this.record('untagImage', [tag]);
+    if (!this.images.has(tag)) return true;
+    const id = (await this.imageId(tag))!;
+    const names = [...this.images].filter((name) => (this.imageIds.get(name) ?? `sha256:${name}`) === id);
+    const users = [...this.containers.keys()].filter((name) => this.imageByContainer.get(name) === id);
+    if (names.length === 1 && users.length > 0 && !users.some((name) => this.containers.get(name) === 'running')) return false;
+    this.images.delete(tag);
+    return true;
   }
   async pruneImages(labels: string[]): Promise<void> {
     this.record('pruneImages', [labels]);
@@ -620,7 +702,7 @@ export class FakeDocker implements DockerPort {
     return { cpuNs: this.cpuNs, memBytes: 1024 * 1024 };
   }
   /** Labels of every container as created, site and service alike - what listManaged filters on. */
-  private labelsByContainer = new Map<string, Record<string, string>>();
+  labelsByContainer = new Map<string, Record<string, string>>();
 
   async listManaged(labelFilters: string[] = []): Promise<{ name: string; labels: Record<string, string>; state: string; imageId: string }[]> {
     return [...this.labelsByContainer.entries()]
@@ -640,6 +722,12 @@ export class FakeDocker implements DockerPort {
   /** Scripted crash loops: name -> what serviceState reports beyond running/stopped. */
   serviceTrouble = new Map<string, { restarting?: boolean; restartCount?: number }>();
   signals: { name: string; signal: string }[] = [];
+  /** Containers whose page cache was emptied, one entry each time. */
+  cacheClears: string[] = [];
+  redisFlushes: string[] = [];
+  reloads: { name: string; service: string }[] = [];
+  /** What `wpl7-reload <service>` says when it refuses. */
+  reloadRefusals = new Map<string, string>();
 
   async ensureServiceContainer(spec: ServiceContainerSpec): Promise<ServiceOutcome> {
     this.record('ensureServiceContainer', [spec]);

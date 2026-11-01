@@ -111,6 +111,22 @@ export const sites = sqliteTable(
     cpuLimit: real('cpu_limit'),
     memoryLimitMb: integer('memory_limit_mb'),
     pidsLimit: integer('pids_limit'),
+    /**
+     * Whether the site keeps a page cache: 'on' or 'off'. NULL = the `site.pageCache` setting, so a
+     * site from before the cache existed has it as soon as its container can run it.
+     */
+    pageCache: text('page_cache'),
+    /** 1 = its container runs Redis, and WordPress keeps its objects there. */
+    objectCache: integer('object_cache').notNull().default(0),
+    /** What the site changed about its cache, as JSON (shared/cacheRules.ts SiteCacheRules). NULL = nothing. */
+    cacheRules: text('cache_rules'),
+    /**
+     * Why the site's container could not move from Apache with mod_php to nginx, Apache and PHP-FPM,
+     * and the image it failed on (`sha256:…`), which the image sweep then leaves alone until there
+     * is a newer one. Both NULL when the last move worked, or none was needed.
+     */
+    stackSwitchError: text('stack_switch_error'),
+    stackSwitchImage: text('stack_switch_image'),
     diskBytes: integer('disk_bytes'),
     /**
      * 'hosted' | 'external'. An external site is hosted elsewhere and reached through the WPL7

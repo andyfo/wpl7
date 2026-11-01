@@ -20,6 +20,7 @@ import {
   siteUpdateDomains,
   siteUpdateDomainsPayload,
 } from './handlers/sites.js';
+import { siteObjectCache, siteObjectCachePayload } from './handlers/caches.js';
 import {
   backupCreate,
   backupCreatePayload,
@@ -147,6 +148,7 @@ const registry: Partial<Record<JobType, RegistryEntry>> = {
   'site.restart': entry(siteIdPayload, siteRestart, 5 * 60_000) as RegistryEntry,
   'site.changePhp': entry(siteChangePhpPayload, siteChangePhp, 20 * 60_000) as RegistryEntry,
   'site.reconcile': entry(siteReconcilePayload, siteReconcile, 20 * 60_000) as RegistryEntry,
+  'site.objectCache': entry(siteObjectCachePayload, siteObjectCache, 10 * 60_000) as RegistryEntry,
   'site.updateDomains': entry(siteUpdateDomainsPayload, siteUpdateDomains, 20 * 60_000) as RegistryEntry,
   'backup.create': entry(backupCreatePayload, backupCreate, BACKUP_TIME_MS) as RegistryEntry,
   'backup.restore': entry(backupRestorePayload, backupRestore, 60 * 60_000) as RegistryEntry,
