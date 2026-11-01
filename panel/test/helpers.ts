@@ -29,6 +29,7 @@ import type {
   SiteContainerSpec,
 } from '../src/services/docker.js';
 import { SPEC_LABEL, fitCpus, serviceSpecHash } from '../src/services/docker.js';
+import { APACHE_RELOAD_COMMAND } from '../src/services/security.js';
 import { packetLimitFor, type DbAdminPort, type DbInventoryRow } from '../src/services/dbAdmin.js';
 import { FakeDbBrowser } from './dbBrowserFake.js';
 import { hostExec, type ExecPort, type ExecResult } from '../src/lib/exec.js';
@@ -413,6 +414,10 @@ export class FakeDocker implements DockerPort {
     // Apache's own check before a reload of a site's protection (services/security.ts):
     // infrastructure again, answered here rather than from the queue.
     if (cmd[0] === 'apache2ctl') return this.apacheCheck;
+    if (cmd.join(' ') === APACHE_RELOAD_COMMAND.join(' ')) {
+      this.signals.push({ name, signal: 'SIGUSR1' });
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
     if (isAdministratorList(cmd)) return { stdout: JSON.stringify(this.administrators), stderr: '', exitCode: 0 };
     return this.answer(opts);
   }

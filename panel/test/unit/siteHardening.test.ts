@@ -201,6 +201,8 @@ describe('a change of protection, on a running site', () => {
     expect(apacheChecks(w)).toHaveLength(1);
     expect(apacheChecks(w)[0]!.args[0]).toBe(site.containerName);
     expect(w.docker.signals).toEqual([{ name: site.containerName, signal: 'SIGUSR1' }]);
+    // From inside the container: `docker kill --signal` would turn off its restart policy.
+    expect(w.docker.calls.some((c) => c.method === 'signalContainer')).toBe(false);
   });
 
   it('leaves Apache alone when only the PHP side changes', async () => {
