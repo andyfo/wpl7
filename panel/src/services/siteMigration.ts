@@ -413,7 +413,7 @@ function harm(string $key, string $value, string $folder, bool $ran): ?string {
         return 'it would show PHP\'s errors to visitors';
     }
     // PHP refuses such a name, and every page that starts a session comes out blank.
-    if (!$ran && $key === 'session.name' && (ctype_digit($value) || preg_match('/[=,; \t\r\n\x0b\x0c]/', $value) === 1)) {
+    if (!$ran && $key === 'session.name' && preg_match('/^[0-9]+$|[=,; \t\r\n\x0b\x0c]/', $value) === 1) {
         return 'PHP refuses such a name';
     }
     if (isset(HOST_SETTINGS[$key])) {
