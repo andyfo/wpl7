@@ -15,6 +15,7 @@ import {
   HARDENING_VERSION,
   WP_EXTRA_IN_CONTAINER,
 } from './siteHardening.js';
+import { RUNTIME_DIR_IN_CONTAINER, SITE_STACK_LABEL, SITE_STACK_PORT, WP_CACHE_PHP_IN_CONTAINER, type SiteStack } from './siteStack.js';
 
 /** Where a server keeps its site images: one tag per PHP branch, `php<version>`. */
 export const SITE_IMAGE_REPO = 'wpl7-wordpress';
@@ -29,6 +30,15 @@ export const WORDPRESS_CONFIG_EXTRA = [
   // The site's protection from inside (services/siteHardening.ts): a read-only file the panel
   // rewrites when the protection changes, so no container has to be rebuilt for it.
   `if (is_readable('${WP_EXTRA_IN_CONTAINER}')) { require_once '${WP_EXTRA_IN_CONTAINER}'; }`,
+].join('\n');
+
+/**
+ * The same, and the WordPress side of the site's caches (services/wpCachePhp.ts). Its folder is
+ * mounted read-only, so nothing in the site can change it, and no file lands in wp-content.
+ */
+export const WORDPRESS_CONFIG_EXTRA_STACK_2 = [
+  WORDPRESS_CONFIG_EXTRA,
+  `if (is_readable('${WP_CACHE_PHP_IN_CONTAINER}')) { require_once '${WP_CACHE_PHP_IN_CONTAINER}'; }`,
 ].join('\n');
 
 export const DEFAULT_UPLOADS_INI = `upload_max_filesize = 64M
@@ -116,6 +126,11 @@ export function sitePaths(config: Config, slug: string) {
     /** Mounted whole at /etc/wpl7, so the file in it can be replaced rather than rewritten. */
     securityDir: path.join(root, 'config', 'security'),
     securityWpPhp: path.join(root, 'config', 'security', 'wp-config-extra.php'),
+    /**
+     * Mounted whole at /etc/wpl7-runtime on stack 2 (services/siteStack.ts), so its files can be
+     * replaced rather than rewritten, and one can come and go as the object cache does.
+     */
+    runtimeDir: path.join(root, 'config', 'runtime'),
     /** Files a scan or an administrator moved out of the site (services/quarantine.ts). Mounted into no site. */
     quarantine: path.join(root, 'quarantine'),
     siteJson: path.join(root, 'site.json'),
@@ -151,24 +166,29 @@ export function buildSiteContainerSpec(
    * routing:false = no Traefik router at all. Used while a new site is being installed: with
    * a public router, WordPress serves its web installer to whoever reaches the hostname
    * before `wp core install` has created OUR administrator.
+   *
+   * stack: what the image runs (services/siteStack.ts), which has to match it: a container needs
+   * nginx's port, and the folder of runtime files, only from an image that has nginx.
+   * image: a particular image, by tag or id, in place of the site's PHP tag.
    */
-  opts: { routing?: boolean } = {},
+  opts: { routing?: boolean; stack?: SiteStack; image?: string } = {},
 ): SiteContainerSpec {
   const [primary, ...aliases] = domains;
   if (!primary) throw new Error('site has no domains');
   const p = sitePaths(config, site.slug);
   const routing = opts.routing ?? true;
+  const stack = opts.stack ?? 1;
 
   return {
     name: site.containerName,
-    image: siteImage(site.phpVersion),
+    image: opts.image ?? siteImage(site.phpVersion),
     env: {
       WORDPRESS_DB_HOST: config.mariadb.host,
       WORDPRESS_DB_NAME: site.dbName,
       WORDPRESS_DB_USER: site.dbUser,
       WORDPRESS_DB_PASSWORD: site.dbPassword,
       WORDPRESS_TABLE_PREFIX: site.tablePrefix,
-      WORDPRESS_CONFIG_EXTRA,
+      WORDPRESS_CONFIG_EXTRA: stack === 2 ? WORDPRESS_CONFIG_EXTRA_STACK_2 : WORDPRESS_CONFIG_EXTRA,
     },
     labels: {
       ...(routing
@@ -180,6 +200,7 @@ export function buildSiteContainerSpec(
             acmeResolver: config.acmeResolver,
             devDomain: server.devDomain,
             dnsProvider: server.wildcardProvider,
+            ...(stack === 2 ? { port: SITE_STACK_PORT } : {}),
           })
         : { 'traefik.enable': 'false' }),
       'wpl7.managed': 'true',
@@ -193,6 +214,8 @@ export function buildSiteContainerSpec(
       // this label it would route to whichever endpoint it found first - in practice the
       // egress network, where inter-container traffic is dropped, so every site 502s.
       ...(routing ? { 'traefik.docker.network': siteNetworkName(site.slug) } : {}),
+      // No label means stack 1, so a container from before all this needs nothing added.
+      ...(stack === 2 ? { [SITE_STACK_LABEL]: '2' } : {}),
     },
     binds: [
       `${p.wordpress}:/var/www/html`,
@@ -202,6 +225,7 @@ export function buildSiteContainerSpec(
       `${p.securityDir}:${HARDENING_DIR_IN_CONTAINER}:ro`,
       // Catalog zips readable from inside every site so `wp plugin install <path>.zip` just works.
       `${config.paths.plugins}:${config.paths.plugins}:ro`,
+      ...(stack === 2 ? [`${p.runtimeDir}:${RUNTIME_DIR_IN_CONTAINER}:ro`] : []),
     ],
     networks: siteNetworksFor(site.slug),
     memoryBytes: runtime.memoryBytes,
