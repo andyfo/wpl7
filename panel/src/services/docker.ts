@@ -394,7 +394,12 @@ export interface DockerPort {
    * reconciler calls it every tick.
    */
   ensureServiceContainer(spec: ServiceContainerSpec): Promise<ServiceOutcome>;
-  /** Send a signal to the container's main process; false when it is missing or not running. */
+  /**
+   * Send a signal to the container's main process; false when it is missing or not running. Docker
+   * counts this as stopping it by hand, whatever the signal, so a restart policy of unless-stopped
+   * no longer applies afterwards. Only for a container something else brings back, as the FTP
+   * reconciler does its gateway, which has no shell to run `kill` from (docs/internal/watchlist.md).
+   */
   signalContainer(name: string, signal: 'SIGHUP' | 'SIGUSR1'): Promise<boolean>;
   serviceState(name: string): Promise<ServiceState>;
 }

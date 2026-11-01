@@ -28,6 +28,7 @@ for a reason; remove one once there is nothing left to watch.
 | [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
 | [Docker: the build cache and image names, as the nightly clean-up reads them](#docker-the-build-cache-and-image-names-as-the-nightly-clean-up-reads-them) | Medium | 2026-10-27 17:47 UTC | Docker 29.9.2: both prune parameters trim, `all` would remove shared layers first |
 | [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
+| [Docker: a signal counts as stopping a container by hand](#docker-a-signal-counts-as-stopping-a-container-by-hand) | Medium | 2026-11-01 06:30 UTC | Docker 28.1.1: after `docker kill --signal USR1`, a container with `unless-stopped` that exits stays down |
 | [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-10-04 18:10 UTC | `latest` is v5.1.0; hostname logic as relied on |
 | [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-09-30 07:23 UTC | Both answer as expected |
 | [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-09-30 09:51 UTC | All six as listed |
@@ -252,6 +253,24 @@ for a reason; remove one once there is nothing left to watch.
   GC starts trimming early enough on its own, consider dropping the nightly trim. If image listing
   changes, rerun `test/unit/dockerCleanup.test.ts`'s cases against a real daemon before relying on
   `imagesToRemove`.
+
+## Docker: a signal counts as stopping a container by hand
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-01 06:30 UTC. On Docker 28.1.1, a site container with `unless-stopped`
+  stays `exited` after Apache exits if it was sent `docker kill --signal USR1` before, and comes back
+  if the same signal came from `docker exec <c> sh -c 'kill -USR1 1'`. `killWithSignal` in moby's
+  `daemon/kill.go` sets `HasBeenManuallyStopped` for any signal, and only a real start clears it.
+- **The problem:** a signal meant as "reload" also turns the restart policy off, so a container that
+  exits, or a server that reboots, leaves it down. Nothing shows until that happens.
+- **What we do about it:** `APACHE_RELOAD_COMMAND` in `panel/src/services/security.ts` signals Apache
+  from inside the site's container. `signalContainer` in `panel/src/services/docker.ts` is left for
+  the FTP gateway, whose image has no shell, and whose container the FTP reconciler starts again on
+  its next tick.
+- **Check:** `killWithSignal` in [moby's `daemon/kill.go`](https://github.com/moby/moby/blob/master/daemon/kill.go),
+  and the Docker Engine release notes since the last check for `unless-stopped` and restart policies.
+- **When it changes:** if a signal no longer sets the flag on a Docker release we install, nothing
+  has to change. The reload from inside keeps working, and `signalContainer`'s comment can go.
 
 ## Docker: a CPU cap stays on a running container
 
