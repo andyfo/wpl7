@@ -106,10 +106,10 @@ interface Result {
   non2xx: string;
 }
 
-function ab(site: Site, concurrency: number, urlPath: string, cookie?: string): Result {
+function ab(site: Site, concurrency: number, urlPath: string, cookie?: string, requests?: number): Result {
   const out = docker([
     'run', '--rm', '--network', NET, 'httpd:2.4-alpine', 'ab', '-q', '-r', '-s', '120',
-    '-t', String(SECONDS), '-n', '10000000', '-c', String(concurrency),
+    ...(requests ? [] : ['-t', String(SECONDS)]), '-n', String(requests ?? 10_000_000), '-c', String(concurrency),
     '-H', `Host: ${HOST}`,
     ...(cookie ? ['-C', cookie] : []),
     `http://${site.container}:${site.port}${urlPath}`,
@@ -157,7 +157,7 @@ try {
   const fresh = bootSite('new', newImage, 2, runtimeDir);
 
   const SKIP = 'wordpress_no_cache=1';
-  const runs: { what: string; site: Site; concurrency: number; path: string; cookie?: string }[] = [
+  const runs: { what: string; site: Site; concurrency: number; path: string; cookie?: string; burst?: number; warm?: boolean }[] = [
     { what: 'Old, home page', site: old, concurrency: 10, path: '/' },
     { what: 'New, home page, past the cache', site: fresh, concurrency: 10, path: '/', cookie: SKIP },
     { what: 'New, home page, cached', site: fresh, concurrency: 10, path: '/' },
@@ -167,6 +167,11 @@ try {
     { what: 'Old, a page waiting 0.5 s', site: old, concurrency: 50, path: '/wait/' },
     { what: 'New, a page waiting 0.5 s', site: fresh, concurrency: 50, path: '/wait/' },
     // Last: this is where the old image runs out of memory, and it may not come back in time.
+    // After 40 s with no request, PHP-FPM has no workers left, and starts one as each request arrives.
+    { what: 'Old, 10 home pages after 40 s idle', site: old, concurrency: 10, path: '/', burst: 10 },
+    { what: 'New, 10 home pages after 40 s idle, past the cache', site: fresh, concurrency: 10, path: '/', cookie: SKIP, burst: 10 },
+    { what: 'Old, 10 home pages at once, right after', site: old, concurrency: 10, path: '/', burst: 10, warm: true },
+    { what: 'New, 10 home pages at once, right after', site: fresh, concurrency: 10, path: '/', cookie: SKIP, burst: 10, warm: true },
     { what: 'Old, home page', site: old, concurrency: 150, path: '/' },
     { what: 'New, home page, past the cache', site: fresh, concurrency: 150, path: '/', cookie: SKIP },
     { what: 'New, home page, cached', site: fresh, concurrency: 150, path: '/' },
@@ -178,7 +183,8 @@ try {
   console.log('|---|---:|---:|---:|---:|---:|---:|---:|---:|');
   for (const run of runs) {
     console.error(`${run.what}, ${run.concurrency} at once…`);
-    const result = ab(run.site, run.concurrency, run.path, run.cookie);
+    if (run.burst && !run.warm) spawnSync('sleep', ['40']);
+    const result = ab(run.site, run.concurrency, run.path, run.cookie, run.burst);
     const memory = memoryOf(run.site);
     console.log(`| ${run.what} | ${run.concurrency} | ${result.rps} | ${result.p95} | ${result.failed} | ${result.non2xx} | ${memory.peakMb} | ${memory.ooms} | ${memory.restarts}${memory.running ? '' : ' (down)'} |`);
   }

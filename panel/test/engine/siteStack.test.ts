@@ -2467,13 +2467,29 @@ if (strpos($_SERVER['REQUEST_URI'] ?? '', '/t/login-late/') === 0) add_action('t
       expect(back.memory).toBe('192');
     });
 
-    it('10 workers at 512 MB and 2 CPUs: requests that only wait don’t queue behind each other', async () => {
-      await Promise.all(Array.from({ length: 10 }, (_, n) => ask(`/t/page/warming-${n}/`)));
-      const started = Date.now();
-      await Promise.all(Array.from({ length: 10 }, (_, n) => ask(`/t/sleep/6/ten-${n}/`)));
-      // Five workers would take at least 12 seconds. A runner with two cores needs the room.
-      expect(Date.now() - started).toBeLessThan(11_000);
-    });
+    it('10 workers at 512 MB and 2 CPUs: requests that only wait take that many, and no more', async () => {
+      const workers = async () => {
+        const list = await must(inSite(['sh', '-c', "ps -eo cmd | grep -c '^php-fpm: pool www' || true"]), 'ps');
+        return Number(list);
+      };
+      // Twelve, to see the ceiling, one at a time: PHP-FPM starts a worker when a request arrives and
+      // none is idle, so a burst with nothing after it gets few.
+      const asked: Promise<unknown>[] = [];
+      for (let n = 0; n < 12; n++) {
+        asked.push(ask(`/t/sleep/20/ten-${n}/`, { maxTime: 90 }));
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      let most = 0;
+      const until = Date.now() + 18_000;
+      while (Date.now() < until && most < 10) {
+        most = Math.max(most, await workers());
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      await new Promise((r) => setTimeout(r, 1_000));
+      most = Math.max(most, await workers());
+      expect(most).toBe(10);
+      await Promise.all(asked);
+    }, 120_000);
 
     it('the pool size from the panel’s file is in force: 2 workers make 4 one-second requests take 2 seconds', async () => {
       await apply({ memoryMb: 128, cpus: 1 }, 'php');
@@ -3416,9 +3432,19 @@ echo json_encode([
           await w.deps.sites.setCache(SLUG_MOVED, { page: 'off' });
         }, 120_000);
 
+        /** Until it has held. The test before changed the root .htaccess, and the watcher on it clears within 10 s. */
+        const stored = async (url: string) => {
+          let last: unknown;
+          await waitFor(`${url} to be stored`, async () => {
+            last = await checkSiteUrl(handle(), w.config, fresh(), url);
+            return (last as { state: string }).state === 'cached';
+          }, 20_000, 1_000);
+          return last;
+        };
+
         it('says through Check a URL what the cache does with a page', async () => {
           const check = (url: string) => checkSiteUrl(handle(), w.config, fresh(), url);
-          expect(await check('/')).toEqual({ state: 'cached', reason: null, status: 200 });
+          expect(await stored('/')).toEqual({ state: 'cached', reason: null, status: 200 });
           expect(await check('/wp-admin/')).toMatchObject({ state: 'skipped', reason: 'path /wp-admin/*' });
           expect(await check('/?anything=1')).toMatchObject({ state: 'skipped', reason: 'query string' });
           expect(await check('/no-such-page/')).toMatchObject({ state: 'cached', status: 404 });
@@ -3431,12 +3457,12 @@ echo json_encode([
           await w.deps.sites.setCache(SLUG_MOVED, { page: 'off' });
           expect(await check('/')).toMatchObject({ state: 'off' });
           await w.deps.sites.setCache(SLUG_MOVED, { page: 'default', own: [] });
-          expect(await check('/')).toMatchObject({ state: 'cached' });
+          expect(await stored('/')).toMatchObject({ state: 'cached' });
         });
 
         it('empties the page cache with the panel’s clear', async () => {
           const cached = async () => (await inMoved(['find', PAGE_CACHE_DIR_IN_CONTAINER, '-type', 'f', '!', '-name', 'generation.*'], asSite)).stdout.toString('utf8').trim();
-          await checkSiteUrl(handle(), w.config, fresh(), '/');
+          await stored('/');
           expect(await cached()).not.toBe('');
           expect(await clearSiteCaches(handle(), fresh())).toBe(true);
           expect(await cached()).toBe('');
