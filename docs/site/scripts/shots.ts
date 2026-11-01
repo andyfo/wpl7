@@ -114,7 +114,8 @@ export const SHOTS: Shot[] = [
     what: 'The Structure view of wp_options: its columns, its primary key, and the buttons that change them',
     path: '/sites/northwind-bakery?tab=database&table=wp_options',
     theme: 'light',
-    prepare: steps(button('Structure'), scrollTo('Browse wp_northwind_bakery')),
+    // Scrolling before the view has loaded stops short, as far as the page is tall by then.
+    prepare: steps(button('Structure'), (page) => page.getByText(/foreign keys/i).waitFor(), scrollTo('Browse wp_northwind_bakery')),
   },
   {
     name: 'site-database-row',
