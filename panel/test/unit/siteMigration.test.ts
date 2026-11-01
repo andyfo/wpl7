@@ -524,7 +524,7 @@ describe.skipIf(!CAN_RUN)('a php_value or php_flag in a .htaccess', () => {
   const paths = S.add((dir) => ({
     'real/.keep': '',
     'app/.htaccess': `php_value session.save_path "${dir}/real"\nphp_value error_log "${dir}/real/php.log"\nphp_value open_basedir "${path.dirname(dir)}:/tmp"\n`,
-    'gone/.htaccess': 'php_value session.save_path "/home/olduser/tmp"\nphp_value error_log /home/olduser/logs/php.log\nphp_value open_basedir /home/olduser/public_html:/tmp\n',
+    'gone/.htaccess': 'php_value session.save_path "/home/olduser/tmp"\nphp_value error_log /home/olduser/logs/php.log\nphp_value open_basedir /home/olduser/public_html:/nowhere\n',
   }));
   it('keeps a path the site was running with, unless it is not here', () => {
     const r = paths.result();
