@@ -103,7 +103,7 @@ PHP and Redis follow the site's memory and CPU limits:
 | PHP workers | What the memory leaves after OPcache, one per 32 MB. At least 2, and at most 5 per core | 10 |
 | Redis, when it is on | An eighth of the memory, at least 16 MB | 64 MB |
 
-A burst of requests past the workers waits its turn. A site with no CPU cap counts the cores of its
+One worker stays ready, and more start each second while none is idle. A burst of requests past the workers waits its turn. A site with no CPU cap counts the cores of its
 server. When a change alters these sizes, PHP-FPM reloads: OPcache starts empty, and requests still
 running after 10 seconds end.
 

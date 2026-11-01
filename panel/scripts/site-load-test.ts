@@ -167,7 +167,7 @@ try {
     { what: 'Old, a page waiting 0.5 s', site: old, concurrency: 50, path: '/wait/' },
     { what: 'New, a page waiting 0.5 s', site: fresh, concurrency: 50, path: '/wait/' },
     // Last: this is where the old image runs out of memory, and it may not come back in time.
-    // After 40 s with no request, PHP-FPM has no workers left, and starts one as each request arrives.
+    // After 40 s with no request, PHP-FPM is down to its one or two idle workers.
     { what: 'Old, 10 home pages after 40 s idle', site: old, concurrency: 10, path: '/', burst: 10 },
     { what: 'New, 10 home pages after 40 s idle, past the cache', site: fresh, concurrency: 10, path: '/', cookie: SKIP, burst: 10 },
     { what: 'Old, 10 home pages at once, right after', site: old, concurrency: 10, path: '/', burst: 10, warm: true },

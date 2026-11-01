@@ -32,6 +32,7 @@ for a reason; remove one once there is nothing left to watch.
 | [The built-in cache rules' cookies and parameters](#the-built-in-cache-rules-cookies-and-parameters) | Medium | 2026-11-01 09:08 UTC | Every name is in the latest code or WP Rocket 3.24's lists; `wp_is_mobile()` tests the same words |
 | [Debian's nginx and Apache, as the page cache relies on them](#debians-nginx-and-apache-as-the-page-cache-relies-on-them) | Low | 2026-11-01 09:08 UTC | nginx 1.26.3-3+deb13u10 and Apache 2.4.69-1~deb13u1 on trixie-security, as tested; engine test not run at this check |
 | [PHP-FPM: `[PATH=]` and `[HOST=]` in a `.user.ini`](#php-fpm-path-and-host-in-a-userini) | Low | 2026-11-01 09:08 UTC | No upstream issue found; `php_ini_parser_cb` unchanged in its handling; not re-run at this check |
+| [PHP-FPM: `ondemand` and requests arriving together](#php-fpm-ondemand-and-requests-arriving-together) | Low | 2026-11-01 12:13 UTC | On PHP 8.4.27, two 4 s requests at once take 8 s on `ondemand` and 4 s on `dynamic` |
 | [PHP-FPM: the status line, and a header with no colon](#php-fpm-the-status-line-and-a-header-with-no-colon) | Low | 2026-11-01 09:08 UTC | `sapi_cgi_send_headers` on master still sends the stored status line first |
 | [Download Monitor and Complianz, as the page cache's design relies on them](#download-monitor-and-complianz-as-the-page-caches-design-relies-on-them) | Low | 2026-11-01 09:08 UTC | Download Monitor 5.3.6 and Complianz 7.5.6 as relied on; Cookiebot 4.7.5 reads its cookie in PHP |
 | [Cloudflare's request headers](#cloudflares-request-headers) | Low | 2026-11-01 09:08 UTC | Default and visitor location headers are on the list; `CF-Worker`, `CF-Connecting-O2O` and two managed transforms' are not |
@@ -363,6 +364,23 @@ for a reason; remove one once there is nothing left to watch.
   image for the newest PHP, write `[PATH=/x]` to a `.user.ini` beside a PHP file, and ask for it through PHP-FPM.
 - **When it changes:** once every branch on offer survives such a section, change the reason `clean_user_ini`
   gives. What is under one was meant for another path or host, so it still goes.
+
+## PHP-FPM: `ondemand` and requests arriving together
+
+- **Priority:** Low
+- **Last checked:** 2026-11-01 12:13 UTC. On PHP 8.4.27, from an idle pool, two 4 s requests sent together took 8.1 s on
+  `pm = ondemand`, six times out of six, and 4.2 s on `pm = dynamic`. Twelve 20 s requests got 5 workers on
+  `ondemand` however long they waited, and 10 within 8 s on `dynamic`.
+- **The problem:** `ondemand` starts a worker when a request arrives and none is idle. Requests that arrive
+  together count as one arrival, so the second waits for the first to end, however long that takes, unless a
+  third comes along. mod_php never did that.
+- **What we do about it:** `deploy/wordpress-image/php-fpm.conf` uses `dynamic`, with one worker kept ready. That
+  costs a site about 10 MB, and from idle a burst has to wait for the pool to grow: 10 home pages at once took
+  about 2 s there, against 1 s on the old image.
+- **Check:** `fpm_pctl_on_socket_accept` in `sapi/fpm/fpm/fpm_process_ctl.c` in php-src. Then two slow requests
+  together on an idle pool with `pm = ondemand`.
+- **When it changes:** if requests arriving together each get a worker, `ondemand` is worth going back to: an
+  idle site would again hold no workers.
 
 ## PHP-FPM: the status line, and a header with no colon
 

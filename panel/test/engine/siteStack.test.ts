@@ -1936,9 +1936,8 @@ if (strpos($_SERVER['REQUEST_URI'] ?? '', '/t/login-late/') === 0) add_action('t
 
     it('a 90-second request, on both paths', async () => {
       const [cachedPath, directPath] = await Promise.all([
-        // Room to spare: the requests of the tests before may still hold workers for a while.
-        ask('/t/sleep/90/cached/', { maxTime: 170 }),
-        ask('/t/sleep/90/direct/', { maxTime: 170, cookie: 'wordpress_no_cache=1' }),
+        ask('/t/sleep/90/cached/', { maxTime: 120 }),
+        ask('/t/sleep/90/direct/', { maxTime: 120, cookie: 'wordpress_no_cache=1' }),
       ]);
       expect([cachedPath.status, cachedPath.cache]).toEqual([200, 'MISS']);
       expect([directPath.status, directPath.cache]).toEqual([200, 'BYPASS']);
@@ -2472,13 +2471,8 @@ if (strpos($_SERVER['REQUEST_URI'] ?? '', '/t/login-late/') === 0) add_action('t
         const list = await must(inSite(['sh', '-c', "ps -eo cmd | grep -c '^php-fpm: pool www' || true"]), 'ps');
         return Number(list);
       };
-      // Twelve, to see the ceiling, one at a time: PHP-FPM starts a worker when a request arrives and
-      // none is idle, so a burst with nothing after it gets few.
-      const asked: Promise<unknown>[] = [];
-      for (let n = 0; n < 12; n++) {
-        asked.push(ask(`/t/sleep/20/ten-${n}/`, { maxTime: 90 }));
-        await new Promise((r) => setTimeout(r, 400));
-      }
+      // Twelve, to see the ceiling. PHP-FPM starts more each second while none is idle, so all at once.
+      const asked = Array.from({ length: 12 }, (_, n) => ask(`/t/sleep/20/ten-${n}/`, { maxTime: 90 }));
       let most = 0;
       const until = Date.now() + 18_000;
       while (Date.now() < until && most < 10) {
@@ -2490,6 +2484,15 @@ if (strpos($_SERVER['REQUEST_URI'] ?? '', '/t/login-late/') === 0) add_action('t
       expect(most).toBe(10);
       await Promise.all(asked);
     }, 120_000);
+
+    it('two slow requests at once don’t wait for each other, from an idle pool either', async () => {
+      // Long enough for the pool to have shrunk back to what it keeps ready.
+      await new Promise((r) => setTimeout(r, 15_000));
+      const started = Date.now();
+      await Promise.all([ask('/t/sleep/4/together-a/'), ask('/t/sleep/4/together-b/')]);
+      // One after the other would be 8 s. PHP-FPM's ondemand mode does just that.
+      expect(Date.now() - started).toBeLessThan(7_000);
+    }, 60_000);
 
     it('the pool size from the panel’s file is in force: 2 workers make 4 one-second requests take 2 seconds', async () => {
       await apply({ memoryMb: 128, cpus: 1 }, 'php');
