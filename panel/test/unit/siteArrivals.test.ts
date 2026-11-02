@@ -27,6 +27,8 @@ const LINE = 'php_value max_input_vars 4321';
 const MOVED = `# Moved to .user.ini by WPL7: ${LINE}`;
 const LEFTOVER = 'open_basedir = /home/olduser/public_html\n';
 const NOT_USED = `; Not used by WPL7: ${LEFTOVER}`;
+/** A .user.ini a site on PHP-FPM runs with: a limit of its own, and its own sessions. */
+const IN_FORCE = 'memory_limit = 64M\nsession.save_path = /tmp\n';
 
 async function runJob(w: TestWorld, jobId: number) {
   w.worker.start();
@@ -117,8 +119,14 @@ describe('the helper', () => {
   it('runs for a stack 2 container, running or not', async () => {
     const { w, site, ctx, handle } = await world();
     await w.docker.stopContainer(site.containerName);
-    await migrateArrivedFiles(ctx, handle, w.core, site);
+    await migrateArrivedFiles(ctx, handle, w.core, site, { inForce: false });
     expect(migrations(w.docker).map((opts) => [opts.image, opts.labels!['wpl7.migration']])).toEqual([[siteImage(site.phpVersion), 'migrate']]);
+  });
+
+  it('leaves .user.ini files PHP-FPM has been reading as they are', async () => {
+    const { w, site, ctx, handle } = await world();
+    await migrateArrivedFiles(ctx, handle, w.core, site, { inForce: true });
+    expect(migrations(w.docker).map((opts) => opts.labels!['wpl7.migration'])).toEqual(['maintain']);
   });
 
   it('only puts lines back for a stack 1 container, whose mod_php reads them', async () => {
@@ -126,21 +134,21 @@ describe('the helper', () => {
     allStack1(w.docker);
     const site = await createSite(w);
     w.docker.calls.length = 0;
-    await migrateArrivedFiles(new JobContext(w.worker.enqueue('demo', {}).id, {}, w.db), w.servers.handleFor(1), w.core, site);
+    await migrateArrivedFiles(new JobContext(w.worker.enqueue('demo', {}).id, {}, w.db), w.servers.handleFor(1), w.core, site, { inForce: true });
     expect(migrations(w.docker).map((o) => o.labels!['wpl7.migration'])).toEqual(['undo']);
   });
 
   it('does nothing without a container: nothing says what the files are for yet', async () => {
     const { w, site, ctx, handle } = await world();
     await w.docker.removeContainer(site.containerName);
-    await migrateArrivedFiles(ctx, handle, w.core, site);
+    await migrateArrivedFiles(ctx, handle, w.core, site, { inForce: false });
     expect(migrations(w.docker)).toEqual([]);
   });
 
   it('asks the container, not the image: a tag that moved on does not change what runs', async () => {
     const { w, site, ctx, handle } = await world();
     vi.spyOn(w.docker, 'imageStack').mockResolvedValue(1);
-    await migrateArrivedFiles(ctx, handle, w.core, site);
+    await migrateArrivedFiles(ctx, handle, w.core, site, { inForce: false });
     expect(migrations(w.docker)).toHaveLength(1);
   });
 
@@ -153,19 +161,30 @@ describe('the helper', () => {
     const { w, site, ctx, handle } = await world();
     fail(w);
     const warn = vi.spyOn(ctx, 'warn');
-    await expect(migrateArrivedFiles(ctx, handle, w.core, site)).resolves.toBeUndefined();
+    await expect(migrateArrivedFiles(ctx, handle, w.core, site, { inForce: false })).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]![0]).toContain('answers 500');
   });
 });
 
 describe.skipIf(!HAS_PHP)('a restore', () => {
-  /** A backup with the old lines in it, of a site that has since moved on. */
-  async function restorable(w: TestWorld) {
+  /**
+   * A backup with the old lines in it, of a site that has since moved on: from before PHP-FPM, whose
+   * manifest says nothing of what the site ran, unless it was taken there.
+   */
+  async function restorable(w: TestWorld, taken: { onFpm: boolean; userIni: string } = { onFpm: false, userIni: LEFTOVER }) {
     const site = await createSite(w);
     const wordpress = sitePaths(w.config, site.slug).wordpress;
     putOldLines(wordpress);
+    fs.writeFileSync(path.join(wordpress, '.user.ini'), taken.userIni);
     const backup = await w.core.backup.create(site, 'manual', {});
+    const manifest = path.join(backup.path, 'manifest.json');
+    const said = JSON.parse(fs.readFileSync(manifest, 'utf8')) as Record<string, unknown>;
+    expect(said.stack).toBe((await w.docker.containerStack(site.containerName))!.stack);
+    if (!taken.onFpm) {
+      delete said.stack;
+      fs.writeFileSync(manifest, JSON.stringify(said));
+    }
     fs.writeFileSync(path.join(wordpress, '.htaccess'), '# the site as it is now\n');
     fs.rmSync(path.join(wordpress, '.user.ini'));
     w.docker.calls.length = 0;
@@ -190,6 +209,19 @@ describe.skipIf(!HAS_PHP)('a restore', () => {
     expect(starts[0]!.userIni).toContain(NOT_USED);
     expect(order(w.docker, ['stopContainer', 'runEphemeral', 'startContainer'])).toEqual(['stopContainer', 'runEphemeral', 'startContainer']);
     expect(logOf(w, job.id).join('\n')).toContain('.htaccess:1: php_value max_input_vars: moved to .user.ini');
+  });
+
+  it('on stack 2, of a backup taken there: its .user.ini is what the site ran with, and stays', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    useRealMigration(w.docker);
+    const { site, wordpress, backup } = await restorable(w, { onFpm: true, userIni: IN_FORCE });
+    const starts = watchStarts(w.docker, wordpress);
+    expect((await runJob(w, restore(w, site, backup.id).id)).status).toBe('succeeded');
+    expect(migrations(w.docker).map((o) => o.labels!['wpl7.migration'])).toEqual(['maintain']);
+    expect(starts[0]!.htaccess).toBe(`${MOVED}\n`);
+    expect(starts[0]!.userIni.startsWith(IN_FORCE)).toBe(true);
+    expect(starts[0]!.userIni).toContain("max_input_vars = '4321'");
+    expect(starts[0]!.userIni).not.toContain('Not used by WPL7');
   });
 
   it('on stack 1: the lines stay, because mod_php reads them, and the switch moves them when it comes', async () => {
@@ -267,6 +299,19 @@ describe.skipIf(!HAS_PHP)('the arrival of a move', () => {
     expect(fileOf(wordpress, '.htaccess')).toBe(`${LINE}\n`);
     expect(fileOf(wordpress, '.user.ini')).toBe(LEFTOVER);
     expect(logOf(w, job.id).join('\n')).toContain('.htaccess:1: php_value max_input_vars: moved to .user.ini');
+  });
+
+  it('from stack 2: its .user.ini is what it ran with there, and stays', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const { site, wordpress, target, targetWordpress } = await moving(w, 2);
+    fs.writeFileSync(path.join(wordpress, '.user.ini'), IN_FORCE);
+    const starts = watchStarts(target.docker, targetWordpress);
+    const job = w.deps.sites.move(site.slug, { targetServerId: target.id });
+    const done = await runJob(w, job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(migrations(target.docker).map((o) => o.labels!['wpl7.migration'])).toEqual(['maintain']);
+    expect(starts[0]!.userIni.startsWith(IN_FORCE)).toBe(true);
+    expect(starts[0]!.userIni).not.toContain('Not used by WPL7');
   });
 
   it('on stack 1: the lines stay as they are', async () => {
@@ -401,13 +446,31 @@ describe.skipIf(!HAS_PHP)('a site with no container left', () => {
     const site = await createSite(w);
     const wordpress = sitePaths(w.config, site.slug).wordpress;
     putOldLines(wordpress);
+    w.db.update(sites).set({ stackSwitchError: 'the new container could not start: no, and the old one could not be put back' }).where(eq(sites.id, site.id)).run();
     await w.docker.removeContainer(site.containerName);
     w.docker.calls.length = 0;
     const starts = watchStarts(w.docker, wordpress);
     const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
     expect(done.status, done.error ?? '').toBe('succeeded');
     expect(starts[0]!.htaccess).toBe(`${MOVED}\n`);
+    // Files mod_php ran: their .user.ini never did.
+    expect(starts[0]!.userIni).toContain(NOT_USED);
     expect(order(w.docker, ['createSiteContainer', 'runEphemeral', 'startContainer'])).toEqual(['createSiteContainer', 'runEphemeral', 'startContainer']);
+  });
+
+  it('and keeps its .user.ini when it was on stack 2 before its container went', async () => {
+    const w = await makeWorld();
+    useRealMigration(w.docker);
+    const site = await createSite(w);
+    const wordpress = sitePaths(w.config, site.slug).wordpress;
+    putOldLines(wordpress);
+    fs.writeFileSync(path.join(wordpress, '.user.ini'), IN_FORCE);
+    await w.docker.removeContainer(site.containerName);
+    w.docker.calls.length = 0;
+    const starts = watchStarts(w.docker, wordpress);
+    expect((await runJob(w, w.deps.sites.reconcile(site.slug).id)).status).toBe('succeeded');
+    expect(migrations(w.docker).map((o) => o.labels!['wpl7.migration'])).toEqual(['maintain']);
+    expect(starts[0]!.userIni.startsWith(IN_FORCE)).toBe(true);
   });
 
   it('and not when it lands on stack 1', async () => {

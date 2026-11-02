@@ -12,6 +12,8 @@
  * Kept free of backticks and dollar-brace, so each fits in a String.raw literal as it is.
  */
 
+import { HTACCESS_MOVE_PHP, MAX_SETTINGS_FILE_BYTES } from './siteMigrationHtaccess.js';
+
 // @docs security/malware-scans
 /** Findings a run prints at most; the rest are counted. Keeps the output well under 1 MiB. */
 export const MAX_REPORTED_FINDINGS = 500;
@@ -39,7 +41,9 @@ function header_value(string $text, string $name): ?string {
  *                      that lead out of the site. A wordpress.org plugin in a folder of
  *                      another name only has the files that match its list vouched for.
  *                      The panel's own files are held to the hashes it wrote them with, and
- *                      a plugin's deployed copy of one of its files to that file.
+ *                      a plugin's deployed copy of one of its files to that file. A plugin's
+ *                      .htaccess that the move to PHP-FPM changed is held to the plugin's list
+ *                      as it was before, and has to be the move's work and nothing else.
  */
 export const CHECK_SCRIPT = String.raw`
 error_reporting(E_ALL);
@@ -57,7 +61,12 @@ const JSON_FLAGS = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALI
 // PHP at the top of a site that is not WordPress's and is still expected: the site's own
 // config, the WordPress image's template for it, and Wordfence's firewall loader.
 const ROOT_PHP_OF_THEIR_OWN = ['wp-config.php', 'wp-config-docker.php', 'wordfence-waf.php'];
+const MOVED_MAX_BYTES = ${MAX_SETTINGS_FILE_BYTES};
 $started = microtime(true);
+${HTACCESS_MOVE_PHP}
+
+// What the move reports as it goes; doing it again here reports nothing.
+function say(string $level, string $path, int $line, string $what): void {}
 
 function emit(array $line): void { echo json_encode($line, JSON_FLAGS), "\n"; }
 
@@ -142,15 +151,105 @@ function enabling_line(string $text): ?string {
     return null;
 }
 
+/** A regular file that is not a link, whole, when it is no bigger than the move reads; null otherwise. */
+function whole_of(string $abs): ?string {
+    $text = head_of($abs, MOVED_MAX_BYTES + 1);
+    return $text === null || strlen($text) > MOVED_MAX_BYTES ? null : $text;
+}
+
 /**
- * A plugin's .htaccess whose PHP lines the panel moved (services/siteMigration.ts), or the .user.ini
- * it moved them to: not the file the plugin shipped, and nothing wrong with it either, as long as
- * it switches nothing on. Reinstalling would only bring back what had to be moved.
+ * What a .htaccess the move to PHP-FPM changed may have been before, in each way its marks can be
+ * read: the lines it commented out put back, and a deny it added after a line, or at the end with a
+ * line of its own, taken out. Only what the move writes is taken out, and moved_from decides.
  */
-function moved_by_panel(string $abs): bool {
-    $text = head_of($abs, 65536);
-    if ($text === null || preg_match('/^[ \t]*[#;] (?:Moved|Not moved|Not used|Replaced)[^\n]* by WPL7/m', $text) !== 1) return false;
-    return enabling_line($text) === null;
+function before_move(string $text): array {
+    $lines = split_lines($text);
+    $eol = eol_of($lines);
+    $block = split_lines(deny_block('', $eol));
+    $n = count($lines);
+    $size = count($block);
+    $ways = [$lines];
+    if ($n > $size && array_slice($lines, -$size) === $block && str_starts_with($lines[$n - $size - 1], DENY_MARK)) {
+        $ways[] = array_slice($lines, 0, $n - $size - 1);
+    }
+    $found = [];
+    foreach ($ways as $kept) {
+        $out = [];
+        for ($i = 0, $m = count($kept); $i < $m; $i++) {
+            $line = $kept[$i];
+            if (preg_match(PUT_BACK, $line, $mark) === 1) {
+                $out[] = $mark[1] . substr($line, strlen($mark[0]));
+                continue;
+            }
+            if (preg_match(DENY_BACK, $line, $mark) !== 1) {
+                $out[] = $line;
+                continue;
+            }
+            $out[] = $mark[1] . substr($line, strlen($mark[0]));
+            // The lines Apache joins to it, which the deny came after.
+            while (substr(without_eol($kept[$i]), -1) === '\\' && substr($kept[$i], -1) === "\n" && $i + 1 < $m) $out[] = $kept[++$i];
+            foreach ([deny_block($mark[1], $eol), scoped_deny($mark[1], $eol)] as $added) {
+                $added = split_lines($added);
+                if (array_slice($kept, $i + 1, count($added)) === $added) {
+                    $i += count($added);
+                    break;
+                }
+            }
+        }
+        $before = implode('', $out);
+        $found[] = $before;
+        // Before it adds a line, the move ends the last one, which may have had no end.
+        if (str_ends_with($before, $eol)) $found[] = substr($before, 0, -strlen($eol));
+    }
+    return array_values(array_unique($found));
+}
+
+/**
+ * What a plugin's .htaccess was before the move to PHP-FPM changed it (services/siteMigration.ts),
+ * when that matches the plugin's checksum; null otherwise. The move is done again to it, and has to
+ * give back this file byte for byte, but for which of its two marks a setting's line has: both only
+ * comment it out. Marks are in a file the site can write, so on their own they prove nothing.
+ */
+function moved_from(string $abs, array $hashes): ?string {
+    $text = whole_of($abs);
+    if ($text === null || strpos($text, ' by WPL7: ') === false) return null;
+    $same = fn(string $t) => str_replace(NOT_MOVED_MARK, MOVED_MARK, $t);
+    foreach (before_move($text) as $before) {
+        if (!in_array(hash('sha256', $before), $hashes, true)) continue;
+        [$again] = migrate_htaccess($before, read_htaccess(split_lines($before)), '', fn() => 'moved');
+        if ($same($again) === $same($text)) return $before;
+    }
+    return null;
+}
+
+/**
+ * Whether a .user.ini in a plugin's folder, where the plugin has none, is one the move wrote from the
+ * plugin's .htaccess beside it: that file the plugin's, as it is or as the move left it, and every line
+ * here a record of one of its settings, or that setting with the value mod_php gave it.
+ */
+function written_by_move(string $abs, array $manifest, string $inner): bool {
+    $folder = dirname($inner);
+    $hashes = $manifest['files'][($folder === '.' ? '' : $folder . '/') . '.htaccess'] ?? null;
+    $text = whole_of($abs);
+    $besidePath = dirname($abs) . '/.htaccess';
+    $beside = whole_of($besidePath);
+    if (!is_array($hashes) || $text === null || $beside === null) return false;
+    $original = in_array(hash('sha256', $beside), $hashes, true) ? $beside : moved_from($besidePath, $hashes);
+    if ($original === null) return false;
+    $settings = [];
+    foreach (read_htaccess(split_lines($original)) as $e) {
+        if ($e['kind'] === 'setting') $settings[$e['text']] = $e;
+    }
+    $lines = array_map('without_eol', split_lines($text));
+    for ($i = 0, $n = count($lines); $i < $n; $i++) {
+        $line = $lines[$i];
+        if (str_starts_with($line, INI_LEFT) && isset($settings[substr($line, strlen(INI_LEFT))])) continue;
+        $e = str_starts_with($line, INI_MOVED) ? ($settings[substr($line, strlen(INI_MOVED))] ?? null) : null;
+        $set = $lines[++$i] ?? '';
+        $read = $e === null ? false : @parse_ini_string($set, false, INI_SCANNER_NORMAL);
+        if (!is_array($read) || !str_starts_with($set, $e['name'] . ' = ') || ($read[$e['name']] ?? null) !== literal_of($e)) return false;
+    }
+    return $lines !== [];
 }
 
 /**
@@ -372,12 +471,12 @@ function check(array $input): void {
                     $hash = @hash_file('sha256', $abs);
                     if ($hash === false) { $unread($rel); continue; }
                     if (in_array($hash, $hashes, true)) { $count('plugin:' . $slug, 'verified'); continue; }
-                    if ($lower === '.htaccess' && moved_by_panel($abs)) { $count('plugin:' . $slug, 'verified'); continue; }
+                    if ($lower === '.htaccess' && moved_from($abs, $hashes) !== null) { $count('plugin:' . $slug, 'verified'); continue; }
                     $count('plugin:' . $slug, 'modified');
                     if ($vouchOnly) { $unvouched($slug, $rel); continue; }
                     $finding('plugin-modified', $rel, $package + ['sha256' => $hash]);
                 } else {
-                    if ($lower === '.user.ini' && moved_by_panel($abs)) continue;
+                    if ($lower === '.user.ini' && written_by_move($abs, $manifest, $inner)) continue;
                     $count('plugin:' . $slug, 'extra');
                     if ($vouchOnly) continue;
                     // Reported when it can run; a stray image or log file only keeps the

@@ -176,7 +176,7 @@ export async function writeSiteRelayConfig(
 }
 
 /** What the mount helpers need: where the files go, the protection they carry, and the site's caches. */
-export type MountServices = Pick<CoreServices, 'config' | 'security' | 'settings' | 'db'>;
+export type MountServices = Pick<CoreServices, 'config' | 'security' | 'settings' | 'db' | 'worker'>;
 
 /**
  * Make every file the site container bind-mounts exist, as a file, before Docker is asked
@@ -224,8 +224,10 @@ export async function ensureSiteMountSources(
   await s.security.prepareHardening(server, site);
   // Read here rather than taken from the caller: a job holds the row it began with, which can be
   // an hour old by now, and a cache setting changed since must not be put back by this start.
-  const current = s.db.select().from(sites).where(eq(sites.id, site.id)).get();
-  if (current) await writeSiteRuntimeFiles(server, s, current, ctx);
+  await s.worker.inRuntimeTurn(site.id, async () => {
+    const current = s.db.select().from(sites).where(eq(sites.id, site.id)).get();
+    if (current) await writeSiteRuntimeFiles(server, s, current, ctx);
+  });
 }
 
 /**

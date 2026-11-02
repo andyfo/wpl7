@@ -125,6 +125,8 @@ export class JobWorker {
   private zombieLanes = new Map<number, { serverId: number | null; auxServerId: number | null; lane: string | null }>();
   /** Changes to a site made outside the queue that are still under way, per site (see holdSite). */
   private siteHolds = new Map<number, Set<{ since: number }>>();
+  /** Changes to a site's runtime files under way, per site, each ended before the next (see inRuntimeTurn). */
+  private runtimeTurns = new Map<number, Promise<void>>();
 
   constructor(
     private readonly db: Db,
@@ -133,6 +135,25 @@ export class JobWorker {
     // See CoreServices.worker: handlers get `services`, and some of them (system.postUpdate)
     // need to queue follow-up jobs.
     this.services.worker = this;
+  }
+
+  /**
+   * Run `change` once every change to the same site's runtime files asked for before it has ended. A
+   * save of a site's caches reads its row, writes its files and reloads what reads them: two side by
+   * side could end in the other order, and leave the files saying what the row no longer does. So
+   * whatever reads the row for such a change reads it in here, after the one before it.
+   */
+  inRuntimeTurn<T>(siteId: number, change: () => Promise<T>): Promise<T> {
+    const run = (this.runtimeTurns.get(siteId) ?? Promise.resolve()).then(change);
+    const ended = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.runtimeTurns.set(siteId, ended);
+    void ended.then(() => {
+      if (this.runtimeTurns.get(siteId) === ended) this.runtimeTurns.delete(siteId);
+    });
+    return run;
   }
 
   /** The site's queued or running job, if it has one (there is never more than one). */
@@ -616,7 +637,7 @@ export class JobWorker {
     const site = this.db.select().from(sites).where(eq(sites.id, siteId)).get();
     if (!site) return;
     if (PACKAGE_JOBS.has(job.type as JobType) && !isExternal(site)) {
-      await migrateArrivedFiles(ctx, this.services.servers.handleFor(site.serverId), this.services, site);
+      await migrateArrivedFiles(ctx, this.services.servers.handleFor(site.serverId), this.services, site, { inForce: true });
     }
     await clearAfterChange(this.services, site);
   }

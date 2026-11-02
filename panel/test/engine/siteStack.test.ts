@@ -3535,7 +3535,7 @@ echo json_encode([
         it('a move: an archive from when it was on stack 1 has its lines moved, and none of its runtime folder stays', async () => {
           const backup = w.db.select().from(backups).where(eq(backups.id, backupId)).get()!;
           await asIfNeverHere();
-          const log = await arrive({ kind: 'archive', filesTarGz: path.join(backup.path, 'files.tar.gz'), dbSqlGz: path.join(backup.path, 'db.sql.gz') }, { requireWpConfig: true, probed: true });
+          const log = await arrive({ kind: 'archive', filesTarGz: path.join(backup.path, 'files.tar.gz'), dbSqlGz: path.join(backup.path, 'db.sql.gz'), ranOnFpm: false }, { requireWpConfig: true, probed: true });
           await expectAtHome(log);
           const runtime = (await must(inMoved(['ls', '-A', '/etc/wpl7-runtime']), 'the folder')).split('\n').sort();
           expect(runtime).toEqual(RUNTIME_FILES);

@@ -260,6 +260,8 @@ export class BackupService {
       if (tar.exitCode !== 0) throw new Error(`tar failed (exit ${tar.exitCode}): ${tar.stderr.slice(0, 500)}`);
 
       const wpVersion = await readWpVersion(h, p.wordpress);
+      // Only a note for a restore: not knowing it is no reason to fail the backup.
+      const container = await h.docker.containerStack(site.containerName).catch(() => null);
       const manifest = {
         format: 1,
         slug: site.slug,
@@ -278,6 +280,11 @@ export class BackupService {
         databases: extras,
         serverId: h.id,
         serverName: h.name,
+        /**
+         * What the site's container ran: 2 is PHP-FPM, which reads a .user.ini, so the ones in this
+         * archive are what the site ran with. None from before there was a choice, or with no container.
+         */
+        stack: container?.stack ?? null,
       };
       await h.files.writeFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
 

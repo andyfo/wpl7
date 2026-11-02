@@ -11,6 +11,7 @@ on:
       - panel/src/services/siteCaches.ts
       - panel/src/services/siteHardening.ts
       - panel/src/services/siteMigration.ts
+      - panel/src/services/siteMigrationHtaccess.ts
       - panel/src/services/siteSpec.ts
       - panel/src/services/siteStack.ts
       - panel/src/services/wpCachePhp.ts

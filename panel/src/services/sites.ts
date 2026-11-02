@@ -617,12 +617,17 @@ export class SitesService {
    * save that didn't make it to the container leaves the row as it was.
    */
   async setCache(slug: string, body: SiteCacheBody): Promise<{ job: JobRow | null }> {
+    const problem = body.off ? cacheOffProblem(body.off) : null;
+    if (problem) throw badRequest(problem, [{ path: 'off', message: problem }]);
+    // One save at a time, each reading the row the one before it left.
+    return this.worker.inRuntimeTurn(this.bySlug(slug).id, () => this.saveCache(slug, body));
+  }
+
+  private async saveCache(slug: string, body: SiteCacheBody): Promise<{ job: JobRow | null }> {
     const site = this.bySlug(slug);
     if (site.status === 'provisioning' || site.status === 'deleting') {
       throw conflict(`Site is ${site.status}; wait for it to finish`);
     }
-    const problem = body.off ? cacheOffProblem(body.off) : null;
-    if (problem) throw badRequest(problem, [{ path: 'off', message: problem }]);
     const server = this.s.servers.handleFor(site.serverId);
     if (body.object === true && (await siteContainerStack(server.docker, site.containerName)) === 1) {
       throw conflict('This site still runs the old PHP setup, which has no object cache.');

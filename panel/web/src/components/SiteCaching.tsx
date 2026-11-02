@@ -116,6 +116,7 @@ export function SiteCachingCard({ site }: { site: SiteDetail }) {
               { id: 'off', label: 'Off' },
             ]}
             value={cache.page}
+            disabled={saving}
             onChange={(page) => void save({ page })}
           />
           {cache.offReason && <p className="measure mt-1 text-xs text-amber-800">{cache.offReason}</p>}

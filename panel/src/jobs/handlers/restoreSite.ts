@@ -26,6 +26,8 @@ export type StagedSiteSource =
       dbSqlGz: string;
       /** The site's other databases (site_databases), each with its dump in the archive. */
       extraDbs?: { name: string; sqlGz: string }[];
+      /** It ran on PHP-FPM where it comes from, so its .user.ini files are what it ran with. */
+      ranOnFpm: boolean;
     }
   | { kind: 'tree'; wordpressDir: string; dbSqlGz: string };
 
@@ -143,7 +145,7 @@ export async function restoreSiteOnServer(
   await target.docker.createSiteContainer(
     await siteContainerSpec(s, target, site, domains, siteRuntimeFrom(s.settings, site), { routing: opts.routing }),
   );
-  await migrateArrivedFiles(ctx, target, s, site);
+  await migrateArrivedFiles(ctx, target, s, site, { inForce: source.kind === 'archive' && source.ranOnFpm });
   await startSiteContainer(target, s, site, ctx);
   await opts.afterStart?.();
 

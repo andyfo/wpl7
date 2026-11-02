@@ -12,6 +12,8 @@ import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 import { afterAll, describe, expect, it } from 'vitest';
 import { CHECK_SCRIPT, MAX_REPORTED_FINDINGS, MAX_UNVERIFIED_FILES, REDUCER_SCRIPT, RULES_SCRIPT, ZIP_MANIFEST_SCRIPT } from '../../src/services/scanScripts.js';
+import { SITE_MIGRATION_SCRIPT } from '../../src/services/siteMigration.js';
+import { DEFAULT_UPLOADS_INI } from '../../src/services/siteSpec.js';
 import { parseCheck, parseInventory, parseSignatures, parseZipCheck } from '../../src/services/scanReport.js';
 import { EXPLOIT_OVERRIDES, tuningArg } from '../../src/services/scanTuning.js';
 
@@ -70,6 +72,17 @@ function run(code: string, root: string, args: string[]) {
   const script = code.replace("const ROOT = '/var/www/html';", `const ROOT = ${JSON.stringify(root)};`);
   const res = spawnSync('php', ['-d', 'display_errors=stderr', '-r', script, ...args], { encoding: 'utf8' });
   return { stdout: res.stdout, stderr: res.stderr, exitCode: res.status ?? -1 };
+}
+
+/** The move to PHP-FPM, by its real script, over the whole site, with the site's limits as a new site has them. */
+function moveToFpm(root: string): void {
+  const conf = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-scan-conf-'));
+  dirs.push(conf);
+  fs.writeFileSync(path.join(conf, 'zz-site.ini'), DEFAULT_UPLOADS_INI);
+  const script = SITE_MIGRATION_SCRIPT.replace("const ROOT = '/var/www/html';", `const ROOT = ${JSON.stringify(root)};`);
+  const res = spawnSync('php', ['-c', conf, '-r', script, 'migrate'], { encoding: 'utf8', env: { ...process.env, PHP_INI_SCAN_DIR: conf } });
+  expect(res.stderr).toBe('');
+  expect(res.status).toBe(0);
 }
 
 function check(root: string, input: unknown) {
@@ -173,22 +186,61 @@ describe.skipIf(!HAS_PHP)('the check, in the site image', () => {
     expect(found.map((f) => `${f.path} ${f.detail}`)).toEqual(["wp-content/themes/shop/.user.ini auto_prepend_file = '/var/www/html/wp-content/themes/shop/logo.png'"]);
   });
 
-  it('takes what the panel moved in a plugin for its own, unless it switches something on', () => {
-    const { root, input } = makeSite();
-    const plugin = path.join(root, 'wp-content/plugins/hello');
-    fs.mkdirSync(plugin, { recursive: true });
-    const original = 'php_flag engine off\n';
-    fs.writeFileSync(path.join(plugin, '.htaccess'), '# Replaced by a deny by WPL7: php_flag engine off\nRequire all denied\n');
-    fs.writeFileSync(path.join(plugin, '.user.ini'), "; Moved from .htaccess by WPL7: php_value memory_limit 512M\nmemory_limit = '512M'\n");
-    const withPlugin = {
-      ...(input as object),
-      plugins: { ...(input as { plugins?: object }).plugins, hello: { version: '1.0', files: { '.htaccess': [crypto.createHash('sha256').update(original).digest('hex')] } } },
+  it('takes a plugin file the move to PHP-FPM changed as the plugin’s, and nothing that only looks like one', () => {
+    // What the move changes: a deny after a line, one for a section, one at the end for a block for
+    // mod_php (in a file with no last line end), a setting moved to a new .user.ini (Windows line
+    // ends), and one in a block for an old PHP, which moves and leaves its line as it is.
+    const files: Record<string, string> = {
+      'lib/.htaccess': 'Options -Indexes\nphp_flag engine off\n',
+      'files/.htaccess': '<Files *.php>\nphp_flag engine off\n</Files>\n',
+      'waf/.htaccess': '<IfModule mod_php5.c>\nphp_flag engine 0\n</IfModule>\nOptions -ExecCGI',
+      'vendor/.htaccess': 'php_value memory_limit 512M\r\nOptions -Indexes\r\n',
+      'old/.htaccess': '<IfModule mod_php7.c>\nphp_value max_input_vars 5000\n</IfModule>\n',
+      'guard/.htaccess': 'Require all denied\n',
     };
-    const about = (result: { findings: { path: string }[] }) => result.findings.filter((f) => f.path.startsWith('wp-content/plugins/hello/'));
-    expect(about(check(root, withPlugin))).toEqual([]);
+    const { root, put, input } = makeSite();
+    for (const [rel, text] of Object.entries(files)) put(`wp-content/plugins/hello/${rel}`, text);
+    const withPlugin = {
+      ...input,
+      plugins: { ...input.plugins, hello: { version: '1.0', hashType: 'sha256', files: Object.fromEntries(Object.entries(files).map(([f, t]) => [f, [sha256(t)]])) } },
+    };
+    moveToFpm(root);
+    const file = (rel: string) => path.join(root, 'wp-content/plugins/hello', rel);
+    const now = (rel: string) => fs.readFileSync(file(rel), 'utf8');
+    expect(now('lib/.htaccess')).toContain('# Replaced by a deny by WPL7: php_flag engine off\n<If ');
+    expect(now('files/.htaccess')).toContain('# Replaced by a deny by WPL7: php_flag engine off\nRequire all denied\nSatisfy All\n</Files>');
+    expect(now('waf/.htaccess')).toContain('Options -ExecCGI\n# Replaced by a deny by WPL7: php_flag engine 0\n<If ');
+    expect(now('vendor/.htaccess')).toBe('# Moved to .user.ini by WPL7: php_value memory_limit 512M\r\nOptions -Indexes\r\n');
+    expect(now('vendor/.user.ini')).toContain('memory_limit = ');
+    expect(now('old/.htaccess')).toBe(files['old/.htaccess']);
+    expect(now('old/.user.ini')).toContain('max_input_vars = ');
 
-    fs.writeFileSync(path.join(plugin, '.htaccess'), '# Moved to .user.ini by WPL7: php_value a b\nAddHandler application/x-httpd-php .jpg\n');
-    expect(about(check(root, withPlugin)).map((f) => f.path)).toEqual(['wp-content/plugins/hello/.htaccess']);
+    const about = (result: { findings: { kind: string; path: string }[] }) =>
+      result.findings.filter((f) => f.path.startsWith('wp-content/plugins/hello/')).map((f) => `${f.kind} ${f.path.slice('wp-content/plugins/hello/'.length)}`);
+    const clean = check(root, withPlugin);
+    expect(about(clean)).toEqual([]);
+    expect(clean.packages['plugin:hello']).toEqual({ files: 6, verified: 6, modified: 0, extra: 0, missing: 0 });
+
+    const forged = (rel: string, text: string) => {
+      const was = now(rel);
+      fs.writeFileSync(file(rel), text);
+      const found = about(check(root, withPlugin));
+      fs.writeFileSync(file(rel), was);
+      return found;
+    };
+    // A plugin's deny, its line marked as the move's and a grant after it.
+    expect(forged('guard/.htaccess', '# Replaced by a deny by WPL7: php_flag engine off\nRequire all granted\n')).toEqual(['plugin-modified guard/.htaccess']);
+    // The deny the move added, taken out.
+    expect(forged('lib/.htaccess', 'Options -Indexes\n# Replaced by a deny by WPL7: php_flag engine off\n')).toEqual(['plugin-modified lib/.htaccess']);
+    // A line of the plugin's commented out with one of the move's marks.
+    expect(forged('guard/.htaccess', '# Moved to .user.ini by WPL7: Require all denied\n')).toEqual(['plugin-modified guard/.htaccess']);
+    // A change past the first 64 KiB.
+    expect(forged('lib/.htaccess', `${now('lib/.htaccess')}${'# more\n'.repeat(10_000)}Require all granted\n`)).toEqual(['plugin-modified lib/.htaccess']);
+    // A setting the plugin's .htaccess doesn't have, and a value it doesn't give.
+    expect(forged('vendor/.user.ini', `${now('vendor/.user.ini')}; Moved from .htaccess by WPL7: php_value include_path /tmp/x\ninclude_path = /tmp/x\n`)).toEqual(['plugin-extra vendor/.user.ini']);
+    expect(forged('vendor/.user.ini', now('vendor/.user.ini').replace(/^memory_limit = .*$/m, 'memory_limit = 1G'))).toEqual(['plugin-extra vendor/.user.ini']);
+    // Its .htaccess changed, the .user.ini beside it no longer comes from the plugin's.
+    expect(forged('old/.htaccess', '<IfModule mod_php7.c>\nphp_value max_input_vars 5000\n</IfModule>\nRequire all granted\n').sort()).toEqual(['plugin-extra old/.user.ini', 'plugin-modified old/.htaccess']);
   });
 
   it('never follows a link, and reports the ones that leave the site or sit among WordPress files', () => {

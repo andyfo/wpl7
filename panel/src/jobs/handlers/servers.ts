@@ -127,7 +127,7 @@ export async function serverApplySiteLimits(
       }
       // PHP's workers and Redis follow the memory limit, and the caches follow Settings.
       // Read again: this job can have taken minutes to get here, and a rule saved since must stay.
-      const applied = await applySiteCaches(handle, s, loadSite(s.db, site.id), ctx);
+      const applied = await s.worker.inRuntimeTurn(site.id, () => applySiteCaches(handle, s, loadSite(s.db, site.id), ctx));
       if (applied.reloaded.length > 0 || applied.cleared) {
         ctx.info(`${site.slug}: ${[...applied.reloaded.map((name) => `${name} reloaded`), ...(applied.cleared ? ['page cache cleared'] : [])].join(', ')}.`);
       }

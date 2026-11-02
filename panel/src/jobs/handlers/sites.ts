@@ -667,7 +667,7 @@ export async function replaceContainer(
     await server.docker.createSiteContainer(await siteContainerSpec(s, server, next.site, next.domains, runtime, stayOn ? { from: stayOn } : {}));
     // With no old container there is nothing to say what these files were last run on. They may
     // well be a stack 1 site's: a switch that could not put its old container back leaves just that.
-    if (!old) await migrateArrivedFiles(ctx, server, s, { ...row, phpVersion: next.site.phpVersion });
+    if (!old) await migrateArrivedFiles(ctx, server, s, { ...row, phpVersion: next.site.phpVersion }, { inForce: row.stackSwitchError === null });
     if (run) await startSiteContainer(server, s, row, ctx);
   } catch (err) {
     ctx.error(`Replacing the container failed (${errMsg(err)}); putting the previous one back…`);

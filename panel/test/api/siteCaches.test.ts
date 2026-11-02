@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { jobs, siteWpComponents, sites, type SiteRow } from '../../src/db/schema.js';
 import { markRuntimeApplied, sweepSiteRuntime, wpCliOnlyReads } from '../../src/services/siteCaches.js';
 import { siteImage, sitePaths } from '../../src/services/siteSpec.js';
@@ -42,6 +42,8 @@ async function createSite(w: TestWorld): Promise<SiteRow> {
   w.docker.reloads.length = 0;
   return w.deps.sites.bySlug(site.slug);
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 async function world() {
   const w = await makeWorld();
@@ -81,6 +83,28 @@ describe('PUT /api/sites/:slug/cache', () => {
     w.docker.cacheClears.length = 0;
     await call('PUT', '/cache', { page: 'on' });
     await waitFor(() => w.docker.cacheClears.length === 2);
+  });
+
+  it('one save at a time: two at once end as the later one says, in the row and in the files', async () => {
+    const { w, site, call, nginxFile } = await world();
+    expect((await call('PUT', '/cache', { page: 'off' })).statusCode).toBe(200);
+    // The first look the On save takes at the container waits, until the Off save has come in.
+    let letGo!: () => void;
+    const gate = new Promise<void>((resolve) => (letGo = resolve));
+    const stack = w.docker.containerStack.bind(w.docker);
+    const looked = vi.spyOn(w.docker, 'containerStack').mockImplementationOnce(async (name: string) => {
+      await gate;
+      return stack(name);
+    });
+    const on = call('PUT', '/cache', { page: 'on' });
+    await waitFor(() => looked.mock.calls.length === 1);
+    const off = call('PUT', '/cache', { page: 'off' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    letGo();
+    expect((await on).statusCode).toBe(200);
+    expect((await off).statusCode).toBe(200);
+    expect(w.deps.sites.bySlug(site.slug).pageCache).toBe('off');
+    expect(nginxFile()).toContain('The page cache is off');
   });
 
   it('reloads nothing, and clears nothing, when nothing changed', async () => {
@@ -374,11 +398,11 @@ describe('what empties the caches', () => {
     expect(w.docker.cacheClears).toEqual([site.containerName]);
   });
 
-  it('a plugin update: and what it brought is checked for PHP lines first', async () => {
+  it('a plugin update: and what it brought is checked for PHP lines first, with the site’s .user.ini files left as they are', async () => {
     const { w, site } = await world();
     const job = w.worker.enqueue('wp.pluginTask', { siteId: site.id, slug: 'hello', action: 'update', backupFirst: false } as never, { id: site.id, slug: site.slug, serverId: site.serverId });
     await runJob(w, job.id);
-    expect(w.docker.calls.some((c) => c.method === 'runEphemeral' && (c.args[0] as { labels?: Record<string, string> }).labels?.['wpl7.migration'] === 'migrate')).toBe(true);
+    expect(w.docker.calls.some((c) => c.method === 'runEphemeral' && (c.args[0] as { labels?: Record<string, string> }).labels?.['wpl7.migration'] === 'maintain')).toBe(true);
     expect(w.docker.cacheClears).toEqual([site.containerName]);
   });
 

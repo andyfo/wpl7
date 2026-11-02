@@ -186,8 +186,9 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
       await server.docker.createSiteContainer(await siteContainerSpec(s, server, restored, siteDomains(site), siteRuntimeFrom(s.settings, restored), stayOn ? { from: stayOn } : {}));
     }
 
-    // After that recreate: it can be what takes the site to stack 2. A backup can be older than that.
-    await migrateArrivedFiles(ctx, server, s, loadSite(s.db, site.id));
+    // After that recreate: it can be what takes the site to stack 2. A backup can be older than that,
+    // and then its .user.ini files never ran.
+    await migrateArrivedFiles(ctx, server, s, loadSite(s.db, site.id), { inForce: manifest?.stack === 2 });
 
     ctx.info('Starting site…');
     await startSiteContainer(server, s, site, ctx);
@@ -264,7 +265,7 @@ async function readManifest(
   s: CoreServices,
   serverId: number,
   dir: string,
-): Promise<{ phpVersion?: string; domains?: string[]; tablePrefix?: string; kind?: string; databases?: unknown } | null> {
+): Promise<{ phpVersion?: string; domains?: string[]; tablePrefix?: string; kind?: string; databases?: unknown; stack?: unknown } | null> {
   try {
     const files = s.servers.handleFor(serverId).files;
     return JSON.parse(await files.readFile(path.join(dir, 'manifest.json')));

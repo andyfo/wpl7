@@ -251,6 +251,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
         filesTarGz: path.join(finalDir, 'files.tar.gz'),
         dbSqlGz: path.join(finalDir, 'db.sql.gz'),
         extraDbs: extraNames.map((name) => ({ name, sqlGz: path.join(finalDir, extraDbFile(name)) })),
+        ranOnFpm: (await source.docker.containerStack(site.containerName).catch(() => null))?.stack === 2,
       },
       {
         routing: true,

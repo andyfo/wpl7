@@ -272,7 +272,7 @@ export async function siteImportRefresh(ctx: JobContext<z.infer<typeof siteImpor
     await server.dbAdmin.importFromAs(dbFile, site.dbName, site.dbUser, site.dbPassword);
     // What was left behind at the import stays out: the listing skips it (cursor.skip).
     await applyChangedFiles(server, site, paths.wordpress, delta);
-    await migrateArrivedFiles(ctx, server, s, site);
+    await migrateArrivedFiles(ctx, server, s, site, { inForce: false });
     await startSiteContainer(server, s, site, ctx);
     const unlisted = before ? await removeDeleted(ctx, server, site.containerName, before.files, listedNow) : [];
     if (!before) ctx.warn('Files the old site deleted since the import are still here: the panel has no list of its files from then.');

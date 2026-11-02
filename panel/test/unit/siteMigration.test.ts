@@ -99,7 +99,7 @@ function runScript(root: string, mode: string, siteIni: string) {
 }
 
 /** One run of the real script. */
-function run(root: string, mode: 'migrate' | 'undo' = 'migrate', siteIni: string = DEFAULT_UPLOADS_INI) {
+function run(root: string, mode: 'migrate' | 'maintain' | 'undo' = 'migrate', siteIni: string = DEFAULT_UPLOADS_INI) {
   const res = runScript(root, mode, siteIni);
   expect(res.stderr).toBe('');
   expect(res.status).toBe(0);
@@ -1073,6 +1073,41 @@ describe.skipIf(!CAN_RUN)('a .user.ini that was already there', () => {
     const again = run(root);
     expect(iniAsPhpReadsIt(root, '.user.ini')).toEqual({});
     expect(again.changes.map((c) => c.path)).toEqual(['.user.ini']);
+  });
+});
+
+describe.skipIf(!CAN_RUN)('a site already on PHP-FPM (maintain)', () => {
+  // A dev site's own: a lower limit, sessions of its own and errors on the page. All of it in force.
+  const IN_FORCE = 'memory_limit = 64M\nsession.save_path = /tmp\ndisplay_errors = On\n';
+  const HTACCESS = 'php_value max_input_vars 4321\nphp_value memory_limit 300M\n';
+
+  it('leaves what its .user.ini says, and still moves what a .htaccess brings', () => {
+    const root = makeSite({ '.htaccess': HTACCESS, '.user.ini': IN_FORCE });
+    run(root, 'maintain');
+    expect(read(root, '.user.ini')).toBe(`${IN_FORCE}${INI_MOVED}php_value max_input_vars 4321\nmax_input_vars = '4321'\n`);
+    // What the .user.ini says wins: no .htaccess line has run on PHP-FPM.
+    expect(read(root, '.htaccess')).toBe(`${MOVED}php_value max_input_vars 4321\n${NOT_MOVED}php_value memory_limit 300M\n`);
+    expect(iniAsPhpReadsIt(root, '.user.ini')).toEqual({ memory_limit: '64M', 'session.save_path': '/tmp', display_errors: '1', max_input_vars: '4321' });
+    expect(run(root, 'maintain').summary.written).toBe(0);
+  });
+
+  it('where migrate, for files that never ran here, comments all of that out', () => {
+    const root = makeSite({ '.htaccess': HTACCESS, '.user.ini': IN_FORCE });
+    run(root, 'migrate');
+    expect(iniAsPhpReadsIt(root, '.user.ini')).toEqual({ max_input_vars: '4321', memory_limit: '300M' });
+  });
+
+  it('leaves a line PHP cannot parse, which the site lives with, and says what it costs', () => {
+    const root = makeSite({ '.htaccess': 'php_value max_input_vars 4321\n', '.user.ini': 'memory_limit = 64M\nbroken = "\n' });
+    const { warnings } = run(root, 'maintain');
+    expect(read(root, '.user.ini')).toMatch(/^memory_limit = 64M\nbroken = "\n/);
+    expect(warnings.map((w) => w.what).join('\n')).toContain('PHP stops reading this file where it goes wrong');
+  });
+
+  it('still comments out a section PHP-FPM’s workers crash on', () => {
+    const root = makeSite({ '.user.ini': 'memory_limit = 64M\n[PATH=/var/www/html/x]\nmemory_limit = 1G\n' });
+    run(root, 'maintain');
+    expect(read(root, '.user.ini')).toBe(`memory_limit = 64M\n${INI_UNUSED}[PATH=/var/www/html/x]\n${INI_UNUSED}memory_limit = 1G\n`);
   });
 });
 

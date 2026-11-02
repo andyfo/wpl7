@@ -6,6 +6,7 @@ import type { RunResult } from './docker.js';
 import type { CoreServices } from './index.js';
 import { siteContainerStack } from './siteCaches.js';
 import { siteImage, sitePaths } from './siteSpec.js';
+import { HTACCESS_MOVE_PHP, MAX_SETTINGS_FILE_BYTES } from './siteMigrationHtaccess.js';
 
 /**
  * A site's own PHP settings, moved from where mod_php read them to where PHP-FPM does, at the
@@ -22,12 +23,7 @@ import { siteImage, sitePaths } from './siteSpec.js';
  * can answer what they are (services/quarantine.ts has the reasoning).
  */
 
-/**
- * Past this a `.htaccess` or `.user.ini` is reported and left alone. Apache reads a `.htaccess` on
- * every request, so real ones stay far under it, long ban lists included, and two at this size made of
- * nothing but directives still fit in the memory the script gives itself.
- */
-export const MAX_SETTINGS_FILE_BYTES = 1024 * 1024;
+export { MAX_SETTINGS_FILE_BYTES };
 
 /** What the script prints at most of changes, and again of warnings; past that it only counts. */
 const MAX_REPORT_BYTES = 256 * 1024;
@@ -48,11 +44,18 @@ export const MAX_LOGGED_LINES = 200;
 const FILE_TEXT_WITHHELD = 'what the file says is not shown at Read only access';
 
 /**
- * PHP for `php -r`, as uid 33: `migrate` or `undo`. Everything it says is JSON lines on stdout,
- * `{"t":"change"|"warn","path","line","what"}` and one `{"t":"summary",…}` last. A run without
- * its summary line was cut short.
+ * PHP for `php -r`, as uid 33, in one of three modes:
  *
- * Both modes can run any number of times: a second run writes nothing. It only says again what
+ *   migrate    files that ran on mod_php or on another host: what a .user.ini says was never read
+ *              here, so whatever in it would hurt now is commented out
+ *   maintain   files of a site already on PHP-FPM: what a .user.ini says is what the site runs with,
+ *              so it stays, and only .htaccess lines are moved
+ *   undo       back to mod_php
+ *
+ * Everything it says is JSON lines on stdout, `{"t":"change"|"warn","path","line","what"}` and one
+ * `{"t":"summary",…}` last. A run without its summary line was cut short.
+ *
+ * Each mode can run any number of times: a second run writes nothing. It only says again what
  * still stands and needs a person (a handler line, a file it can't write).
  *
  * It looks in every folder of the site, cache folders too: Apache reads a `.htaccess` wherever it
@@ -74,38 +77,7 @@ const S_IFDIR = 0040000;
 const S_IFREG = 0100000;
 const S_IFLNK = 0120000;
 const JSON_FLAGS = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE;
-// What Apache counts as whitespace between the words of a line.
-const SPACE = " \t\r\n\f\v";
-
-// Put in front of a .htaccess line that has to go, with its indentation before the mark and nothing
-// else touched, so that undo gets back the same bytes. mod_php needs these three back.
-const MOVED_MARK = '# Moved to .user.ini by WPL7: ';
-const NOT_MOVED_MARK = '# Not moved to .user.ini by WPL7: ';
-const HANDLER_MARK = '# Not used with PHP-FPM, by WPL7: ';
-const PUT_BACK = '/^([ \t\x0C\x0B]*)(?:# Moved to \.user\.ini by WPL7: |# Not moved to \.user\.ini by WPL7: |# Not used with PHP-FPM, by WPL7: )/';
-// This one stays when a switch fails: see the end of undo_folder.
-const DENY_MARK = '# Replaced by a deny by WPL7: ';
-// The names the panel's own "No PHP in uploads" stops. mod_php with its engine off sent such a file
-// as text, and only .php runs on PHP-FPM, so there is nothing else a deny could take away here.
-// No line further down could turn PHP back on under mod_php, so none may here: an <If> is applied
-// after every other section, where a <FilesMatch> loses to a later <FilesMatch ".*"> with Require all
-// granted, here or in a folder below. Satisfy All does the same for a Satisfy Any. All tried on both.
-const DENY_OPEN = '<If "%{REQUEST_FILENAME} =~ /\.ph(p[0-9]?|tml|ar|t|ps)$/i">';
-
-// In a .user.ini. The first two also say a .htaccess line has been dealt with: one in a block for
-// mod_php stays where it is, and would otherwise be read again, over any later edit of the setting.
-const INI_MOVED = '; Moved from .htaccess by WPL7: ';
-const INI_LEFT = '; Not moved from .htaccess by WPL7: ';
-const INI_UNUSED = '; Not used by WPL7: ';
-
-// <IfModule> blocks for a PHP this Apache doesn't have: what is inside them isn't read, so it can stay
-// as it is. A block for anything else is read, so a php_value in it is a 500 like any other.
-const PHP_BLOCK = '/^(?:mod_php[0-9]*\.c|php[0-9]*_module|sapi_apache2\.c|mod_lsapi\.c|lsapi_module|litespeed|mod_litespeed\.c)$/i';
-// The only two of those mod_php answers to in PHP 8, tried on real Apache and in its source: not
-// mod_php7.c, not php8_module. What is in the others never applied here.
-const LIVE_PHP_BLOCKS = ['mod_php.c', 'php_module'];
-// Sections that apply to less than the folder. A .user.ini can't say that.
-const NARROWING_SECTIONS = ['files', 'filesmatch', 'if', 'elseif', 'else', 'limit', 'limitexcept'];
+${HTACCESS_MOVE_PHP}
 
 const LIMITS = ['memory_limit', 'upload_max_filesize', 'post_max_size', 'max_execution_time', 'max_input_time', 'max_input_vars'];
 // What belongs to the server a site is on, each with why it has to go when it comes from another.
@@ -181,146 +153,6 @@ function save(string $rel, string $text, int $mode): bool {
     }
     $stats['written']++;
     return true;
-}
-
-/** The lines of a file with their own line endings, so that joining them gives the same bytes. */
-function split_lines(string $text): array {
-    if ($text === '') return [];
-    $parts = explode("\n", $text);
-    $last = array_pop($parts);
-    foreach ($parts as $i => $part) $parts[$i] = $part . "\n";
-    if ($last !== '') $parts[] = $last;
-    return $parts;
-}
-
-function without_eol(string $line): string {
-    if (substr($line, -2) === "\r\n") return substr($line, 0, -2);
-    return substr($line, -1) === "\n" ? substr($line, 0, -1) : $line;
-}
-
-function eol_of(array $lines): string {
-    return substr($lines[0] ?? '', -2) === "\r\n" ? "\r\n" : "\n";
-}
-
-function ending_a_line(string $line, string $eol): string {
-    return substr($line, -1) === "\n" ? $line : $line . $eol;
-}
-
-function indent_of(string $line): string {
-    return substr($line, 0, strspn($line, " \t\f\v"));
-}
-
-function comment_out(string $line, string $mark): string {
-    $indent = indent_of($line);
-    return $indent . $mark . substr($line, strlen($indent));
-}
-
-function deny_block(string $indent, string $eol): string {
-    return $indent . DENY_OPEN . $eol . $indent . '    Require all denied' . $eol . $indent . '    Satisfy All' . $eol . $indent . '</If>' . $eol;
-}
-
-/** A line cut into words the way Apache does (ap_getword_conf). A backslash only escapes a quote or a backslash. */
-function conf_words(string $line): array {
-    $words = [];
-    $n = strlen($line);
-    $i = strspn($line, SPACE);
-    while ($i < $n) {
-        $quote = $line[$i] === '"' || $line[$i] === "'" ? $line[$i] : '';
-        if ($quote !== '') $i++;
-        $word = '';
-        while ($i < $n && ($quote !== '' ? $line[$i] !== $quote : strpos(SPACE, $line[$i]) === false)) {
-            if ($line[$i] === '\\' && $i + 1 < $n && ($line[$i + 1] === '\\' || ($quote !== '' && $line[$i + 1] === $quote))) $i++;
-            $word .= $line[$i++];
-        }
-        if ($quote !== '') $i++;
-        $words[] = $word;
-        $i += strspn($line, SPACE, min($i, $n));
-    }
-    return $words;
-}
-
-/**
- * The lines of a .htaccess that matter here, each with what is around it. Apache joins a line ending
- * in a backslash to the next before it looks at either, comments included, so a mark on the first
- * line of such a run comments out all of it.
- */
-function read_htaccess(array $lines): array {
-    $entries = [];
-    $open = [];
-    $total = count($lines);
-    for ($i = 0; $i < $total; $i++) {
-        $first = $i;
-        $joined = without_eol($lines[$i]);
-        while (substr($joined, -1) === '\\' && substr($lines[$i], -1) === "\n" && $i + 1 < $total) {
-            $i++;
-            $joined = substr($joined, 0, -1) . without_eol($lines[$i]);
-        }
-        $text = str_replace("\r", ' ', trim($joined, SPACE));
-        if ($text === '' || $text[0] === '#') continue;
-        if ($text[0] === '<') {
-            if (($text[1] ?? '') === '/') {
-                array_pop($open);
-            } else {
-                $words = conf_words(rtrim(substr($text, 1), '>' . SPACE));
-                $open[] = ['name' => strtolower($words[0] ?? ''), 'args' => array_slice($words, 1), 'label' => substr($text, 0, 120)];
-            }
-            continue;
-        }
-        $words = conf_words($text);
-        $directive = strtolower($words[0] ?? '');
-        $setting = preg_match('/^php_(admin_)?(value|flag)$/', $directive, $m) === 1;
-        if (!$setting && !in_array($directive, ['addhandler', 'addtype', 'sethandler', 'forcetype'], true)) continue;
-        // Skipped unread on the new setup. "live": mod_php read it, or nothing stands in the way.
-        $inert = false;
-        $live = true;
-        $scope = null;
-        foreach ($open as $section) {
-            if ($section['name'] === 'ifmodule' && preg_match(PHP_BLOCK, $section['args'][0] ?? '') === 1) {
-                $inert = true;
-                if (!in_array($section['args'][0], LIVE_PHP_BLOCKS, true)) $live = false;
-            } elseif (in_array($section['name'], NARROWING_SECTIONS, true)) {
-                $scope = $section;
-            }
-        }
-        // What the job log says of the line: a value can hold a password.
-        $shown = $setting && count($words) >= 2 ? $words[0] . ' ' . $words[1] : $text;
-        $entry = ['line' => $first, 'last' => $i, 'text' => $text, 'shown' => $shown, 'words' => $words, 'directive' => $directive, 'inert' => $inert, 'live' => $live, 'scope' => $scope];
-        if (!$setting) {
-            $entries[] = ['kind' => 'handler'] + $entry;
-            continue;
-        }
-        $wellFormed = count($words) === 3;
-        $problem = null;
-        if (!$wellFormed) $problem = 'Apache takes a name and one value here, and refuses anything else';
-        elseif ($scope !== null) $problem = 'it is inside ' . $scope['label'] . ', and a .user.ini applies to the whole folder';
-        $entries[] = [
-            'kind' => $wellFormed && $words[1] === 'engine' ? 'engine' : 'setting',
-            'flag' => $m[2] === 'flag',
-            'admin' => $m[1] !== '',
-            'name' => $words[1] ?? '',
-            'value' => $words[2] ?? '',
-            // php_admin_* is a 500 in a .htaccess under mod_php, wherever mod_php reads it.
-            'ran' => $live && $m[1] === '',
-            'problem' => $problem,
-        ] + $entry;
-    }
-    return $entries;
-}
-
-function flag_is_on(string $value): bool {
-    return strcasecmp($value, 'on') === 0 || $value === '1';
-}
-
-/** php_flag takes On or 1 for on and anything else for off, php_value what PHP itself reads as true. Tried on real mod_php. */
-function engine_is_on(array $e): bool {
-    if ($e['flag']) return flag_is_on($e['value']);
-    return in_array(strtolower($e['value']), ['on', 'yes', 'true'], true) || (int) $e['value'] !== 0;
-}
-
-/** What mod_php hands to PHP for a line (sapi/apache2handler/apache_config.c). */
-function literal_of(array $e): string {
-    if ($e['flag']) return flag_is_on($e['value']) ? '1' : '0';
-    return strcasecmp($e['value'], 'none') === 0 ? '' : $e['value'];
 }
 
 /**
@@ -435,10 +267,11 @@ function not_used(array &$ini, int $i, string $text, string $why): void {
 }
 
 /**
- * A .user.ini that was already there, which mod_php never read: what would hurt now is commented
- * out, and what stays is noted, for what comes from the .htaccess beside it.
+ * A .user.ini that was already there. One mod_php never read: what would hurt now is commented out.
+ * One PHP-FPM has been reading ($inForce): what it says is what the site runs with, and stays, but for
+ * a section PHP-FPM's workers crash on. What stays is noted, for what comes from the .htaccess beside it.
  */
-function clean_user_ini(array &$ini): void {
+function clean_user_ini(array &$ini, bool $inForce): void {
     $inSpecial = false;
     foreach ($ini['lines'] as $i => $line) {
         $text = trim(preg_replace('/^\xEF\xBB\xBF/', '', without_eol($line)));
@@ -457,13 +290,13 @@ function clean_user_ini(array &$ini): void {
         }
         // PHP stops reading a file at a line it can't parse, and what is moved here goes after it.
         if (@parse_ini_string($text . "\n", false, INI_SCANNER_NORMAL) === false) {
-            not_used($ini, $i, $text, 'PHP stops reading the file at a line like this');
+            if (!$inForce) not_used($ini, $i, $text, 'PHP stops reading the file at a line like this');
             continue;
         }
         if (preg_match('/^([^=\s]+)\s*=(.*)$/s', $text, $m) !== 1) continue;
         $read = @parse_ini_string($text, false, INI_SCANNER_NORMAL);
         $value = is_array($read) && is_string($read[$m[1]] ?? null) ? $read[$m[1]] : trim($m[2], " \t\"'");
-        $why = harm($m[1], $value, $ini['folder'], isset($ini['movedKeys'][$m[1]]));
+        $why = $inForce ? null : harm($m[1], $value, $ini['folder'], isset($ini['movedKeys'][$m[1]]));
         if ($why !== null) {
             not_used($ini, $i, $text, $why);
             continue;
@@ -527,74 +360,6 @@ function settle(int $index, array $e, array &$ini): string {
     return 'moved';
 }
 
-/**
- * Which files a <Files> or <FilesMatch> section takes: anything named .php, and anything else. The
- * pattern is tried on names rather than read, so that any way of writing it counts the same.
- */
-function section_takes(array $section): array {
-    $args = $section['args'];
-    $regex = $section['name'] === 'filesmatch' || ($args[0] ?? '') === '~';
-    $pattern = ($args[0] ?? '') === '~' ? ($args[1] ?? '') : ($args[0] ?? '');
-    $match = $regex
-        ? fn(string $name) => @preg_match('~' . str_replace('~', '\~', $pattern) . '~', $name) === 1
-        : fn(string $name) => @fnmatch($pattern, $name);
-    $other = false;
-    foreach (['index.html', 'index.phtml', 'index.php5', 'index.txt', 'index'] as $name) $other = $other || $match($name);
-    // A section for one script takes no other name, and still is about .php.
-    $php = $match('index.php') || (!$other && preg_match('/\.php\$?$/i', $pattern) === 1);
-    return ['php' => $php, 'other' => $other || !$php];
-}
-
-/**
- * A line that hands files to PHP by name, all of it checked on the real thing. Only files named .php
- * reach PHP-FPM, and the image's own rule for them beats an AddHandler or AddType, so a line that
- * only names .php needs nothing. A SetHandler in a section is another matter: the section is applied
- * after the image's, so it takes .php away from PHP-FPM, and every one of them answers 403, or sends
- * its source when the handler is one Apache doesn't have. That line is what has to go, and mod_php
- * gets it back from undo. Unless it also takes other files, under mod_php's own name: they'd go from
- * a 403 to sending their source.
- */
-function handler_line(array $e, array &$lines, array &$changes, string $path): void {
-    $handler = $e['words'][1] ?? '';
-    // The new setup's own socket, which someone has set here for it. All that is its own business.
-    if (stripos($handler, 'php') === false || stripos($handler, 'proxy:unix:/run/wpl7/') === 0) return;
-    if ($e['inert'] && !$e['live']) return;
-    $own = preg_match('#^(?:application/x-httpd-php(?:-source)?|php-script)$#i', $handler) === 1;
-    if ($e['inert']) $effect = 'are sent as they are, source included, because this block does nothing now';
-    elseif ($own) $effect = 'now answer 403';
-    else $effect = 'are sent as they are, source included, because Apache has no such handler';
-    $warn = fn(string $files, string $verb) => say('warn', $path, $e['line'] + 1, $e['text'] . ': ' . $files . ' ' . $verb . '. Rename them to .php.');
-
-    if ($e['directive'] === 'addhandler' || $e['directive'] === 'addtype') {
-        $others = array_filter(array_slice($e['words'], 2), fn($ext) => strcasecmp(ltrim($ext, '.'), 'php') !== 0);
-        if ($others !== []) $warn('files named ' . implode(' ', $others), $effect);
-        return;
-    }
-    if ($e['scope'] === null) {
-        // Outside any section the image's rule for .php comes later, and wins.
-        $warn('all files here but .php', $effect);
-        return;
-    }
-    $isFiles = $e['scope']['name'] === 'files' || $e['scope']['name'] === 'filesmatch';
-    $takes = $isFiles ? section_takes($e['scope']) : ['php' => false, 'other' => true];
-    if ($e['directive'] === 'forcetype' || $e['inert']) {
-        // These don't choose the handler .php has, so .php is not their problem.
-        if ($takes['other']) $warn('the files in that section', $effect);
-        return;
-    }
-    if (!$takes['php']) {
-        $warn('the files in that section', $effect);
-        return;
-    }
-    if ($own && $takes['other']) {
-        say('warn', $path, $e['line'] + 1, $e['text'] . ': every file in that section now answers 403, .php included. Take .php out of the section, and rename the others to .php.');
-        return;
-    }
-    $lines[$e['line']] = comment_out($lines[$e['line']], HANDLER_MARK);
-    $changes[] = [$path, $e['line'] + 1, $e['text'] . ': commented out, .php files here go to PHP-FPM and this line would stop that'];
-    if ($takes['other']) $warn('the other files in that section', $effect);
-}
-
 function migrate_folder(string $dir): void {
     $prefix = $dir === '' ? '' : $dir . '/';
     $htPath = $prefix . '.htaccess';
@@ -603,8 +368,9 @@ function migrate_folder(string $dir): void {
     $iniFile = site_file($iniPath);
     if ($ht['state'] !== 'ok' && $iniFile['state'] !== 'ok') return;
 
-    $lines = split_lines($ht['text']);
-    $entries = read_htaccess($lines);
+    $entries = read_htaccess(split_lines($ht['text']));
+    // On PHP-FPM no .htaccess line has run: the .user.ini beside it is what the site runs with.
+    if (IN_FORCE) foreach ($entries as $i => $e) $entries[$i]['ran'] = false;
     $ini = [
         'path' => $iniPath,
         'htaccess' => $htPath,
@@ -627,7 +393,7 @@ function migrate_folder(string $dir): void {
             $ini['records'][$text] = true;
         }
     }
-    clean_user_ini($ini);
+    clean_user_ini($ini, IN_FORCE);
 
     // Of several lines for one setting the last counts, as it did in Apache, but one mod_php read
     // beats any it did not: a block for an older PHP further down never applied.
@@ -664,52 +430,7 @@ function migrate_folder(string $dir): void {
     }
     if ($ht['state'] !== 'ok') return;
 
-    $hasDeny = strpos($ht['text'], DENY_OPEN) !== false;
-    $eol = eol_of($lines);
-    $changes = [];
-    $denyLater = null;
-    foreach ($entries as $i => $e) {
-        $at = $e['line'] + 1;
-        if ($e['kind'] === 'handler') {
-            handler_line($e, $lines, $changes, $htPath);
-        } elseif ($e['kind'] === 'setting') {
-            if ($e['inert']) continue;
-            $fate = $fates[$i] ?? $fates[$winners[$e['name']]];
-            $lines[$e['line']] = comment_out($lines[$e['line']], $fate === 'moved' ? MOVED_MARK : NOT_MOVED_MARK);
-            if ($fate === 'moved') $changes[] = [$htPath, $at, $e['shown'] . ': moved to .user.ini'];
-            elseif ($fate === 'unknown') $changes[] = [$htPath, $at, $e['shown'] . ': commented out, this PHP has no such setting, so it did nothing'];
-            else $changes[] = [$htPath, $at, $e['shown'] . ': commented out'];
-        } elseif (engine_is_on($e)) {
-            if ($e['inert']) continue;
-            $lines[$e['line']] = comment_out($lines[$e['line']], NOT_MOVED_MARK);
-            $changes[] = [$htPath, $at, $e['text'] . ': commented out, PHP-FPM has no such setting. PHP runs here unless a folder above has a deny.'];
-        } elseif ($e['inert']) {
-            if ($e['scope'] === null) $denyLater ??= $e;
-            else say('warn', $htPath, $at, $e['shown'] . ': it is inside ' . $e['scope']['label'] . ' in a block for mod_php, and does nothing now. PHP runs in those files: deny them if it should not.');
-        } else {
-            // A deny in place of the line, where it can be read in context. It runs on both setups.
-            $indent = indent_of($lines[$e['line']]);
-            $lines[$e['line']] = comment_out($lines[$e['line']], DENY_MARK);
-            $add = '';
-            if ($e['scope'] !== null) {
-                $add = $indent . 'Require all denied' . $eol . $indent . 'Satisfy All' . $eol;
-            } elseif (!$hasDeny) {
-                $add = deny_block($indent, $eol);
-                $hasDeny = true;
-            }
-            $lines[$e['last']] = ending_a_line($lines[$e['last']], $eol) . $add;
-            $changes[] = [$htPath, $at, $e['text'] . ': replaced by a deny for PHP files'];
-        }
-    }
-    // A block for mod_php stays exactly as it is, because plugins compare theirs word for word and add
-    // it again when it differs. So the deny goes at the end, outside anything a plugin regenerates.
-    if ($denyLater !== null && !$hasDeny) {
-        $last = count($lines) - 1;
-        $lines[$last] = ending_a_line($lines[$last], $eol);
-        $lines[] = DENY_MARK . $denyLater['text'] . $eol . deny_block('', $eol);
-        $changes[] = [$htPath, $denyLater['line'] + 1, $denyLater['text'] . ': this line stays, and does nothing now; a deny for PHP files is added at the end of the file'];
-    }
-    $text = implode('', $lines);
+    [$text, $changes] = migrate_htaccess($ht['text'], $entries, $htPath, fn(int $i, array $e) => $fates[$i] ?? $fates[$winners[$e['name']]]);
     if ($text === $ht['text']) return;
     if (save($htPath, $text, $ht['mode'])) {
         foreach ($changes as $change) say('change', ...$change);
@@ -783,15 +504,16 @@ function walk(callable $visit): void {
 }
 
 $mode = $argv[1] ?? '';
-if ($mode !== 'migrate' && $mode !== 'undo') {
-    fwrite(STDERR, "usage: migrate | undo\n");
+if (!in_array($mode, ['migrate', 'maintain', 'undo'], true)) {
+    fwrite(STDERR, "usage: migrate | maintain | undo\n");
     exit(2);
 }
+define('IN_FORCE', $mode === 'maintain');
 $started = microtime(true);
 foreach (LIMITS as $key) $own[$key] = own_setting($key);
 // That was only to compare with. This run needs room for a big .htaccess, whatever the site allows itself.
 ini_set('memory_limit', '192M');
-walk($mode === 'migrate' ? 'migrate_folder' : 'undo_folder');
+walk($mode === 'undo' ? 'undo_folder' : 'migrate_folder');
 emit([
     't' => 'summary',
     'mode' => $mode,
@@ -881,11 +603,11 @@ function failureOf(res: RunResult, report: MigrationReport): string | null {
   return null;
 }
 
-async function runSiteMigration(server: ServerHandle, s: CoreServices, site: SiteRow, mode: 'migrate' | 'undo'): Promise<RunResult> {
+async function runSiteMigration(server: ServerHandle, s: CoreServices, site: SiteRow, mode: 'migrate' | 'maintain' | 'undo'): Promise<RunResult> {
   const p = sitePaths(s.config, site.slug);
   const binds = [`${p.wordpress}:/var/www/html`];
   // A bind whose source is missing fails the run, and undo compares nothing with the site's limits.
-  if (mode === 'migrate' && (await server.files.exists(p.uploadsIni))) binds.push(`${p.uploadsIni}:/usr/local/etc/php/conf.d/zz-site.ini:ro`);
+  if (mode !== 'undo' && (await server.files.exists(p.uploadsIni))) binds.push(`${p.uploadsIni}:/usr/local/etc/php/conf.d/zz-site.ini:ro`);
   return server.docker.runEphemeral({
     image: siteImage(site.phpVersion),
     entrypoint: ['php'],
@@ -907,7 +629,11 @@ async function runSiteMigration(server: ServerHandle, s: CoreServices, site: Sit
  * probe says whether that matters.
  */
 export async function migrateSiteForStack2(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, site: SiteRow): Promise<void> {
-  const res = await runSiteMigration(server, s, site, 'migrate');
+  await moveSettings(ctx, server, s, site, 'migrate');
+}
+
+async function moveSettings(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, site: SiteRow, mode: 'migrate' | 'maintain'): Promise<void> {
+  const res = await runSiteMigration(server, s, site, mode);
   const report = parseMigrationOutput(res.stdout);
   logReport(ctx, report);
   const failure = failureOf(res, report);
@@ -922,23 +648,28 @@ export async function migrateSiteForStack2(ctx: JobContext<unknown>, server: Ser
 
 /**
  * The same for files that have just come from somewhere else: an import, a refresh, a restore, the
- * arrival of a move. An old backup or another host brings back what Apache now refuses, and a
- * .user.ini written for a server this isn't. Called once the container is what it is going to be
- * and before it starts, so that no request meets those lines, and what decides is that container:
- * on stack 1 they are what mod_php reads, so they go back to how it reads them.
+ * arrival of a move, a package update. An old backup or another host brings back what Apache now
+ * refuses, and a .user.ini written for a server this isn't. Called once the container is what it is
+ * going to be and before it starts, so that no request meets those lines, and what decides is that
+ * container: on stack 1 they are what mod_php reads, so they go back to how it reads them.
+ *
+ * `inForce` says the files' .user.ini files are what a site on PHP-FPM has been running with: a
+ * restore, a move or a package update of such a site. What they say then stays as it is. An import's
+ * were written for another server. A backup from before the site moved to PHP-FPM counts as in force
+ * too, so a .user.ini in it applies as it is.
  *
  * Here a failure is only a warning. At the switch there is an old container to go back to; here the
  * site's files and database have already been replaced, and it is better up with one folder answering
  * 500 than not up at all.
  */
-export async function migrateArrivedFiles(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, site: SiteRow): Promise<void> {
+export async function migrateArrivedFiles(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, site: SiteRow, arrived: { inForce: boolean }): Promise<void> {
   try {
     const stack = await siteContainerStack(server.docker, site.containerName);
     // A stack 2 site arriving on a server still on the old image: mod_php wants its lines back.
     if (stack === 1) await undoSiteMigration(ctx, server, s, site);
     if (stack !== 2) return;
     ctx.info('Checking the PHP settings in the files that came in…');
-    await migrateSiteForStack2(ctx, server, s, site);
+    await moveSettings(ctx, server, s, site, arrived.inForce ? 'maintain' : 'migrate');
   } catch (err) {
     ctx.warn(
       `The PHP settings in this site's files could not be checked: ${err instanceof Error ? err.message : String(err)}. ` +

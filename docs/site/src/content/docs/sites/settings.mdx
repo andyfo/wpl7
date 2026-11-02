@@ -14,6 +14,7 @@ sources:
   - panel/src/services/siteSpec.ts
   - panel/src/services/siteStack.ts
   - panel/src/services/siteMigration.ts
+  - panel/src/services/siteMigrationHtaccess.ts
   - panel/src/db/seed.ts
   - deploy/wordpress-image/apache-site.conf
   - deploy/wordpress-image/php-fpm.conf
@@ -59,14 +60,16 @@ Such a line in a `.htaccess` gives a 500 for its folder. Inside `<IfModule mod_p
 nothing.
 
 The panel moves these lines to `.user.ini` when a site moves to PHP-FPM. It does the same after an
-import, a refresh, a restore and a move to another server. Each line stays in the `.htaccess`,
-commented out, after `# Moved to .user.ini by WPL7:`. `php_flag engine off` has no such setting, so
-a deny for PHP files takes its place.
+import, a refresh, a restore, a move to another server, and an update of WordPress, a plugin or a
+theme. Each line stays in the `.htaccess`, commented out, after `# Moved to .user.ini by WPL7:`.
+`php_flag engine off` has no such setting, so a deny for PHP files takes its place.
 
-The same pass reads every `.user.ini` the site already has, because PHP-FPM applies files that
-mod_php ignored. It comments out what would hurt here: a path from another host, `open_basedir`,
-`[PATH=]` and `[HOST=]` sections, and limits lower than the site's own. The job log lists every line
-it changes.
+The same pass reads every `.user.ini` that PHP-FPM has not run with yet: when a site moves to it,
+after an import or a refresh, and after a restore or a move of files from before the site moved. It
+comments out what would hurt here: a path from another host, `open_basedir`, and limits lower than
+the site's own. A `.user.ini` the site has run with on PHP-FPM stays as it is. `[PATH=]` and
+`[HOST=]` sections are commented out in any of them, because PHP-FPM crashes on them. The job log
+lists every line it changes.
 
 ## Stop, start or recreate the container
 
