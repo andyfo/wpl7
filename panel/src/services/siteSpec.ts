@@ -24,14 +24,15 @@ export const SITE_IMAGE_REPO = 'wpl7-wordpress';
 export const siteImage = (phpVersion: string) => `${SITE_IMAGE_REPO}:php${phpVersion}`;
 
 /**
- * A name that keeps a site's old image while it moves to another stack: once its container has
- * gone, an image whose tag has moved on has no name and nothing using it, which is what the
- * housekeeping removes. A repository of its own, so the housekeeping counts it as nobody's, and
- * nothing that reads the site images' tags takes it for a PHP version.
+ * The name a site's old container has, stopped, while its next one comes up: its way back
+ * (jobs/handlers/sites.ts replaceContainer). The old image is no way back: Docker's containerd
+ * store deletes an image when a build takes its name, even while a container runs it. With a dot,
+ * which no site's container name has.
  */
-export const SITE_ROLLBACK_REPO = 'wpl7-rollback';
+export const asideContainerName = (containerName: string) => `${containerName}.previous`;
 
-export const siteRollbackImage = (slug: string) => `${SITE_ROLLBACK_REPO}:${slug}`;
+/** The site container a kept-aside one belongs to; null for any other name. */
+export const containerOfAside = (name: string): string | null => (name.endsWith('.previous') ? name.slice(0, -'.previous'.length) : null);
 
 export const WORDPRESS_CONFIG_EXTRA = [
   // Behind Traefik's TLS termination WP would otherwise see is_ssl()=false -> redirect loop.

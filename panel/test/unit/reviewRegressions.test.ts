@@ -110,8 +110,9 @@ describe('review regressions', () => {
     expect(failed.status).toBe('failed');
     expect(w.deps.sites.bySlug(site.slug).phpVersion).toBe('8.3');
     expect(w.docker.containers.get(site.containerName)).toBe('running');
-    const restored = w.docker.calls.filter((c) => c.method === 'createSiteContainer').at(-1)!.args[0] as { image: string };
-    expect(restored.image).toBe(await w.docker.imageId('wpl7-wordpress:php8.3'));
+    // The old container itself, not one made again.
+    expect(w.docker.imageByContainer.get(site.containerName)).toBe(await w.docker.imageId('wpl7-wordpress:php8.3'));
+    expect(w.docker.calls.filter((c) => c.method === 'renameContainer').at(-1)!.args).toEqual([`${site.containerName}.previous`, site.containerName]);
 
     const retry = await runJob(w, w.deps.sites.changePhp(site.slug, '8.4').id);
     expect(retry.status).toBe('succeeded');

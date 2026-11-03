@@ -50,7 +50,7 @@ import { sweepSiteImages } from '../../src/services/siteImages.js';
 import { checkSiteUrl, clearSiteCaches } from '../../src/services/siteCaches.js';
 import { undoSiteMigration } from '../../src/services/siteMigration.js';
 import { EGRESS_NETWORK as PANEL_EGRESS_NETWORK, siteNetworkName } from '../../src/services/siteNetwork.js';
-import { DEFAULT_UPLOADS_INI, buildSiteContainerSpec, siteContainerSpec, siteImage, sitePaths, siteRollbackImage, siteRuntimeFrom } from '../../src/services/siteSpec.js';
+import { DEFAULT_UPLOADS_INI, asideContainerName, buildSiteContainerSpec, siteContainerSpec, siteImage, sitePaths, siteRuntimeFrom } from '../../src/services/siteSpec.js';
 import {
   FPM_SOCKET_IN_CONTAINER,
   PAGE_CACHE_DIR_IN_CONTAINER,
@@ -2911,7 +2911,7 @@ if (strpos($_SERVER['REQUEST_URI'] ?? '', '/t/login-late/') === 0) add_action('t
     const NETWORK_MOVED = siteNetworkName(SLUG_MOVED);
     const PHP_MOVED = `move${process.pid}`;
     const TAG_MOVED = siteImage(PHP_MOVED);
-    const ROLLBACK_TAG = siteRollbackImage(SLUG_MOVED);
+    const ASIDE = asideContainerName(MOVED);
     const EDGE = `wpl7-engine-site-edge-${process.pid}`;
     const BROKEN_IMAGE = `wpl7-engine-site-broken:${process.pid}`;
     const OLD_IMAGE = process.env.WPL7_ENGINE_OLD_SITE_IMAGE ?? `wpl7-wordpress:php${PHP}-stack1`;
@@ -3091,9 +3091,8 @@ echo json_encode([
       expect(noPhp.status).toBe(403);
       expect(noPhp.body).not.toContain(SOURCE_ONLY);
 
-      // Still there, with no name, kept by the container that runs it: nothing else could undo this.
-      expect(await namesOf(oldId)).toEqual([]);
-      expect(await movedDocker.imageId(ROLLBACK_TAG)).toBeNull();
+      // The old container itself, back under its name, and nothing left aside.
+      expect(await movedDocker.containerState(ASIDE)).toBe('missing');
       expect(fresh().stackSwitchError).toMatch(reason);
       expect(fresh().stackSwitchImage).toBe(failedOn);
       expect((await w.deps.sites.detail(SLUG_MOVED)).stack).toBe(1);
@@ -3220,15 +3219,15 @@ echo json_encode([
 
     afterAll(async () => {
       if (KEEP) {
-        process.stderr.write(`Left running as well: docker rm -f -v ${MOVED} ${EDGE}; docker network rm ${NETWORK_MOVED}; docker rmi -f ${TAG_MOVED} ${BROKEN_IMAGE} ${ROLLBACK_TAG}; rm -rf ${movedRoot}\n`);
+        process.stderr.write(`Left running as well: docker rm -f -v ${MOVED} ${ASIDE} ${EDGE}; docker network rm ${NETWORK_MOVED}; docker rmi -f ${TAG_MOVED} ${BROKEN_IMAGE}; rm -rf ${movedRoot}\n`);
         return;
       }
       await w?.worker.stop();
-      await dockerCli('rm', '-f', '-v', MOVED, EDGE);
+      await dockerCli('rm', '-f', '-v', MOVED, ASIDE, EDGE);
       await dockerCli('network', 'disconnect', '-f', NETWORK_MOVED, DATABASE);
       await dockerCli('network', 'disconnect', '-f', NETWORK_MOVED, RELAY);
       await dockerCli('network', 'rm', NETWORK_MOVED);
-      await dockerCli('rmi', '-f', TAG_MOVED, BROKEN_IMAGE, ROLLBACK_TAG);
+      await dockerCli('rmi', '-f', TAG_MOVED, BROKEN_IMAGE);
       // Once a tag has moved off an image nothing else names it, and a build without BuildKit leaves
       // a nameless image for each of its steps. All of them have this label, and nothing else does.
       await dockerCli('image', 'prune', '-f', '--filter', `label=wpl7.engine.move=${process.pid}`);
@@ -3279,7 +3278,8 @@ echo json_encode([
       expect(log).toContain(`.htaccess:`);
       expect(log).toContain('php_value max_input_vars: moved to .user.ini');
       expect(log).toMatch(/\.htaccess files put back: \d+ lines?\./);
-      expect(log).toContain(`The temporary name ${ROLLBACK_TAG} is gone.`);
+      expect(log).toContain(`The old one waits, stopped, as ${ASIDE} until this is over.`);
+      expect(log).toContain('The old container is back.');
       expect(log).not.toContain('The site answers on the new setup');
     });
 
@@ -3326,9 +3326,9 @@ echo json_encode([
         const home = await viaEdge('/');
         expect(home.status).toBe(200);
         expect(home.cache).toBe('BYPASS');
-        // The temporary name went, and with it the image: nothing runs it now, and it had no other name.
-        expect(await movedDocker.imageId(ROLLBACK_TAG)).toBeNull();
-        expect(await namesOf(oldId)).toBeNull();
+        // The old container went. Its image has no name and nothing runs it: the nightly clean-up's.
+        expect(await movedDocker.containerState(ASIDE)).toBe('missing');
+        expect(await namesOf(oldId)).toEqual([]);
       });
 
       it('has every post and option it had', async () => {

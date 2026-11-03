@@ -8,7 +8,7 @@ import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
 import { sitePaths, siteImage } from '../../services/siteSpec.js';
 import { removeSiteNetwork } from '../../services/siteNetwork.js';
-import { loadSite, siteDomains, siteUrl, startSiteContainer, updateSiteRow, writeSiteJson } from './shared.js';
+import { loadSite, removeSiteContainers, siteDomains, siteUrl, startSiteContainer, updateSiteRow, writeSiteJson } from './shared.js';
 import { ensureSiteImage, wildcardCovers } from './sites.js';
 import { pipeBetweenServers, proxyConfigPathFor, proxyConfigYaml, rmOn } from './moveHelpers.js';
 import { extraDbFile } from '../../services/backup.js';
@@ -91,8 +91,8 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     // Leftovers from a previous failed attempt are provably garbage (slugs are unique).
     if ((await target.docker.containerState(site.containerName)) !== 'missing') {
       ctx.warn(`Removing leftover container ${site.containerName} on "${target.name}" (previous attempt)`);
-      await target.docker.removeContainer(site.containerName);
     }
+    await removeSiteContainers(target.docker, site.containerName);
     if (await target.files.exists(paths.root)) {
       ctx.warn(`Removing leftover files on "${target.name}" (previous attempt)`);
       await rmOn(target, s.config.paths.sites, site.slug);
@@ -424,7 +424,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     }
     stopKeepalive();
     try {
-      await source.docker.removeContainer(site.containerName);
+      await removeSiteContainers(source.docker, site.containerName);
       ctx.info('Source container removed.');
     } catch (err) {
       ctx.warn(`Could not remove the source container (${errMsg(err)}); finalize will retry.`);
@@ -545,7 +545,7 @@ export async function finalizeCleanup(ctx: JobContext<unknown>, s: CoreServices,
   }
   const source = s.servers.handleFor(cleanup.sourceServerId);
   ctx.info(`Removing the old copy of "${cleanup.siteSlug}" from "${source.name}"…`);
-  await source.docker.removeContainer(cleanup.containerName);
+  await removeSiteContainers(source.docker, cleanup.containerName);
   await source.dbAdmin.dropSiteDb(cleanup.dbName, cleanup.dbUser);
   for (const name of parseNames(cleanup.extraDbs)) {
     // Its name may since belong to a database of a site on the source server: then it is not ours.

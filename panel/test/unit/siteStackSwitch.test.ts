@@ -1,6 +1,6 @@
 /**
  * A site's container follows the image on its server (services/siteSpec.ts siteContainerSpec), and a
- * site moving from stack 1 to stack 2 goes back to its own old image when it doesn't come up there
+ * site moving from stack 1 to stack 2 gets its old container back when it doesn't come up there
  * (jobs/handlers/sites.ts). The real Docker's side of this: test/engine/siteSwitch.test.ts, and the last
  * part of test/engine/siteStack.test.ts.
  */
@@ -13,13 +13,14 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hostExec } from '../../src/lib/exec.js';
 import { jobLogs, jobs, sites, type SiteRow } from '../../src/db/schema.js';
+import { siteShouldRun } from '../../src/jobs/handlers/shared.js';
 import { GEOLOCATE_OFF_REASON } from '../../src/jobs/handlers/sites.js';
 import type { SiteContainerSpec } from '../../src/services/docker.js';
 import * as siteMigration from '../../src/services/siteMigration.js';
 import { sweepSiteImages } from '../../src/services/siteImages.js';
 import { siteContainerStack } from '../../src/services/siteCaches.js';
 import { RUNTIME_DIR_IN_CONTAINER, SITE_STACK_LABEL } from '../../src/services/siteStack.js';
-import { siteContainerSpec, siteImage, sitePaths, siteRollbackImage, siteRuntimeFrom } from '../../src/services/siteSpec.js';
+import { asideContainerName, siteContainerSpec, siteImage, sitePaths, siteRuntimeFrom } from '../../src/services/siteSpec.js';
 import { parseSiteCacheRules } from '../../shared/cacheRules.js';
 import { makeWorld, waitFor, type TestWorld } from '../helpers.js';
 import { HAS_PHP, useRealMigration } from '../realMigration.js';
@@ -74,13 +75,15 @@ async function createSite(w: TestWorld): Promise<SiteRow> {
 
 /**
  * A site that has run stack 1 until now, on a server whose update has just moved its tag: the image
- * it runs has no name any more, and the tag names a stack 2 image.
+ * it runs has no name any more, and the tag names a stack 2 image. With `deleted`, Docker has
+ * deleted the old image too, as a `docker build` does on the containerd store.
  */
-async function siteOnOldImage(w: TestWorld): Promise<SiteRow> {
+async function siteOnOldImage(w: TestWorld, opts: { deleted?: boolean } = {}): Promise<SiteRow> {
   w.docker.stackOf(TAG, 1);
   const site = await createSite(w);
   expect(await siteContainerStack(w.docker, site.containerName)).toBe(1);
-  w.docker.imageIds.set(TAG, NEW_ID);
+  if (opts.deleted) w.docker.rebuild(TAG, NEW_ID);
+  else w.docker.imageIds.set(TAG, NEW_ID);
   w.docker.calls.length = 0;
   return site;
 }
@@ -88,15 +91,19 @@ async function siteOnOldImage(w: TestWorld): Promise<SiteRow> {
 /** The order some calls were made in, by method. */
 const order = (w: TestWorld, methods: string[]) => w.docker.calls.map((c) => c.method).filter((m) => methods.includes(m));
 
-const SWITCH_CALLS = ['tagImage', 'removeContainer', 'createSiteContainer', 'startContainer', 'untagImage'];
+const SWITCH_CALLS = ['renameContainer', 'stopContainer', 'removeContainer', 'createSiteContainer', 'startContainer'];
 
-function expectBackOnOldImage(w: TestWorld, site: SiteRow, state: 'running' | 'created' = 'running') {
-  const spec = specs(w).at(-1)!;
-  expect(spec.image).toBe(OLD_ID);
-  expect(spec.labels).not.toHaveProperty(SITE_STACK_LABEL);
-  expect(spec.labels[portLabel(site.slug)]).toBe('80');
-  expect(spec.binds.some((b) => b.includes(RUNTIME_DIR_IN_CONTAINER))).toBe(false);
+const asideOf = (site: SiteRow) => asideContainerName(site.containerName);
+
+/** The site's own old container has its name back: not one made again, which its image may not allow. */
+function expectOldContainerBack(w: TestWorld, site: SiteRow, state: 'running' | 'exited' = 'running') {
+  expect(w.docker.imageByContainer.get(site.containerName)).toBe(OLD_ID);
+  const labels = w.docker.labelsByContainer.get(site.containerName)!;
+  expect(labels).not.toHaveProperty(SITE_STACK_LABEL);
+  expect(labels[portLabel(site.slug)]).toBe('80');
   expect(w.docker.containers.get(site.containerName)).toBe(state);
+  expect(w.docker.containers.has(asideOf(site))).toBe(false);
+  expect(w.docker.calls.filter((c) => c.method === 'renameContainer').at(-1)!.args).toEqual([asideOf(site), site.containerName]);
 }
 
 describe('the stack of a container follows its image', () => {
@@ -144,7 +151,6 @@ describe('the stack of a container follows its image', () => {
     expect(done.status, done.error ?? '').toBe('succeeded');
     expect(specs(w).at(-1)!.labels).not.toHaveProperty(SITE_STACK_LABEL);
     expect(migrate).not.toHaveBeenCalled();
-    expect(w.docker.calls.some((c) => c.method === 'tagImage')).toBe(false);
     expect(await siteContainerStack(w.docker, site.containerName)).toBe(1);
   });
 
@@ -223,6 +229,21 @@ describe('the stack of a container follows its image', () => {
     expect(specs(w).at(-1)!.labels).not.toHaveProperty(SITE_STACK_LABEL);
   });
 
+  it('builds a restore on the new image once Docker has deleted the old one', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await siteOnOldImage(w, { deleted: true });
+    vi.spyOn(w.docker, 'startContainer').mockRejectedValueOnce(new Error('no'));
+    expect((await runJob(w, w.deps.sites.reconcile(site.slug).id)).status).toBe('failed');
+    const backup = await w.core.backup.create(rowOf(w, site), 'manual', {});
+    const manifestPath = path.join(backup.path, 'manifest.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(manifestPath, 'utf8')), tablePrefix: 'other_' }));
+    const job = w.worker.enqueue('backup.restore', { backupId: backup.id, skipPreRestoreBackup: true }, { id: site.id, slug: site.slug, serverId: 1 });
+    const done = await runJob(w, job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(specs(w).some((spec) => spec.image === OLD_ID)).toBe(false);
+    expect(specs(w).at(-1)!.labels[SITE_STACK_LABEL]).toBe('2');
+  });
+
   it('follows the image a restore recreates a container on', async () => {
     const w = await makeWorld({ exec: hostExec });
     const site = await createSite(w);
@@ -260,7 +281,7 @@ describe('the stack of a container follows its image', () => {
 });
 
 describe('putting a container back', () => {
-  it('uses the image it ran, by id, after the tag has moved, and the stack it was', async () => {
+  it('puts the old container itself back after the tag has moved, with the stack it was', async () => {
     const w = await makeWorld();
     const site = await createSite(w);
     w.docker.imageIds.set(TAG, NEW_ID);
@@ -268,12 +289,29 @@ describe('putting a container back', () => {
     vi.spyOn(w.docker, 'createSiteContainer').mockRejectedValueOnce(new Error('Docker unavailable'));
     const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
     expect(done.status).toBe('failed');
-    const spec = specs(w).at(-1)!;
-    expect(spec.image).toBe(OLD_ID);
-    expect(spec.labels[SITE_STACK_LABEL]).toBe('2');
+    // The create that failed is the spy's: the fake never saw it.
+    expect(order(w, SWITCH_CALLS)).toEqual(['renameContainer', 'stopContainer', 'removeContainer', 'renameContainer', 'startContainer']);
+    expect(await w.docker.containerStack(site.containerName)).toEqual({ imageId: OLD_ID, stack: 2 });
     expect(w.docker.containers.get(site.containerName)).toBe('running');
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
     const list = await w.docker.listManaged(['wpl7.role=wordpress']);
     expect(list.find((c) => c.name === site.containerName)!.imageId).toBe(OLD_ID);
+    vi.restoreAllMocks();
+  });
+
+  it('puts it back when Docker has deleted its image, which nothing could be made from', async () => {
+    const w = await makeWorld();
+    const site = await createSite(w);
+    w.docker.rebuild(TAG, NEW_ID);
+    w.docker.calls.length = 0;
+    vi.spyOn(w.docker, 'startContainer').mockRejectedValueOnce(new Error('OCI runtime create failed'));
+    const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
+    expect(done.status).toBe('failed');
+    expect(done.error).toMatch(/OCI runtime create failed/);
+    expect(specs(w).map((spec) => spec.image)).toEqual([TAG]);
+    expect(w.docker.imageByContainer.get(site.containerName)).toBe(OLD_ID);
+    expect(w.docker.containers.get(site.containerName)).toBe('running');
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
     vi.restoreAllMocks();
   });
 
@@ -286,7 +324,7 @@ describe('putting a container back', () => {
     w.docker.calls.length = 0;
     vi.spyOn(w.docker, 'createSiteContainer').mockRejectedValueOnce(new Error('Docker unavailable'));
     expect((await runJob(w, w.deps.sites.reconcile(site.slug).id)).status).toBe('failed');
-    expectBackOnOldImage(w, site);
+    expectOldContainerBack(w, site);
     vi.restoreAllMocks();
   });
 
@@ -301,22 +339,26 @@ describe('putting a container back', () => {
     vi.restoreAllMocks();
   });
 
-  it('uses the old image by id when a change of PHP fails its check after the swap', async () => {
+  it('puts the old container back when a change of PHP fails its check after the swap', async () => {
     const w = await makeWorld();
     const site = await createSite(w);
-    // The tag has moved since the container was made.
-    w.docker.imageIds.set(TAG, NEW_ID);
+    // The tag has moved since the container was made, and its image is gone.
+    w.docker.rebuild(TAG, NEW_ID);
     w.docker.images.add(siteImage('8.4'));
     let starts = 0;
     w.docker.onStart = (name) => {
       if (name === site.containerName && ++starts === 1) w.docker.containers.set(name, 'exited');
     };
-    const done = await runJob(w, w.deps.sites.changePhp(site.slug, '8.4').id);
+    const job = w.deps.sites.changePhp(site.slug, '8.4');
+    const done = await runJob(w, job.id);
     expect(done.status).toBe('failed');
-    expect(done.error).toMatch(/smoke check/);
-    expect(specs(w).at(-1)!.image).toBe(OLD_ID);
+    expect(done.error).toBe('PHP 8.4 switch failed the smoke check');
+    expect(logOf(w, job.id).join('\n')).toContain('the site is not responding on PHP 8.4');
+    expect(specs(w).at(-1)!.image).toBe(siteImage('8.4'));
+    expect(w.docker.imageByContainer.get(site.containerName)).toBe(OLD_ID);
     expect(rowOf(w, site).phpVersion).toBe('8.3');
     expect(w.docker.containers.get(site.containerName)).toBe('running');
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
   });
 });
 
@@ -330,7 +372,7 @@ describe('moving to stack 2', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  /** The site's row and the temporary name after a move that failed. */
+  /** The site's row after a move that failed, and nothing left aside. */
   function expectFailedMove(w: TestWorld, site: SiteRow, done: { status: string; error: string | null }, reason: RegExp) {
     expect(done.status).toBe('failed');
     expect(done.error).toMatch(/^This site still runs the old PHP setup: /);
@@ -339,47 +381,68 @@ describe('moving to stack 2', () => {
     expect(row.stackSwitchError).toMatch(reason);
     expect(done.error).toContain(row.stackSwitchError!);
     expect(row.stackSwitchImage).toBe(NEW_ID);
-    expect(w.docker.images.has(siteRollbackImage(site.slug))).toBe(false);
-    expect(order(w, ['tagImage']).length).toBeLessThanOrEqual(1);
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
+    expect(order(w, ['tagImage'])).toEqual([]);
   }
 
-  it('moves a running site: old image kept, files moved, new container up, name gone', async () => {
+  it('moves a running site: files moved, old container aside, new container up, old one gone', async () => {
     const w = await makeWorld();
     const site = await siteOnOldImage(w);
     // What an earlier try left.
     w.db.update(sites).set({ stackSwitchError: 'it did not answer', stackSwitchImage: 'sha256:older' }).where(eq(sites.id, site.id)).run();
-    let tagAtMigration = false;
     migrate.mockImplementation(async () => {
-      tagAtMigration = w.docker.images.has(siteRollbackImage(site.slug));
       expect(w.docker.containers.get(site.containerName)).toBe('running');
+      expect(w.docker.containers.has(asideOf(site))).toBe(false);
     });
     const job = w.deps.sites.reconcile(site.slug);
     const done = await runJob(w, job.id);
     expect(done.status, done.error ?? '').toBe('succeeded');
 
     expect(migrate).toHaveBeenCalledTimes(1);
-    expect(tagAtMigration).toBe(true);
     expect(undo).not.toHaveBeenCalled();
-    expect(order(w, SWITCH_CALLS)).toEqual(['tagImage', 'removeContainer', 'createSiteContainer', 'startContainer', 'untagImage']);
-    expect(w.docker.calls.find((c) => c.method === 'tagImage')!.args).toEqual([OLD_ID, siteRollbackImage(site.slug)]);
+    expect(order(w, SWITCH_CALLS)).toEqual(['renameContainer', 'stopContainer', 'createSiteContainer', 'startContainer', 'removeContainer']);
+    const args = (method: string) => w.docker.calls.find((c) => c.method === method)!.args;
+    expect(args('renameContainer')).toEqual([site.containerName, asideOf(site)]);
+    expect(args('stopContainer')).toEqual([asideOf(site), 0]);
+    expect(args('removeContainer')).toEqual([asideOf(site)]);
     const spec = specs(w).at(-1)!;
     expect(spec.image).toBe(TAG);
     expect(spec.labels[SITE_STACK_LABEL]).toBe('2');
     expect(spec.labels[portLabel(site.slug)]).toBe('8080');
     expect(w.docker.containers.get(site.containerName)).toBe('running');
     expect(await siteContainerStack(w.docker, site.containerName)).toBe(2);
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
     expect(rowOf(w, site)).toMatchObject({ stackSwitchError: null, stackSwitchImage: null });
-    // Nothing runs the old image now, and it had no other name.
-    expect(w.docker.images.has(siteRollbackImage(site.slug))).toBe(false);
+    expect(order(w, ['tagImage'])).toEqual([]);
     expect(JSON.parse(done.result!).changed).toContain('moved to PHP-FPM');
     const log = logOf(w, job.id).join('\n');
     expect(log).toContain('mod_php');
-    expect(log).toContain('wpl7-rollback:');
+    expect(log).toContain(asideOf(site));
     expect(log).toContain('.htaccess');
     expect(log).toContain('answers on the new setup');
   });
 
-  it('runs once: the next recreate has nothing to move', async () => {
+  it('moves a site whose old image Docker has deleted: the way back is its container', async () => {
+    const w = await makeWorld();
+    const site = await siteOnOldImage(w, { deleted: true });
+    expect(await w.docker.imageExists(OLD_ID)).toBe(false);
+    const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(await siteContainerStack(w.docker, site.containerName)).toBe(2);
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
+  });
+
+  it('goes back to a container whose image Docker has deleted', async () => {
+    const w = await makeWorld();
+    const site = await siteOnOldImage(w, { deleted: true });
+    vi.spyOn(w.docker, 'startContainer').mockRejectedValueOnce(new Error('OCI runtime create failed'));
+    const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
+    expectFailedMove(w, site, done, /could not start: OCI runtime create failed/);
+    expectOldContainerBack(w, site);
+    expect(specs(w).map((spec) => spec.image)).toEqual([TAG]);
+  });
+
+  it('runs once: the next recreate has nothing to move, and keeps the old container aside all the same', async () => {
     const w = await makeWorld();
     const site = await siteOnOldImage(w);
     expect((await runJob(w, w.deps.sites.reconcile(site.slug).id)).status).toBe('succeeded');
@@ -387,7 +450,7 @@ describe('moving to stack 2', () => {
     migrate.mockClear();
     expect((await runJob(w, w.deps.sites.reconcile(site.slug).id)).status).toBe('succeeded');
     expect(migrate).not.toHaveBeenCalled();
-    expect(w.docker.calls.some((c) => c.method === 'tagImage')).toBe(false);
+    expect(order(w, SWITCH_CALLS)).toEqual(['renameContainer', 'stopContainer', 'createSiteContainer', 'startContainer', 'removeContainer']);
   });
 
   it('goes back when the new container cannot be created', async () => {
@@ -397,8 +460,8 @@ describe('moving to stack 2', () => {
     const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
     expectFailedMove(w, site, done, /could not be created: Docker unavailable/);
     expect(undo).toHaveBeenCalledTimes(1);
-    expectBackOnOldImage(w, site);
-    expect(order(w, SWITCH_CALLS).at(-1)).toBe('untagImage');
+    expectOldContainerBack(w, site);
+    expect(order(w, SWITCH_CALLS).slice(-3)).toEqual(['removeContainer', 'renameContainer', 'startContainer']);
   });
 
   it('goes back when the new container cannot start', async () => {
@@ -408,7 +471,7 @@ describe('moving to stack 2', () => {
     const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
     expectFailedMove(w, site, done, /could not start: OCI runtime create failed/);
     expect(undo).toHaveBeenCalledTimes(1);
-    expectBackOnOldImage(w, site);
+    expectOldContainerBack(w, site);
   });
 
   it('goes back when the site does not answer, and says what the check saw', async () => {
@@ -421,8 +484,8 @@ describe('moving to stack 2', () => {
     const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
     expectFailedMove(w, site, done, /check on the new setup failed: its container is exited/);
     expect(undo).toHaveBeenCalledTimes(1);
-    expectBackOnOldImage(w, site);
-    // Back up from its own image, and the tag has still moved on.
+    expectOldContainerBack(w, site);
+    // Back up on its own image, and the tag has still moved on.
     expect(await w.docker.imageId(TAG)).toBe(NEW_ID);
     expect((await w.docker.containerStack(site.containerName))!.imageId).toBe(OLD_ID);
   });
@@ -454,7 +517,7 @@ describe('moving to stack 2', () => {
       };
       const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
       expectFailedMove(w, site, done, /check on the new setup failed: it answered HTTP 500/);
-      expectBackOnOldImage(w, site);
+      expectOldContainerBack(w, site);
       expect(undo).toHaveBeenCalledTimes(1);
     });
 
@@ -493,15 +556,15 @@ describe('moving to stack 2', () => {
   it('undoes the migration before the new container goes, and after that puts the old one back', async () => {
     const w = await makeWorld();
     const site = await siteOnOldImage(w);
-    let removedAtUndo: number | null = null;
+    let atUndo: string[] = [];
     undo.mockImplementation(async () => {
-      removedAtUndo = order(w, ['removeContainer']).length;
+      atUndo = order(w, ['removeContainer', 'renameContainer']);
     });
     vi.spyOn(w.docker, 'startContainer').mockRejectedValueOnce(new Error('no'));
     await runJob(w, w.deps.sites.reconcile(site.slug).id);
-    // One remove of the old container so far; the one of the new container comes after the undo.
-    expect(removedAtUndo).toBe(1);
-    expect(order(w, ['removeContainer'])).toHaveLength(2);
+    // The old container is aside so far; the new one goes, and the old one comes back, after the undo.
+    expect(atUndo).toEqual(['renameContainer']);
+    expect(order(w, ['removeContainer', 'renameContainer'])).toEqual(['renameContainer', 'removeContainer', 'renameContainer']);
   });
 
   it('leaves the old container alone when the migration fails: nothing has been taken down', async () => {
@@ -511,36 +574,116 @@ describe('moving to stack 2', () => {
     const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
     expectFailedMove(w, site, done, /\.htaccess files could not be moved: cannot write/);
     expect(undo).toHaveBeenCalledTimes(1);
-    expect(order(w, ['removeContainer', 'createSiteContainer'])).toEqual([]);
+    expect(order(w, SWITCH_CALLS)).toEqual([]);
     expect(w.docker.containers.get(site.containerName)).toBe('running');
   });
 
-  it('stops before the migration when the old image can’t be kept', async () => {
+  it('starts the old container again when it could not be renamed: it never left', async () => {
     const w = await makeWorld();
     const site = await siteOnOldImage(w);
-    vi.spyOn(w.docker, 'tagImage').mockRejectedValueOnce(Object.assign(new Error('No such image'), { statusCode: 404 }));
+    vi.spyOn(w.docker, 'renameContainer').mockRejectedValueOnce(new Error('daemon busy'));
     const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
-    expectFailedMove(w, site, done, /could not be kept for going back: No such image/);
-    expect(migrate).not.toHaveBeenCalled();
-    expect(undo).not.toHaveBeenCalled();
-    expect(order(w, ['removeContainer', 'createSiteContainer', 'untagImage'])).toEqual([]);
+    expectFailedMove(w, site, done, /old container could not be renamed: daemon busy/);
+    expect(order(w, ['removeContainer', 'createSiteContainer'])).toEqual([]);
+    expect(w.docker.imageByContainer.get(site.containerName)).toBe(OLD_ID);
     expect(w.docker.containers.get(site.containerName)).toBe('running');
   });
 
-  it('says so when the old container could not be put back either, and keeps its image by name', async () => {
+  it('says so when the old container could not be put back either, keeps it aside, and Recreate puts it back first', async () => {
     const w = await makeWorld();
     const site = await siteOnOldImage(w);
-    const create = vi.spyOn(w.docker, 'createSiteContainer');
-    create.mockRejectedValueOnce(new Error('disk full'));
-    create.mockRejectedValueOnce(new Error('disk still full'));
+    const rename = w.docker.renameContainer.bind(w.docker);
+    vi.spyOn(w.docker, 'createSiteContainer').mockRejectedValueOnce(new Error('disk full'));
+    vi.spyOn(w.docker, 'renameContainer').mockImplementationOnce(rename).mockRejectedValueOnce(new Error('disk still full'));
     const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
     expect(done.status).toBe('failed');
     expect(done.error).not.toContain('still runs');
-    expect(done.error).toMatch(/could not be created: disk full.*could not be put back: disk still full.*Recreate container/);
+    expect(done.error).toMatch(/could not be created: disk full.*could not be put back: disk still full/);
+    expect(done.error).toContain(`kept, stopped, as ${asideOf(site)}`);
+    expect(done.error).toContain('Recreate container');
     expect(rowOf(w, site).stackSwitchError).toMatch(/disk full.*disk still full/);
     expect(w.docker.containers.has(site.containerName)).toBe(false);
-    expect(w.docker.images.has(siteRollbackImage(site.slug))).toBe(true);
-    expect(order(w, ['untagImage'])).toEqual([]);
+    expect(w.docker.containers.get(asideOf(site))).toBe('exited');
+    vi.restoreAllMocks();
+    migrate = vi.spyOn(siteMigration, 'migrateSiteForStack2').mockResolvedValue(undefined);
+
+    w.docker.calls.length = 0;
+    const job = w.deps.sites.reconcile(site.slug);
+    const again = await runJob(w, job.id);
+    expect(again.status, again.error ?? '').toBe('succeeded');
+    expect(w.docker.calls.find((c) => c.method === 'renameContainer')!.args).toEqual([asideOf(site), site.containerName]);
+    expect(logOf(w, job.id).join('\n')).toContain(`${asideOf(site)} is the container from before a change that did not finish`);
+    expect(await siteContainerStack(w.docker, site.containerName)).toBe(2);
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
+  });
+
+  it('starts a container a change left aside before it tries again, so the check knows the site worked', async () => {
+    const w = await makeWorld();
+    const site = await siteOnOldImage(w);
+    // A panel that stopped right after it set the running site's container aside.
+    await w.docker.renameContainer(site.containerName, asideOf(site));
+    await w.docker.stopContainer(asideOf(site), 0);
+    // The new setup's container exits as soon as it starts.
+    w.docker.onStart = (name) => {
+      if (name === site.containerName && w.docker.labelsByContainer.get(name)?.[SITE_STACK_LABEL] === '2') w.docker.containers.set(name, 'exited');
+    };
+    const job = w.deps.sites.reconcile(site.slug);
+    const done = await runJob(w, job.id);
+    expectFailedMove(w, site, done, /check on the new setup failed: its container is exited/);
+    expectOldContainerBack(w, site);
+    expect(logOf(w, job.id).join('\n')).toContain(`${asideOf(site)} is the container from before a change that did not finish`);
+  });
+
+  /**
+   * What a panel that stopped after starting a move's new container leaves, when that container
+   * then exited: the old one aside and stopped, the new one under the site's name, exited.
+   */
+  async function failedReplacementLeft(w: TestWorld, site: SiteRow): Promise<void> {
+    await w.docker.renameContainer(site.containerName, asideOf(site));
+    await w.docker.stopContainer(asideOf(site), 0);
+    const handle = w.servers.handleFor(1);
+    await w.docker.createSiteContainer(await siteContainerSpec(w.core, handle, site, JSON.parse(site.domains) as string[], siteRuntimeFrom(w.core.settings, site)));
+    w.docker.containers.set(site.containerName, 'exited');
+    w.docker.calls.length = 0;
+  }
+
+  it('does not take a failed replacement that exited for a site stopped on purpose: the old one comes back, running', async () => {
+    const w = await makeWorld();
+    const site = await siteOnOldImage(w);
+    await failedReplacementLeft(w, site);
+    expect(await siteShouldRun(w.docker, rowOf(w, site))).toBe(true);
+    // And the new setup fails again.
+    w.docker.onStart = (name) => {
+      if (name === site.containerName && w.docker.labelsByContainer.get(name)?.[SITE_STACK_LABEL] === '2') w.docker.containers.set(name, 'exited');
+    };
+    const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
+    expectFailedMove(w, site, done, /check on the new setup failed: its container is exited/);
+    expectOldContainerBack(w, site);
+  });
+
+  it('finishes the move a failed replacement left, with the site running', async () => {
+    const w = await makeWorld();
+    const site = await siteOnOldImage(w);
+    await failedReplacementLeft(w, site);
+    const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(await siteContainerStack(w.docker, site.containerName)).toBe(2);
+    expect(w.docker.containers.get(site.containerName)).toBe('running');
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
+  });
+
+  it('goes on without a container left aside that does not start', async () => {
+    const w = await makeWorld();
+    const site = await siteOnOldImage(w);
+    await w.docker.renameContainer(site.containerName, asideOf(site));
+    await w.docker.stopContainer(asideOf(site), 0);
+    vi.spyOn(w.docker, 'startContainer').mockRejectedValueOnce(new Error('OCI runtime create failed'));
+    const job = w.deps.sites.reconcile(site.slug);
+    const done = await runJob(w, job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(await siteContainerStack(w.docker, site.containerName)).toBe(2);
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
+    expect(logOf(w, job.id).join('\n')).toContain('It did not start (OCI runtime create failed), so the change goes on without it.');
   });
 
   it('migrates a stopped site, without starting or checking it', async () => {
@@ -551,15 +694,15 @@ describe('moving to stack 2', () => {
     const done = await runJob(w, job.id);
     expect(done.status, done.error ?? '').toBe('succeeded');
     expect(migrate).toHaveBeenCalledTimes(1);
-    expect(order(w, SWITCH_CALLS)).toEqual(['tagImage', 'removeContainer', 'createSiteContainer', 'untagImage']);
+    expect(order(w, SWITCH_CALLS)).toEqual(['renameContainer', 'stopContainer', 'createSiteContainer', 'removeContainer']);
     expect(w.docker.containers.get(site.containerName)).toBe('created');
     expect(specs(w).at(-1)!.labels[SITE_STACK_LABEL]).toBe('2');
     expect(rowOf(w, site)).toMatchObject({ stackSwitchError: null, stackSwitchImage: null });
-    expect(w.docker.images.has(siteRollbackImage(site.slug))).toBe(false);
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
     expect(logOf(w, job.id).join('\n')).toContain('stays stopped');
   });
 
-  it('puts a stopped site back stopped, its image still named while nothing runs it', async () => {
+  it('puts a stopped site back stopped', async () => {
     const w = await makeWorld();
     const site = await siteOnOldImage(w);
     w.docker.containers.set(site.containerName, 'exited');
@@ -569,20 +712,11 @@ describe('moving to stack 2', () => {
     expect(done.status).toBe('failed');
     expect(done.error).toMatch(/still runs the old PHP setup/);
     expect(order(w, ['startContainer'])).toEqual([]);
-    expectBackOnOldImage(w, site, 'created');
+    expectOldContainerBack(w, site, 'exited');
     expect(undo).toHaveBeenCalledTimes(1);
-    // Docker's classic image store deletes a stopped container's image if this name is forced off.
-    expect(w.docker.images.has(siteRollbackImage(site.slug))).toBe(true);
-    expect(await w.docker.imageId(siteRollbackImage(site.slug))).toBe(OLD_ID);
-    expect(logOf(w, job.id).join('\n')).toContain('while only a stopped container uses it');
-    // Once it runs, the name can go, and the image stays with the container.
-    w.docker.containers.set(site.containerName, 'running');
-    expect(await w.docker.untagImage(siteRollbackImage(site.slug))).toBe(true);
-    expect(w.docker.images.has(siteRollbackImage(site.slug))).toBe(false);
-    expect((await w.docker.containerStack(site.containerName))!.imageId).toBe(OLD_ID);
   });
 
-  it('takes the name off when the old image still has its own tag', async () => {
+  it('goes back to its old container through a change of PHP, and the old tag stays', async () => {
     const w = await makeWorld();
     w.docker.stackOf(TAG, 1);
     const site = await createSite(w);
@@ -593,9 +727,8 @@ describe('moving to stack 2', () => {
     const done = await runJob(w, w.deps.sites.changePhp(site.slug, '8.4').id);
     expect(done.status).toBe('failed');
     expect(done.error).toMatch(/still runs the old PHP setup/);
-    expect(specs(w).at(-1)!.image).toBe(OLD_ID);
-    expect(specs(w).at(-1)!.labels['wpl7.php']).toBe('8.3');
-    expect(w.docker.images.has(siteRollbackImage(site.slug))).toBe(false);
+    expectOldContainerBack(w, site);
+    expect(w.docker.labelsByContainer.get(site.containerName)!['wpl7.php']).toBe('8.3');
     expect(w.docker.images.has(TAG)).toBe(true);
     expect(rowOf(w, site)).toMatchObject({ phpVersion: '8.3', stackSwitchImage: `sha256:${other}` });
   });
@@ -605,12 +738,12 @@ describe('moving to stack 2', () => {
     w.docker.stackOf(TAG, 1);
     const site = await createSite(w);
     w.docker.images.add(siteImage('8.4'));
-    // The old image may be gone by the time the move is over, so a second check, with a rollback
-    // behind it, would have nothing to go back to.
-    const untag = w.docker.untagImage.bind(w.docker);
-    vi.spyOn(w.docker, 'untagImage').mockImplementation(async (tag) => {
-      vi.spyOn(w.docker, 'containerState').mockResolvedValue('exited');
-      return untag(tag);
+    // The move has asked the site already, and its old container is gone once the move is over:
+    // a second check would have nothing to go back to.
+    const remove = w.docker.removeContainer.bind(w.docker);
+    vi.spyOn(w.docker, 'removeContainer').mockImplementation(async (name) => {
+      if (name === asideOf(site)) vi.spyOn(w.docker, 'containerState').mockResolvedValue('exited');
+      return remove(name);
     });
     const done = await runJob(w, w.deps.sites.changePhp(site.slug, '8.4').id);
     expect(done.status, done.error ?? '').toBe('succeeded');
@@ -629,7 +762,7 @@ describe('moving to stack 2', () => {
     expect(done.error).toMatch(/still runs the old PHP setup/);
     expect(rowOf(w, site).domains).toBe(before);
     expect(rowOf(w, site).isLive).toBe(0);
-    expectBackOnOldImage(w, site);
+    expectOldContainerBack(w, site);
   });
 
   it('does not send back a site that was not answering before', async () => {
@@ -662,6 +795,23 @@ describe('moving to stack 2', () => {
     // Still something to fix: the error stays, and so does what it failed on.
     expect(rowOf(w, site).stackSwitchImage).toBe(NEW_ID);
     expect((await w.deps.sites.detail(site.slug)).stackSwitchError).toMatch(/could not start: no/);
+  });
+
+  it('tries the move again through a change of domains once Docker has deleted its old image', async () => {
+    const w = await makeWorld();
+    const site = await siteOnOldImage(w, { deleted: true });
+    vi.spyOn(w.docker, 'startContainer').mockRejectedValueOnce(new Error('no'));
+    expect((await runJob(w, w.deps.sites.reconcile(site.slug).id)).status).toBe('failed');
+    expectOldContainerBack(w, site);
+
+    const job = w.deps.sites.updateDomains(site.slug, ['customer.example.test'], true, true);
+    const done = await runJob(w, job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    // Nothing was made from the image Docker no longer has, which would have left the site with no container.
+    expect(specs(w).some((spec) => spec.image === OLD_ID)).toBe(false);
+    expect(await siteContainerStack(w.docker, site.containerName)).toBe(2);
+    expect(logOf(w, job.id).join('\n')).not.toContain('stays on the old PHP setup');
+    expect(rowOf(w, site)).toMatchObject({ stackSwitchError: null, stackSwitchImage: null });
   });
 
   it('does not claim a change of PHP on its old image: a failed one tries the move again', async () => {
@@ -704,8 +854,8 @@ describe('moving to stack 2', () => {
       const done = await runJob(w, job.id);
       expect(done.status, done.error ?? '').toBe('succeeded');
       expect(specs(w).at(-1)!.labels[SITE_STACK_LABEL]).toBe('2');
-      // Nothing to go back to: it never worked.
-      expect(w.docker.calls.some((c) => c.method === 'tagImage')).toBe(false);
+      // Nothing to go back to: it never worked, so it is not kept aside.
+      expect(w.docker.calls.some((c) => c.method === 'renameContainer')).toBe(false);
       expect(await sweepSiteImages(w.core, w.worker)).toEqual({ queued: [], busy: [] });
     });
 
@@ -720,6 +870,31 @@ describe('moving to stack 2', () => {
 
       w.docker.containers.set(site.containerName, 'created');
       expect(await sweepSiteImages(w.core, w.worker)).toEqual({ queued: [site.slug], busy: [] });
+    });
+
+    it('brings back a container a change left aside, which the reconcile puts back first', async () => {
+      const w = await makeWorld();
+      const site = await createSite(w);
+      // What a panel that stopped half-way through a change leaves: the old container aside, none in its place.
+      await w.docker.renameContainer(site.containerName, asideOf(site));
+      await w.docker.stopContainer(asideOf(site), 0);
+      expect(await sweepSiteImages(w.core, w.worker)).toEqual({ queued: [site.slug], busy: [] });
+      const job = w.db.select().from(jobs).where(eq(jobs.type, 'site.reconcile')).all().at(-1)!;
+      w.docker.calls.length = 0;
+      expect((await runJob(w, job.id)).status).toBe('succeeded');
+      expect(w.docker.calls.find((c) => c.method === 'renameContainer')!.args).toEqual([asideOf(site), site.containerName]);
+      expect(w.docker.containers.get(site.containerName)).toBe('running');
+      expect(w.docker.containers.has(asideOf(site))).toBe(false);
+      expect(await sweepSiteImages(w.core, w.worker)).toEqual({ queued: [], busy: [] });
+    });
+
+    it('leaves a container aside alone while its site has a job, which may be the change itself', async () => {
+      const w = await makeWorld();
+      const site = await createSite(w);
+      w.worker.enqueue('site.restart', { siteId: site.id }, { id: site.id, slug: site.slug, serverId: 1 });
+      await w.docker.renameContainer(site.containerName, asideOf(site));
+      expect(await sweepSiteImages(w.core, w.worker)).toEqual({ queued: [], busy: [site.slug] });
+      expect(w.db.select().from(jobs).where(eq(jobs.type, 'site.reconcile')).all()).toHaveLength(0);
     });
 
     it('leaves a stopped site without a container alone', async () => {
@@ -829,6 +1004,30 @@ describe('moving to stack 2', () => {
   });
 });
 
+describe('a container left aside', () => {
+  it('means the registry says whether the site should run, not the container under its name', async () => {
+    const w = await makeWorld();
+    const site = await createSite(w);
+    w.docker.containers.set(site.containerName, 'exited');
+    expect(await siteShouldRun(w.docker, site)).toBe(false);
+    w.docker.containers.set(asideOf(site), 'exited');
+    expect(await siteShouldRun(w.docker, site)).toBe(true);
+    expect(await siteShouldRun(w.docker, { ...site, status: 'stopped' })).toBe(false);
+  });
+
+  it('goes with its site when the site is deleted, so a slug used again cannot get it back', async () => {
+    const w = await makeWorld();
+    const site = await createSite(w);
+    // What a change that never finished leaves next to the site's own container.
+    await w.docker.createSiteContainer({ ...specs(w).at(-1)!, name: asideOf(site) });
+    await w.docker.stopContainer(asideOf(site), 0);
+    const done = await runJob(w, w.deps.sites.delete(site.slug, false).id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(w.docker.containers.has(site.containerName)).toBe(false);
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
+  });
+});
+
 describe('the migration, as the move runs it', () => {
   const runs = (w: TestWorld) =>
     w.docker.calls
@@ -843,7 +1042,7 @@ describe('the migration, as the move runs it', () => {
     expect((await runJob(w, w.deps.sites.reconcile(site.slug).id)).status).toBe('succeeded');
     expect(runs(w).map((run) => [run.image, run.labels['wpl7.migration']])).toEqual([[TAG, 'migrate']]);
     const methods = w.docker.calls.map((c) => c.method);
-    expect(methods.indexOf('runEphemeral')).toBeLessThan(methods.indexOf('removeContainer'));
+    expect(methods.indexOf('runEphemeral')).toBeLessThan(methods.indexOf('renameContainer'));
     expect(w.docker.execQueue).toHaveLength(1);
   });
 
@@ -879,7 +1078,7 @@ describe('the migration, as the move runs it', () => {
     expect(done.status).toBe('failed');
     expect(done.error).toMatch(/still runs the old PHP setup: the PHP settings in its \.htaccess files could not be moved: its script failed \(exit 137\): out of memory/);
     expect(runs(w).map((run) => run.labels['wpl7.migration'])).toEqual(['migrate', 'undo']);
-    expect(order(w, ['removeContainer', 'createSiteContainer'])).toEqual([]);
+    expect(order(w, SWITCH_CALLS)).toEqual([]);
     expect(w.docker.containers.get(site.containerName)).toBe('running');
   });
 
@@ -932,10 +1131,10 @@ describe.skipIf(!HAS_PHP)('the real script in the job that moves a site', () => 
     const w = await makeWorld();
     const { site, read } = await siteWithLines(w);
     let atRemove = '';
-    const remove = w.docker.removeContainer.bind(w.docker);
-    vi.spyOn(w.docker, 'removeContainer').mockImplementation(async (name) => {
+    const rename = w.docker.renameContainer.bind(w.docker);
+    vi.spyOn(w.docker, 'renameContainer').mockImplementation(async (name, to) => {
       atRemove ||= read('.htaccess');
-      return remove(name);
+      return rename(name, to);
     });
     const job = w.deps.sites.reconcile(site.slug);
     const done = await runJob(w, job.id);
@@ -983,7 +1182,7 @@ describe.skipIf(!HAS_PHP)('the real script in the job that moves a site', () => 
     const done = await runJob(w, job.id);
     vi.restoreAllMocks();
     expect(done.status).toBe('failed');
-    expectBackOnOldImage(w, site);
+    expectOldContainerBack(w, site);
 
     expect(read('.htaccess')).toBe(HTACCESS);
     expect(read('firewall/.htaccess')).toBe(WRAPPED);

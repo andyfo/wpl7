@@ -140,13 +140,14 @@ A WooCommerce store on plain Geolocate stays **Off**, and its **Caching** card s
 ### If a site cannot move
 
 The job checks the site before and after the move. A site that answered before, and does not answer
-on the new setup, goes back to its old container, on its old image. Its `.htaccess` lines go back
-too. The **Recreate site container** job fails, and the site's **Overview** tab says
+on the new setup, gets its old container back. Its `.htaccess` lines go back too. The
+**Recreate site container** job fails, and the site's **Overview** tab says
 **This site still runs the old PHP setup**, with the reason and **Retry**.
 
 The site then works as it did, without either cache. It stays on its old image through anything else
-that recreates its container. It tries again when its server has a newer image, or when you choose
-**Retry** or **Recreate container**.
+that recreates its container, while Docker still has that image. A rebuild of the site images can
+delete it, and then the site tries the move again instead. It also tries again when its server has a
+newer image, or when you choose **Retry** or **Recreate container**.
 
 A site that did not answer before the move stays on the new setup, and the job warns. A stopped site
 moves and stays stopped, without a check.
