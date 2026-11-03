@@ -13,6 +13,7 @@ import { eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { hostExec } from '../../src/lib/exec.js';
 import { jobLogs, jobs, sites, type SiteRow } from '../../src/db/schema.js';
+import { siteShouldRun } from '../../src/jobs/handlers/shared.js';
 import { GEOLOCATE_OFF_REASON } from '../../src/jobs/handlers/sites.js';
 import type { SiteContainerSpec } from '../../src/services/docker.js';
 import * as siteMigration from '../../src/services/siteMigration.js';
@@ -633,6 +634,44 @@ describe('moving to stack 2', () => {
     expect(logOf(w, job.id).join('\n')).toContain(`${asideOf(site)} is the container from before a change that did not finish`);
   });
 
+  /**
+   * What a panel that stopped after starting a move's new container leaves, when that container
+   * then exited: the old one aside and stopped, the new one under the site's name, exited.
+   */
+  async function failedReplacementLeft(w: TestWorld, site: SiteRow): Promise<void> {
+    await w.docker.renameContainer(site.containerName, asideOf(site));
+    await w.docker.stopContainer(asideOf(site), 0);
+    const handle = w.servers.handleFor(1);
+    await w.docker.createSiteContainer(await siteContainerSpec(w.core, handle, site, JSON.parse(site.domains) as string[], siteRuntimeFrom(w.core.settings, site)));
+    w.docker.containers.set(site.containerName, 'exited');
+    w.docker.calls.length = 0;
+  }
+
+  it('does not take a failed replacement that exited for a site stopped on purpose: the old one comes back, running', async () => {
+    const w = await makeWorld();
+    const site = await siteOnOldImage(w);
+    await failedReplacementLeft(w, site);
+    expect(await siteShouldRun(w.docker, rowOf(w, site))).toBe(true);
+    // And the new setup fails again.
+    w.docker.onStart = (name) => {
+      if (name === site.containerName && w.docker.labelsByContainer.get(name)?.[SITE_STACK_LABEL] === '2') w.docker.containers.set(name, 'exited');
+    };
+    const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
+    expectFailedMove(w, site, done, /check on the new setup failed: its container is exited/);
+    expectOldContainerBack(w, site);
+  });
+
+  it('finishes the move a failed replacement left, with the site running', async () => {
+    const w = await makeWorld();
+    const site = await siteOnOldImage(w);
+    await failedReplacementLeft(w, site);
+    const done = await runJob(w, w.deps.sites.reconcile(site.slug).id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(await siteContainerStack(w.docker, site.containerName)).toBe(2);
+    expect(w.docker.containers.get(site.containerName)).toBe('running');
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
+  });
+
   it('goes on without a container left aside that does not start', async () => {
     const w = await makeWorld();
     const site = await siteOnOldImage(w);
@@ -966,6 +1005,16 @@ describe('moving to stack 2', () => {
 });
 
 describe('a container left aside', () => {
+  it('means the registry says whether the site should run, not the container under its name', async () => {
+    const w = await makeWorld();
+    const site = await createSite(w);
+    w.docker.containers.set(site.containerName, 'exited');
+    expect(await siteShouldRun(w.docker, site)).toBe(false);
+    w.docker.containers.set(asideOf(site), 'exited');
+    expect(await siteShouldRun(w.docker, site)).toBe(true);
+    expect(await siteShouldRun(w.docker, { ...site, status: 'stopped' })).toBe(false);
+  });
+
   it('goes with its site when the site is deleted, so a slug used again cannot get it back', async () => {
     const w = await makeWorld();
     const site = await createSite(w);

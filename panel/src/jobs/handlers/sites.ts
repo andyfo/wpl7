@@ -40,8 +40,8 @@ import {
   restartSiteContainer,
   rewriteWordPressUrls,
   runLicenseHook,
-  shouldSiteRun,
   siteDomains,
+  siteShouldRun,
   siteUrl,
   startSiteContainer,
   syncRelayAuth,
@@ -961,7 +961,7 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
   if (state === 'missing') ctx.warn('Site container is missing; it will be recreated.');
   // A container the panel lists as running comes back running unless it was stopped on
   // purpose (see shouldSiteRun).
-  const shouldRun = shouldSiteRun(state, site);
+  const shouldRun = await siteShouldRun(server.docker, site, state);
 
   await ensureSiteImage(ctx, server, s.config, newVersion);
   ctx.checkCanceled();
@@ -1049,8 +1049,7 @@ export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcile
   ctx.info('Registering the site with the mail relay…');
   await syncRelayAuth(ctx, s, site.slug);
 
-  const state = await server.docker.containerState(site.containerName);
-  const shouldRun = shouldSiteRun(state, site);
+  const shouldRun = await siteShouldRun(server.docker, site);
   ctx.info('Recreating the container with the current isolation policy…');
   const replaced = await replaceContainer(
     ctx,
@@ -1147,7 +1146,7 @@ export async function siteUpdateDomains(
   await dnsPreflight(s.config, server.row, newList, ctx);
   ctx.checkCanceled();
 
-  const wasRunning = shouldSiteRun(await server.docker.containerState(site.containerName), site);
+  const wasRunning = await siteShouldRun(server.docker, site);
 
   // Phase 1: serve old + new hosts together (old primary stays canonical while certs issue).
   const transition = [oldPrimary, ...new Set([...oldDomains.slice(1), ...newList.filter((d) => d !== oldPrimary)])];

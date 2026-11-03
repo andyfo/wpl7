@@ -11,7 +11,7 @@ import type { DbTarget } from '../../services/dbBrowser.js';
 import type { CoreServices } from '../../services/index.js';
 import { sitePaths, siteRuntimeFrom } from '../../services/siteSpec.js';
 import type { JobContext } from '../context.js';
-import { loadSite, probeSite, shouldSiteRun, siteDomains, startSiteContainer, updateSiteRow } from './shared.js';
+import { loadSite, probeSite, siteDomains, siteShouldRun, startSiteContainer, updateSiteRow } from './shared.js';
 import { replaceContainer } from './sites.js';
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -102,7 +102,7 @@ export async function databasePassword(ctx: JobContext<z.infer<typeof databasePa
   const oldPassword = site.dbPassword;
   const newPassword = generateSecret(24);
   const state = await server.docker.containerState(site.containerName);
-  const run = shouldSiteRun(state, site);
+  const run = await siteShouldRun(server.docker, site, state);
   const domains = siteDomains(site);
   const withPassword = (dbPassword: string) => ({ site: { ...site, dbPassword }, domains });
   const answers = async (timeoutMs: number): Promise<boolean> =>
