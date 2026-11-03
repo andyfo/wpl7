@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { siteStats, sites } from '../../src/db/schema.js';
 import { siteImage, sitePaths } from '../../src/services/siteSpec.js';
+import { SITE_STACK_LABEL } from '../../src/services/siteStack.js';
 import type { TestWorld } from '../../test/helpers.js';
 import { DAY, MINUTE, ago } from './clock.js';
 import { ADMIN_EMAIL, PHP_RELEASES, SERVERS, SITES, devHostname, rng, seedOf, siteDomains, type DemoSite } from './data.js';
@@ -63,6 +64,8 @@ export function seedSites(world: TestWorld): void {
 
     const docker = site.server === 1 ? world.docker : world.remote(site.server).docker;
     docker.containers.set(`wp-${site.slug}`, site.state === 'stopped' ? 'exited' : 'running');
+    docker.labelsByContainer.set(`wp-${site.slug}`, { [SITE_STACK_LABEL]: '2' });
+    docker.imageByContainer.set(`wp-${site.slug}`, `sha256:${site.slug}`);
     // The site's folder, which the Files tab and the backup views look at.
     fs.mkdirSync(onDisk(sitePaths(world.config, site.slug).wordpress), { recursive: true });
   }

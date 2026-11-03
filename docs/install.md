@@ -7,10 +7,11 @@ to pull.
 
 - A fresh **Ubuntu 26.04** server, **x86-64** (the images are not built for ARM, and the
   installer stops on an ARM server), with root access. WPL7 takes the whole machine: it
-  installs Docker, enables a firewall (UFW for SSH, 80 and 443, and an nftables table for
-  blocked addresses) and binds ports 80 and 443.
+  installs Docker, enables a firewall (UFW for SSH, 80, 443 and 443/udp, and an nftables table for
+  blocked addresses) and binds ports 80 and 443, and UDP 443 for HTTP/3.
 - **Ports 80 and 443 open to the internet**, including in your provider's own firewall if it
-  has one. Let's Encrypt validates over port 80.
+  has one. Let's Encrypt validates over port 80. **UDP 443** open there too, for HTTP/3: without it
+  browsers stay on HTTP/2, and nothing else changes.
 - **2 GB of RAM** to start; a 2 GB swap file is added below 4 GB. Add memory as you add sites.
 - **A domain** whose DNS you can edit.
 - Outbound access to GitHub and `ghcr.io` (the release and its images), Docker Hub (Traefik,

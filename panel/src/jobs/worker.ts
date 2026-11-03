@@ -1,4 +1,4 @@
-// @docs automations/jobs, get-started/how-it-works, help/troubleshooting
+// @docs automations/jobs, get-started/how-it-works, help/troubleshooting, sites/caching
 import { EventEmitter } from 'node:events';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
@@ -11,6 +11,9 @@ import { readSitePhp } from '../services/phpReleases.js';
 import { currentActor, withoutActor } from './actor.js';
 import { JobContext } from './context.js';
 import { SECRET_PAYLOAD_KEYS, SITE_INTERRUPTING_JOBS, getRegistry, jobDeadline } from './registry.js';
+import { clearAfterChange, wpCliOnlyReads } from '../services/siteCaches.js';
+import { migrateArrivedFiles } from '../services/siteMigration.js';
+import { isExternal } from '../lib/siteKind.js';
 import { summarizeJob } from './summaries.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -49,6 +52,50 @@ const DATABASE_CHANGING_JOBS: ReadonlySet<JobType> = new Set<JobType>([
   'backup.restore',
 ]);
 
+/**
+ * Jobs that can change what a site's visitors see, so its caches are emptied when they end. Whether
+ * they failed or not: one that failed half-way may have changed plenty. Commands are in the list
+ * because they can do anything: changedSiteContent lets the ones through that only read.
+ */
+const SITE_CONTENT_JOBS: ReadonlySet<JobType> = new Set<JobType>([
+  'backup.restore',
+  'site.importFinish',
+  'site.importRefresh',
+  'site.updateDomains',
+  'site.move',
+  'database.import',
+  'database.alter',
+  'wp.coreUpdate',
+  'wp.pluginTask',
+  'wp.themeTask',
+  'wp.bulkTask',
+  'wp.recipes',
+  'wp.reinstall',
+  'wp.cli',
+  'site.shell',
+  'wp.rest',
+  'files.extract',
+  'site.malwareScan',
+]);
+
+/**
+ * Jobs that put a package's own files back: an update or a reinstall can bring a bare php_flag in a
+ * plugin's .htaccess, which is a 500 for that folder until it is moved.
+ */
+const PACKAGE_JOBS: ReadonlySet<JobType> = new Set<JobType>(['wp.coreUpdate', 'wp.pluginTask', 'wp.themeTask', 'wp.bulkTask', 'wp.reinstall']);
+
+/** Whether this job, as it went, changed anything of its site's. */
+function changedSiteContent(type: JobType, payload: Record<string, unknown>, result: unknown): boolean {
+  if (!SITE_CONTENT_JOBS.has(type)) return false;
+  const outcome = (result ?? {}) as { nothingToDo?: unknown; quarantined?: unknown };
+  if (type === 'wp.cli') return !wpCliOnlyReads(Array.isArray(payload.args) ? (payload.args as string[]) : []);
+  if (type === 'wp.rest') return payload.method !== 'GET';
+  if (type === 'wp.bulkTask') return outcome.nothingToDo !== true;
+  // A scan reads. What it moves out of the site afterwards is another matter.
+  if (type === 'site.malwareScan') return typeof outcome.quarantined === 'number' && outcome.quarantined > 0;
+  return true;
+}
+
 export { execLane, laneServerId } from './lanes.js';
 import { externalLane } from './lanes.js';
 
@@ -78,6 +125,8 @@ export class JobWorker {
   private zombieLanes = new Map<number, { serverId: number | null; auxServerId: number | null; lane: string | null }>();
   /** Changes to a site made outside the queue that are still under way, per site (see holdSite). */
   private siteHolds = new Map<number, Set<{ since: number }>>();
+  /** Changes to a site's runtime files under way, per site, each ended before the next (see inRuntimeTurn). */
+  private runtimeTurns = new Map<number, Promise<void>>();
 
   constructor(
     private readonly db: Db,
@@ -86,6 +135,25 @@ export class JobWorker {
     // See CoreServices.worker: handlers get `services`, and some of them (system.postUpdate)
     // need to queue follow-up jobs.
     this.services.worker = this;
+  }
+
+  /**
+   * Run `change` once every change to the same site's runtime files asked for before it has ended. A
+   * save of a site's caches reads its row, writes its files and reloads what reads them: two side by
+   * side could end in the other order, and leave the files saying what the row no longer does. So
+   * whatever reads the row for such a change reads it in here, after the one before it.
+   */
+  inRuntimeTurn<T>(siteId: number, change: () => Promise<T>): Promise<T> {
+    const run = (this.runtimeTurns.get(siteId) ?? Promise.resolve()).then(change);
+    const ended = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.runtimeTurns.set(siteId, ended);
+    void ended.then(() => {
+      if (this.runtimeTurns.get(siteId) === ended) this.runtimeTurns.delete(siteId);
+    });
+    return run;
   }
 
   /** The site's queued or running job, if it has one (there is never more than one). */
@@ -551,6 +619,30 @@ export class JobWorker {
   }
 
   /**
+   * Empty the caches of the site a job changed. After the handler, which is what makes this right
+   * for the jobs that change a site's content once its container is back up (a restore, an import
+   * refresh, new domains), and before the check of the site. A site's row is read here: a move has
+   * changed its server by now, and a scan's job row doesn't name its site.
+   */
+  private async clearCaches(job: JobRow, ctx: JobContext): Promise<void> {
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(job.payload) as Record<string, unknown>;
+    } catch {
+      return;
+    }
+    if (!changedSiteContent(job.type as JobType, payload, ctx.getResult())) return;
+    const siteId = job.siteId ?? (typeof payload.siteId === 'number' ? payload.siteId : null);
+    if (siteId === null) return;
+    const site = this.db.select().from(sites).where(eq(sites.id, siteId)).get();
+    if (!site) return;
+    if (PACKAGE_JOBS.has(job.type as JobType) && !isExternal(site)) {
+      await migrateArrivedFiles(ctx, this.services.servers.handleFor(site.serverId), this.services, site, { inForce: true });
+    }
+    await clearAfterChange(this.services, site);
+  }
+
+  /**
    * Have the servers a job made, dropped or replaced databases on read again (Database sizes), so the
    * Databases page and the site's Database tab show what it left rather than what was there an hour ago.
    * The database jobs of their own kick it themselves.
@@ -580,6 +672,8 @@ export class JobWorker {
     // deadline, and before the status is written: a page that reloads as the job ends then
     // shows what the job left.
     let release: (() => Promise<void>) | null = null;
+    // A handler that ran out of time is still at work: its caches are cleared once it has stopped.
+    let clearsLater = false;
     try {
       if (!entry) throw new Error(`Unknown job type: ${job.type}`);
       const parsed = entry.payloadSchema.safeParse(JSON.parse(job.payload));
@@ -612,10 +706,12 @@ export class JobWorker {
           // overtake it, and neither job's reading would stand.
           const late = release;
           release = null;
+          clearsLater = true;
           this.holdLaneUntilSettled(
             job,
             handlerPromise
               .catch(() => undefined)
+              .then(() => this.clearCaches(job, ctx))
               .then(() => this.releaseChecks(job, late))
               .then(() => this.rereadPhp(job)),
           );
@@ -625,6 +721,7 @@ export class JobWorker {
         clearTimeout(timer);
       }
 
+      await this.clearCaches(job, ctx);
       await this.releaseChecks(job, release);
       await this.rereadPhp(job);
       this.rereadDatabases(job);
@@ -639,6 +736,7 @@ export class JobWorker {
         .run();
       this.forgetSecrets(job);
     } catch (err) {
+      if (!clearsLater) await this.clearCaches(job, ctx);
       await this.releaseChecks(job, release);
       // A rollback puts the old container back, and a half-done job may have left a new one.
       await this.rereadPhp(job);

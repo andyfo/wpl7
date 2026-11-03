@@ -25,7 +25,8 @@ minutes is the installer downloading images.
 ## What you need
 
 - A fresh Ubuntu 26.04 server on x86-64, with root access and at least 2 GB of memory.
-- Ports 80 and 443 open to the internet, in your provider's firewall too.
+- Ports 80 and 443 open to the internet, in your provider's firewall too. Open UDP port 443 there
+  as well for HTTP/3.
 - A domain whose DNS you can edit. The steps below use `example.com`.
 
 WPL7 takes the whole machine. The installer sets up Docker and turns on a firewall.

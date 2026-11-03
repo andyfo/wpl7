@@ -45,6 +45,7 @@ import { KeepDaysSetting } from '../components/backups/KeepDays';
 import { BackupBeforeUpdatesSetting } from '../components/backups/BackupBeforeUpdates';
 import { WpAdminLoginButton } from '../components/WpAdminLoginButton';
 import { SiteLimitsCard } from '../components/SiteLimits';
+import { ClearCacheButton, SiteCachingCard } from '../components/SiteCaching';
 import { ExternalOverview } from '../components/external/ExternalOverview';
 import { ExternalSettings } from '../components/external/ExternalSettings';
 import { Sparkline } from '../components/Sparkline';
@@ -325,6 +326,17 @@ function OverviewTab({ slug }: { slug: string }) {
         </div>
       )}
       {s.importSource?.connected && s.importSource.status === 'done' && <ImportedBanner slug={slug} source={s.importSource} />}
+      {s.stackSwitchError && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-medium">This site still runs the old PHP setup.</p>
+          <p className="mt-1">{s.stackSwitchError[0]!.toUpperCase() + s.stackSwitchError.slice(1)}.</p>
+          <div className="mt-2">
+            <Button small {...containerAction('reconcile')}>
+              Retry
+            </Button>
+          </div>
+        </div>
+      )}
       <Card>
         <div className="flex flex-wrap items-center gap-2">
           <Button small variant="secondary" {...containerAction('start')}>Start</Button>
@@ -335,6 +347,7 @@ function OverviewTab({ slug }: { slug: string }) {
           <Button small variant="secondary" {...containerAction('reconcile')}>
             Recreate container
           </Button>
+          <ClearCacheButton site={s} />
           <WpAdminLoginButton slug={slug} running={s.containerState === 'running'} />
           {!s.isLive && (
             <Button small onClick={() => setGoLiveOpen(true)}>
@@ -1260,6 +1273,7 @@ function SettingsTab({ slug }: { slug: string }) {
 
       <ErrorNote error={run.error} />
 
+      <SiteCachingCard site={s} />
       <SiteLimitsCard site={s} />
 
       <Card title="Danger zone">

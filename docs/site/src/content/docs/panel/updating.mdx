@@ -9,6 +9,7 @@ sources:
   - panel/src/jobs/handlers/systemUpdate.ts
   - panel/src/updates/hooks.ts
   - panel/src/services/siteImages.ts
+  - panel/src/jobs/handlers/sites.ts
   - panel/web/src/components/UpdatesCard.tsx
   - panel/web/src/components/UpdateProgress.tsx
   - provision/update.sh
@@ -116,16 +117,55 @@ updates. A site busy with another job is rebuilt at the next hourly check.
 In checkout mode, the same happens when a rebuild changes the site images. `deploy.sh` and
 `build.sh --images` pull the newest WordPress base image for each rebuild.
 
+## The move to PHP-FPM
+
+<Since v="0.3.3" /> This update moves every site from Apache with mod_php to nginx, Apache and
+PHP-FPM, as [How WPL7 works](/docs/get-started/how-it-works/#inside-a-sites-container) shows. You
+start nothing. Each site moves when the panel rebuilds it on the new site image, as above.
+
+- **The [page cache](/docs/sites/caching/) turns on for every site.** Every site follows the default
+  unless it says otherwise, and the default is on. To keep it off everywhere, switch off
+  **Page cache** in **Settings → Sites**. A site can still choose **On** for itself.
+- **Each site is recreated once.** It does not answer for a few seconds. Sites on a worker server
+  move within the hour after that server updates.
+- **PHP settings in `.htaccess` move to `.user.ini`.** See
+  [Change a PHP setting](/docs/sites/settings/#change-a-php-setting).
+- **The database restarts once.** `wpl7-mariadb` gets its new buffer pool, so every site on that
+  server is without its database for a few seconds.
+- **Traefik restarts once.** It takes on HTTP/3's port. Sites can answer 504 until the panel has
+  attached it to their networks again, within a minute.
+
+A WooCommerce store on plain Geolocate stays **Off**, and its **Caching** card says why.
+
+### If a site cannot move
+
+The job checks the site before and after the move. A site that answered before, and does not answer
+on the new setup, goes back to its old container, on its old image. Its `.htaccess` lines go back
+too. The **Recreate site container** job fails, and the site's **Overview** tab says
+**This site still runs the old PHP setup**, with the reason and **Retry**.
+
+The site then works as it did, without either cache. It stays on its old image through anything else
+that recreates its container. It tries again when its server has a newer image, or when you choose
+**Retry** or **Recreate container**.
+
+A site that did not answer before the move stays on the new setup, and the job warns. A stopped site
+moves and stays stopped, without a check.
+
 ## Limits
 
 - A panel that always has a job running keeps updates waiting.
 - The button needs the panel's SSH access as root to its own host. A host that refuses root logins
   updates from the command line.
 - An update that brings new site images rebuilds every site once. Each site is unreachable for a second or two.
+- A site that cannot move to PHP-FPM keeps its old image's PHP, and the PHP security releases in newer
+  images do not reach it until it moves.
+- The move cannot tell what a site's visitors should see. A page that changes by something the request
+  does not show needs a rule or **Off**, as [Caching](/docs/sites/caching/#limits) says.
 
 ## Related
 
 - [Settings](/docs/panel/settings/)
+- [Caching](/docs/sites/caching/)
 - [Installer and scripts](/docs/reference/installer-and-scripts/)
 - [How WPL7 works](/docs/get-started/how-it-works/)
 - [Changelog](/docs/help/changelog/)

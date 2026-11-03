@@ -9,6 +9,7 @@ import { seedCloudflareToken } from '../services/dnsAccount.js';
 import { UsersService, type TotpEnrollment, type TotpState } from '../services/users.js';
 import { generatePassword } from '../lib/crypto.js';
 import { DEFAULT_DETECTION_RULES, DEFAULT_TRUSTED_PROXIES } from '../../shared/security.js';
+import { MAX_KEEP_SECONDS } from '../../shared/cacheRules.js';
 
 export interface SeedResult {
   /**
@@ -107,6 +108,11 @@ export async function seed(db: Db, config: Config): Promise<SeedResult> {
   s.seedRaw('site.cpuLimit', 2);
   s.seedRaw('site.memoryLimitMb', 512);
   s.seedRaw('site.pidsLimit', 512);
+  // On for every site, including those that exist on the day this is installed: pages are only
+  // stored when WordPress says they may be, and one switch takes it all away again. Ten hours is
+  // as long as a page can be kept (shared/cacheRules.ts).
+  s.seedRaw('site.pageCache', true);
+  s.seedRaw('site.pageCacheSeconds', MAX_KEEP_SECONDS);
   s.seedRaw('site.defaultPhpVersion', d.defaultPhpVersion);
   s.seedRaw('site.defaultLocale', d.defaultLocale);
   s.seedRaw('site.defaultAdminEmail', '');

@@ -8,6 +8,7 @@ sources:
   - "deploy/sftpgo-image/**"
   - "deploy/adminer-image/**"
   - "deploy/wordpress-image/**"
+  - panel/src/jobs/handlers/caches.ts
   - panel/src/services/scanEngines.ts
   - panel/src/config.ts
   - panel/Dockerfile
@@ -30,7 +31,13 @@ when these pages were built, read from the files in the last column.
 | Adminer | Opens a site's database in [Adminer](/docs/databases/adminer/) | 6.2.0, the MySQL-only English build, checked by SHA-256, on `php:8.4-cli-alpine`, as `wpl7-adminer:6.2.0-wpl7.1` | Apache-2.0 or GPL-2.0 | `deploy/adminer-image/Dockerfile`, `deploy/adminer-image/VERSION` |
 | AMWScan, the PHP Antimalware Scanner | Malware scans | 0.21.12, pinned by digest | GPL-3.0 | `panel/src/services/scanEngines.ts` |
 | rclone | Offsite copies of backups | `rclone/rclone:1.71` | MIT | `panel/src/config.ts` |
-| The official WordPress image | The base of every site image, with PHP and Apache | `wordpress:php8.2-apache` to `wordpress:php8.5-apache` | WordPress: GPL-2.0-or-later. The image: GPL-2.0 | `deploy/wordpress-image/Dockerfile` |
+| The official WordPress image | The base of every site image, with PHP and PHP-FPM | `wordpress:php8.2-fpm` to `wordpress:php8.5-fpm` | WordPress: GPL-2.0-or-later. The image: GPL-2.0 | `deploy/wordpress-image/Dockerfile` |
+| nginx | The [page cache](/docs/sites/caching/), in front of Apache in each site's container | Debian's package, in the site image | BSD-2-Clause | `deploy/wordpress-image/Dockerfile` |
+| Apache HTTP Server | `.htaccess`, static files, Brotli and gzip in each site's container | Debian's package, in the site image | Apache-2.0 | `deploy/wordpress-image/Dockerfile` |
+| Redis | The [object cache](/docs/sites/caching/#turn-on-the-object-cache), only on a site with it switched on | Debian's package, in the site image | RSALv2, SSPLv1 or AGPL-3.0, at the user's choice. WPL7 uses it under AGPL-3.0 | `deploy/wordpress-image/Dockerfile` |
+| phpredis | The client PHP talks to Redis with | 6.3.0, from PECL | PHP-3.01 | `deploy/wordpress-image/Dockerfile` |
+| Redis Object Cache plugin | Connects WordPress to Redis. Installed on a site when its object cache is switched on | The latest release on wordpress.org | GPL-3.0 | `panel/src/jobs/handlers/caches.ts` |
+| tini | Process 1 in each site's container | Debian's package, in the site image | MIT | `deploy/wordpress-image/Dockerfile` |
 | WP-CLI | WordPress commands inside each site | The latest stable release when the site image is built | MIT | `deploy/wordpress-image/Dockerfile` |
 | msmtp | Hands PHP's `mail()` to the relay | Debian's package, in the site image | GPL-3.0 | `deploy/wordpress-image/Dockerfile` |
 | Node.js | Runs the panel | 22, from `node:22-bookworm-slim` | MIT | `panel/Dockerfile` |
@@ -40,6 +47,8 @@ when these pages were built, read from the files in the last column.
 
 - Traefik, MariaDB, the relay, the signer, AMWScan, rclone and the WordPress base are pulled as
   their projects publish them.
+- nginx, Apache, Redis and tini are Debian's packages, unmodified. WPL7 does not modify phpredis or
+  the Redis Object Cache plugin either. Redis has no network port, and runs as a separate process.
 - SFTPGo is the one modified component. WPL7 builds it from a fixed upstream commit with one
   patch: an overwrite keeps the old file until the new one is complete. The patch ships inside
   the image, in `/usr/share/doc/wpl7-sftpgo/`.
@@ -63,12 +72,15 @@ repository, not by that license.
 - Traefik and MariaDB follow their minor versions, so patch releases arrive the same way.
 - AMWScan runs with its signature updates switched off. Its signatures are the ones in the
   pinned image, and they age until a WPL7 release moves the pin.
+- The site image's Debian packages have the fixes of the day a WPL7 release builds it. Redis stays
+  at the version in Debian's stable release, with Debian's security fixes, not Redis's newer releases.
+- The Redis Object Cache plugin updates like any plugin on the site, and WPL7 tests it at one version.
 
 ## Related
 
 - [How WPL7 works](/docs/get-started/how-it-works/)
 - [Architecture](/docs/reference/architecture/)
+- [Caching](/docs/sites/caching/)
 - [Malware scans](/docs/security/malware-scans/)
 - [FTP and SFTP logins](/docs/sites/ftp-sftp/)
 - [What leaves your server](/docs/security/privacy/)
-- [Updating WPL7](/docs/panel/updating/)

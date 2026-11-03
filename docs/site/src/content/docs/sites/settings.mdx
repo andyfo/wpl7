@@ -1,8 +1,8 @@
 ---
 title: Site settings
-description: "Switch PHP, set CPU, memory and process limits, stop, recreate or delete a site."
+description: "Switch PHP, change PHP settings, set CPU, memory and process limits, stop, recreate or delete a site."
 sidebar:
-  order: 12
+  order: 13
 sources:
   - panel/web/src/pages/SiteDetail.tsx
   - panel/web/src/components/SiteLimits.tsx
@@ -12,14 +12,21 @@ sources:
   - panel/src/jobs/handlers/sites.ts
   - panel/src/jobs/handlers/servers.ts
   - panel/src/services/siteSpec.ts
+  - panel/src/services/siteStack.ts
+  - panel/src/services/siteMigration.ts
+  - panel/src/services/siteMigrationHtaccess.ts
   - panel/src/db/seed.ts
+  - deploy/wordpress-image/apache-site.conf
+  - deploy/wordpress-image/php-fpm.conf
+  - deploy/wordpress-image/nginx.conf
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
 import Since from '~/components/Since.astro';
 
-A site's **Settings** tab switches its PHP version, changes its domains, sets its container limits
-and deletes the site. Stopping, starting and rebuilding its container are on the **Overview** tab.
+A site's **Settings** tab switches its PHP version, changes its domains, sets its
+[caches](/docs/sites/caching/) and its container limits, and deletes the site. Stopping, starting
+and rebuilding its container are on the **Overview** tab.
 
 <Screenshot name="site-settings" alt="A site's Settings tab: PHP version, domains and the danger zone" />
 
@@ -34,6 +41,36 @@ branch, such as 8.4.27. Its **Overview** tab shows the release.
 
 To change the site's domains, see [Domains and going live](/docs/sites/domains/).
 
+## Change a PHP setting
+
+`/srv/sites/<slug>/config/uploads.ini` holds the PHP settings of the whole site. Edit it on the
+server, then choose **Restart**.
+
+A `.user.ini` changes them for the PHP scripts in its folder and below it. WordPress's pages all run
+from the site's root, so settings for them go in the root `.user.ini`. PHP reads a change to it
+within 5 minutes, with no restart.
+
+```ini
+upload_max_filesize = 128M
+max_execution_time = 300
+```
+
+<Since v="0.3.3" /> Sites run PHP in PHP-FPM, and Apache no longer knows `php_value` and `php_flag`.
+Such a line in a `.htaccess` gives a 500 for its folder. Inside `<IfModule mod_php.c>`, it does
+nothing.
+
+The panel moves these lines to `.user.ini` when a site moves to PHP-FPM. It does the same after an
+import, a refresh, a restore, a move to another server, and an update of WordPress, a plugin or a
+theme. Each line stays in the `.htaccess`, commented out, after `# Moved to .user.ini by WPL7:`.
+`php_flag engine off` has no such setting, so a deny for PHP files takes its place.
+
+The same pass reads every `.user.ini` that PHP-FPM has not run with yet: when a site moves to it,
+after an import or a refresh, and after a restore or a move of files from before the site moved. It
+comments out what would hurt here: a path from another host, `open_basedir`, and limits lower than
+the site's own. A `.user.ini` the site has run with on PHP-FPM stays as it is. `[PATH=]` and
+`[HOST=]` sections are commented out in any of them, because PHP-FPM crashes on them. The job log
+lists every line it changes.
+
 ## Stop, start or recreate the container
 
 The **Overview** tab has the buttons:
@@ -43,7 +80,8 @@ The **Overview** tab has the buttons:
 | **Stop** | Stops the container. Visitors get a 404 until it starts again. |
 | **Start** | Starts the container. |
 | **Restart** | Restarts the container. |
-| **Recreate container** | Builds a new container from the site's current settings: networks, limits, mail login and certificate. Files and the database stay. |
+| **Recreate container** | Builds a new container from the site's current settings: networks, limits, mail login and certificate. Files and the database stay. On a site that [could not move to PHP-FPM](/docs/panel/updating/#if-a-site-cannot-move), it tries the move again. |
+| **Clear cache** | Empties the site's page cache, and Redis when it runs. See [Caching](/docs/sites/caching/#clear-the-cache). |
 
 A WordPress job on a stopped site, such as an update, starts the site for the job and stops it
 again afterwards.
@@ -58,7 +96,19 @@ CPU cap with 0 is the exception: it restarts each site once.
 |---|---|---|
 | **CPU cores per site** | 2 | Fractions allowed. 0 means uncapped. |
 | **Memory per site (MB)** | 512 | The container is killed if it exceeds this. |
-| **Processes per site** | 512 | 0 means uncapped. |
+| **Processes per site** | 512 | At least 64, because a site runs nginx, Apache and PHP. A lower value saved earlier counts as 64. 0 means uncapped. |
+
+PHP and Redis follow the site's memory and CPU limits:
+
+| What | How it is worked out | At 512 MB and 2 cores |
+|---|---|---|
+| OPcache | Three eighths of the memory, from 32 MB to 192 MB | 192 MB |
+| PHP workers | What the memory leaves after OPcache, one per 32 MB. At least 2, and at most 5 per core | 10 |
+| Redis, when it is on | An eighth of the memory, at least 16 MB | 64 MB |
+
+One worker stays ready, and more start each second while none is idle. A burst of requests past the workers waits its turn. A site with no CPU cap counts the cores of its
+server. When a change alters these sizes, PHP-FPM reloads: OPcache starts empty, and requests still
+running after 10 seconds end.
 
 ## Give a site its own limits
 
@@ -70,8 +120,8 @@ CPU cap with 0 is the exception: it restarts each site once.
    **Memory (MB)** or **Processes**.
 2. Choose **Save limits**.
 
-An empty field uses the default, which the field names under it. To put a limit back on the
-default, clear its field and save. The change reaches the container at once, without a restart.
+An empty field uses the default, which the field names under it. **Processes** is at least 64 here
+too. To put a limit back on the default, clear its field and save. The change reaches the container at once, without a restart.
 Lifting the CPU cap with 0 restarts the site once.
 
 The site keeps its own limits when the defaults change. **Settings → Sites** lists the sites with
@@ -98,6 +148,37 @@ deleted, nothing of the site is left: no files, no database and no backup.
 
 ## Limits
 
+| Limit | Value |
+|---|---|
+| A request body | 1 GB, or `post_max_size` in `uploads.ini` plus 16 MB when that is more. Past it, a 413 |
+| Bodies of 1 MB or more at once, per site | 16. The next one gets a 429 |
+| One request header line | 8 KB |
+| All request headers | About 60 KB |
+| One response header line | 8 KB. Past it, a 500 |
+| All response headers | 32 KB. Past it, a 502 |
+| One PHP request | About an hour, at most 80 minutes |
+| Running requests at a stop | 5 seconds. **Recreate container** ends them at once |
+
+- `php_value` and `php_flag` in a `.htaccess` give a 500 for its folder, and do nothing inside
+  `<IfModule mod_php.c>`. Use `.user.ini`.
+- A change to a `.user.ini` takes up to 5 minutes.
+- A higher upload limit set only in `.user.ini` gets a 413 past the body limit above.
+  `LimitRequestBody` in a `.htaccess` has no effect on PHP files.
+- PHP runs only in files named `.php`. A file a `.htaccess` hands to PHP under another name answers
+  403. One handed to a handler Apache does not have, such as cPanel's `ea-php`, is sent as it is,
+  source included. The job log names each such line. Rename the file to `.php`.
+- A download PHP serves holds a worker for as long as it runs.
+- A PHP page with `Last-Modified` or `ETag` can get a 304 or 412 from the server, even if its body
+  changed.
+- A plain script that does not load WordPress gets a 500 for a header line with no colon, and
+  `http_response_code()` does not replace a status it set with `header()`. A plugin that registers
+  its own `header_register_callback` brings both back on WordPress's pages.
+- `apache_get_modules`, `apache_get_version`, `apache_getenv`, `apache_setenv`, `apache_note`,
+  `apache_lookup_uri`, `apache_response_headers` and `virtual` do not exist under PHP-FPM.
+- `SetEnv no-gzip` does not stop Brotli. `<IfModule mod_headers.c>` blocks now apply, and
+  `Header unset` needs `always`.
+- Repeated response headers are merged into one, except `Set-Cookie`.
+- A URL with `%00` in it gets a 400.
 - A site gets at most the CPU cores its server has. A higher CPU limit gives it all of them.
 - Switching PHP replaces the container, so the site does not answer for a few seconds.
 - If a recreated container starts but does not answer, **Recreate container** leaves it in
@@ -107,6 +188,7 @@ deleted, nothing of the site is left: no files, no database and no backup.
 
 ## Related
 
+- [Caching](/docs/sites/caching/)
 - [Domains and going live](/docs/sites/domains/)
 - [Delete backups](/docs/backups/delete/)
 - [The Sites list](/docs/sites/overview/)

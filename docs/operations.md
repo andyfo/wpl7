@@ -70,6 +70,29 @@ or **Recreate container** on each site's Overview tab. One job per site, seriali
 each rolling back on its own if the recreated container does not answer. Until a site has been
 reconciled its outbound mail is refused (`553 … not logged in`), because it has no relay credential.
 
+**A site that could not move to PHP-FPM** went back to its old container, and its Overview says why,
+with **Retry**. A sweep and `reconcile-all` leave it on its old image until there is a newer one;
+**Retry**, **Recreate container** and `POST /api/sites/:slug/reconcile` try again. Its job log has the
+whole story, `.htaccess` lines included.
+
+### A site's services
+
+A site's container runs nginx, Apache, PHP-FPM and, with the object cache on, Redis
+([architecture.md](architecture.md#stack-2-nginx-apache-and-php-fpm)). All of them log to
+`docker logs wp-<slug>`. When one exits by itself the container restarts as a whole.
+
+```bash
+docker exec wp-<slug> wpl7-reload apache                # or nginx, php, redis: applies what the panel wrote
+docker exec -u 33:33 wp-<slug> sh -c 'find /var/cache/nginx/wpl7 -mindepth 1 -type f -delete'   # what Clear cache does
+docker exec -u 33:33 wp-<slug> redis-cli -s /run/wpl7/redis.sock FLUSHALL                       # the same for Redis
+curl -sI https://<site>/ | grep -i x-cache              # HIT, MISS, EXPIRED, STALE, BYPASS, and the reason
+```
+
+The files the panel writes for these are in `/srv/sites/<slug>/config/runtime/`, and an edit there is
+overwritten. Change them through the site's Caching card and limits. `wpl7-reload php` empties OPcache and
+ends requests still running after 10 s. nginx logs a harmless `[crit] unlink() ... failed (2: No such
+file or directory)` when an entry a clear already removed comes up for expiry.
+
 ### Migrating an install from ceo-server
 
 The product was called `ceo-server` until 0.2.0, and the rename went all the way down:
@@ -134,9 +157,9 @@ bundle and runs `setup.sh` on them, which finds their legacy stack and does the 
 
 ## Updating the wpl7-wordpress base images
 
-Site containers run local `wpl7-wordpress:php<X.Y>` images. Because each site's files live in a bind
-mount and WordPress core updates flow through WP-CLI, a stale base image only affects *newly created*
-sites. To refresh:
+Site containers run local `wpl7-wordpress:php<X.Y>` images. Each site's files live in a bind mount and
+WordPress core updates flow through WP-CLI, so a stale base image means an old PHP, nginx, Apache and
+Redis rather than old sites. To refresh:
 
 ```bash
 cd /opt/wpl7
@@ -145,7 +168,8 @@ for v in 8.2 8.3 8.4 8.5; do
 done
 ```
 
-Existing sites pick the new image up on their next PHP switch or container recreate.
+The panel rebuilds every site container that runs an older image than its server has now, at its next
+start and hourly (`services/siteImages.ts`), one job per site.
 
 ## Multiple servers
 
@@ -178,7 +202,7 @@ docker logs wpl7-traefik    # routing + ACME
 docker logs wpl7-mariadb
 docker logs wpl7-mail       # postfix queue/delivery (also readable in the panel: Mail -> Traffic)
 docker logs wpl7-dkim       # DKIM signing decisions
-docker logs wp-<slug>      # a site's Apache/PHP errors
+docker logs wp-<slug>      # a site's nginx, Apache, PHP and Redis errors
 docker logs wpl7-ftp       # FTP/SFTP logins, failed logins, transfers (only on servers with FTP logins)
 docker logs wpl7-ftp-<slug> # that site's FTP file server
 ```
@@ -199,6 +223,15 @@ Container logs rotate automatically (json-file, 10 MB × 3, set in /etc/docker/d
   the last copy — a backup that already exists offsite gives up its local files and stays listed as
   *offsite only*, fetchable on demand.
 
+## MariaDB's memory
+
+`MARIADB_POOL_SIZE=auto` is an eighth of the server's memory, 256 MB to 4 GB, worked out by the
+container's start command at every start, so it follows a resized VM. Any other value is used as it is.
+`setup.sh` adds the key to an existing `.env`, as `auto`, or as the size someone had set in the old
+`MARIADB_BUFFER_POOL`. That old key stays, for a rollback to the old compose file, which reads it.
+Changing the new one recreates `wpl7-mariadb`: a few seconds without the
+database for every site on that server.
+
 ## Panel state
 
 Panel state (sites registry, jobs, API keys, settings) lives in `/srv/panel/panel.db` (SQLite).
@@ -213,14 +246,15 @@ machine you own. Keep it somewhere a bucket is not — a password manager or an 
 
 ## Firewall
 
-UFW allows 22 (rate-limited), 80, 443. Docker-published ports bypass UFW — by design only Traefik
-publishes ports, 80/443, and the FTP gateway on a server one of whose sites has an FTP login: SFTP
-2222, FTP 21 and passive 30000-30015 by default, IPv4 only (docs/ftp.md). Nothing else. A cloud
-firewall in front of a server has to allow the FTP ports for FTP to work. Never publish mariadb or
-the panel directly.
+UFW allows 22 (rate-limited), 80, 443, and 443/udp. Docker-published ports bypass UFW — by design only
+Traefik publishes ports, 80/443 and 443/udp for HTTP/3, and the FTP gateway on a server one of whose
+sites has an FTP login: SFTP 2222, FTP 21 and passive 30000-30015 by default, IPv4 only (docs/ftp.md).
+Nothing else. A cloud firewall in front of a server has to allow the FTP ports for FTP to work, and
+443/udp for HTTP/3: without it browsers stay on HTTP/2, and nothing else changes. Never publish mariadb
+or the panel directly.
 
 **Blocked addresses** (docs/security.md) have a table of their own, `table inet wpl7`, ahead of
-Docker's forwarding, for ports 80 and 443 only - UFW and Docker's tables are never touched. On a
+Docker's forwarding, for TCP 80 and 443 and UDP 443 only - UFW and Docker's tables are never touched. On a
 server: `sudo wpl7-firewall status` says what is loaded; `sudo wpl7-firewall off` empties it and
 keeps it empty, whatever the panel sends, until `sudo wpl7-firewall on`. `nftables.service` is
 never enabled: its default configuration begins with `flush ruleset`.

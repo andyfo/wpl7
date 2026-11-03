@@ -28,7 +28,7 @@ code it documents (`sources:` in its front matter), and code names its pages in 
   `Docs: not needed — <reason>`.
 - A new feature gets a page, and `@docs` markers in its code: `npm run docs:markers` adds them
   for every file a page lists in `sources:`.
-- Generated pages (API reference, MCP tools, `deploy/.env`, job types, levels, changelog) are
+- Generated pages (API reference, MCP tools, `deploy/.env`, job types, levels, limits, changelog) are
   never edited by hand. Change the source, run `npm run docs:generate`, commit what it writes.
 - A change to the panel's UI changes screenshots: run the screenshot script to look at them
   (`docs/site/README.md`, Screenshots). The `screenshots` job commits the new ones.

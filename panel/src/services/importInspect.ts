@@ -368,9 +368,12 @@ export function inspectReport(report: MigrateReport, opts: { offeredPhp: string[
   if (report.htaccess.custom) {
     warn('htaccess-custom', '.htaccess has rules of its own. Check them once the site is up (Files tab).');
   }
-  if (report.user_ini || report.php_ini) {
-    warn('user-ini', 'PHP settings in .user.ini or php.ini are not used here.');
+  // PHP-FPM reads a .user.ini, wherever it came from. services/siteMigration.ts comments out what would
+  // hurt here, because a path from the old host is a 500 or a 403 for every page below that folder.
+  if (report.user_ini) {
+    warn('user-ini', 'The .user.ini applies here, without lines that would hurt the site on this server, such as paths from the old host or lower limits. The job log lists them.');
   }
+  if (report.php_ini) warn('php-ini', 'PHP settings in php.ini are not used here.');
   if (report.files.partial) warn('partial-count', 'Sizes are estimates: the old host took too long to count.');
   for (const w of report.warnings) {
     if (warnings.some((mine) => mine.code === w.code)) continue;

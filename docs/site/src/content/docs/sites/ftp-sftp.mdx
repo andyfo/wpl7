@@ -88,6 +88,8 @@ sudo docker logs wpl7-ftp
 - A cloud firewall in front of the server has to allow the ports. Only IPv4 is served.
 - Repeated failed logins ban an address for 30 minutes, and longer each time.
 - An interrupted upload starts over instead of resuming.
+- The panel cannot see a change made over FTP or SFTP. A changed theme file reaches stored pages when
+  they expire, or after **Clear cache**. See [Caching](/docs/sites/caching/#clear-the-cache).
 
 ## Related
 

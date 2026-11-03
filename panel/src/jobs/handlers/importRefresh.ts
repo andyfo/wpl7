@@ -9,6 +9,7 @@ import { initialCursor } from '../../services/imports.js';
 import { NOT_READ, type ListedFile } from '../../services/importListing.js';
 import { PullCanceledError, type ImportPullClient } from '../../services/importPull.js';
 import { JobCanceledError } from '../../lib/errors.js';
+import { migrateArrivedFiles } from '../../services/siteMigration.js';
 import { siteImage, sitePaths } from '../../services/siteSpec.js';
 import type { SiteRow } from '../../db/schema.js';
 import { safeJoin } from '../../lib/slug.js';
@@ -271,6 +272,7 @@ export async function siteImportRefresh(ctx: JobContext<z.infer<typeof siteImpor
     await server.dbAdmin.importFromAs(dbFile, site.dbName, site.dbUser, site.dbPassword);
     // What was left behind at the import stays out: the listing skips it (cursor.skip).
     await applyChangedFiles(server, site, paths.wordpress, delta);
+    await migrateArrivedFiles(ctx, server, s, site, { inForce: false });
     await startSiteContainer(server, s, site, ctx);
     const unlisted = before ? await removeDeleted(ctx, server, site.containerName, before.files, listedNow) : [];
     if (!before) ctx.warn('Files the old site deleted since the import are still here: the panel has no list of its files from then.');

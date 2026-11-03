@@ -1,0 +1,54 @@
+# A real site on the real image: nginx, Apache, PHP-FPM, Redis, MariaDB, real WooCommerce, a stack 1
+# site moving to all that and back. Ten minutes or so, so only when something it covers changes, and
+# apart from the gate (test.yml), which stays quick.
+name: Site image
+
+on:
+  pull_request:
+    paths:
+      - deploy/wordpress-image/**
+      - panel/shared/cacheRules.ts
+      - panel/src/services/siteCaches.ts
+      - panel/src/services/siteHardening.ts
+      - panel/src/services/siteMigration.ts
+      - panel/src/services/siteMigrationHtaccess.ts
+      - panel/src/services/siteSpec.ts
+      - panel/src/services/siteStack.ts
+      - panel/src/services/wpCachePhp.ts
+      - panel/src/jobs/handlers/sites.ts
+      - panel/test/engine/siteHardening.test.ts
+      - panel/test/engine/siteStack.test.ts
+      - panel/test/engine/siteSwitch.test.ts
+      - .github/workflows/site-stack.yml
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    name: A real site on the site image
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # The whole history: the image from before stack 2 is built from an old commit.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/panel-deps
+      - name: Build the image from before stack 2
+        run: |
+          mkdir -p "$RUNNER_TEMP/old"
+          git archive 028ea18 deploy/wordpress-image | tar -x -C "$RUNNER_TEMP/old"
+          docker build --pull --build-arg PHP_TAG=php8.4 -t wpl7-wordpress:php8.4-stack1 "$RUNNER_TEMP/old/deploy/wordpress-image"
+      # This one builds the image, the way the panel does, and leaves it for the other two.
+      - name: A real site on the image
+        run: npx vitest run test/engine/siteStack.test.ts
+        working-directory: panel
+        env:
+          WPL7_ENGINE_TESTS: '1'
+      # One file at a time: some of what these check takes real time, on a runner with two cores.
+      - name: Moving a site to it, and PHP in uploads
+        run: npx vitest run --no-file-parallelism test/engine/siteSwitch.test.ts test/engine/siteHardening.test.ts
+        working-directory: panel
+        env:
+          WPL7_ENGINE_TESTS: '1'

@@ -105,7 +105,8 @@ Sites reach the internet, and the panel does not filter what they send. WordPres
 wordpress.org for updates and downloads from it, and plugins and themes call their own services.
 The inventory scan and the WordPress cron the panel runs both let WordPress check for updates. A
 [recipe](/docs/reference/glossary/#recipe) activates a pro plugin's license through the plugin's own
-code, so the plugin contacts its vendor to activate the key for the site's address.
+code, so the plugin contacts its vendor to activate the key for the site's address. Switching on a
+site's object cache downloads the Redis Object Cache plugin from wordpress.org.
 
 A site hosted elsewhere calls the panel too. WPL7 Connect sends the panel its report once, when it
 connects. It downloads its own updates, and plugins from the panel's catalog, from links the panel

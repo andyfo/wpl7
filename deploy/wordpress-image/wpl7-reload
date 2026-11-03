@@ -1,0 +1,106 @@
+#!/bin/bash
+# Applies what the panel changed in /etc/wpl7-runtime to the running container, without a restart:
+#   wpl7-reload apache   check the configuration, then a graceful reload
+#   wpl7-reload nginx    link the site file if nginx accepts it, reload, wait until it's in force
+#   wpl7-reload php      take the sizes if PHP-FPM accepts them, reload, wait until they're in force
+#                        (OPcache starts empty, and requests still running after 10 s are ended)
+#   wpl7-reload redis    start or stop Redis to match whether redis.conf exists; if it runs, apply
+#                        its maxmemory
+# Exits non-zero and says why when something was refused. What is running then stays as it was.
+# Runs as root, the default for `docker exec` in this image.
+
+set -u
+
+source /usr/local/lib/wpl7-runtime.sh
+
+# The new configuration is in force when this returns: the old worker takes no more requests, though
+# it may still be finishing some. A check of the page right after a save has to see the new answer.
+reload_nginx() {
+    local master old tenths=50
+    link_nginx || return
+    master=$(cat /run/nginx.pid)
+    old=$(pgrep -P "$master" -f '^nginx: worker process$')
+    kill -HUP "$master" || return
+    while pgrep -P "$master" -f '^nginx: worker process$' | grep -qxF "$old"; do
+        if ((tenths-- <= 0)); then
+            say "nginx is still running its old configuration: see the container's log"
+            return 1
+        fi
+        sleep 0.1
+    done
+}
+
+# PHP-FPM starts itself again with the same pid once its requests have finished. It removes its pid
+# file as it goes and writes a new one when it has read its configuration, so a new file is what says
+# the new configuration is in force.
+reload_php() {
+    local before now tenths=150
+    link_php || return
+    before=$(stat -c %y "$FPM_PID_FILE") || return
+    kill -USR2 "$(cat "$FPM_PID_FILE")" || return
+    while :; do
+        now=$(stat -c %y "$FPM_PID_FILE" 2>/dev/null)
+        if [[ -n $now && $now != "$before" ]]; then
+            return 0
+        fi
+        if ((tenths-- <= 0)); then
+            say "PHP-FPM is still running its old configuration: see the container's log"
+            return 1
+        fi
+        sleep 0.1
+    done
+}
+
+reload_redis() {
+    local conf=$RUNTIME_DIR/redis.conf tenths=50 maxmemory
+
+    # wpl7-start owns the Redis process, so that its leaving on purpose isn't taken for a crash.
+    kill -USR2 1 || return
+
+    if [[ ! -f $conf ]]; then
+        while [[ -e $REDIS_SOCKET ]] && ((tenths-- > 0)); do
+            sleep 0.1
+        done
+        if [[ -e $REDIS_SOCKET ]]; then
+            say "Redis did not stop"
+            return 1
+        fi
+        return 0
+    fi
+
+    until redis-cli -s "$REDIS_SOCKET" PING 2>/dev/null | grep -q PONG; do
+        if ((tenths-- <= 0)); then
+            say "Redis did not start: see the container's log"
+            return 1
+        fi
+        sleep 0.1
+    done
+
+    # The last one counts, as when Redis reads the file.
+    maxmemory=$(awk '$1 == "maxmemory" { value = $2 } END { print value }' "$conf")
+    if [[ -n $maxmemory ]]; then
+        redis-cli -s "$REDIS_SOCKET" CONFIG SET maxmemory "$maxmemory" | grep -q OK || {
+            say "Redis refused maxmemory $maxmemory"
+            return 1
+        }
+    fi
+}
+
+case "${1:-}" in
+    apache)
+        apache2ctl -t && kill -USR1 1
+        ;;
+    nginx)
+        reload_nginx
+        ;;
+    php)
+        reload_php
+        ;;
+    redis)
+        reload_redis
+        ;;
+    *)
+        echo "usage: wpl7-reload apache|nginx|php|redis" >&2
+        exit 2
+        ;;
+esac

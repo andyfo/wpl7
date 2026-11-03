@@ -23,7 +23,7 @@ import {
   type SnapshotAnswer,
 } from '../../services/importPull.js';
 import type { PluginClient } from '../../services/pluginClient.js';
-import { buildSiteContainerSpec, sitePaths, siteRuntimeFrom, siteTlsFor } from '../../services/siteSpec.js';
+import { siteContainerSpec, sitePaths, siteRuntimeFrom } from '../../services/siteSpec.js';
 import { restoreSiteOnServer, type ProtectionHold } from './restoreSite.js';
 import {
   dnsPreflight,
@@ -966,9 +966,7 @@ export async function siteImportFinish(ctx: JobContext<z.infer<typeof siteImport
     ctx.info('Publishing the site…');
     await s.security.kick(server.id);
     await server.docker.removeContainer(site.containerName);
-    await server.docker.createSiteContainer(
-      buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), siteRuntimeFrom(s.settings, site)),
-    );
+    await server.docker.createSiteContainer(await siteContainerSpec(s, server, site, domains, siteRuntimeFrom(s.settings, site)));
     await startSiteContainer(server, s, site, ctx);
     const up = await probeSite(server, site.containerName, primary, s.config.probeTimeoutMs);
     if (!up) ctx.warn('The site did not answer the smoke check yet; look at its Files tab (.htaccess) and container logs if it stays down.');

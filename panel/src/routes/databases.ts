@@ -36,6 +36,7 @@ import { jobToDto, viewerOf } from '../lib/dto.js';
 import { alterTableSql, createTableSql, describeChanges, dropTableSql, truncateTableSql } from '../lib/sqlDdl.js';
 import { tsStamp } from '../services/backup.js';
 import type { DbTarget, DdlAttempt } from '../services/dbBrowser.js';
+import { clearAfterChange } from '../services/siteCaches.js';
 import type { AppDeps } from './deps.js';
 
 /**
@@ -61,6 +62,12 @@ const MAX_INFLIGHT_BYTES = 64 * 1024 * 1024;
 
 /** JSON bodies that carry a row's values or a block of SQL: larger than the panel's usual 1 MiB. */
 const BIG_JSON = 20 * 1024 * 1024;
+
+/** A single SELECT and the like: someone reading a site through the SQL box doesn't empty its cache. */
+function sqlOnlyReads(sql: string): boolean {
+  const statement = sql.trim().replace(/;\s*$/, '');
+  return /^(?:select|show|describe|desc|explain)\b/i.test(statement) && !statement.includes(';') && !/\binto\s+(?:out|dump)file\b/i.test(statement);
+}
 
 export async function registerDatabaseRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   // Its own scope: the raw-body parser below is for the upload chunks alone (as in routes/files.ts).
@@ -89,12 +96,14 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
   const browser = (site: SiteRow) => deps.servers.handleFor(site.serverId).dbBrowser;
 
   /** A change, with the site held (JobWorker.holdSite): refused while a job but a backup has it, and no job starts meanwhile. */
-  const changing = async <T>(site: SiteRow, work: () => Promise<T>): Promise<T> => {
+  const changing = async <T>(site: SiteRow, work: () => Promise<T>, changesPages = true): Promise<T> => {
     const release = deps.worker.holdSite(site, DB_SAFE_JOBS);
     try {
       return await work();
     } finally {
       release();
+      // What visitors see comes out of this database, and a change can land even if the answer failed.
+      if (changesPages) await clearAfterChange(deps, site);
     }
   };
 
@@ -410,11 +419,15 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
     async (req) => {
       const site = usableSite(req.params.slug);
       const target = deps.databases.targetFor(site, req.params.db);
-      return changing(site, async () => {
-        // The SQL itself is not logged: it may carry anything, a password included.
-        audit(req, site, 'sql', { db: target.database, chars: req.body.sql.length });
-        return browser(site).run(target, req.body.sql);
-      });
+      return changing(
+        site,
+        async () => {
+          // The SQL itself is not logged: it may carry anything, a password included.
+          audit(req, site, 'sql', { db: target.database, chars: req.body.sql.length });
+          return browser(site).run(target, req.body.sql);
+        },
+        !sqlOnlyReads(req.body.sql),
+      );
     },
   );
 

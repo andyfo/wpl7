@@ -4,7 +4,8 @@ import type { SiteRow } from '../../db/schema.js';
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
-import { buildSiteContainerSpec, sitePaths, siteRuntimeFrom, siteTlsFor } from '../../services/siteSpec.js';
+import { migrateArrivedFiles } from '../../services/siteMigration.js';
+import { siteContainerSpec, sitePaths, siteRuntimeFrom } from '../../services/siteSpec.js';
 import { ensureSiteNetwork, removeSiteNetwork } from '../../services/siteNetwork.js';
 import { ensureSiteMountSources, probeSite, startSiteContainer, syncRelayAuth } from './shared.js';
 import { rmOn } from './moveHelpers.js';
@@ -25,6 +26,8 @@ export type StagedSiteSource =
       dbSqlGz: string;
       /** The site's other databases (site_databases), each with its dump in the archive. */
       extraDbs?: { name: string; sqlGz: string }[];
+      /** It ran on PHP-FPM where it comes from, so its .user.ini files are what it ran with. */
+      ranOnFpm: boolean;
     }
   | { kind: 'tree'; wordpressDir: string; dbSqlGz: string };
 
@@ -78,6 +81,10 @@ export async function restoreSiteOnServer(
       timeoutMs: 60 * 60_000,
     });
     if (untar.exitCode !== 0) throw new Error(`File extraction failed: ${untar.stderr.slice(0, 300)}`);
+    // The panel writes this folder from the site's row before every start (just below), so an
+    // archive's copy is worth nothing, and none of it may stay: a file the panel doesn't write now
+    // would still be there for the image to read.
+    await target.files.rm(paths.runtimeDir);
   } else {
     // Back where they came from on a rollback, so a retry does not have to pull them again.
     ctx.pushCompensation('move site files back to staging', async () => {
@@ -136,10 +143,9 @@ export async function restoreSiteOnServer(
     await target.docker.removeContainer(site.containerName);
   });
   await target.docker.createSiteContainer(
-    buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, target.row), siteRuntimeFrom(s.settings, site), {
-      routing: opts.routing,
-    }),
+    await siteContainerSpec(s, target, site, domains, siteRuntimeFrom(s.settings, site), { routing: opts.routing }),
   );
+  await migrateArrivedFiles(ctx, target, s, site, { inForce: source.kind === 'archive' && source.ranOnFpm });
   await startSiteContainer(target, s, site, ctx);
   await opts.afterStart?.();
 

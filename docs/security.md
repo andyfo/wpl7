@@ -70,9 +70,11 @@ panel's own uptime probe - a limit on that address would limit all of them toget
 Three settings are enforced by the site's own Apache and WordPress, from two files the panel
 writes and mounts into the container read-only:
 
-- **No PHP in uploads**: `php_admin_flag engine off` for `wp-content/uploads`, and every PHP
-  name there refused - which a `.htaccess` in the site cannot undo. `AllowOverride` is left
-  alone: WooCommerce protects downloads with `.htaccess`.
+- **No PHP in uploads**: for `wp-content/uploads`, `SetHandler none` and every PHP name refused
+  on stack 2 (PHP-FPM behind `proxy_fcgi`), `php_admin_flag engine off` on stack 1 - which a
+  `.htaccess` in the site cannot undo. `AllowOverride` is left alone: WooCommerce protects downloads
+  with `.htaccess`. A `.user.ini` changes settings, not handlers, and Apache refuses to serve one; one
+  can still load a file with `auto_prepend_file`, which takes code already running in the site.
 - **No file editor**: `DISALLOW_FILE_EDIT`, so a stolen admin login cannot rewrite PHP from
   wp-admin.
 - **No installs from wp-admin** (Strict): `DISALLOW_FILE_MODS`. Updates from the panel keep
@@ -174,8 +176,8 @@ block. The Detection tab lists what was decided, and why not when not.
 
 ### Enforcement
 
-A block is in force on **every server** within a minute, for ports 80 and 443 only - SSH and FTP
-keep their own protection:
+A block is in force on **every server** within a minute, for TCP 80 and 443 and UDP 443 (HTTP/3) only -
+SSH and FTP keep their own protection:
 
 | Layer | For | How |
 |---|---|---|

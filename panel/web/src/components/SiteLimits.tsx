@@ -106,7 +106,7 @@ export function SiteLimitsCard({ site }: { site: SiteDetail }) {
           <Field
             key={f.key}
             label={f.label}
-            hint={`Default: ${shown(f.key, defaults[f.key])}.${f.zeroUncaps ? ' 0 = uncapped.' : ''}`}
+            hint={`Default: ${shown(f.key, defaults[f.key])}.${f.zeroUncaps ? ' 0 = uncapped.' : ''}${f.key === 'pidsLimit' ? ' At least 64.' : ''}`}
           >
             <input
               className={inputClass}

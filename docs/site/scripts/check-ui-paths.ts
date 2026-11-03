@@ -44,6 +44,9 @@ export const IGNORE = new Set(
     'Settings → Permalinks',
     'WordPress Address (URL)',
     'Site Address (URL)',
+    // WooCommerce
+    'Geolocate',
+    'Geolocate (with page caching support)',
     // Cloudflare
     'My Profile',
     'API Tokens',

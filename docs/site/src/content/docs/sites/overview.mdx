@@ -97,7 +97,7 @@ The page's header shows the site's title, its badges and its address. The tabs:
 
 | Tab | What it holds |
 |---|---|
-| **Overview** | **Start**, **Stop**, **Restart**, **Recreate container**, **Log in to WordPress** and **Go live →**. Below them, the site's facts and its last 24 hours of response time, CPU and memory. |
+| **Overview** | **Start**, **Stop**, **Restart**, **Recreate container**, **Clear cache**, **Log in to WordPress** and **Go live →**. Below them, the site's facts and its last 24 hours of response time, CPU and memory. |
 | **Visitors** | [Visitor statistics](/docs/sites/visitors/). |
 | **Backups** | The site's backups, and whether it is in the scheduled ones. See [How backups work](/docs/backups/overview/). |
 | **WordPress** | Updates, plugins, themes, maintenance mode and WP-CLI. See [Manage WordPress](/docs/sites/wordpress/). |
@@ -105,10 +105,12 @@ The page's header shows the site's title, its badges and its address. The tabs:
 | **FTP** | [FTP and SFTP logins](/docs/sites/ftp-sftp/) for the site. |
 | **Database** | How the site connects to its [database](/docs/sites/database/), the databases added to it, its tables and SQL. |
 | **Security** | The site's protection, its malware scans and the requests it blocked. See [Site protection](/docs/security/site-protection/). |
-| **Settings** | PHP version, domains and deleting the site. See [Site settings](/docs/sites/settings/). |
+| **Settings** | PHP version, domains, [caching](/docs/sites/caching/), container limits and deleting the site. See [Site settings](/docs/sites/settings/). |
 
 On a fleet, **Overview** also offers **Move server**. Banners appear there when the site's
-outgoing mail is suspended, with **Resume mail**, and after a move, with **Finalize now**.
+outgoing mail is suspended, with **Resume mail**, and after a move, with **Finalize now**. One also
+appears when the site [could not move to PHP-FPM](/docs/panel/updating/#if-a-site-cannot-move), with
+**Retry**.
 
 A site hosted elsewhere has four of these tabs: **Overview**, **Backups**, **WordPress** and
 **Settings**. See [Sites hosted elsewhere](/docs/sites/external/).

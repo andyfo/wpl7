@@ -65,6 +65,9 @@ queued.
 
 - The site keeps its users, passwords and language. **Log in to WordPress** on its page works as
   on any site.
+- `php_value` and `php_flag` lines in its `.htaccess` files move to `.user.ini`. A `.user.ini` from
+  the old host applies here, without lines that would hurt the site on this server. The job log lists
+  them. See [Change a PHP setting](/docs/sites/settings/#change-a-php-setting).
 - **Go live** moves it to its domain and allows search engines again. See
   [Domains and going live](/docs/sites/domains/).
 - The plugin on the old site stays connected until you choose **Disconnect** on the site page,

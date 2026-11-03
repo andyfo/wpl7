@@ -23,6 +23,21 @@ type Loaded =
   | { status: 'not-utf8'; preview: string }
   | { status: 'text'; text: string; bom: boolean; eol: LineEndings; etag: string; size: number };
 
+/**
+ * A php_value or php_flag Apache would refuse. Inside <IfModule mod_php…> it is harmless, and that is
+ * how most plugins write it. An old-setup site's mod_php reads them, but its server gets the new setup
+ * with its next update, so the note is true soon enough.
+ */
+function hasBarePhpSetting(text: string): boolean {
+  let inBlock = 0;
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*<IfModule\b/i.test(line) && (inBlock > 0 || /php/i.test(line))) inBlock++;
+    else if (/^\s*<\/IfModule>/i.test(line) && inBlock > 0) inBlock--;
+    else if (inBlock === 0 && /^\s*php_(?:admin_)?(?:value|flag)\b/i.test(line)) return true;
+  }
+  return false;
+}
+
 type Problem =
   | { kind: 'conflict' }
   | { kind: 'syntax'; message: string; line: number | null }
@@ -62,6 +77,7 @@ export default function FileEditor({
   const [problem, setProblem] = useState<Problem | null>(null);
   const [cursor, setCursor] = useState({ line: 1, col: 1 });
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [phpInHtaccess, setPhpInHtaccess] = useState(false);
   const [wrap, setWrap] = useState(false);
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -111,6 +127,7 @@ export default function FileEditor({
         savedDoc.current = doc;
         setDirty(!view.state.doc.eq(doc));
         setSavedAt(Date.now());
+        setPhpInHtaccess(/(^|\/)\.htaccess$/.test(path) && hasBarePhpSetting(doc.toString()));
         onSaved();
         view.focus();
       } catch (err) {
@@ -269,6 +286,11 @@ export default function FileEditor({
         </Button>
       </header>
 
+      {phpInHtaccess && (
+        <div className="border-b border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          PHP settings in a .htaccess give a 500 here. Put them in .user.ini in the same folder.
+        </div>
+      )}
       {problem && (
         <div className="border-b border-neutral-200 px-4 py-2 text-sm">
           {problem.kind === 'conflict' && (

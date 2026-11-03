@@ -10,6 +10,8 @@ export interface TraefikLabelOpts {
   devDomain: string;
   /** Non-empty = the letsencrypt-dns wildcard resolver is available. */
   dnsProvider: string;
+  /** Where the container listens: 80 for Apache alone, unless nginx stands in front of it. */
+  port?: number;
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -32,7 +34,7 @@ export function traefikLabels(opts: TraefikLabelOpts): Record<string, string> {
     'traefik.enable': 'true',
     [`traefik.http.routers.${router}.rule`]: hosts.map((h) => `Host(\`${h}\`)`).join(' || '),
     [`traefik.http.routers.${router}.entrypoints`]: scheme === 'https' ? 'websecure' : 'web',
-    [`traefik.http.services.${router}.loadbalancer.server.port`]: '80',
+    [`traefik.http.services.${router}.loadbalancer.server.port`]: String(opts.port ?? 80),
   };
 
   if (scheme === 'https') {

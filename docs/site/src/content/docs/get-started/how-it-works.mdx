@@ -21,9 +21,9 @@ the parts and how they fit, so the rest of the docs make sense.
 ## One container per site
 
 Each site runs in a container of its own, named `wp-<slug>` after the site's
-[slug](/docs/reference/glossary/#slug). Its image is the official WordPress image with Apache,
-plus WP-CLI and a mail client. Each site picks a PHP version, 8.2 to 8.5 by default, and can
-switch later.
+[slug](/docs/reference/glossary/#slug). Its image is the official WordPress image with PHP-FPM,
+plus nginx, Apache, Redis, WP-CLI and a mail client. Each site picks a PHP version, 8.2 to 8.5 by
+default, and can switch later.
 
 The site's files are in `/srv/sites/<slug>/wordpress` on its server. Its database and database
 user live on the server's shared MariaDB, one pair per site.
@@ -38,10 +38,30 @@ WordPress's own cron is switched off. The panel runs each site's due cron events
 minutes instead. Mail from `wp_mail()` goes to the server's relay with the site's own login,
 so a site cannot send as another site's domain.
 
+## Inside a site's container
+
+Traefik hands a request to the services in the site's own container:
+
+```text
+Traefik
+ └─ nginx, port 8080: the page cache
+     └─ Apache, 127.0.0.1:80: .htaccess, static files, Brotli and gzip, cache times
+         └─ PHP-FPM, over a socket
+             ├─ MariaDB, the server's own, on the site's network
+             └─ Redis, over a socket, only with the object cache on
+```
+
+nginx answers a stored page by itself, so most visitors never reach PHP. Everything else goes on to
+Apache, which keeps a site's `.htaccess` files working. PHP's workers are sized from the site's
+memory, so a burst waits its turn instead of running the site out of memory. If one of these
+services exits, the container restarts as a whole. [Caching](/docs/sites/caching/) explains both
+caches.
+
 ## Traefik, certificates and domains
 
 Traefik answers on ports 80 and 443 and sends each request to the right site container. It
-finds the containers by their labels, so adding a site regenerates nothing. Certificates come
+finds the containers by their labels, so adding a site regenerates nothing. It also answers HTTP/3
+on UDP port 443, and browsers stay on HTTP/2 where a firewall closes that port. Certificates come
 from Let's Encrypt. Each hostname gets one on its first request, unless the server holds a
 [wildcard certificate](/docs/reference/glossary/#wildcard-certificate) for its dev sites.
 
@@ -95,7 +115,7 @@ does not come up. Site containers keep running throughout.
 
 - [Introduction](/docs/)
 - [Architecture](/docs/reference/architecture/)
+- [Caching](/docs/sites/caching/)
 - [Security in WPL7](/docs/security/overview/)
 - [Jobs](/docs/automations/jobs/)
-- [Servers and monitoring](/docs/servers/overview/)
 - [Updating WPL7](/docs/panel/updating/)

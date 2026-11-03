@@ -2,8 +2,9 @@
 import path from 'node:path';
 import type { Config } from '../config.js';
 import type { ServerRow, SiteRow } from '../db/schema.js';
+import { MIN_PIDS_CAP } from '../../shared/schemas.js';
 import type { SiteLimits } from '../../shared/types.js';
-import type { ContainerLimits, SiteContainerSpec } from './docker.js';
+import type { ContainerLimits, DockerPort, SiteContainerSpec } from './docker.js';
 import type { DnsService } from './dns.js';
 import { traefikLabels } from './labels.js';
 import type { PanelSettings } from './settings.js';
@@ -15,11 +16,22 @@ import {
   HARDENING_VERSION,
   WP_EXTRA_IN_CONTAINER,
 } from './siteHardening.js';
+import { RUNTIME_DIR_IN_CONTAINER, SITE_STACK_LABEL, SITE_STACK_PORT, WP_CACHE_PHP_IN_CONTAINER, type SiteStack } from './siteStack.js';
 
 /** Where a server keeps its site images: one tag per PHP branch, `php<version>`. */
 export const SITE_IMAGE_REPO = 'wpl7-wordpress';
 
 export const siteImage = (phpVersion: string) => `${SITE_IMAGE_REPO}:php${phpVersion}`;
+
+/**
+ * A name that keeps a site's old image while it moves to another stack: once its container has
+ * gone, an image whose tag has moved on has no name and nothing using it, which is what the
+ * housekeeping removes. A repository of its own, so the housekeeping counts it as nobody's, and
+ * nothing that reads the site images' tags takes it for a PHP version.
+ */
+export const SITE_ROLLBACK_REPO = 'wpl7-rollback';
+
+export const siteRollbackImage = (slug: string) => `${SITE_ROLLBACK_REPO}:${slug}`;
 
 export const WORDPRESS_CONFIG_EXTRA = [
   // Behind Traefik's TLS termination WP would otherwise see is_ssl()=false -> redirect loop.
@@ -29,6 +41,15 @@ export const WORDPRESS_CONFIG_EXTRA = [
   // The site's protection from inside (services/siteHardening.ts): a read-only file the panel
   // rewrites when the protection changes, so no container has to be rebuilt for it.
   `if (is_readable('${WP_EXTRA_IN_CONTAINER}')) { require_once '${WP_EXTRA_IN_CONTAINER}'; }`,
+].join('\n');
+
+/**
+ * The same, and the WordPress side of the site's caches (services/wpCachePhp.ts). Its folder is
+ * mounted read-only, so nothing in the site can change it, and no file lands in wp-content.
+ */
+export const WORDPRESS_CONFIG_EXTRA_STACK_2 = [
+  WORDPRESS_CONFIG_EXTRA,
+  `if (is_readable('${WP_CACHE_PHP_IN_CONTAINER}')) { require_once '${WP_CACHE_PHP_IN_CONTAINER}'; }`,
 ].join('\n');
 
 export const DEFAULT_UPLOADS_INI = `upload_max_filesize = 64M
@@ -73,7 +94,8 @@ export function siteRuntimeFrom(settings: RuntimeSettingsReader, own: OwnSiteLim
   return {
     memoryBytes: memMb * 1024 * 1024,
     ...(cpu > 0 ? { nanoCpus: Math.round(cpu * 1e9) } : {}),
-    ...(pids > 0 ? { pidsLimit: pids } : {}),
+    // A limit saved before MIN_PIDS_CAP existed would put the site in a restart loop.
+    ...(pids > 0 ? { pidsLimit: Math.max(pids, MIN_PIDS_CAP) } : {}),
   };
 }
 
@@ -116,6 +138,11 @@ export function sitePaths(config: Config, slug: string) {
     /** Mounted whole at /etc/wpl7, so the file in it can be replaced rather than rewritten. */
     securityDir: path.join(root, 'config', 'security'),
     securityWpPhp: path.join(root, 'config', 'security', 'wp-config-extra.php'),
+    /**
+     * Mounted whole at /etc/wpl7-runtime on stack 2 (services/siteStack.ts), so its files can be
+     * replaced rather than rewritten, and one can come and go as the object cache does.
+     */
+    runtimeDir: path.join(root, 'config', 'runtime'),
     /** Files a scan or an administrator moved out of the site (services/quarantine.ts). Mounted into no site. */
     quarantine: path.join(root, 'quarantine'),
     siteJson: path.join(root, 'site.json'),
@@ -151,24 +178,30 @@ export function buildSiteContainerSpec(
    * routing:false = no Traefik router at all. Used while a new site is being installed: with
    * a public router, WordPress serves its web installer to whoever reaches the hostname
    * before `wp core install` has created OUR administrator.
+   *
+   * stack: what the image runs (services/siteStack.ts), which has to match it: a container needs
+   * nginx's port, and the folder of runtime files, only from an image that has nginx. There is no
+   * default, and only siteContainerSpec calls this: it is what knows the image.
+   * image: a particular image, by tag or id, in place of the site's PHP tag.
    */
-  opts: { routing?: boolean } = {},
+  opts: { routing?: boolean; stack: SiteStack; image?: string },
 ): SiteContainerSpec {
   const [primary, ...aliases] = domains;
   if (!primary) throw new Error('site has no domains');
   const p = sitePaths(config, site.slug);
   const routing = opts.routing ?? true;
+  const { stack } = opts;
 
   return {
     name: site.containerName,
-    image: siteImage(site.phpVersion),
+    image: opts.image ?? siteImage(site.phpVersion),
     env: {
       WORDPRESS_DB_HOST: config.mariadb.host,
       WORDPRESS_DB_NAME: site.dbName,
       WORDPRESS_DB_USER: site.dbUser,
       WORDPRESS_DB_PASSWORD: site.dbPassword,
       WORDPRESS_TABLE_PREFIX: site.tablePrefix,
-      WORDPRESS_CONFIG_EXTRA,
+      WORDPRESS_CONFIG_EXTRA: stack === 2 ? WORDPRESS_CONFIG_EXTRA_STACK_2 : WORDPRESS_CONFIG_EXTRA,
     },
     labels: {
       ...(routing
@@ -180,6 +213,7 @@ export function buildSiteContainerSpec(
             acmeResolver: config.acmeResolver,
             devDomain: server.devDomain,
             dnsProvider: server.wildcardProvider,
+            ...(stack === 2 ? { port: SITE_STACK_PORT } : {}),
           })
         : { 'traefik.enable': 'false' }),
       'wpl7.managed': 'true',
@@ -193,6 +227,8 @@ export function buildSiteContainerSpec(
       // this label it would route to whichever endpoint it found first - in practice the
       // egress network, where inter-container traffic is dropped, so every site 502s.
       ...(routing ? { 'traefik.docker.network': siteNetworkName(site.slug) } : {}),
+      // No label means stack 1, so a container from before all this needs nothing added.
+      ...(stack === 2 ? { [SITE_STACK_LABEL]: '2' } : {}),
     },
     binds: [
       `${p.wordpress}:/var/www/html`,
@@ -202,10 +238,39 @@ export function buildSiteContainerSpec(
       `${p.securityDir}:${HARDENING_DIR_IN_CONTAINER}:ro`,
       // Catalog zips readable from inside every site so `wp plugin install <path>.zip` just works.
       `${config.paths.plugins}:${config.paths.plugins}:ro`,
+      ...(stack === 2 ? [`${p.runtimeDir}:${RUNTIME_DIR_IN_CONTAINER}:ro`] : []),
     ],
     networks: siteNetworksFor(site.slug),
     memoryBytes: runtime.memoryBytes,
     ...(runtime.nanoCpus ? { nanoCpus: runtime.nanoCpus } : {}),
     ...(runtime.pidsLimit ? { pidsLimit: runtime.pidsLimit } : {}),
   };
+}
+
+/** What buildSiteContainerSpec needs to know about a site (a row, or a row with in-memory edits). */
+export type SpecSite = Parameters<typeof buildSiteContainerSpec>[1];
+
+/**
+ * The container a site gets on a server, from what the image there runs. Every container is built
+ * through this, so none can come out with the port or the mounts of another stack: a server that
+ * has not had its update yet keeps getting containers its images can run, and one that has gets the
+ * new kind. The stack is read at the last moment, after ensureSiteImage if the caller runs that.
+ *
+ * `from` puts a particular image back, by id: what a container ran before it was replaced, whose
+ * stack is known, and whose tag may have moved on since.
+ */
+export async function siteContainerSpec(
+  s: { config: Config; dns: Pick<DnsService, 'wildcardProvider'> },
+  server: { docker: Pick<DockerPort, 'imageStack'>; row: Pick<ServerRow, 'devDomain' | 'dnsProvider'> },
+  site: SpecSite,
+  domains: string[],
+  runtime: SiteRuntime,
+  opts: { routing?: boolean; from?: { imageId: string; stack: SiteStack } } = {},
+): Promise<SiteContainerSpec> {
+  const stack = opts.from?.stack ?? (await server.docker.imageStack(siteImage(site.phpVersion)));
+  return buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), runtime, {
+    routing: opts.routing,
+    stack,
+    image: opts.from?.imageId,
+  });
 }

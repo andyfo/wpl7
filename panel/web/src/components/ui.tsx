@@ -153,6 +153,7 @@ export function Segmented<T extends string>({
   onChange,
   small = false,
   label,
+  disabled = false,
 }: {
   options: readonly { id: T; label: ReactNode; title?: string }[];
   value: T;
@@ -160,6 +161,7 @@ export function Segmented<T extends string>({
   small?: boolean;
   /** What the group chooses, for screen readers. */
   label?: string;
+  disabled?: boolean;
 }) {
   return (
     <div role="group" aria-label={label} className="flex flex-wrap items-center gap-1.5">
@@ -169,8 +171,9 @@ export function Segmented<T extends string>({
           type="button"
           aria-pressed={value === option.id}
           title={option.title}
+          disabled={disabled}
           onClick={() => onChange(option.id)}
-          className={`rounded-lg font-medium transition-colors ${small ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5 text-sm'} ${
+          className={`rounded-lg font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${small ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5 text-sm'} ${
             value === option.id ? 'button-primary' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
           }`}
         >

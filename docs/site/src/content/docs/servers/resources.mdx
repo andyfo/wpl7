@@ -1,6 +1,6 @@
 ---
 title: "Disk, logs and housekeeping"
-description: "Where disk space goes on a server, where the logs are, what the nightly housekeeping removes, and how the firewall is set up."
+description: "Where disk space goes on a server, where the logs are, what the nightly housekeeping removes, MariaDB's memory, and how the firewall is set up."
 sidebar:
   order: 4
 sources:
@@ -14,11 +14,12 @@ sources:
   - provision/apt-clean.conf
   - provision/setup.sh
   - "provision/firewall/**"
+  - deploy/docker-compose.yml
 ---
 
 Each server keeps what it hosts under `/srv`. One nightly job removes most of what grows there,
 on every server. This page says where the space goes, where to read the logs, what that job
-removes, and how the firewall is set up.
+removes, how much memory MariaDB takes, and how the firewall is set up.
 
 ## Find where disk goes
 
@@ -45,7 +46,9 @@ sudo du -sh /srv/*
 ```
 
 Docker keeps its images, its build cache and the containers' logs in `/var/lib/docker`, outside
-`/srv`. This shows what each takes:
+`/srv`. Each site's [page cache](/docs/sites/caching/) is there too, about 256 MB at most, and so are
+request bodies while they arrive. Every start of a container empties its page cache. This shows what
+each takes:
 
 ```bash
 sudo docker system df
@@ -69,7 +72,7 @@ sudo docker logs --tail 100 wp-northwind-bakery
 | `wpl7-mariadb` | The database server |
 | `wpl7-mail` | Mail delivery and the queue, also shown under **Mail → Traffic** |
 | `wpl7-dkim` | DKIM signing |
-| `wp-<slug>` | A site's Apache and PHP errors |
+| `wp-<slug>` | A site's nginx, Apache, PHP and Redis errors |
 | `wpl7-ftp` | FTP and SFTP logins and transfers, on servers with FTP logins |
 
 Docker rotates these logs and keeps three files of 10 MB per container. The panel's own work is
@@ -106,17 +109,25 @@ The same job refreshes the vulnerability data for what your sites run. Once a we
 refreshes the country lookup data and the address lists Cloudflare, Jetpack and the AI companies
 publish.
 
+## Set MariaDB's memory
+
+MariaDB keeps data and indexes in its buffer pool. `MARIADB_POOL_SIZE` in `deploy/.env` sets its
+size. `auto`, the default, is an eighth of the server's memory, from 256 MB to 4 GB, worked out at
+every start, so it follows a resized server. Any other value, such as `2G`, is used as it is. Run
+`setup.sh` after you change it, which restarts MariaDB.
+
 ## How the firewall is set up
 
 `setup.sh` turns on UFW. It refuses every incoming connection except SSH, 80 and 443, and it limits
-how quickly SSH connections may be opened. Ports that Docker publishes go past UFW. Only two
-containers publish any: Traefik on 80 and 443, and the FTP gateway once a site on that server has
-an FTP login. A cloud firewall in front of the server has to allow the FTP ports set under **FTP &
-SFTP** in **Settings**.
+how quickly SSH connections may be opened. It also allows UDP on 443, for HTTP/3. Ports that Docker
+publishes go past UFW. Only two containers publish any: Traefik on 80 and 443, and the FTP gateway
+once a site on that server has an FTP login. A cloud firewall in front of the server has to allow
+the FTP ports set under **FTP & SFTP** in **Settings**. It also has to allow UDP 443, or browsers
+stay on HTTP/2.
 
 [Blocked addresses](/docs/security/blocked-addresses/) have an nftables table of their own,
-`inet wpl7`. It drops connections to 80 and 443 from a blocked address before Docker forwards
-them, and leaves UFW's and Docker's rules alone. The `wpl7-firewall` helper controls it on each
+`inet wpl7`. It drops connections to 80 and 443, and UDP packets to 443, from a blocked address
+before Docker forwards them, and leaves UFW's and Docker's rules alone. The `wpl7-firewall` helper controls it on each
 server. This command prints what is loaded, as one line of JSON:
 
 ```bash

@@ -122,6 +122,10 @@ WordPress's maintenance page for visitors, switched on in the **Maintenance mode
 
 The Model Context Protocol, through which AI apps such as Claude or ChatGPT connect to the panel at `/mcp` and use its API once you switch it on, as [AI apps over MCP](/docs/integrations/mcp/) explains.
 
+## Object cache
+
+WordPress's database answers kept in Redis, in the site's own container, switched on per site, as [Caching](/docs/sites/caching/) describes.
+
 ## Offsite copy
 
 A copy of a backup on a destination outside the server, uploaded by the server that holds the backup, as [Offsite copies](/docs/backups/offsite/) explains.
@@ -133,6 +137,10 @@ Signing in to a site's wp-admin from the panel with **Log in to WordPress**, thr
 ## Owner
 
 The first account, created at install, which no other admin can remove or change, as [Users](/docs/panel/users/) explains.
+
+## Page cache
+
+Finished pages stored by nginx in the site's own container, so a visitor who gets one never reaches PHP, as [Caching](/docs/sites/caching/) describes.
 
 ## Panel
 

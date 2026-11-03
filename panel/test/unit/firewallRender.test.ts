@@ -46,6 +46,10 @@ describe('the network layer', () => {
     expect(text.split('\n').slice(3, 6)).toEqual(['table inet wpl7', 'delete table inet wpl7', 'table inet wpl7 {']);
     expect(text).toContain('type filter hook prerouting priority -310; policy accept;');
     expect(text).toContain('ip saddr @block4 tcp dport { 80, 443 } drop');
+    // HTTP/3: all four sets, or a blocked address gets back in over QUIC.
+    for (const line of ['ip saddr @block4', 'ip6 saddr @block6', 'ip saddr @timed4', 'ip6 saddr @timed6']) {
+      expect(text).toContain(`${line} udp dport 443 drop`);
+    }
     expect(text).toContain('2001:db8:1:2::/64 timeout 3600s');
     // An empty set has no elements line at all: `elements = { }` does not parse.
     expect(text).not.toMatch(/elements = \{\s*\}/);

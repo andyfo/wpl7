@@ -158,7 +158,8 @@ export function registerMiscRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (req.body.mcpEnabled === true && current.mcpEnabled !== true && mcpProblem) {
       throw conflict(`MCP cannot be switched on: ${mcpProblem}. See docs/mcp.md`);
     }
-    const limitKeys = ['siteCpuLimit', 'siteMemoryLimitMb', 'sitePidsLimit'] as const;
+    // The same job brings the sites' caches along.
+    const limitKeys = ['siteCpuLimit', 'siteMemoryLimitMb', 'sitePidsLimit', 'sitePageCache', 'sitePageCacheSeconds'] as const;
     const limitsChanged = limitKeys.some((k) => req.body[k] !== undefined && req.body[k] !== current[k]);
     // Switching FTP off always works: nothing will listen, so no port can be wrong.
     if (ftpChanged && (req.body.ftpEnabled ?? current.ftpEnabled) !== false) {
