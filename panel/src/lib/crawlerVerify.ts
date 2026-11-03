@@ -20,8 +20,10 @@ export const systemResolver: CrawlerResolver = {
 
 /**
  * The crawlers that publish a way to be verified, and the domains their hosts are under. Not
- * googleusercontent.com: Google's user-triggered fetchers use it, none of the agents below do,
- * and every Google Cloud machine answers to a name under it (`<ip>.bc.googleusercontent.com`).
+ * googleusercontent.com: every Google Cloud machine answers to a name under it
+ * (`<ip>.bc.googleusercontent.com`). Google's user-triggered fetchers use it, and so do some of
+ * Googlebot's own addresses, which detection finds on the list Google publishes instead
+ * (`crawlerList` in services/proxyRanges.ts).
  */
 const CRAWLERS: { name: string; ua: RegExp; domains: string[] }[] = [
   { name: 'Googlebot', ua: /googlebot|google-inspectiontool|googleother|adsbot-google|mediapartners-google|storebot-google/i, domains: ['googlebot.com', 'google.com'] },

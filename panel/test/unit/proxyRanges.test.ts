@@ -72,7 +72,7 @@ describe('ProxyRangesService', () => {
     expect(ranges.isStale()).toBe(true);
 
     const result = await ranges.refresh();
-    expect(result.failed).toEqual(['cloudflare', 'jetpack', ...AI_SOURCES]);
+    expect(result.failed).toEqual(['cloudflare', 'jetpack', 'googleCrawlers', ...AI_SOURCES]);
     expect(ranges.ranges('cloudflare')).toEqual(RANGE_SOURCES.cloudflare.builtin);
     expect(ranges.status().find((s) => s.source === 'cloudflare')).toMatchObject({ fetchedAt: null, error: expect.stringMatching(/404/) });
     // Tried today: not again until tomorrow, whatever happened.
@@ -88,7 +88,7 @@ describe('ProxyRangesService', () => {
     const { settings, ranges } = service(good);
     let changes = 0;
     ranges.onChange = () => changes++;
-    expect(await ranges.refresh()).toEqual({ refreshed: ['cloudflare', 'jetpack'], failed: [...AI_SOURCES] });
+    expect(await ranges.refresh()).toEqual({ refreshed: ['cloudflare', 'jetpack'], failed: ['googleCrawlers', ...AI_SOURCES] });
     expect(ranges.ranges('cloudflare')).toContain('104.16.0.0/16');
     expect(ranges.ranges('jetpack')).toEqual(['192.0.64.0/18', '122.248.245.244', '54.217.201.243']);
     expect(changes).toBe(1);
@@ -103,7 +103,7 @@ describe('ProxyRangesService', () => {
         'https://jetpack.com/ips-v4.txt': '192.0.64.0/18\n',
       }),
     );
-    expect(await broken.refresh(Date.now() + 8 * 24 * 3600_000)).toEqual({ refreshed: [], failed: ['cloudflare', 'jetpack', ...AI_SOURCES] });
+    expect(await broken.refresh(Date.now() + 8 * 24 * 3600_000)).toEqual({ refreshed: [], failed: ['cloudflare', 'jetpack', 'googleCrawlers', ...AI_SOURCES] });
     expect(broken.ranges('cloudflare')).toContain('104.16.0.0/16');
     expect(broken.ranges('jetpack')).toHaveLength(3);
   });
@@ -125,6 +125,28 @@ describe('ProxyRangesService', () => {
     expect((await later.refresh(Date.now() + 8 * 24 * 3600_000)).failed).toContain('anthropic');
     expect(later.ranges('anthropic')).toContain('203.0.113.0/24');
     expect(later.status().find((s) => s.source === 'anthropic')!.error).toMatch(/8\.0\.0\.0\/8 is wider than a \/16/);
+  });
+
+  it("gives Google's crawler lists to Googlebot alone, and refuses one wider than a crawler's", async () => {
+    const common = 'https://developers.google.com/static/crawling/ipranges/common-crawlers.json';
+    const special = 'https://developers.google.com/static/crawling/ipranges/special-crawlers.json';
+    const doc = (prefixes: object[]) => JSON.stringify({ prefixes });
+    const googlebot = [...Array.from({ length: 100 }, (_, i) => ({ ipv4Prefix: `198.51.100.${i}/32` })), { ipv6Prefix: '2001:db8:4860:4801::/64' }];
+    const { settings, ranges } = service(fetchFrom({ [common]: doc(googlebot), [special]: doc([{ ipv4Prefix: '203.0.113.0/27' }]) }));
+    // None shipped: until the first download, reverse DNS decides alone.
+    expect(ranges.crawlerList('Googlebot')!.set.has('198.51.100.42')).toBe(false);
+
+    expect((await ranges.refresh()).refreshed).toContain('googleCrawlers');
+    const google = ranges.crawlerList('Googlebot')!;
+    expect(google.publisher).toBe('Google');
+    for (const ip of ['198.51.100.42', '203.0.113.20', '2001:db8:4860:4801::1']) expect(google.set.has(ip), ip).toBe(true);
+    expect(google.set.has('203.0.113.40')).toBe(false);
+    expect(ranges.crawlerList('Bingbot')).toBeNull();
+
+    const wide = new ProxyRangesService(settings, quiet, fetchFrom({ [common]: doc(googlebot), [special]: doc([{ ipv4Prefix: '203.0.112.0/23' }]) }));
+    expect((await wide.refresh(Date.now() + 8 * 24 * 3600_000)).failed).toContain('googleCrawlers');
+    expect(wide.status().find((s) => s.source === 'googleCrawlers')!.error).toMatch(/203\.0\.112\.0\/23 is wider than a \/24/);
+    expect(wide.crawlerList('Googlebot')!.set.has('203.0.113.20')).toBe(true);
   });
 
   it('trusts Cloudflare and the proxies of the setting, and only their headers', () => {

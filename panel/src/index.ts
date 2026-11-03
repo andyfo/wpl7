@@ -170,7 +170,7 @@ async function main(): Promise<void> {
   };
   const blocklist = new BlocklistService(db, settings, servers, proxyRanges, geoip, log);
   const securityEvents = new SecurityEventsService(db, settings, geoip, blocklist);
-  const detector = new AttackDetector(settings, blocklist, log);
+  const detector = new AttackDetector(settings, blocklist, proxyRanges, log);
   const integrityManifests = new IntegrityManifests(db, log);
   const quarantine = new QuarantineService(db, config, servers, log);
   const pluginZipChecks = new PluginZipChecks(db, servers, settings, (subject, body) => mail.notifyOperator(subject, body), log);

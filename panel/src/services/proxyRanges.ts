@@ -1,16 +1,18 @@
 /**
  * The published address ranges of the services whose traffic the panel treats specially:
  * Cloudflare, whose edge servers stand in front of sites that use its proxy; Jetpack, whose
- * servers call a site's XML-RPC endpoint and must not be limited or blocked for it; and the
- * AI assistants - ChatGPT, Claude, Gemini and the rest - whose crawlers and fetchers are never
- * blocked.
+ * servers call a site's XML-RPC endpoint and must not be limited or blocked for it; Google's
+ * crawlers, which detection takes for Googlebot even where reverse DNS can't tell (some of their
+ * addresses have Google Cloud names); and the AI assistants - ChatGPT, Claude, Gemini and the
+ * rest - whose crawlers and fetchers are never blocked.
  *
- * Cloudflare and Jetpack publish a plain list, the AI companies Google's JSON format. The panel
- * fetches them weekly (from the nightly housekeeping), keeps the last copy that passed its
- * sanity checks, and ships with a copy of its own for an install that has never reached them.
- * A list that fails the checks is never used: trusting a wrong range for Cloudflare means
- * believing a forged visitor address from whoever holds it, and a wrong range for an AI
- * company means never blocking whoever holds it.
+ * Cloudflare and Jetpack publish a plain list, Google and the AI companies Google's JSON format.
+ * The panel fetches them weekly (from the nightly housekeeping), keeps the last copy that passed
+ * its sanity checks, and, for all but Google's crawlers, ships with a copy of its own for an
+ * install that has never reached them. A list that fails the checks is never used: trusting a
+ * wrong range for Cloudflare means believing a forged visitor address from whoever holds it, a
+ * wrong range for an AI company means never blocking whoever holds it, and one for Google's
+ * crawlers lets whoever holds it pass as Googlebot.
  */
 // @docs security/blocked-addresses, security/privacy
 import { CidrSet, isPrivateIp, parseCidr, WIDEST_PREFIX, type IpFamily } from '../../shared/cidr.js';
@@ -23,7 +25,15 @@ import type { Logger } from './index.js';
 /** The AI companies whose published addresses are never blocked. */
 export const AI_SOURCES = ['openai', 'anthropic', 'googleAgents', 'perplexity', 'mistral', 'duckduckgo'] as const;
 export type AiSource = (typeof AI_SOURCES)[number];
-export type RangeSource = 'cloudflare' | 'jetpack' | AiSource;
+export type RangeSource = 'cloudflare' | 'jetpack' | 'googleCrawlers' | AiSource;
+
+/**
+ * The search engines' own lists of their crawlers' addresses, by the crawler they verify
+ * (lib/crawlerVerify.ts), and whose list it is.
+ */
+const CRAWLER_LISTS = new Map<string, { source: RangeSource; publisher: string }>([
+  ['Googlebot', { source: 'googleCrawlers', publisher: 'Google' }],
+]);
 
 interface SourceSpec {
   label: string;
@@ -42,6 +52,8 @@ interface SourceSpec {
 
 /** An AI company's range never blocked may be no wider than this: Google's widest is a /16. */
 const AI_WIDEST: Record<IpFamily, number> = { 4: 16, 6: 32 };
+/** A crawler list's widest range: Google's are /27s and /64s. */
+const CRAWLER_WIDEST: Record<IpFamily, number> = { 4: 24, 6: 48 };
 
 export const RANGE_SOURCES: Record<RangeSource, SourceSpec> = {
   cloudflare: {
@@ -89,6 +101,21 @@ export const RANGE_SOURCES: Record<RangeSource, SourceSpec> = {
       '195.234.108.0/22',
       '192.0.64.0/18',
     ],
+  },
+  // The two lists https://developers.google.com/crawling/docs/crawlers-fetchers/verify-google-requests
+  // names for Googlebot and the special-case crawlers (AdsBot).
+  googleCrawlers: {
+    label: "Google's crawlers (Googlebot, AdsBot)",
+    urls: [
+      'https://developers.google.com/static/crawling/ipranges/common-crawlers.json',
+      'https://developers.google.com/static/crawling/ipranges/special-crawlers.json',
+    ],
+    format: 'prefixes',
+    minRanges: 100,
+    maxRanges: 2000,
+    widest: CRAWLER_WIDEST,
+    // None shipped: until the first download, Googlebot is verified by its reverse DNS alone.
+    builtin: [],
   },
   // Each company's lists as its bot documentation names them. The copies shipped are in
   // services/aiRanges.ts, which scripts/ai-ranges.ts writes.
@@ -224,6 +251,7 @@ export class ProxyRangesService {
   private cache: { key: string; proxies: TrustedProxy[] } | null = null;
   private jetpackSet: { key: string; set: CidrSet } | null = null;
   private aiSets: { key: string; list: { label: string; set: CidrSet }[] } | null = null;
+  private readonly crawlerSets = new Map<RangeSource, { key: string; set: CidrSet }>();
   /** Told when the ranges or the setting change what is trusted, so the rules get rewritten. */
   onChange: (() => void) | null = null;
 
@@ -354,6 +382,24 @@ export class ProxyRangesService {
       this.aiSets = { key, list: AI_SOURCES.map((source) => ({ label: RANGE_SOURCES[source].label, set: new CidrSet(this.ranges(source)) })) };
     }
     return this.aiSets.list;
+  }
+
+  /**
+   * The addresses a search engine publishes for the crawler a visitor claims to be: detection
+   * takes such an address for that crawler without asking reverse DNS. Null for a crawler whose
+   * engine publishes none.
+   */
+  crawlerList(crawler: string): { publisher: string; set: CidrSet } | null {
+    const list = CRAWLER_LISTS.get(crawler);
+    if (!list) return null;
+    const ranges = this.ranges(list.source);
+    const key = ranges.join(',');
+    let cached = this.crawlerSets.get(list.source);
+    if (cached?.key !== key) {
+      cached = { key, set: new CidrSet(ranges) };
+      this.crawlerSets.set(list.source, cached);
+    }
+    return { publisher: list.publisher, set: cached.set };
   }
 
   /** The setting changed; see onChange. */

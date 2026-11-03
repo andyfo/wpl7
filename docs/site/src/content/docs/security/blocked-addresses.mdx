@@ -60,7 +60,9 @@ usual, none private and none too wide. Otherwise the last good copy stays.
 Detection also leaves two kinds of visitor alone:
 
 - A search engine's crawler, once its address names a host under the engine's own domain, such
-  as `googlebot.com`, and that host names the address back.
+  as `googlebot.com`, and that host names the address back. Googlebot also passes from an
+  address on the lists Google publishes for its crawlers. Some of those addresses have Google
+  Cloud names, which never pass the reverse DNS check.
 - An address with three or more different browsers behind it, which looks like a shared
   connection.
 

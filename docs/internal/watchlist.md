@@ -66,6 +66,7 @@ for a reason; remove one once there is nothing left to watch.
 | [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 22:05 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
 | [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-10-29 10:03 UTC | 6.2.0 (2026-10-23) is the latest, and pinned; no new advisory; `php:8.4-cli-alpine` is PHP 8.4.27 |
 | [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-10-20 12:22 UTC | The feed calls five listed bbPress plugins closed and misses `captcha`; the directory answers as `wporgListing` reads them |
+| [Google's crawler address lists](#googles-crawler-address-lists) | Medium | 2026-11-03 09:35 UTC | Both answer: 589 prefixes, none wider than a /27 or a /64 |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -1169,3 +1170,34 @@ for a reason; remove one once there is nothing left to watch.
   - The themes API starts saying a theme is closed, or the plugins API gets a field for a
     temporary closure: read it, and drop the matching line from the updates page's Limits.
   - The feed's flags change, either way: nothing to do. The panel goes by the directory.
+
+## Google's crawler address lists
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-03 09:35 UTC. Both lists answered at the URLs Google's
+  [Verify Google requests](https://developers.google.com/crawling/docs/crawlers-fetchers/verify-google-requests)
+  page names, and passed the panel's checks: 589 prefixes, 95 ranges once merged.
+  - `common-crawlers.json`: 170 IPv4 and 147 IPv6 prefixes. The old `googlebot.json` URL
+    redirects to it.
+  - `special-crawlers.json`: 136 IPv4 and 136 IPv6 prefixes.
+  - None is wider than a /27 or a /64. Some of the common crawlers' addresses answer to
+    `<ip>.bc.googleusercontent.com`, all of `34.22.85.0/27` among them.
+- **The problem:** detection takes a visitor that claims to be Googlebot at its word when its
+  address is on these lists (`googleCrawlers` in `panel/src/services/proxyRanges.ts`). Reverse
+  DNS can't tell those addresses from any Google Cloud machine. The panel refreshes the lists
+  weekly and keeps the last good copy. A list that moves, or one refused for a range wider than
+  `CRAWLER_WIDEST` (a /24 or a /48), leaves that copy to age, and Googlebot from Google's newer
+  addresses can be blocked like any visitor again.
+- **Check:** count both lists' prefixes and their widest ranges:
+  ```sh
+  for f in common special; do
+    curl -s "https://developers.google.com/static/crawling/ipranges/$f-crawlers.json" |
+      jq -r --arg f "$f" '[.prefixes[] | (.ipv4Prefix // .ipv6Prefix)] | "\($f): \(length) prefixes, widest IPv4 /\([.[] | select(contains(".")) | split("/")[1] | tonumber] | min), IPv6 /\([.[] | select(contains(":")) | split("/")[1] | tonumber] | min)"'
+  done
+  ```
+  Together they should hold 100 to 2,000 prefixes, none wider than a /24 or a /48. Then read
+  Google's page for the lists' URLs, and for a new list for a crawler `CRAWLERS` counts as
+  Googlebot.
+- **When it changes:** update `googleCrawlers` in `RANGE_SOURCES`: a moved or new list's URL, or
+  the limits once the wider ranges have had a look. Never take a list that covers Google Cloud
+  in general: only addresses Google names as its crawlers'.

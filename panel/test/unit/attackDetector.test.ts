@@ -4,6 +4,7 @@ import type { AccessEvent } from '../../src/lib/accessLog.js';
 import { isTrapPath, signalsOf } from '../../src/lib/attackSignals.js';
 import { verifyCrawler, type CrawlerResolver } from '../../src/lib/crawlerVerify.js';
 import { AttackDetector, MAX_TRACKED } from '../../src/services/attackDetector.js';
+import { ProxyRangesService } from '../../src/services/proxyRanges.js';
 import { TrafficService } from '../../src/services/traffic.js';
 import { makeWorld, type TestWorld } from '../helpers.js';
 
@@ -42,7 +43,7 @@ const burst = (count: number, over: (i: number) => Partial<AccessEvent>, start =
 const failedLogin = (i: number): Partial<AccessEvent> => ({ method: 'POST', path: '/wp-login.php', status: 200, originStatus: 200, ts: T0 + i * 1000 });
 
 function detectorFor(w: TestWorld, resolver?: CrawlerResolver): AttackDetector {
-  return new AttackDetector(w.core.settings, w.core.blocklist, quiet, resolver ?? { reverse: async () => [], lookup: async () => [] });
+  return new AttackDetector(w.core.settings, w.core.blocklist, w.core.proxyRanges, quiet, resolver ?? { reverse: async () => [], lookup: async () => [] });
 }
 
 async function run(w: TestWorld, events: AccessEvent[], resolver?: CrawlerResolver) {
@@ -175,6 +176,32 @@ describe('blocking', () => {
     const fake = await run(w, burst(70, deadUrl('2001:db8:7:7::')), resolver);
     expect(fake.result.blocked).toBe(1);
     expect(w.core.blocklist.active()[0]!.address).toBe('2001:db8:7:7::/64');
+  });
+
+  it("takes Googlebot on an address Google publishes for its crawlers, though its name is Google Cloud's", async () => {
+    const w = await makeWorld();
+    // Google's two lists, as the weekly refresh reads them.
+    const prefixes = [{ ipv4Prefix: '203.0.113.0/27' }, ...Array.from({ length: 100 }, (_, i) => ({ ipv4Prefix: `198.51.100.${i}/32` }))];
+    const lists = (async (url: string | URL) =>
+      /\/(common|special)-crawlers\.json$/.test(String(url)) ? new Response(JSON.stringify({ prefixes })) : new Response('', { status: 404 })) as typeof fetch;
+    expect((await new ProxyRangesService(w.core.settings, quiet, lists).refresh()).refreshed).toContain('googleCrawlers');
+    // Every address answers to a Google Cloud name that points back, as any Google Cloud machine does.
+    const name = (ip: string) => `${ip.split('.').reverse().join('.')}.bc.googleusercontent.com`;
+    const cloud: CrawlerResolver = {
+      reverse: async (ip) => [name(ip)],
+      lookup: async (host) => [host.replace('.bc.googleusercontent.com', '').split('.').reverse().join('.')],
+    };
+    const googlebot = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
+    const deadUrl = (ip: string, userAgent = googlebot) => (i: number) => ({ clientIp: ip, userAgent, path: `/gone-${i}/`, status: 404, originStatus: 404 });
+
+    const listed = await run(w, burst(70, deadUrl('203.0.113.9')), cloud);
+    expect(listed.result).toMatchObject({ blocked: 0, skipped: 1 });
+    expect(listed.d.status().decisions[0]!.reason).toMatch(/it is Googlebot, at an address Google publishes for its crawlers/);
+    // Off Google's list, the same kind of name is any Google Cloud machine.
+    expect((await run(w, burst(70, deadUrl(ATTACKER)), cloud)).result.blocked).toBe(1);
+    // And the list vouches for Googlebot only.
+    const bingbot = 'Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)';
+    expect((await run(w, burst(70, deadUrl('203.0.113.10', bingbot)), cloud)).result.blocked).toBe(1);
   });
 
   it("never blocks an AI assistant's published address, whatever it asks for", async () => {

@@ -202,7 +202,7 @@ export function DetectionTab() {
                 : 'Nothing is watched. Blocks made by hand still work.'}{' '}
             Never blocked: private addresses, the fleet&rsquo;s servers, trusted proxies, Jetpack, AI assistants (ChatGPT, Claude, Gemini, Perplexity,
             Mistral, DuckDuckGo) by the addresses they publish, the never-block list and every address an admin used the panel from in the last 30
-            days. A search engine&rsquo;s crawler is checked by reverse DNS first.
+            days. A search engine&rsquo;s crawler is checked by reverse DNS first, and Googlebot also by the addresses Google publishes.
           </p>
           <table className="w-full text-sm">
             <thead>
