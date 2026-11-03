@@ -119,6 +119,9 @@ async function needsOn(s: CoreServices, handle: ServerHandle): Promise<{ needed:
     repositoryOf(config.rcloneImage),
     repositoryOf(config.mariadb.clientImage),
     ...[...stack.values()].map(repositoryOf),
+    // LEGACY(wpl7-rollback) - delete in 0.4.0. The name the first move to PHP-FPM gave an old site
+    // image while it ran, and on some paths left on it: the image goes once nothing uses it.
+    'wpl7-rollback',
   ];
   return { needed, repos, panelRepos };
 }

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { backups, jobs, moveCleanups, servers, sites } from '../../src/db/schema.js';
 import { FakeDnsProvider, makeWorld, waitFor, type TestWorld } from '../helpers.js';
-import { sitePaths } from '../../src/services/siteSpec.js';
+import { asideContainerName, sitePaths } from '../../src/services/siteSpec.js';
 import { hostExec } from '../../src/lib/exec.js';
 import { autoFinalizeMoves } from '../../src/services/housekeeping.js';
 import { wildcardCovers } from '../../src/jobs/handlers/sites.js';
@@ -145,10 +145,13 @@ describe('site.move', () => {
       .where(eq(sites.id, site.id))
       .run();
     const s2 = w.addSshServer('s2', { real: true, publicIp: '203.0.113.9' });
+    // An old container a change that never finished left aside on the source.
+    w.docker.containers.set(asideContainerName(site.containerName), 'exited');
 
     const job = w.deps.sites.move(site.slug, { targetServerId: s2.id });
     const done = await runJob(w, job.id);
     expect(done.status).toBe('succeeded');
+    expect(w.docker.containers.has(asideContainerName(site.containerName))).toBe(false);
 
     // Maintenance freeze happened on the source, cleared on the target.
     const srcExecs = w.docker.calls.filter((c) => c.method === 'exec').map((c) => (c.args[1] as string[]).join(' '));
@@ -177,6 +180,7 @@ describe('site.move', () => {
     expect(result.dns.manual.map((m) => m.host)).toContain('customer.example.com');
 
     // Finalize tears the parked copy down and removes the proxy file.
+    w.docker.calls.length = 0;
     const fin = w.deps.worker.enqueue(
       'site.moveFinalize',
       { cleanupId: cleanup.id },
@@ -185,6 +189,8 @@ describe('site.move', () => {
     );
     const finDone = await runJob(w, fin.id);
     expect(finDone.status).toBe('succeeded');
+    const removed = w.docker.calls.filter((c) => c.method === 'removeContainer').map((c) => c.args[0]);
+    expect(removed).toEqual(expect.arrayContaining([site.containerName, asideContainerName(site.containerName)]));
     expect(fs.existsSync(sitePaths(w.config, site.slug).root)).toBe(false);
     expect(fs.existsSync(proxyFile)).toBe(false);
     expect(w.db.select().from(moveCleanups).all()[0]!.status).toBe('done');
@@ -237,6 +243,7 @@ describe('site.move', () => {
     const s2 = w.addSshServer('s2', { real: true });
     // Simulate garbage from a crashed earlier attempt.
     s2.docker.containers.set(site.containerName, 'exited');
+    s2.docker.containers.set(asideContainerName(site.containerName), 'exited');
     fs.mkdirSync(path.join(s2.root!, 'sites', site.slug, 'wordpress'), { recursive: true });
     fs.mkdirSync(path.join(s2.root!, 'backups', site.slug, 'staging-old'), { recursive: true });
 
@@ -246,6 +253,7 @@ describe('site.move', () => {
     expect(fs.existsSync(path.join(s2.root!, 'backups', site.slug, 'staging-old'))).toBe(false);
     const removals = s2.docker.calls.filter((c) => c.method === 'removeContainer');
     expect(removals.length).toBeGreaterThanOrEqual(1);
+    expect(s2.docker.containers.has(asideContainerName(site.containerName))).toBe(false);
   });
 
   it('validates move requests', async () => {

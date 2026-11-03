@@ -111,6 +111,18 @@ describe('imagesToRemove', () => {
 });
 
 describe('cleanDocker', () => {
+  it('removes an image an earlier move to PHP-FPM left a name on, once nothing uses it', async () => {
+    const w = await makeWorld();
+    const log = { info: () => undefined, warn: () => undefined };
+    add(w.docker, 'wpl7-rollback:gone-site');
+    const kept = add(w.docker, 'wpl7-rollback:stopped-site');
+    await w.docker.createSiteContainer({ name: 'wp-stopped-site', image: 'wpl7-rollback:stopped-site', env: {}, labels: { 'wpl7.role': 'wordpress' }, binds: [], networks: [] });
+    await cleanDocker(w.core, log);
+    expect(w.docker.images.has('wpl7-rollback:gone-site')).toBe(false);
+    expect(w.docker.images.has('wpl7-rollback:stopped-site')).toBe(true);
+    expect((await w.docker.containerStack('wp-stopped-site'))!.imageId).toBe(kept);
+  });
+
   it("removes each reachable server's old images and trims its build cache", async () => {
     const w = await makeWorld();
     const lines: string[] = [];

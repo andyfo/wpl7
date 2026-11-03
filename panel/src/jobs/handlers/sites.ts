@@ -36,6 +36,7 @@ import {
   loadSite,
   probeSite,
   probeSiteAttempt,
+  removeSiteContainers,
   restartSiteContainer,
   rewriteWordPressUrls,
   runLicenseHook,
@@ -425,7 +426,7 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   const hadFtp = s.ftp.hasLogins(site.id);
   try {
     ctx.info('Removing container…');
-    await server.docker.removeContainer(site.containerName);
+    await removeSiteContainers(server.docker, site.containerName);
     if (hadFtp) {
       // Before the files go: its FTP file server has them mounted.
       ctx.info('Removing FTP/SFTP access…');
@@ -645,7 +646,7 @@ export async function replaceContainer(
 ): Promise<ReplacedContainer> {
   const { docker } = server;
   const name = next.site.containerName;
-  await takeBackAside(ctx, docker, name);
+  await takeBackAside(ctx, server, s, row, name, run);
   let old = await docker.containerStack(name);
   // Set when this site has already failed to move to the image the tag names: going through that
   // again would only fail a change of domains or a new database password for a reason of its own.
@@ -727,11 +728,21 @@ async function putBack(docker: ServerHandle['docker'], name: string): Promise<vo
  * the old container aside. It is the last one known to serve, so it gets the site's name back
  * before anything else: whatever has that name now has passed no check. At worst, a change that
  * had worked is made once more.
+ *
+ * It starts again when the site should run, as it ran before that change. Left stopped, a move to
+ * stack 2 would take it for a site that wasn't answering, keep a new container that doesn't answer
+ * either, and delete this one.
  */
-async function takeBackAside(ctx: JobContext<unknown>, docker: ServerHandle['docker'], name: string): Promise<void> {
-  if ((await docker.containerState(asideContainerName(name))) === 'missing') return;
+async function takeBackAside(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, row: SiteRow, name: string, run: boolean): Promise<void> {
+  if ((await server.docker.containerState(asideContainerName(name))) === 'missing') return;
   ctx.warn(`${asideContainerName(name)} is the container from before a change that did not finish. It comes back first.`);
-  await putBack(docker, name);
+  await putBack(server.docker, name);
+  if (!run) return;
+  try {
+    await startSiteContainer(server, s, row, ctx);
+  } catch (err) {
+    ctx.warn(`It did not start (${errMsg(err)}), so the change goes on without it.`);
+  }
 }
 
 /** The old container, once the new one is in place. Never a reason to fail: the next change, or the image sweep, deals with it. */

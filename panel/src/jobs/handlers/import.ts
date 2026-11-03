@@ -29,6 +29,7 @@ import {
   dnsPreflight,
   loadSite,
   probeSite,
+  removeSiteContainers,
   rewriteWordPressUrls,
   siteDomains,
   siteUrl,
@@ -905,8 +906,8 @@ export async function siteImportFinish(ctx: JobContext<z.infer<typeof siteImport
     }
     if ((await server.docker.containerState(site.containerName)) !== 'missing') {
       ctx.warn(`Removing leftover container ${site.containerName} (earlier attempt)`);
-      await server.docker.removeContainer(site.containerName);
     }
+    await removeSiteContainers(server.docker, site.containerName);
     if (await server.files.exists(paths.root)) {
       ctx.warn('Removing leftover files of an earlier attempt');
       await server.files.rm(paths.root);

@@ -7,12 +7,12 @@ import type { Config } from '../../config.js';
 import type { JobContext } from '../context.js';
 import { siteScheme } from '../../services/labels.js';
 import { writeSiteRuntimeFiles } from '../../services/siteCaches.js';
-import { DEFAULT_UPLOADS_INI, sitePaths } from '../../services/siteSpec.js';
+import { DEFAULT_UPLOADS_INI, asideContainerName, sitePaths } from '../../services/siteSpec.js';
 import { ensureSiteNetwork } from '../../services/siteNetwork.js';
 import { mailLogin, renderMsmtprc, type SenderOwner } from '../../services/mailAuth.js';
 import type { CoreServices } from '../../services/index.js';
 import type { FilesPort } from '../../lib/files.js';
-import type { ContainerState } from '../../services/docker.js';
+import type { ContainerState, DockerPort } from '../../services/docker.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import { httpProbe, httpProbeAttempts, type ProbeAttempt } from '../../lib/httpProbe.js';
 import type { RecipeHook } from '../../../shared/recipes.js';
@@ -246,6 +246,17 @@ export function shouldSiteRun(state: ContainerState, site: Pick<SiteRow, 'status
   if (state === 'running') return true;
   if (state === 'exited') return false;
   return site.status === 'running';
+}
+
+/**
+ * Remove a site's container for good, with the old one a change may have left aside
+ * (replaceContainer): for a site that leaves a server, or a leftover where one arrives. Left
+ * behind, that old container would come back as the site's at its next change, and on a slug
+ * used again, as another site's.
+ */
+export async function removeSiteContainers(docker: Pick<DockerPort, 'removeContainer'>, containerName: string): Promise<void> {
+  await docker.removeContainer(asideContainerName(containerName));
+  await docker.removeContainer(containerName);
 }
 
 /** A site, as much of it as the mount helpers need. */

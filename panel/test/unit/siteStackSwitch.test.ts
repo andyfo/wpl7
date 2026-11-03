@@ -616,6 +616,37 @@ describe('moving to stack 2', () => {
     expect(w.docker.containers.has(asideOf(site))).toBe(false);
   });
 
+  it('starts a container a change left aside before it tries again, so the check knows the site worked', async () => {
+    const w = await makeWorld();
+    const site = await siteOnOldImage(w);
+    // A panel that stopped right after it set the running site's container aside.
+    await w.docker.renameContainer(site.containerName, asideOf(site));
+    await w.docker.stopContainer(asideOf(site), 0);
+    // The new setup's container exits as soon as it starts.
+    w.docker.onStart = (name) => {
+      if (name === site.containerName && w.docker.labelsByContainer.get(name)?.[SITE_STACK_LABEL] === '2') w.docker.containers.set(name, 'exited');
+    };
+    const job = w.deps.sites.reconcile(site.slug);
+    const done = await runJob(w, job.id);
+    expectFailedMove(w, site, done, /check on the new setup failed: its container is exited/);
+    expectOldContainerBack(w, site);
+    expect(logOf(w, job.id).join('\n')).toContain(`${asideOf(site)} is the container from before a change that did not finish`);
+  });
+
+  it('goes on without a container left aside that does not start', async () => {
+    const w = await makeWorld();
+    const site = await siteOnOldImage(w);
+    await w.docker.renameContainer(site.containerName, asideOf(site));
+    await w.docker.stopContainer(asideOf(site), 0);
+    vi.spyOn(w.docker, 'startContainer').mockRejectedValueOnce(new Error('OCI runtime create failed'));
+    const job = w.deps.sites.reconcile(site.slug);
+    const done = await runJob(w, job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(await siteContainerStack(w.docker, site.containerName)).toBe(2);
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
+    expect(logOf(w, job.id).join('\n')).toContain('It did not start (OCI runtime create failed), so the change goes on without it.');
+  });
+
   it('migrates a stopped site, without starting or checking it', async () => {
     const w = await makeWorld();
     const site = await siteOnOldImage(w);
@@ -931,6 +962,20 @@ describe('moving to stack 2', () => {
       expect((await runJob(w, w.deps.sites.reconcile(site.slug).id)).status).toBe('succeeded');
       expect(rowOf(w, site).pageCache).toBeNull();
     });
+  });
+});
+
+describe('a container left aside', () => {
+  it('goes with its site when the site is deleted, so a slug used again cannot get it back', async () => {
+    const w = await makeWorld();
+    const site = await createSite(w);
+    // What a change that never finished leaves next to the site's own container.
+    await w.docker.createSiteContainer({ ...specs(w).at(-1)!, name: asideOf(site) });
+    await w.docker.stopContainer(asideOf(site), 0);
+    const done = await runJob(w, w.deps.sites.delete(site.slug, false).id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(w.docker.containers.has(site.containerName)).toBe(false);
+    expect(w.docker.containers.has(asideOf(site))).toBe(false);
   });
 });
 
