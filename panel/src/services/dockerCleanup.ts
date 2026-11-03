@@ -8,7 +8,7 @@ import type { ImageSummary } from './docker.js';
 import type { HousekeepingLog } from './housekeeping.js';
 import type { CoreServices } from './index.js';
 import { SCANNER_IMAGE } from './scanEngines.js';
-import { SITE_IMAGE_REPO, SITE_ROLLBACK_REPO, siteImage } from './siteSpec.js';
+import { SITE_IMAGE_REPO, siteImage } from './siteSpec.js';
 import { DKIM_CONTAINER, MAIL_CONTAINER, MARIADB_CONTAINER, PANEL_CONTAINER, TRAEFIK_CONTAINER } from './stack.js';
 
 /**
@@ -23,8 +23,7 @@ import { DKIM_CONTAINER, MAIL_CONTAINER, MARIADB_CONTAINER, PANEL_CONTAINER, TRA
  *
  * An image goes when no container uses it, running or stopped, no name the panel needs points
  * at it, and it is WPL7's: every name it has is in a repository WPL7 pulls or builds into, or it
- * has no name at all. A server's own images, under names of their own, are left alone, and so is
- * the old image of a site moving to another stack (SITE_ROLLBACK_REPO), until that is over. Of the
+ * has no name at all. A server's own images, under names of their own, are left alone. Of the
  * panel's images, the newest one no container runs stays too, for a rollback. An update of the
  * panel and the removal of images on its server take turns, through a lock (removeUnusedImages).
  *
@@ -151,24 +150,8 @@ export async function removeUnusedImages(s: CoreServices, handle: ServerHandle, 
   }
 }
 
-/**
- * The temporary names a site's move to another stack left behind (replaceContainer): one a stopped
- * container's image had to keep, or one from a panel that stopped half-way. An image with such a
- * name counts as nobody's below, so without this it would stay for good. Not while that site has
- * a job, which may be the move itself. An image a stopped container uses keeps its name for now.
- */
-async function dropRollbackNames(s: CoreServices, handle: ServerHandle, log: HousekeepingLog): Promise<void> {
-  for (const tag of await handle.docker.imageTags(SITE_ROLLBACK_REPO)) {
-    const slug = tag.slice(SITE_ROLLBACK_REPO.length + 1);
-    const site = s.db.select().from(sites).where(eq(sites.slug, slug)).get();
-    if (site && s.worker.activeSiteJob(site.id)) continue;
-    await handle.docker.untagImage(tag).catch((err: unknown) => log.warn(`Docker on "${handle.name}": could not remove ${tag}: ${errorText(err)}`));
-  }
-}
-
 async function removeFrom(s: CoreServices, handle: ServerHandle, log: HousekeepingLog): Promise<string[]> {
   const { docker } = handle;
-  await dropRollbackNames(s, handle, log);
   const images = await docker.listImages();
   const inUse = new Set(await docker.containerImageIds());
   const { needed: neededRefs, repos, panelRepos } = await needsOn(s, handle);

@@ -5,7 +5,7 @@ import type { JobWorker } from '../jobs/worker.js';
 import type { CoreServices } from './index.js';
 import { hostedSites } from '../lib/siteKind.js';
 import { queueReconcile, type HardeningSweep } from './siteHardening.js';
-import { siteImage } from './siteSpec.js';
+import { containerOfAside, siteImage } from './siteSpec.js';
 import { stackFromLabels, type SiteStack } from './siteStack.js';
 
 /**
@@ -25,6 +25,9 @@ import { stackFromLabels, type SiteStack } from './siteStack.js';
  * So is a site that went back to its old container from the image the tag names now: every hour
  * it would be taken down to fail the same way. It tries again by itself once there is a newer
  * image, so no site stays behind for good, and its page offers a Retry before that.
+ *
+ * A container kept aside by a change that never finished (replaceContainer) gets its site a
+ * reconcile too, which puts it back first.
  */
 export async function sweepSiteImages(
   s: CoreServices,
@@ -49,9 +52,15 @@ export async function sweepSiteImages(
       const containers = await docker.listManaged(['wpl7.role=wordpress']);
       const queued = new Set<number>();
       for (const container of containers) {
-        const site = rows.find((r) => r.containerName === container.name && r.serverId === server.id);
+        const asideOf = containerOfAside(container.name);
+        const site = rows.find((r) => r.containerName === (asideOf ?? container.name) && r.serverId === server.id);
         // A container the panel cannot explain is not the sweep's to rebuild.
-        if (!site) continue;
+        if (!site || queued.has(site.id)) continue;
+        if (asideOf) {
+          queued.add(site.id);
+          queueReconcile(worker, site, sweep);
+          continue;
+        }
         const image = await tagged(siteImage(site.phpVersion));
         if (!image.id || image.id === site.stackSwitchImage) continue;
         // On the current image, yet made for the one before it: the panel that was running while an

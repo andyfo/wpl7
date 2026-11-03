@@ -303,9 +303,11 @@ export interface ImageSummary {
 export interface DockerPort {
   createSiteContainer(spec: SiteContainerSpec): Promise<void>;
   startContainer(name: string): Promise<void>;
-  stopContainer(name: string): Promise<void>;
+  /** Stop, after `graceSeconds` (20) for the container to stop by itself. A container that is not there is not an error. */
+  stopContainer(name: string, graceSeconds?: number): Promise<void>;
   restartContainer(name: string): Promise<void>;
   removeContainer(name: string): Promise<void>;
+  renameContainer(name: string, to: string): Promise<void>;
   containerState(name: string): Promise<ContainerState>;
   /** The image reference a container was created from; null when it does not exist. */
   containerImage(name: string): Promise<string | null>;
@@ -372,12 +374,6 @@ export interface DockerPort {
   tagImage(source: string, target: string): Promise<void>;
   /** Untag, and remove if nothing else uses it. An image that does not exist is not an error. */
   removeImage(ref: string): Promise<void>;
-  /**
-   * Take a name off an image and never the image off a container, which `removeImage` refuses to
-   * do alone when it is the image's last name. False: the name stays, because only a container
-   * that isn't running uses the image, and Docker can't be trusted with that (the function says why).
-   */
-  untagImage(tag: string): Promise<boolean>;
   /** Remove untagged images carrying all these labels (`key=value`): what a build left behind. */
   pruneImages(labels: string[]): Promise<void>;
   /** Every image on the server, intermediate build steps aside. */
@@ -574,9 +570,9 @@ export class DockerService implements DockerPort {
     }
   }
 
-  async stopContainer(name: string): Promise<void> {
+  async stopContainer(name: string, graceSeconds = 20): Promise<void> {
     try {
-      await this.docker.getContainer(name).stop({ t: 20 });
+      await this.docker.getContainer(name).stop({ t: graceSeconds });
     } catch (err) {
       if (isStatusError(err, 304) || isStatusError(err, 404)) return; // already stopped / gone
       throw err;
@@ -594,6 +590,10 @@ export class DockerService implements DockerPort {
       if (isStatusError(err, 404)) return;
       throw err;
     }
+  }
+
+  async renameContainer(name: string, to: string): Promise<void> {
+    await this.docker.getContainer(name).rename({ name: to });
   }
 
   async containerState(name: string): Promise<ContainerState> {
@@ -1126,37 +1126,6 @@ export class DockerService implements DockerPort {
     } catch (err) {
       if (!isStatusError(err, 404)) throw err;
     }
-  }
-
-  /**
-   * Measured on Docker 29.9.2 with both image stores, removing an image's last name while a
-   * container uses it: Docker refuses without force. With force a running container keeps the image.
-   * With only a stopped or never started container, the containerd store keeps it too, but the
-   * classic overlay2 store deletes it. That container can still start, but no container can be made
-   * from that image any more, and a site's way back is exactly that. So force is only for a running
-   * container, and otherwise the name stays: it costs nothing while the image is in use.
-   */
-  async untagImage(tag: string): Promise<boolean> {
-    const image = this.docker.getImage(tag);
-    try {
-      await image.remove();
-      return true;
-    } catch (err) {
-      if (isStatusError(err, 404)) return true;
-      if (!isStatusError(err, 409)) throw err;
-    }
-    let id: string;
-    try {
-      id = (await image.inspect()).Id;
-    } catch (err) {
-      // An image built on this one refused the delete after the name had gone.
-      if (isStatusError(err, 404)) return true;
-      throw err;
-    }
-    const containers = await this.docker.listContainers({ all: true });
-    if (!containers.some((c) => c.ImageID === id && c.State === 'running')) return false;
-    await image.remove({ force: true });
-    return true;
   }
 
   async pruneImages(labels: string[]): Promise<void> {

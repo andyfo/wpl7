@@ -67,60 +67,21 @@ describe('containerStack', () => {
   });
 });
 
-describe('untagImage', () => {
-  const ID = 'sha256:abc';
-  const refused = () => {
-    throw status(409, 'conflict: must force');
-  };
-
-  it('is a plain removal when Docker allows one: another name, or nothing using it', async () => {
-    const remove = vi.fn(async () => undefined);
-    expect(await client({ image: { remove } }).untagImage('wpl7-rollback:demo')).toBe(true);
-    expect(remove).toHaveBeenCalledTimes(1);
-    expect(remove).toHaveBeenCalledWith();
+describe('setting a container aside', () => {
+  it('stops it at once when asked to, and gives it 20 s otherwise', async () => {
+    const stop = vi.fn(async () => undefined);
+    await client({ container: { stop } }).stopContainer('wp-demo', 0);
+    await client({ container: { stop } }).stopContainer('wp-demo');
+    expect(stop.mock.calls).toEqual([[{ t: 0 }], [{ t: 20 }]]);
   });
 
-  it('is done when the name is not there', async () => {
-    const remove = vi.fn(async () => {
-      throw status(404);
-    });
-    expect(await client({ image: { remove } }).untagImage('wpl7-rollback:demo')).toBe(true);
-  });
-
-  it('forces the name off when a running container uses the image, which keeps it there', async () => {
-    const remove = vi.fn(async (opts?: { force?: boolean }) => {
-      if (!opts?.force) refused();
-    });
-    const containers = [
-      { ImageID: 'sha256:other', State: 'exited' },
-      { ImageID: ID, State: 'running' },
-    ];
-    expect(await client({ image: { remove, inspect: async () => ({ Id: ID }) }, containers }).untagImage('wpl7-rollback:demo')).toBe(true);
-    expect(remove).toHaveBeenLastCalledWith({ force: true });
-  });
-
-  it.each(['exited', 'created'])('leaves the name on when only a container that is %s uses it: force would delete the image on overlay2', async (state) => {
-    const remove = vi.fn(async (opts?: { force?: boolean }) => {
-      if (!opts?.force) refused();
-    });
-    const containers = [{ ImageID: ID, State: state }];
-    expect(await client({ image: { remove, inspect: async () => ({ Id: ID }) }, containers }).untagImage('wpl7-rollback:demo')).toBe(false);
-    expect(remove).toHaveBeenCalledTimes(1);
-    expect(remove).toHaveBeenCalledWith();
-  });
-
-  it('counts the name as gone when an image built on it refused the rest', async () => {
-    const remove = vi.fn(async () => refused());
-    const inspect = async () => {
-      throw status(404);
+  it('renames it, and passes on a name Docker refuses', async () => {
+    const rename = vi.fn(async () => undefined);
+    await client({ container: { rename } }).renameContainer('wp-demo', 'wp-demo.previous');
+    expect(rename).toHaveBeenCalledWith({ name: 'wp-demo.previous' });
+    const taken = async () => {
+      throw status(409, 'name already in use');
     };
-    expect(await client({ image: { remove, inspect } }).untagImage('wpl7-rollback:demo')).toBe(true);
-  });
-
-  it('passes on anything else', async () => {
-    const remove = vi.fn(async () => {
-      throw status(500, 'daemon on fire');
-    });
-    await expect(client({ image: { remove } }).untagImage('wpl7-rollback:demo')).rejects.toThrow('daemon on fire');
+    await expect(client({ container: { rename: taken } }).renameContainer('wp-demo', 'wp-demo.previous')).rejects.toThrow('already in use');
   });
 });

@@ -1,8 +1,9 @@
 /**
  * A site moving from stack 1 to stack 2 on a real Docker daemon, through the panel's own
- * replaceContainer: a stack 1 container on a real image whose tag then moves, a real WordPress with
- * the real WooCommerce, and a way back that only works if the old image is really still there and
- * by id. The panel's database is a test world's, and its other servers and Traefik aren't there,
+ * replaceContainer: a stack 1 container on a real image whose tag a `docker build` then takes, a
+ * real WordPress with the real WooCommerce, and a way back that is the old container itself. On
+ * Docker's containerd image store that build deletes the old image, though the container runs it.
+ * The panel's database is a test world's, and its other servers and Traefik aren't there,
  * so "does the site answer" is the container's state here, as in every unit test of a job. The same
  * move with a real answer, through a real Traefik: the last part of test/engine/siteStack.test.ts.
  *
@@ -26,7 +27,7 @@ import { JobContext } from '../../src/jobs/context.js';
 import { GEOLOCATE_OFF_REASON, replaceContainer } from '../../src/jobs/handlers/sites.js';
 import { DockerService, type NetworkSpec, type SiteContainerSpec } from '../../src/services/docker.js';
 import { siteNetworkName, EGRESS_NETWORK } from '../../src/services/siteNetwork.js';
-import { SITE_ROLLBACK_REPO, siteImage, sitePaths, siteRollbackImage, siteRuntimeFrom } from '../../src/services/siteSpec.js';
+import { asideContainerName, siteImage, sitePaths, siteRuntimeFrom } from '../../src/services/siteSpec.js';
 import { SITE_STACK_PORT } from '../../src/services/siteStack.js';
 import { WpService } from '../../src/services/wp.js';
 import { makeTestConfig, makeWorld, type TestWorld } from '../helpers.js';
@@ -38,12 +39,11 @@ const OLD_IMAGE = process.env.WPL7_ENGINE_OLD_SITE_IMAGE ?? 'wpl7-wordpress:php8
 const SLUG = `engineswitch${process.pid}`;
 const PHP = `switch${process.pid}`;
 const TAG = siteImage(PHP);
-const ROLLBACK_TAG = siteRollbackImage(SLUG);
 const CONTAINER = `wp-${SLUG}`;
+const ASIDE = asideContainerName(CONTAINER);
 const DATABASE = `wpl7-engine-switch-db-${process.pid}`;
 const SITE_NETWORK = siteNetworkName(SLUG);
 const OWN_EGRESS = `wpl7-engine-switch-egress-${process.pid}`;
-const BROKEN_IMAGE = `wpl7-engine-switch-broken:${process.pid}`;
 const HOST = 'switch.example.com';
 const DB_PASSWORD = 'engine-db-password';
 const PHP_LINE = 'php_value max_input_vars 4321';
@@ -93,15 +93,21 @@ async function build(tag: string, dockerfile: string): Promise<string> {
   return must(['image', 'inspect', '-f', '{{.Id}}', tag]);
 }
 
-/** As a pull or a rebuild moves it: the image it left may have no name any more. */
+/** As a pull moves it: the image it left may have no name any more, but Docker keeps it. */
 async function moveTag(id: string): Promise<void> {
   await must(['tag', id, TAG]);
 }
 
+/** Null: Docker has no such image. */
 const namesOf = async (id: string): Promise<string[] | null> => {
   const done = await dockerCli(['image', 'inspect', '-f', '{{json .RepoTags}}', id]);
   return done.status === 0 ? (JSON.parse(done.stdout) as string[]) : null;
 };
+
+/** Docker's containerd image store, where a build that takes an image's name deletes that image. */
+const onContainerdStore = async () => (await must(['info', '-f', '{{json .DriverStatus}}'])).includes('io.containerd.snapshotter');
+
+const asideExists = async () => (await dockerCli(['container', 'inspect', ASIDE])).status === 0;
 
 /**
  * The site's networks, with the way out one of this test's own: wpl7_egress may be in use by a
@@ -138,10 +144,10 @@ describe.skipIf(!ENABLED)('a site moving to stack 2, on real Docker', { timeout:
   const fresh = () => w.db.select().from(sites).where(eq(sites.id, row.id)).get()!;
   const inspect = (format: string) => must(['inspect', '-f', format, CONTAINER]);
 
-  /** What a recreate does, as the reconcile job calls it. */
-  function recreate(run = true) {
-    // As Retry does: a site that failed on this image otherwise stays on its old one.
-    w.db.update(sites).set({ stackSwitchImage: null }).where(eq(sites.id, row.id)).run();
+  /** What a recreate does, as the reconcile job calls it; with `retry`, as Retry does. */
+  function recreate(run = true, retry = true) {
+    // A site that failed on this image otherwise stays on its old one, where it can.
+    if (retry) w.db.update(sites).set({ stackSwitchImage: null }).where(eq(sites.id, row.id)).run();
     const site = fresh();
     const ctx = new JobContext(w.worker.enqueue('demo', {}).id, {}, w.db);
     const domains = [HOST];
@@ -177,8 +183,6 @@ describe.skipIf(!ENABLED)('a site moving to stack 2, on real Docker', { timeout:
     // Built here so that its id is this test's alone, and nothing else keeps it alive.
     oldId = await build(TAG, `FROM ${OLD_IMAGE}\nLABEL wpl7.engine.switch="${process.pid}"\n`);
     newId = await must(['image', 'inspect', '-f', '{{.Id}}', NEW_IMAGE]);
-    // Stack 2 with PHP in it, so that the migration runs, and a container from it can't start.
-    brokenId = await build(BROKEN_IMAGE, `FROM ${NEW_IMAGE}\nLABEL wpl7.engine.switch="${process.pid}"\nENTRYPOINT ["/no/such/command"]\nCMD []\n`);
 
     await docker.ensureNetwork({ name: SITE_NETWORK, internal: true, labels: { 'wpl7.role': 'site-network', 'wpl7.site': SLUG } });
     await must(['network', 'create', '-o', 'com.docker.network.bridge.enable_icc=false', OWN_EGRESS]);
@@ -196,10 +200,10 @@ describe.skipIf(!ENABLED)('a site moving to stack 2, on real Docker', { timeout:
 
   afterAll(async () => {
     await dockerCli(['exec', CONTAINER, 'find', '/var/www/html', '-mindepth', '1', '-delete']);
-    await dockerCli(['rm', '-f', '-v', CONTAINER, DATABASE]);
+    await dockerCli(['rm', '-f', '-v', CONTAINER, ASIDE, DATABASE]);
     await dockerCli(['network', 'rm', SITE_NETWORK, OWN_EGRESS]);
-    await dockerCli(['rmi', '-f', TAG, ROLLBACK_TAG, BROKEN_IMAGE]);
-    await dockerCli(['rmi', '-f', oldId]);
+    await dockerCli(['rmi', '-f', TAG]);
+    await dockerCli(['rmi', '-f', ...[oldId, brokenId].filter((id): id is string => Boolean(id))]);
     // A build without BuildKit leaves a nameless image for each of its steps, all with this label.
     await dockerCli(['image', 'prune', '-f', '--filter', `label=wpl7.engine.switch=${process.pid}`]);
     fs.rmSync(root, { recursive: true, force: true });
@@ -207,7 +211,7 @@ describe.skipIf(!ENABLED)('a site moving to stack 2, on real Docker', { timeout:
 
   it('starts as a stack 1 container on an old image, with a real store on it', async () => {
     const replaced = await recreate();
-    expect(replaced).toEqual({ previous: null, switched: false });
+    expect(replaced).toEqual({ switched: false });
     expect(await docker.containerStack(CONTAINER)).toEqual({ imageId: oldId, stack: 1 });
     expect(await docker.imageStack(TAG)).toBe(1);
     expect(await inspect(`{{index .Config.Labels "traefik.http.services.wp-${SLUG}.loadbalancer.server.port"}}`)).toBe('80');
@@ -227,9 +231,13 @@ describe.skipIf(!ENABLED)('a site moving to stack 2, on real Docker', { timeout:
     expect(await pageStatus(80)).toBe('200');
   });
 
-  it('goes back to its own image, by id, when the new one cannot start, after the tag has moved', async () => {
-    await moveTag(brokenId);
-    expect(await namesOf(oldId)).toEqual([]);
+  it('goes back to its own container when the new one cannot start, after a build took the tag', async () => {
+    // Stack 2 with PHP in it, so that the migration runs, and a container from it can't start. Built
+    // under the tag, as provision/deploy.sh rebuilds a site image.
+    brokenId = await build(TAG, `FROM ${NEW_IMAGE}\nLABEL wpl7.engine.switch="${process.pid}"\nENTRYPOINT ["/no/such/command"]\nCMD []\n`);
+    // What the move must not need: the containerd store has deleted the image the container runs.
+    if (await onContainerdStore()) expect(await namesOf(oldId)).toBeNull();
+    else expect(await namesOf(oldId)).toEqual([]);
     expect(await docker.imageStack(TAG)).toBe(2);
 
     await expect(recreate()).rejects.toThrow(/^This site still runs the old PHP setup: the new container could not start: /);
@@ -247,15 +255,26 @@ describe.skipIf(!ENABLED)('a site moving to stack 2, on real Docker', { timeout:
     const row2 = fresh();
     expect(row2.stackSwitchError).toMatch(/^the new container could not start: /);
     expect(row2.stackSwitchImage).toBe(brokenId);
-    // The name is off, and the image stays with the container that runs it.
-    expect(await docker.imageId(ROLLBACK_TAG)).toBeNull();
-    expect(await namesOf(oldId)).toEqual([]);
+    expect(await asideExists()).toBe(false);
   });
 
   it('asked real WP-CLI whether this store is on plain Geolocate, in the old container', () => {
     const site = fresh();
     expect(site.pageCache).toBe('off');
     expect(parseSiteCacheRules(site.cacheRules).offReason).toBe(GEOLOCATE_OFF_REASON);
+  });
+
+  it('is never left without a container by a recreate that is not a Retry: it stays, or tries the move again', async () => {
+    const containerd = await onContainerdStore();
+    const done = recreate(true, false);
+    // Where Docker still has the old image, the site stays on it. Where it doesn't, nothing can be
+    // made from it, and the move is tried again, with its own way back.
+    if (containerd) await expect(done).rejects.toThrow(/still runs the old PHP setup/);
+    else await expect(done).resolves.toEqual({ switched: false });
+    expect(await inspect('{{.State.Status}}')).toBe('running');
+    expect(await docker.containerStack(CONTAINER)).toEqual({ imageId: oldId, stack: 1 });
+    expect(await pageStatus(80)).toBe('200');
+    expect(await asideExists()).toBe(false);
   });
 
   it('does not count WooCommerce that is switched off, or the other Geolocate', async () => {
@@ -271,29 +290,25 @@ describe.skipIf(!ENABLED)('a site moving to stack 2, on real Docker', { timeout:
     expect(fresh()).toMatchObject({ pageCache: null, cacheRules: null });
   });
 
-  it('puts a stopped site back stopped, with the name left on, because forcing it could cost the image', async () => {
+  it('puts a stopped site back stopped, and that container still starts', async () => {
     await must(['stop', '-t', '5', CONTAINER]);
     docker.failNextCreate = 'no room left';
     await expect(recreate(false)).rejects.toThrow(/still runs the old PHP setup: the new container could not be created: no room left/);
 
-    expect(await inspect('{{.State.Status}}')).toBe('created');
+    expect(await inspect('{{.State.Status}}')).toBe('exited');
     expect(await inspect('{{.Image}}')).toBe(oldId);
-    expect(await docker.imageId(ROLLBACK_TAG)).toBe(oldId);
-    // Where the nightly clean-up looks for such a name.
-    expect(await docker.imageTags(SITE_ROLLBACK_REPO)).toContain(ROLLBACK_TAG);
+    expect(await asideExists()).toBe(false);
 
-    // Started, its container holds the image by itself, and the name can go.
+    // Whatever has become of its image.
     await docker.startContainer(CONTAINER);
-    expect(await docker.untagImage(ROLLBACK_TAG)).toBe(true);
-    expect(await docker.imageId(ROLLBACK_TAG)).toBeNull();
-    expect(await namesOf(oldId)).toEqual([]);
     expect(await inspect('{{.State.Status}}')).toBe('running');
+    expect(await pageStatus(80)).toBe('200');
   });
 
   it('moves to the real stack 2 image, serves through nginx, and leaves nothing behind', async () => {
     await moveTag(newId);
     const replaced = await recreate();
-    expect(replaced).toEqual({ previous: { imageId: oldId, stack: 1 }, switched: true });
+    expect(replaced).toEqual({ switched: true });
 
     expect(await docker.containerStack(CONTAINER)).toEqual({ imageId: newId, stack: 2 });
     expect(await inspect(`{{index .Config.Labels "traefik.http.services.wp-${SLUG}.loadbalancer.server.port"}}`)).toBe('8080');
@@ -315,8 +330,8 @@ describe.skipIf(!ENABLED)('a site moving to stack 2, on real Docker', { timeout:
     expect(headers).not.toMatch(/x-cache-skipped: off/i);
     expect(await must(['exec', CONTAINER, 'cat', '/etc/wpl7-runtime/php-fpm-pool.conf'])).toContain('pm.max_children');
 
-    // No other name, and no container: the old image went with its temporary name.
-    expect(await docker.imageId(ROLLBACK_TAG)).toBeNull();
-    expect(await namesOf(oldId)).toBeNull();
+    // The old container is gone. Its image has no name and nothing runs it: the nightly clean-up's.
+    expect(await asideExists()).toBe(false);
+    expect((await namesOf(oldId)) ?? []).toEqual([]);
   });
 });

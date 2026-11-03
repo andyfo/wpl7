@@ -40,7 +40,7 @@ for a reason; remove one once there is nothing left to watch.
 | [Docker: the build cache and image names, as the nightly clean-up reads them](#docker-the-build-cache-and-image-names-as-the-nightly-clean-up-reads-them) | Medium | 2026-10-27 17:47 UTC | Docker 29.9.2: both prune parameters trim, `all` would remove shared layers first |
 | [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
 | [Docker: a signal counts as stopping a container by hand](#docker-a-signal-counts-as-stopping-a-container-by-hand) | Medium | 2026-11-01 06:30 UTC | Docker 28.1.1: after `docker kill --signal USR1`, a container with `unless-stopped` that exits stays down |
-| [Docker: removing an image only a stopped container uses](#docker-removing-an-image-only-a-stopped-container-uses) | Low | 2026-11-01 09:08 UTC | Engine 29.9.2 is the latest, and what `untagImage` was measured on |
+| [Docker: a container whose image a build deleted](#docker-a-container-whose-image-a-build-deleted) | Low | 2026-11-03 09:08 UTC | Docker 29.9.2: a build deletes the image on the containerd store, and keeps it on overlay2; the container still stops, renames and starts |
 | [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-10-04 18:10 UTC | `latest` is v5.1.0; hostname logic as relied on |
 | [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-09-30 07:23 UTC | Both answer as expected |
 | [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-09-30 09:51 UTC | All six as listed |
@@ -534,23 +534,29 @@ for a reason; remove one once there is nothing left to watch.
   the "restarts each site once" sentences go from Settings, the site's Container limits card and
   `docs/site/src/content/docs/sites/settings.mdx`.
 
-## Docker: removing an image only a stopped container uses
+## Docker: a container whose image a build deleted
 
 - **Priority:** Low
-- **Last checked:** 2026-11-01 09:08 UTC. Engine 29.9.2, from 2026-10-20, is still the latest. `untagImage`'s comment in
-  `panel/src/services/docker.ts` was measured on it with both image stores: with only a stopped or never started
-  container using the image, `docker rmi -f` of its last name deletes it on the classic overlay2 store, and
-  keeps it on the containerd store. Not measured again at this check, because it needs Docker.
-- **The problem:** a site moving to PHP-FPM keeps its old image under a temporary name, `wpl7-rollback:<slug>`,
-  to go back to. A stopped container can still start after such a delete, but no container can be made from that
-  image any more, and a site's way back is exactly that.
-- **What we do about it:** `untagImage` forces only when a running container uses the image. Otherwise the name
-  stays, which costs nothing while the image is in use, and the nightly clean-up tries again
-  (`dropRollbackNames` in `panel/src/services/dockerCleanup.ts`).
-- **Check:** the Engine's release notes since the last check for image removal. To measure: `docker create` from
-  an image with one tag, `docker rmi -f` that tag, then `docker create` from its id, on each store.
-- **When it changes:** if the classic store keeps it too, or every install has moved to the containerd store,
-  `untagImage` can force every time, and the stopped-container branch can go.
+- **Last checked:** 2026-11-03 09:08 UTC. On Docker 29.9.2 with the containerd image store, `docker build -t <tag>`
+  deletes the image the tag named, though a container runs it: `docker image inspect`, `docker tag` and
+  `docker create` all answer "No such image" for its id. The container itself still stops, is renamed and
+  starts. With the classic overlay2 store the image stays, without a name. Docker Compose treats such a
+  container as a normal, lasting state ([docker/compose#14028](https://github.com/docker/compose/pull/14028),
+  merged 2026-08-14). `test/engine/siteSwitch.test.ts` passes on both stores.
+- **The problem:** a site's way back from a new container can't be its old image. A rebuild of the site
+  images (`provision/deploy.sh`, `provision/build.sh`) may have deleted it, and then the move to PHP-FPM
+  failed on every site, before it had changed anything.
+- **What we do about it:** `replaceContainer` in `panel/src/jobs/handlers/sites.ts` keeps the old
+  container aside, stopped, as `<name>.previous`, until the new one is up, and puts it back when that
+  fails. `failedSwitchToKeep` keeps a site on its old image only while Docker still has that image.
+- **Check:** the Docker Engine release notes since the last check for the containerd image store and for
+  builds that replace a tag. To measure, in a throwaway `docker:dind` with each store: build a tag, run a
+  container from it, build the tag again with a change, `docker image inspect` the old id, then stop,
+  rename and start the container.
+- **When it changes:** if a build keeps the old image on the containerd store too, nothing has to change:
+  a site whose move failed then stays on its old image there as well. If a container whose image is gone
+  can no longer start, the way back breaks, and the scripts that rebuild site images would have to keep
+  the old ones by a name first.
 
 ## boky/postfix: how the relay picks its hostname
 

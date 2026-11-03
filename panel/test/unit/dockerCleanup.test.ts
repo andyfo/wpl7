@@ -10,7 +10,6 @@ import type { ImageSummary } from '../../src/services/docker.js';
 import { BUILD_CACHE_KEEP_BYTES, cleanDocker, imagesToRemove, repositoryOf } from '../../src/services/dockerCleanup.js';
 import { tryFlock } from '../../src/lib/flock.js';
 import { SCANNER_IMAGE } from '../../src/services/scanEngines.js';
-import { siteRollbackImage } from '../../src/services/siteSpec.js';
 import { makeWorld, waitFor, type FakeDocker } from '../helpers.js';
 
 /** The nightly clean-up of Docker on each server (services/dockerCleanup.ts). */
@@ -108,76 +107,6 @@ describe('imagesToRemove', () => {
       panelRepos: new Set(['ghcr.io/andyfo/wpl7/panel']),
     });
     expect(plan).toEqual([]);
-  });
-});
-
-describe('the temporary names of a move to another stack', () => {
-  const log = { info: () => undefined, warn: () => undefined };
-
-  /** An image only such a name holds on to, as a move that stopped half-way leaves it. */
-  function leftover(docker: FakeDocker, slug: string): string {
-    const tag = siteRollbackImage(slug);
-    docker.images.add(tag);
-    docker.imageIds.set(tag, `sha256:old-${slug}`);
-    return tag;
-  }
-
-  it('do not count as WPL7’s, so the clean-up leaves the image alone while a move runs', () => {
-    const plan = imagesToRemove({
-      images: [image('old-site', [siteRollbackImage('demo')], 100)],
-      inUse: new Set(),
-      needed: new Set(),
-      repos: new Set(['wpl7-wordpress']),
-      panelRepos: new Set(),
-    });
-    expect(plan).toEqual([]);
-  });
-
-  it('go when nothing has a use for them, and the next run removes the image', async () => {
-    const w = await makeWorld();
-    const tag = leftover(w.docker, 'gone-site');
-    await cleanDocker(w.core, log);
-    expect(w.docker.images.has(tag)).toBe(false);
-    expect(w.docker.calls.some((c) => c.method === 'untagImage' && c.args[0] === tag)).toBe(true);
-  });
-
-  it('stay while the site has a job, which may be the move itself', async () => {
-    const w = await makeWorld();
-    const [row] = w.db
-      .insert(sites)
-      .values({
-        slug: 'busy-site',
-        title: 'Busy',
-        serverId: 1,
-        domains: '["busy.example.test"]',
-        phpVersion: '8.3',
-        status: 'running',
-        dbName: 'wp_busy',
-        dbUser: 'wp_busy',
-        dbPassword: 'x',
-        containerName: 'wp-busy-site',
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      })
-      .returning()
-      .all();
-    w.worker.enqueue('site.reconcile', { siteId: row!.id }, { id: row!.id, slug: row!.slug, serverId: 1 });
-    const tag = leftover(w.docker, 'busy-site');
-    await cleanDocker(w.core, log);
-    expect(w.docker.images.has(tag)).toBe(true);
-  });
-
-  it('stay on an image only a stopped container uses, and go once it runs', async () => {
-    const w = await makeWorld();
-    const tag = leftover(w.docker, 'stopped-site');
-    const spec = { name: 'wp-stopped-site', image: tag, env: {}, labels: { 'wpl7.role': 'wordpress' }, binds: [], networks: [] };
-    await w.docker.createSiteContainer(spec);
-    await cleanDocker(w.core, log);
-    expect(w.docker.images.has(tag)).toBe(true);
-    w.docker.containers.set('wp-stopped-site', 'running');
-    await cleanDocker(w.core, log);
-    expect(w.docker.images.has(tag)).toBe(false);
-    expect((await w.docker.containerStack('wp-stopped-site'))!.imageId).toBe('sha256:old-stopped-site');
   });
 });
 

@@ -330,6 +330,7 @@ export class FakeDocker implements DockerPort {
 
   async createSiteContainer(spec: SiteContainerSpec): Promise<void> {
     this.record('createSiteContainer', [spec]);
+    if (this.deletedImages.has(spec.image)) throw Object.assign(new Error(`No such image: ${spec.image}`), { statusCode: 404 });
     this.bindsByContainer.set(spec.name, spec.binds);
     this.labelsByContainer.set(spec.name, spec.labels);
     this.imageByContainer.set(spec.name, (await this.imageId(spec.image)) ?? spec.image);
@@ -350,8 +351,8 @@ export class FakeDocker implements DockerPort {
     this.containers.set(name, 'running');
     this.onStart?.(name);
   }
-  async stopContainer(name: string): Promise<void> {
-    this.record('stopContainer', [name]);
+  async stopContainer(name: string, graceSeconds?: number): Promise<void> {
+    this.record('stopContainer', graceSeconds === undefined ? [name] : [name, graceSeconds]);
     if (this.containers.has(name)) this.containers.set(name, 'exited');
   }
   async restartContainer(name: string): Promise<void> {
@@ -367,6 +368,27 @@ export class FakeDocker implements DockerPort {
     this.limits.delete(name);
     this.serviceSpecs.delete(name);
     for (const members of this.networkMembers.values()) members.delete(name);
+  }
+  /** As Docker does: everything about the container goes with it, under its new name. */
+  async renameContainer(name: string, to: string): Promise<void> {
+    this.record('renameContainer', [name, to]);
+    if (!this.containers.has(name)) throw Object.assign(new Error(`No such container: ${name}`), { statusCode: 404 });
+    if (this.containers.has(to)) throw Object.assign(new Error(`Conflict. The container name "/${to}" is already in use`), { statusCode: 409 });
+    const move = <V>(map: Map<string, V>) => {
+      if (!map.has(name)) return;
+      map.set(to, map.get(name)!);
+      map.delete(name);
+    };
+    move(this.containers);
+    move(this.bindsByContainer);
+    move(this.labelsByContainer);
+    move(this.imageByContainer);
+    move(this.limits);
+    move(this.serviceSpecs);
+    move(this.containerImages);
+    move(this.containerConfigs);
+    move(this.logs);
+    for (const members of this.networkMembers.values()) if (members.delete(name)) members.add(to);
   }
   async containerState(name: string): Promise<ContainerState> {
     return this.containers.get(name) ?? 'missing';
@@ -589,8 +611,29 @@ export class FakeDocker implements DockerPort {
     if (opts.labels?.['wpl7.migration']) return this.migrationResult;
     return this.execQueue.shift() ?? this.execDefault;
   }
-  async imageExists(tag: string): Promise<boolean> {
-    return this.images.has(tag);
+  /**
+   * Images Docker no longer has, by id, though containers made from them still run them: what
+   * `docker build` leaves on the containerd store when it gives an image's name to a new one.
+   */
+  deletedImages = new Set<string>();
+  /** `docker build -t <tag>` on the containerd store: the tag names a new image, and the one it named is gone. */
+  rebuild(tag: string, newId: string): void {
+    const was = this.imageIds.get(tag) ?? `sha256:${tag}`;
+    this.imageIds.set(tag, newId);
+    this.deletedImages.add(was);
+  }
+  /** By tag, or by id: any image a tag names, or a container was made from, even one its tag has moved off. */
+  private knownImage(ref: string): boolean {
+    if (!ref.startsWith('sha256:')) return this.images.has(ref);
+    if (this.deletedImages.has(ref)) return false;
+    return (
+      [...this.images].some((tag) => (this.imageIds.get(tag) ?? `sha256:${tag}`) === ref) ||
+      [...this.imageByContainer.values()].includes(ref) ||
+      this.untaggedImages.some((image) => image.id === ref)
+    );
+  }
+  async imageExists(ref: string): Promise<boolean> {
+    return this.knownImage(ref);
   }
   async imageId(tag: string): Promise<string | null> {
     return this.images.has(tag) ? (this.imageIds.get(tag) ?? `sha256:${tag}`) : null;
@@ -608,6 +651,8 @@ export class FakeDocker implements DockerPort {
     this.imageStacks.set(this.imageIds.get(tag) ?? `sha256:${tag}`, stack);
   }
   async imageStack(ref: string): Promise<SiteStack> {
+    // As for any image Docker doesn't have.
+    if (this.deletedImages.has(ref)) return 1;
     if (this.imageStacks.has(ref)) return this.imageStacks.get(ref)!;
     if (ref.startsWith('sha256:')) return 2;
     const id = await this.imageId(ref);
@@ -626,15 +671,8 @@ export class FakeDocker implements DockerPort {
   }
   async tagImage(source: string, target: string): Promise<void> {
     this.record('tagImage', [source, target]);
-    // By id: any image a tag names, or a container was made from, even one its tag has moved off.
-    const byId = source.startsWith('sha256:');
-    const known = byId
-      ? [...this.images].some((tag) => (this.imageIds.get(tag) ?? `sha256:${tag}`) === source) ||
-        [...this.imageByContainer.values()].includes(source) ||
-        this.untaggedImages.some((image) => image.id === source)
-      : this.images.has(source);
-    if (!known) throw Object.assign(new Error(`No such image: ${source}`), { statusCode: 404 });
-    if (byId) this.imageIds.set(target, source);
+    if (!this.knownImage(source)) throw Object.assign(new Error(`No such image: ${source}`), { statusCode: 404 });
+    if (source.startsWith('sha256:')) this.imageIds.set(target, source);
     this.images.add(target);
   }
   async removeImage(ref: string): Promise<void> {
@@ -650,17 +688,6 @@ export class FakeDocker implements DockerPort {
       this.untaggedImages = this.untaggedImages.filter((image) => image.id !== ref);
     }
     this.images.delete(ref);
-  }
-  /** What real Docker was measured to do, by each image store: see DockerService.untagImage. */
-  async untagImage(tag: string): Promise<boolean> {
-    this.record('untagImage', [tag]);
-    if (!this.images.has(tag)) return true;
-    const id = (await this.imageId(tag))!;
-    const names = [...this.images].filter((name) => (this.imageIds.get(name) ?? `sha256:${name}`) === id);
-    const users = [...this.containers.keys()].filter((name) => this.imageByContainer.get(name) === id);
-    if (names.length === 1 && users.length > 0 && !users.some((name) => this.containers.get(name) === 'running')) return false;
-    this.images.delete(tag);
-    return true;
   }
   async pruneImages(labels: string[]): Promise<void> {
     this.record('pruneImages', [labels]);
