@@ -31,6 +31,7 @@ import type { AccessEvent } from '../lib/accessLog.js';
 import { signalsOf } from '../lib/attackSignals.js';
 import { verifyCrawler, type CrawlerResolver, systemResolver, claimedCrawler } from '../lib/crawlerVerify.js';
 import type { BlocklistService } from './blocklist.js';
+import type { ProxyRangesService } from './proxyRanges.js';
 import { blockedRule } from './securityEvents.js';
 import type { SettingsService } from './settings.js';
 import type { Logger } from './index.js';
@@ -119,6 +120,7 @@ export class AttackDetector {
   constructor(
     private readonly settings: SettingsService,
     private readonly blocklist: BlocklistService,
+    private readonly proxyRanges: ProxyRangesService,
     private readonly log: Logger,
     private readonly resolver: CrawlerResolver = systemResolver,
   ) {
@@ -273,7 +275,10 @@ export class AttackDetector {
 
     const claims = claimedCrawler(c.tracked.lastAgent);
     if (claims) {
-      // The address itself: a /64 has no reverse DNS to ask.
+      // The address itself: a /64 has no reverse DNS to ask. The engine's own list comes first,
+      // because some of Googlebot's addresses have Google Cloud names, which never verify.
+      const list = this.proxyRanges.crawlerList(claims);
+      if (list?.set.has(c.tracked.lastIp)) return skip(`it is ${claims}, at an address ${list.publisher} publishes for its crawlers`);
       const check = await this.crawlerCheck(c.tracked.lastIp, claims, c.tracked.lastAgent, now);
       if (check.verified) return skip(`it is ${claims}, verified by its reverse DNS (${check.host})`);
     }

@@ -1672,7 +1672,7 @@ export async function makeWorld(
   const firewall = new FirewallSyncService(config, servers, settings, blocklist, proxyRanges, (id) => firewallHost(id).port(), log, { debounceMs: 0 });
   blocklist.onChange = () => void firewall.kickAll();
   const securityEvents = new SecurityEventsService(db, settings, geoip, blocklist);
-  const detector = new AttackDetector(settings, blocklist, log, { reverse: async () => [], lookup: async () => [] });
+  const detector = new AttackDetector(settings, blocklist, proxyRanges, log, { reverse: async () => [], lookup: async () => [] });
   const checksums = new FakeChecksums();
   const integrityManifests = new IntegrityManifests(db, log, checksums.fetch);
   const quarantine = new QuarantineService(db, config, servers, log);
