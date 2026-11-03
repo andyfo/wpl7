@@ -469,6 +469,11 @@ site.
 The abuse guard (or an operator) suspended this site's outbound mail. The site page shows the reason
 and a **Resume mail** button.
 
+**Every site's mail fails with `454 4.7.0 Temporary authentication failure: generic failure`**
+The relay cannot read its login database: `docker logs wpl7-mail` shows `unable to open Berkeley db
+/etc/postfix/sasl/sasldb2: Permission denied`. Restart the panel: at boot it gives
+`/srv/mail/sasl` and the database in it to the relay's `postfix` group.
+
 **Every message tempfails with `451 4.3.5 Server configuration error`**
 Postfix could not open one of its maps — usually `/srv/mail/policy/*` missing after a manual cleanup.
 Restart the panel: it republishes them at boot. `docker logs wpl7-mail` names the file.
