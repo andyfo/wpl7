@@ -53,7 +53,7 @@ async function addDevSite(w: TestWorld, slug: string, wildcardProvider: string, 
     .get();
   const docker = serverId === 1 ? w.docker : w.remote(serverId).docker;
   await docker.createSiteContainer(
-    buildSiteContainerSpec(w.config, row, [host], { devDomain: w.config.devDomain, wildcardProvider }, siteRuntimeFrom(w.core.settings, row)),
+    buildSiteContainerSpec(w.config, row, [host], { devDomain: w.config.devDomain, wildcardProvider }, siteRuntimeFrom(w.core.settings, row), { stack: 2 }),
   );
   docker.containers.set(`wp-${slug}`, 'running');
 }
@@ -205,6 +205,7 @@ describe('Settings -> DNS: a server’s wildcard certificate', () => {
       ['gamma.dev.example.test'],
       siteTlsFor(world.core.dns, row),
       siteRuntimeFrom(world.core.settings, NO_OWN_LIMITS),
+      { stack: 2 },
     );
     expect(spec.labels['traefik.http.routers.wp-gamma.tls.certresolver']).toBe('letsencrypt-dns');
     expect(spec.labels['traefik.http.routers.wp-gamma.tls.domains[0].sans']).toBe('*.dev.example.test');

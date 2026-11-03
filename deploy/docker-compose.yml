@@ -5,7 +5,7 @@
 #
 # Production:            docker compose up -d
 # Local dev (macOS):     docker compose -f docker-compose.yml -f docker-compose.dev.yml -f docker-compose.build.yml up -d
-# @docs get-started/how-it-works, help/faq, reference/architecture, reference/third-party, security/privacy
+# @docs get-started/how-it-works, help/faq, reference/architecture, reference/installer-and-scripts, reference/third-party, security/privacy, servers/resources
 name: wpl7
 
 services:
@@ -24,6 +24,8 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      # HTTP/3. Without it open in a cloud firewall, browsers simply stay on HTTP/2.
+      - "443:443/udp"
     command:
       - "--log.level=INFO"
       - "--api.dashboard=false"
@@ -57,6 +59,7 @@ services:
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
       - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
       - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.websecure.http3=true"
       - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
@@ -107,10 +110,25 @@ services:
     environment:
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
       MARIADB_AUTO_UPGRADE: "1"
+    # Worked out at every start, so the buffer pool follows a resized server: an eighth of its
+    # memory, 256 MB to 4 GB. Any value but "auto" in MARIADB_POOL_SIZE is used as it is. The first
+    # line of /proc/meminfo is the host's total, in kB: this container has no memory limit of its own.
+    entrypoint:
+      - bash
+      - -c
+      - |
+        pool='${MARIADB_POOL_SIZE:-auto}'
+        if [ "$$pool" = auto ]; then
+          read -r _ kb _ < /proc/meminfo
+          mb=$$((kb / 1024 / 8))
+          if [ "$$mb" -lt 256 ]; then mb=256; elif [ "$$mb" -gt 4096 ]; then mb=4096; fi
+          pool="$${mb}M"
+        fi
+        exec docker-entrypoint.sh --innodb-buffer-pool-size="$$pool" "$$@"
+      - mariadb-start
     command:
       - "--character-set-server=utf8mb4"
       - "--collation-server=utf8mb4_unicode_ci"
-      - "--innodb-buffer-pool-size=${MARIADB_BUFFER_POOL:-256M}"
       - "--max-connections=${MARIADB_MAX_CONNECTIONS:-300}"
     volumes:
       - ${SRV_ROOT:-/srv}/mysql:/var/lib/mysql

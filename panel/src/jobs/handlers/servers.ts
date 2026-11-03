@@ -3,6 +3,8 @@ import { PassThrough, Readable, Writable } from 'node:stream';
 import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { servers, sites } from '../../db/schema.js';
+import { applySiteCaches, markRuntimeApplied } from '../../services/siteCaches.js';
+import { loadSite } from './shared.js';
 import type { CoreServices } from '../../services/index.js';
 import type { JobContext } from '../context.js';
 import { PluginSyncService } from '../../services/pluginSync.js';
@@ -123,6 +125,12 @@ export async function serverApplySiteLimits(
         ctx.info(`${site.slug}: a CPU cap only comes off with a new container - recreating it (job #${job.id}).`);
         recreating.push(site.slug);
       }
+      // PHP's workers and Redis follow the memory limit, and the caches follow Settings.
+      // Read again: this job can have taken minutes to get here, and a rule saved since must stay.
+      const applied = await s.worker.inRuntimeTurn(site.id, () => applySiteCaches(handle, s, loadSite(s.db, site.id), ctx));
+      if (applied.reloaded.length > 0 || applied.cleared) {
+        ctx.info(`${site.slug}: ${[...applied.reloaded.map((name) => `${name} reloaded`), ...(applied.cleared ? ['page cache cleared'] : [])].join(', ')}.`);
+      }
     } catch (err) {
       ctx.warn(`${site.slug}: ${err instanceof Error ? err.message : String(err)}`);
       if (err instanceof ServerUnreachableError) {
@@ -143,6 +151,7 @@ export async function serverApplySiteLimits(
   }
   // `deferred` is what siteLimitsTick reads back.
   ctx.setResult({ updated, recreating, deferred, current, failed });
+  if (failed.length === 0) markRuntimeApplied(s.settings, handle.id);
   ctx.info(
     `${updated.length} updated in place, ${current} already current` +
       (recreating.length > 0 ? `, ${recreating.length} being recreated` : '') +

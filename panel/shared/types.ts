@@ -1,4 +1,5 @@
 /** DTO shapes returned by the API, consumed by the React app. */
+import type { CacheRule } from './cacheRules.js';
 import type { AccessLevel } from './access.js';
 import type { WpLocale } from './locales.js';
 import type { RecipeHook } from './recipes.js';
@@ -202,6 +203,51 @@ export interface SiteDetail extends SiteSummary {
     /** Settings' (`siteCpuLimit`, `siteMemoryLimitMb`, `sitePidsLimit`), for each limit the site has none of its own. */
     defaults: SiteLimits<number>;
   } | null;
+  /**
+   * What its container runs: 2 is nginx, Apache and PHP-FPM, 1 the older Apache with mod_php. Null
+   * when that isn't known: it has no container, its server can't be asked, or it is hosted elsewhere.
+   */
+  stack: 1 | 2 | null;
+  /**
+   * Why its container could not move to stack 2, so that it still runs stack 1. Null when nothing
+   * failed. Recreating the container tries again.
+   */
+  stackSwitchError: string | null;
+  /** Its caches; null for a site hosted elsewhere. */
+  cache: SiteCacheDto | null;
+}
+
+/** What the Caching card shows and sets. The built-in groups themselves are in shared/cacheRules.ts. */
+export interface SiteCacheDto {
+  /** What the site says: `default` follows `site.pageCache` in Settings. */
+  page: 'default' | 'on' | 'off';
+  /** What that comes to. */
+  pageOn: boolean;
+  /** Settings' `site.pageCache`, which `default` follows. */
+  pageDefault: boolean;
+  /** Why the page cache was switched off when the site moved to this setup; gone once someone chooses. */
+  offReason: string | null;
+  /** Its own time in seconds; null follows Settings. */
+  keepSeconds: number | null;
+  keepDefaultSeconds: number;
+  /** Built-in groups and rules it switched off. */
+  off: string[];
+  own: CacheRule[];
+  /** Groups whose plugin the WordPress inventory found on the site. */
+  groupsInUse: string[];
+  object: boolean;
+  /** Why the object cache can't be switched on now; null when it can. */
+  objectBlocked: string | null;
+  /** Why the caches can't be cleared or checked now; null when they can. */
+  liveBlocked: string | null;
+}
+
+/** What Check a URL found: `cached` is stored or now stored, and `reason` is the page's or the rule's own words. */
+export interface SiteCacheCheck {
+  state: 'cached' | 'stale' | 'skipped' | 'not-stored' | 'off';
+  reason: string | null;
+  /** The HTTP status the page answered with. */
+  status: number | null;
 }
 
 /** A site container's limits. CPU in cores; 0 = uncapped, for CPU and processes. */

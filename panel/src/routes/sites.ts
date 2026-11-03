@@ -12,6 +12,8 @@ import {
   goLiveBody,
   mailSuspensionBody,
   phpUpdateBody,
+  siteCacheBody,
+  siteCacheCheckBody,
   siteCreateBody,
   siteDeleteQuery,
   siteLimitsBody,
@@ -19,9 +21,10 @@ import {
   siteSlugParam,
 } from '../../shared/schemas.js';
 import { moveCleanups } from '../db/schema.js';
-import { notFound } from '../lib/errors.js';
+import { conflict, notFound } from '../lib/errors.js';
 import { jobToDto, viewerOf } from '../lib/dto.js';
 import { requireAccess } from '../plugins/auth.js';
+import { checkSiteUrl, clearSiteCaches, siteContainerStack } from '../services/siteCaches.js';
 import type { AppDeps } from './deps.js';
 
 // Addressing an existing site: no reserved-name check, see siteSlugParam.
@@ -167,6 +170,36 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
       return reply.send(await deps.sites.detail(req.params.slug));
     },
   );
+
+  /** The page cache's switch, keep time and rules, and the object cache's switch, which queues a job. */
+  r.put('/api/sites/:slug/cache', { schema: { params: slugParams, body: siteCacheBody } }, async (req, reply) => {
+    const { job } = await deps.sites.setCache(req.params.slug, req.body);
+    const site = await deps.sites.detail(req.params.slug);
+    if (!job) return reply.send({ site, job: null });
+    return reply
+      .status(202)
+      .header('location', `/api/jobs/${job.id}`)
+      .send({ site, job: jobToDto(job, viewerOf(req)) });
+  });
+
+  /** What the page cache and Redis hold needs a running container on stack 2 to be there at all. */
+  const liveCacheOf = async (slug: string) => {
+    const site = deps.sites.bySlug(slug);
+    const server = deps.servers.handleFor(site.serverId);
+    if ((await siteContainerStack(server.docker, site.containerName)) !== 2) throw conflict('This site still runs the old PHP setup, which has no page cache.');
+    if ((await server.docker.containerState(site.containerName)) !== 'running') throw conflict('The site is not running.');
+    return { site, server };
+  };
+
+  r.post('/api/sites/:slug/cache/clear', { schema: { params: slugParams } }, async (req) => {
+    const { site, server } = await liveCacheOf(req.params.slug);
+    return { cleared: await clearSiteCaches(server, site) };
+  });
+
+  r.post('/api/sites/:slug/cache/check', { schema: { params: slugParams, body: siteCacheCheckBody } }, async (req) => {
+    const { site, server } = await liveCacheOf(req.params.slug);
+    return checkSiteUrl(server, deps.config, site, req.body.path);
+  });
 
   /**
    * The site container's own CPU, memory and process limits: each left out stays as it is, null

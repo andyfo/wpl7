@@ -66,6 +66,7 @@ describe('table prefix', () => {
       siteDomains(fresh),
       siteTlsFor(w.core.dns, w.servers.rowById(1)!),
       siteRuntimeFrom(w.core.settings, fresh),
+      { stack: 2 },
     );
     expect(spec.env.WORDPRESS_TABLE_PREFIX).toBe('wpx_');
   });

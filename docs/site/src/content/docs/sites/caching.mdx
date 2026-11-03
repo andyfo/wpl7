@@ -1,0 +1,250 @@
+---
+title: Caching
+description: "Store finished pages in front of PHP, keep database answers in Redis, and decide what the cache may keep."
+sidebar:
+  order: 12
+since: 0.3.3
+sources:
+  - panel/web/src/components/SiteCaching.tsx
+  - panel/shared/cacheRules.ts
+  - panel/src/services/siteCaches.ts
+  - panel/src/services/siteStack.ts
+  - panel/src/services/wpCachePhp.ts
+  - panel/src/services/sites.ts
+  - panel/src/jobs/handlers/caches.ts
+  - panel/src/jobs/worker.ts
+  - deploy/wordpress-image/nginx.conf
+  - deploy/wordpress-image/nginx-passthrough.conf
+  - deploy/wordpress-image/wpl7-start
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A site can keep two caches, both set in the **Caching** card on its **Settings** tab. The page cache
+stores finished pages in nginx, so most visitors never reach PHP. It is on by default. The object
+cache keeps WordPress's database answers in Redis, which speeds up what the page cache skips, such
+as wp-admin and logged-in visitors. It is off by default.
+
+<Screenshot name="site-caching" alt="A site's Caching card with Page cache, Keep pages for, Object cache (Redis) and Check a URL" />
+
+## Turn on the page cache
+
+Under **Page cache**, choose **On**. **Off** turns it off for this site. **Follow the default** takes
+the switch from **Settings → Sites**, where it is on unless you change it. The change applies at
+once, without a restart, and empties the cache.
+
+Only WordPress's own pages are stored, for logged-out visitors, when they answer 200, 301 or 404. Files
+on disk, scripts that do not load WordPress and pages a cache plugin serves before WordPress loads go
+straight through. A page that says no-cache, sets a cookie or defines `DONOTCACHEPAGE` is not stored,
+which keeps out WooCommerce's cart, checkout and account pages.
+
+When PHP or the database fails, visitors get the last stored copy of a page, if it has one. The
+panel's own checks go past the cache, so they still see the failure.
+
+A WooCommerce store on plain **Geolocate** shows prices by country at one address, so its pages are
+never stored. Such a site goes to **Off** when it moves to this setup, unless it chose otherwise, and
+the card says why. **Geolocate (with page caching support)** works with the cache, because each country
+gets its own `?v=` copy.
+
+## Clear the cache
+
+Choose **Clear cache** on the site's **Overview** tab. It empties the page cache, and Redis when it
+runs. **Clear cache** on WordPress's admin bar, for administrators, empties the page cache only.
+
+The cache also clears by itself:
+
+- In WordPress, or under WP-CLI, when a published post or page changes, or a block theme's templates,
+  styles or navigation. So do approved comments, terms, menus, widgets, the Customizer, a theme switch,
+  plugin activation, updates, WooCommerce stock and settings an administrator saves.
+- When WP Rocket, W3 Total Cache, WP Super Cache, LiteSpeed Cache, Autoptimize or Elementor clears
+  its own cache.
+- After a panel [job](/docs/reference/glossary/#job), or a change on the **Files** or **Database**
+  tab, that can change pages. A WP-CLI command that only reads, or a GET through the REST tool, does
+  not clear it.
+- When a rule, the keep time or the page cache's switch changes.
+- Within 10 seconds of a change to the site's root `.htaccess`.
+- At every start of the container.
+
+The panel cannot see edits in Adminer, FTP and SFTP changes to theme PHP files, or what runs in the
+server's terminal. Use **Clear cache** after those.
+
+## Turn on the object cache
+
+Switch on **Object cache (Redis)**. A job starts Redis in the site's container, installs and
+activates the Redis Object Cache plugin from wordpress.org, and turns on its drop-in. If the plugin
+cannot reach Redis, the job fails and Redis stops again. Switching it off stops Redis and deactivates
+the plugin, which stays installed.
+
+Redis has no network port, so only the site's own PHP and WP-CLI reach it. If it is down, the site
+runs without it. While another plugin's object cache drop-in is installed, the switch stays off and
+names that plugin.
+
+## Skip the cache for a page
+
+Open **Rules**. It shows while the page cache is on, as do **Keep pages for** and **Check a URL**.
+
+<Screenshot name="site-caching-rules" alt="The Caching card's Rules: the built-in groups, each with a switch and an In use mark" />
+
+1. Under **This site's rules**, set **What** to **Skip the cache**.
+2. Set **Matches**, then fill in **Value**.
+3. Choose **Add rule**.
+
+| Matches | Value |
+|---|---|
+| **URL path** | `/shop/` is that page. `/shop/*` also takes what is under it, and `/shop*` whatever starts so. Case does not count, and any language's letters work. |
+| **Cookie** | The start of a cookie's name. |
+| **Query parameter** | A parameter's name. |
+| **User agent** | Text anywhere in the user agent, in its exact case. |
+| **Post type** | A post type, such as `product`. WordPress applies this one, at the end of the page. |
+
+A query parameter the cache does not know skips it anyway, so `?s=` and `?add-to-cart=` need no
+rule. A visitor with a cookie it does not know can still get a stored page. So a login or membership
+plugin with a cookie of its own needs a **Cookie** rule.
+
+Above the form are the built-in groups:
+
+| Group | What it does |
+|---|---|
+| **WordPress** | Skips logged-in visitors, wp-admin, logins, comments, files and the panel's own checks. It cannot be switched off. |
+| **Phones** | Keeps a separate copy for phones, by the same test as `wp_is_mobile()`. |
+| **PHP sessions** | Skips a visitor with a PHP session. |
+| **WooCommerce** | Skips once a visitor has a cart. Keeps a separate copy per `?v=`. |
+| **Easy Digital Downloads** | Skips once a visitor has a cart. |
+| **Currency switchers** | Keeps a separate copy per currency, country or tax choice. |
+| **Languages** | Keeps a separate copy per language cookie. |
+| **Tracking parameters** | Ignores `utm_*`, `gclid` and the like. |
+
+They stay on for every site, because a cookie rule matches nothing without its plugin. **In use**
+marks a group whose plugin the site has. Each group and each of its rules has a switch. To change a
+built-in value, switch that rule off and add your own. The rules you leave alone improve with each
+release.
+
+## Keep separate copies
+
+This kind of rule stores one copy of a page per value of a cookie or a parameter, such as a currency
+or a language.
+
+1. Set **What** to **Separate copy per value**.
+2. Set **Matches** to **Cookie** or **Query parameter**, and **Value** to its exact name.
+3. Choose **Add rule**.
+
+A value has to be 1 to 32 letters, digits, `_` or `-`. Any other value skips the cache, so a visitor
+cannot fill it with made-up copies. Each rule multiplies the copies of every page, so a site has at
+most five of its own.
+
+## Ignore a query parameter
+
+**Ignore this parameter** leaves a parameter out of the cache and takes it off the request PHP sees.
+A link with it gets the stored page, and its value cannot end up inside one. A redirect keeps the
+parameter. A `*` at the end of **Value** takes any name that starts so.
+
+The **Tracking parameters** group does this for `utm_*`, `gclid`, `gbraid`, `wbraid`, `fbclid`,
+`msclkid`, `mc_cid`, `mc_eid`, `_ga` and `_gl`. If the site reads one of them in PHP, switch that rule
+off.
+
+## Keep a page for less time
+
+**Keep pages for** sets the time for the whole site, from 5 minutes to 10 hours. **Default** takes it
+from **Settings → Sites**. Ten hours is the most, because WordPress's form tokens expire after 12 to
+24 hours.
+
+For some pages only:
+
+1. Set **What** to **Keep for a set time**.
+2. Set **Matches** to **URL path** or **Post type**, fill in **Value**, and set **Seconds**.
+3. Choose **Add rule**.
+
+A path rule comes first, then a post type rule, then the site's time.
+
+## Check a URL
+
+In **Check a URL**, enter an address on the site, such as `/shop/`, and choose **Check**. The panel
+asks the site's nginx from inside its container, as a visitor with no cookies. One line says what
+happened, with the status when it is not 200.
+
+| The line | What it means |
+|---|---|
+| `Cached.` | The page is stored. |
+| `Skipped:` and a reason | The request went past the cache. |
+| `Not stored:` and a reason | The page came from PHP, and was not stored. |
+| `An old copy: PHP or the database isn't answering.` | The last stored copy, because of a failure. |
+| `The page cache is off.` | nginx runs without it, because it refused the panel's file at a start. The site's log says why. |
+
+Every page also answers with `X-Cache-Status`, and with the reason in `X-Cache-Skipped`. `HIT` is a
+stored page. `MISS` and `EXPIRED` came from PHP. `STALE` is the last stored copy, after a failure.
+`BYPASS` went past the cache. A browser signed in to WordPress always gets `BYPASS`, because of its
+cookie, and `curl` sends none:
+
+```bash
+curl -sI https://northwindbakery.example/ | grep -i x-cache
+```
+
+Most reasons say what they mean, such as `logged in`, `page sets a cookie` or
+`cookie wordpress_logged_in_`. These need a word more:
+
+| Reason | What it means |
+|---|---|
+| `query string` | A query parameter the cache does not know. |
+| `file` | The address looks like a file. |
+| `body` | A GET with a body. |
+| `ajax` | A request from a script: `X-Requested-With`, `X-PJAX`, `HX-Request`, `Turbo-Frame` or `Origin`. |
+| `range` | A request for part of an answer. |
+| `device` | The browser's phone hint and its user agent disagree. |
+| `separate copy value` | A separate-copy cookie or parameter has a value that is not a short token. |
+| `page says no-cache` | `Cache-Control` says no-cache, no-store, private or a zero age, or `Expires` has passed. |
+| `page varies by …` | `Vary` names something the cache keeps no copies by. |
+| `page flushed early` | The page was sent in parts, so it streams instead. |
+| `missing file` | A 404 at an address with a file extension. |
+| `another spelling of this address` | Such as `/Shop/` for `/shop/`. |
+| `request header …` | The request carries a header the cache does not know, usually from a proxy. |
+| `.htaccess limits who can see this` | A `.htaccess` above WordPress says who may see the page. |
+| `.htaccess or Apache says no-cache` | Something after PHP said so, such as a `Header` line. |
+| `cleared while rendering` | A clear came while the page was being drawn. |
+| `not a WordPress page` | **Check a URL** only: nothing asked to store this answer. |
+
+## Limits
+
+| Limit | Value |
+|---|---|
+| A site's page cache | About 256 MB. The least used pages go first. |
+| The longest a page stays | 10 hours |
+| A 404 | 5 minutes |
+| A site's own rules | 50, of which 5 separate-copy rules |
+| Redis | An eighth of the site's memory limit, at least 16 MB, out of that limit |
+| A key in Redis | 4 hours |
+
+- Logged-in visitors never get a stored page. The object cache is what speeds them up.
+- A stored page never reaches `.htaccess` or PHP. A change to the root `.htaccess` empties the cache
+  within 10 seconds. A block in PHP, such as a security plugin's firewall, or in another folder's
+  `.htaccess`, does not apply to a stored page until it expires.
+- [Site protection](/docs/security/site-protection/) and
+  [blocked addresses](/docs/security/blocked-addresses/) always apply, because they come before the
+  cache.
+- `User-Agent`, `Accept`, `Accept-Language` and `X-Forwarded-*` reach PHP but do not keep copies
+  apart. A page that changes by them without saying so in `Vary` freezes the first visitor's version.
+- A page that changes by what the request does not show, such as random content or location by
+  address, needs a skip rule or **Off**.
+- A request with a cookie the cache does not know cannot store a page, though it can get one. Consent
+  cookies count as such. On a site where every visitor has one, nothing is stored.
+- Behind a CDN other than Cloudflare, a header the cache does not know can stop pages being stored.
+  `X-Cache-Skipped` on a page that came through the CDN names it. **Check a URL** does not go through
+  the CDN, so it cannot.
+- A store's country header works only from Cloudflare.
+- A clear empties the whole site's cache. There is no clear for one page.
+- A visitor's approved comment clears the cache at most once a minute.
+- After a clear or an expiry, every request for a page goes to PHP until one has been stored. PHP's
+  workers take them in turn.
+- A 404 at an address with no file extension stays for its 5 minutes, even if you upload a folder
+  there over FTP. **Clear cache** ends it.
+- Tracking parameters are not put back on a redirect to another domain, or when the address already
+  has a query and the request has a separate-copy parameter.
+- A [site hosted elsewhere](/docs/sites/external/) has no caches. Neither has a site that still runs
+  the old PHP setup: see [Updating WPL7](/docs/panel/updating/#if-a-site-cannot-move).
+
+## Related
+
+- [Site settings](/docs/sites/settings/)
+- [Updating WPL7](/docs/panel/updating/)
+- [Site protection](/docs/security/site-protection/)
+- [Manage WordPress](/docs/sites/wordpress/)
+- [Troubleshooting](/docs/help/troubleshooting/)

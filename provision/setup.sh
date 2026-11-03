@@ -144,6 +144,7 @@ ufw default allow outgoing >/dev/null
 for port in $SSH_PORTS; do ufw limit "$port/tcp" >/dev/null; done
 ufw allow 80/tcp >/dev/null
 ufw allow 443/tcp >/dev/null
+ufw allow 443/udp >/dev/null
 ufw --force enable >/dev/null
 fi
 # Note: Docker-published ports bypass UFW; only Traefik publishes (80/443), which are allowed anyway.
@@ -284,6 +285,19 @@ fi
 # the operator overruling it - and the stack started below recreates the relay with it.
 if [ -n "$MAIL_HOSTNAME_ARG" ]; then
   wpl7_mail_hostname_set "$ENV_FILE" "$SRV_ROOT/mail/relay.env" "$MAIL_HOSTNAME_ARG"
+fi
+
+# MariaDB's buffer pool used to be a fixed size in MARIADB_BUFFER_POOL, 256M by default, and every
+# .env from then says so. That key stays as it is, because a rollback to the old compose file reads
+# it, and "auto" there would stop MariaDB from starting. The new key starts out as auto, or as the
+# size someone chose back then.
+if [ -z "$(env_value MARIADB_POOL_SIZE)" ]; then
+  old_pool="$(env_value MARIADB_BUFFER_POOL)"
+  if [ -n "$old_pool" ] && [ "$old_pool" != "256M" ]; then
+    set_env_value MARIADB_POOL_SIZE "$old_pool"
+  else
+    set_env_value MARIADB_POOL_SIZE auto
+  fi
 fi
 
 # Which release this install runs, as recorded by whoever put the bundle here: install.sh for

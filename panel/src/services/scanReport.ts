@@ -115,6 +115,7 @@ const CHECK_KINDS: ReadonlySet<FindingKind> = new Set([
   'plugin-extra',
   'upload-php',
   'upload-handler',
+  'user-ini-load',
   'link-outside',
   'panel-modified',
 ]);

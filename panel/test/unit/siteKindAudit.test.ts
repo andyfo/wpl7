@@ -34,7 +34,10 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   'jobs/handlers/import.ts': { siteImportQueuedCancel: hosted("'provisioning'") },
   'jobs/handlers/move.ts': { finalizeCleanup: hosted("owner.kind !== 'external'") },
   'jobs/handlers/servers.ts': { serverApplySiteLimits: hosted('hostedSites()') },
-  'jobs/handlers/shared.ts': { loadSite: both('the guard itself: refuses an external site unless the job takes either kind') },
+  'jobs/handlers/shared.ts': {
+    loadSite: both('the guard itself: refuses an external site unless the job takes either kind'),
+    ensureSiteMountSources: both('reads the row of the site it was handed, which only a job on a hosted site does'),
+  },
   'jobs/handlers/sites.ts': { siteCreateQueuedCancel: hosted("'provisioning'") },
   'jobs/handlers/wp.ts': { wpScanAll: both('external sites are scanned in a group of their own (isExternal)') },
   'jobs/schedulers.ts': {
@@ -46,6 +49,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     dtoContext: NAMES,
   },
   'jobs/worker.ts': {
+    clearCaches: both('clearAfterChange leaves a site hosted elsewhere alone'),
     enqueue: both("reads the kind, to put an external site's jobs in the external lanes"),
     rereadDatabases: both("reads the server of a site whose job changed a database; an external site's kick reads its backup server, which harms nothing"),
   },
@@ -59,6 +63,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     sitesCountFor: hosted('hostedSites()'),
     externalCountFor: both('counts the external sites a server keeps the backups of'),
   },
+  'services/siteCaches.ts': { sweepSiteRuntime: hosted('hostedSites()') },
   'services/reminders.ts': { siteRows: both('reads domains, PHP versions and reminder links for both hosted and external sites; never invokes a container') },
   'services/alerts.ts': { vulnerabilities: both('alerts are for every site') },
   'services/backup.ts': {
@@ -79,7 +84,10 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     userClaimed: hosted('hostedSites()'),
     pruneUploads: hosted('hostedSites()'),
   },
-  'services/dockerCleanup.ts': { needsOn: hosted('hostedSites()') },
+  'services/dockerCleanup.ts': {
+    dropRollbackNames: both('only asks whether the site a temporary image name was for has a job'),
+    needsOn: hosted('hostedSites()'),
+  },
   'services/domainGuard.ts': { assertDomainsFree: both('a domain belongs to one site, of either kind') },
   'services/externalBackup.ts': { pruneOrphans: both('external sites only (externalSites)') },
   'services/ftp.ts': {

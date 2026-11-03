@@ -114,7 +114,8 @@ export const SHOTS: Shot[] = [
     what: 'The Structure view of wp_options: its columns, its primary key, and the buttons that change them',
     path: '/sites/northwind-bakery?tab=database&table=wp_options',
     theme: 'light',
-    prepare: steps(button('Structure'), scrollTo('Browse wp_northwind_bakery')),
+    // Scrolling before the view has loaded stops short, as far as the page is tall by then.
+    prepare: steps(button('Structure'), (page) => page.getByText(/foreign keys/i).waitFor(), scrollTo('Browse wp_northwind_bakery')),
   },
   {
     name: 'site-database-row',
@@ -153,6 +154,22 @@ export const SHOTS: Shot[] = [
     prepare: steps(tab('Security'), async (page) => page.getByRole('button', { name: 'Settings', exact: true }).last().click()),
   },
   { name: 'site-settings', what: 'A site’s Settings tab: PHP version, domains, delete', path: '/sites/northwind-bakery', theme: 'light', prepare: tab('Settings') },
+  {
+    name: 'site-caching',
+    what: 'A site’s Caching card: the page cache, how long pages stay, the object cache and Check a URL',
+    path: '/sites/northwind-bakery',
+    theme: 'light',
+    prepare: steps(tab('Settings'), scrollTo('Caching')),
+  },
+  {
+    name: 'site-caching-rules',
+    what: 'A site’s Caching card with its rules open: the built-in groups and the form for a rule of its own',
+    path: '/sites/northwind-bakery',
+    theme: 'light',
+    prepare: steps(tab('Settings'), scrollTo('Caching'), async (page) => {
+      await page.locator('summary', { hasText: /^Rules$/ }).click();
+    }),
+  },
   {
     name: 'site-limits',
     what: 'A site’s container limits: memory of its own, CPU and processes on the defaults',

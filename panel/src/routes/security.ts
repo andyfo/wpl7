@@ -33,6 +33,7 @@ import {
   siteScanDto,
   siteSecurityDto,
 } from '../services/securityViews.js';
+import { clearAfterChange } from '../services/siteCaches.js';
 import type { AppDeps } from './deps.js';
 
 const slugParams = z.object({ slug: siteSlugParam });
@@ -189,6 +190,7 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
       throw badRequest('The panel no longer writes that file; remove it in the Files tab');
     }
     audit(req, 'security', site.slug, 'put back', { path: row.path });
+    await clearAfterChange(deps, site);
     const { job } = deps.malwareScan.request(deps.worker, site, 'rescan');
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });
@@ -221,6 +223,7 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
     );
     deps.malwareScan.refreshCounts(site.id);
     audit(req, 'security', site.slug, 'quarantine', { path: row.path });
+    await clearAfterChange(deps, site);
     return quarantineDto(moved);
   });
 
@@ -233,6 +236,7 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
   r.post('/api/sites/:slug/security/quarantine/:id/restore', { schema: { params: idParams } }, async (req) => {
     const site = deps.sites.bySlug(req.params.slug);
     const restored = await QuarantineService.held(deps.worker, site, () => deps.quarantine.restore(site, req.params.id, actorName(req) ?? 'unknown'));
+    await clearAfterChange(deps, site);
     deps.malwareScan.refreshCounts(site.id);
     audit(req, 'security', site.slug, 'restore from quarantine', { path: restored.path });
     return quarantineDto(restored);

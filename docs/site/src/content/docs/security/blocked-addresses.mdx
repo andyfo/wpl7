@@ -77,7 +77,8 @@ addresses either, but its refusals still apply.
 
 ## How blocks are enforced
 
-A block reaches every server within a minute, for ports 80 and 443 only.
+A block reaches every server within a minute, for TCP ports 80 and 443 and for UDP port 443, which
+HTTP/3 uses. It covers nothing else.
 
 | Layer | For | How |
 |---|---|---|
@@ -98,6 +99,9 @@ sudo wpl7-firewall off
 
 - Detection reacts within about two minutes, not seconds.
 - SSH and FTP are not covered. They keep their own protection.
+- The firewall and Traefik come before the page cache, so a blocked address gets no stored page. A
+  block in a `.htaccess` or in a plugin does not stop a stored page. See
+  [Caching](/docs/sites/caching/#limits).
 - A crawler on a domain the panel does not know is not verified, and can be blocked.
 - A bot whose company publishes no address list is blocked like any visitor when it crosses a rule.
 - Without IPv6 in Docker, direct IPv6 visitors arrive as one private address and are not detected

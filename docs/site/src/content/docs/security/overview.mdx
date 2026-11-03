@@ -9,6 +9,9 @@ sources:
   - panel/src/services/siteHardening.ts
   - panel/src/services/siteImages.ts
   - deploy/wordpress-image/Dockerfile
+  - deploy/wordpress-image/apache-site.conf
+  - deploy/wordpress-image/php-fpm.conf
+  - panel/src/services/siteMigration.ts
   - panel/src/services/siteNetwork.ts
   - panel/src/services/docker.ts
   - panel/src/services/mailAuth.ts
@@ -53,6 +56,8 @@ A site container:
   from a shared network with traffic between containers disabled.
 - runs without `NET_RAW`, so it cannot forge packets or poison ARP caches on the networks it shares,
   and with `no-new-privileges`, so setuid programs are not an escalation path.
+- has one port on its network, nginx's. Apache listens on the loopback, and PHP-FPM and Redis on
+  sockets, so nothing else on that network can reach them.
 - is capped at 2 CPU cores, 512 MB and 512 processes by default, under **Site container limits** in
   <UiPath href="/docs/panel/settings/">Settings → Sites</UiPath>, or at limits of its own. A miner or
   a fork bomb slows only its own site.
@@ -76,6 +81,17 @@ and that key opens every machine you own.
 The settings inside a container guard against a stolen admin login, not against code already running
 in the site. A scan reads files, not the database. Containers built before a protection existed keep
 the old one until they are recreated, which the panel does once, by itself.
+
+PHP runs in PHP-FPM, and only in files named `.php`. **No PHP in uploads** holds there too: Apache
+takes PHP's handler away from such a file and refuses it, from a file the site cannot write. PHP-FPM
+also reads a `.user.ini` in the site's folders, which mod_php never did. Code in the site, or an FTP
+login, can write one that loads a file before every script. Apache refuses to serve these files, and
+the panel comments out what another host left in them. See
+[Change a PHP setting](/docs/sites/settings/#change-a-php-setting).
+
+Site protection and blocked addresses run in Traefik and at the firewall, in front of the
+[page cache](/docs/sites/caching/). A security plugin's firewall runs in PHP, so a request for a
+stored page never reaches it.
 
 A site's PHP comes from its site image. When an update brings a newer image, the panel rebuilds every
 site container on it, so a PHP security release reaches every site. The site image does not build on

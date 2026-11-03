@@ -8,6 +8,7 @@ sources:
   - panel/src/services/security.ts
   - panel/src/services/securityConfig.ts
   - panel/src/services/siteHardening.ts
+  - deploy/wordpress-image/apache-site.conf
   - panel/web/src/pages/SitesSecurity.tsx
   - "panel/web/src/components/security/**"
 ---
@@ -58,6 +59,17 @@ A rule blocks or allows requests by path, user agent, method, query parameter or
 to 8 conditions. **Allow** lets a request past the site's other rules and limits. A rule Traefik
 refuses disables only itself, and the tab names it.
 
+## Keep PHP out of uploads
+
+**No PHP in uploads** works in two places. Traefik refuses a request for such a file. Apache, in the
+site's container, takes PHP's handler away from it and refuses it too. Both come from files the site
+cannot write, so a `.htaccess` in uploads cannot turn it back. Apache also refuses to serve any
+`.user.ini`.
+
+A `.user.ini` changes PHP's settings, not which files Apache hands to PHP. One can still load a file
+from uploads before every script, with `auto_prepend_file`. That takes code already running in the
+site, or an FTP login.
+
 ## Trust a proxy
 
 Behind Cloudflare or a load balancer, every visitor seems to come from the proxy. For a trusted
@@ -83,6 +95,8 @@ exactly one of them.
 - A proxy that sends only `X-Forwarded-For` cannot be trusted.
 - Request bodies are never read. A POST exploit is refused by its path, or not at all.
 - The settings inside the container stop a stolen admin login, not code already running in the site.
+- A stored page never reaches PHP or `.htaccess`. Site protection comes before the
+  [page cache](/docs/sites/caching/) and still applies, but a security plugin's firewall does not run.
 
 ## Related
 

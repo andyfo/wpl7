@@ -64,6 +64,7 @@ describe('importing a site', () => {
     // Published, backed up, scanned, cleaned up.
     const lastSpec = w.docker.calls.filter((c) => c.method === 'createSiteContainer').at(-1)!.args[0] as { labels: Record<string, string>; env: Record<string, string> };
     expect(lastSpec.labels['wpl7.routing']).toBe('public');
+    expect(lastSpec.labels['wpl7.stack']).toBe('2');
     expect(lastSpec.env.WORDPRESS_TABLE_PREFIX).toBe('wpx_');
     expect(w.db.select().from(backups).where(eq(backups.siteSlug, 'willow')).all().map((b) => b.type)).toEqual(['import']);
     const scan = w.db.select().from(jobs).where(eq(jobs.type, 'site.malwareScan')).get()!;

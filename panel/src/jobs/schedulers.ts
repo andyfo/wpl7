@@ -9,6 +9,7 @@ import { defaultSiteLimits } from '../services/siteSpec.js';
 import { sweepLegacyRename } from '../services/legacyRename.js';
 import { sweepHardening } from '../services/siteHardening.js';
 import { sweepSiteImages } from '../services/siteImages.js';
+import { sweepSiteRuntime } from '../services/siteCaches.js';
 import { sweepPhpReleases } from '../services/phpReleases.js';
 import { sweepWildcardSites } from '../services/wildcardSites.js';
 import { FIRST_CHECK_DELAY_MS } from '../services/updates.js';
@@ -470,6 +471,8 @@ export class Schedulers {
             this.hardeningSweptAt = Date.now();
             await sweepHardening(s, this.worker);
             await sweepSiteImages(s, this.worker);
+            // A release that renders a site's runtime files differently.
+            sweepSiteRuntime(s, this.worker);
             await sweepPhpReleases(s);
             // Its own trigger is Settings -> DNS; this is for the sites that were busy then.
             await sweepWildcardSites(s, this.worker);

@@ -111,7 +111,7 @@ describe('review regressions', () => {
     expect(w.deps.sites.bySlug(site.slug).phpVersion).toBe('8.3');
     expect(w.docker.containers.get(site.containerName)).toBe('running');
     const restored = w.docker.calls.filter((c) => c.method === 'createSiteContainer').at(-1)!.args[0] as { image: string };
-    expect(restored.image).toBe('wpl7-wordpress:php8.3');
+    expect(restored.image).toBe(await w.docker.imageId('wpl7-wordpress:php8.3'));
 
     const retry = await runJob(w, w.deps.sites.changePhp(site.slug, '8.4').id);
     expect(retry.status).toBe('succeeded');

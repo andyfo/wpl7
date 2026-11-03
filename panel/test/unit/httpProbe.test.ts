@@ -1,7 +1,7 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { httpProbe, httpProbeOnce, isUp } from '../../src/lib/httpProbe.js';
+import { httpProbe, httpProbeAttempts, httpProbeOnce, isUp } from '../../src/lib/httpProbe.js';
 
 let server: http.Server | null = null;
 
@@ -36,6 +36,12 @@ describe('httpProbe', () => {
     expect(isUp(404)).toBe(false); // "no router for this host"
     expect(isUp(502)).toBe(false);
     expect(isUp(500)).toBe(false);
+  });
+
+  it('answers with the last attempt, which says what came back', async () => {
+    const url = await serve((_req, res) => res.writeHead(503).end(''));
+    expect(await httpProbeAttempts(url, 'nope.example.com', 0)).toMatchObject({ ok: false, status: 503 });
+    expect(await httpProbeAttempts('http://127.0.0.1:1/', 'x.example.com', 0)).toMatchObject({ ok: false, status: null });
   });
 
   it('reports a 404 site as down instead of up', async () => {

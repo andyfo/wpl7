@@ -28,6 +28,7 @@ import { audit as auditLog } from '../lib/audit.js';
 import { jobToDto, viewerOf } from '../lib/dto.js';
 import type { SiteRow } from '../db/schema.js';
 import type { SiteFilesService } from '../services/siteFiles.js';
+import { clearAfterChange } from '../services/siteCaches.js';
 import type { AppDeps } from './deps.js';
 
 /**
@@ -103,13 +104,18 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
   const changing = async <T>(
     site: SiteRow,
     work: (at: { container: string; files: SiteFilesService }) => Promise<T>,
+    /** Whether what came of it can change what visitors see: its caches are then emptied. */
+    changesPages: (result: T) => boolean = () => true,
   ): Promise<T> => {
     const release = deps.worker.holdSite(site, FILE_SAFE_JOBS);
+    let result: T;
     try {
-      return await work(await containerOf(site));
+      result = await work(await containerOf(site));
     } finally {
       release();
     }
+    if (changesPages(result)) await clearAfterChange(deps, site);
+    return result;
   };
 
   /**
@@ -321,11 +327,16 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
       const site = siteOf(req.params.slug);
       const { body, release } = await readBody(req, FILE_LIMITS.chunkBytes);
       try {
-        return await changing(site, async ({ container, files }) => {
-          const { replayed, ...res } = await files.appendChunk(container, { ...req.query, id: req.params.id }, body);
-          if (res.written && !replayed) audit(req, site, 'upload', { path: req.query.path, bytes: req.query.size });
-          return res;
-        });
+        // Once, when the file is whole: a folder of uploads is many requests.
+        return await changing(
+          site,
+          async ({ container, files }) => {
+            const { replayed, ...res } = await files.appendChunk(container, { ...req.query, id: req.params.id }, body);
+            if (res.written && !replayed) audit(req, site, 'upload', { path: req.query.path, bytes: req.query.size });
+            return res;
+          },
+          (res) => Boolean(res.written),
+        );
       } finally {
         release();
       }
@@ -405,12 +416,16 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   r.post('/api/sites/:slug/files/extract', { schema: { params: slugParams, body: siteFileExtractBody } }, async (req, reply) => {
     const site = siteOf(req.params.slug);
-    const job = await changing(site, async () =>
-      deps.worker.enqueue(
-        'files.extract',
-        { siteId: site.id, path: req.body.path, to: req.body.to, overwrite: req.body.overwrite },
-        { id: site.id, slug: site.slug, serverId: site.serverId },
-      ),
+    // The job clears when it ends.
+    const job = await changing(
+      site,
+      async () =>
+        deps.worker.enqueue(
+          'files.extract',
+          { siteId: site.id, path: req.body.path, to: req.body.to, overwrite: req.body.overwrite },
+          { id: site.id, slug: site.slug, serverId: site.serverId },
+        ),
+      () => false,
     );
     audit(req, site, 'extract', { path: req.body.path, to: req.body.to, job: job.id });
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
@@ -424,12 +439,15 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
       const outside = req.body.paths.find((p) => siteFileParent(p) !== folder);
       if (outside !== undefined) throw badRequest(`"${outside}" is not in the folder the archive goes into`);
       const site = siteOf(req.params.slug);
-      const job = await changing(site, async () =>
-        deps.worker.enqueue(
-          'files.compress',
-          { siteId: site.id, paths: req.body.paths, to: req.body.to, overwrite: req.body.overwrite },
-          { id: site.id, slug: site.slug, serverId: site.serverId },
-        ),
+      const job = await changing(
+        site,
+        async () =>
+          deps.worker.enqueue(
+            'files.compress',
+            { siteId: site.id, paths: req.body.paths, to: req.body.to, overwrite: req.body.overwrite },
+            { id: site.id, slug: site.slug, serverId: site.serverId },
+          ),
+        () => false,
       );
       audit(req, site, 'compress', { paths: req.body.paths, to: req.body.to, job: job.id });
       return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });

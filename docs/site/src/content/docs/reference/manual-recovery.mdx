@@ -227,6 +227,9 @@ snapshot are gone, and logins deleted since come back.
   the panel adds: its own mail login, its protection rules and its resource limits.
 - The database password of a site is not in its backup. On another host, the site gets a new
   database user.
+- The `-apache` image's mod_php does not read `.user.ini`, so settings the panel moved there do not
+  apply. In each `.htaccess`, take the `# Moved to .user.ini by WPL7:` mark off the line to bring one
+  back.
 - Restoring the panel's database rolls back everything the panel knows to that night, users and
   API keys included.
 

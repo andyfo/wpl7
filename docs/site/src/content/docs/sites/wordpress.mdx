@@ -73,7 +73,8 @@ new password is shown once. **Send test email** sends a message through the site
 
 Open **WP-CLI console (advanced)** with **show**. Type a command without the leading `wp`, such
 as `option get siteurl`, and choose **Run**. It runs inside the site's container as
-`www-data`, and stops after 55 seconds.
+`www-data`, and stops after 55 seconds. A command that changes something empties the site's caches
+when it ends. One that only reads, such as `plugin list`, does not.
 
 ## On a site hosted elsewhere
 

@@ -5,6 +5,7 @@
 // @docs sites/create, sites/domains, sites/move
 import { z } from 'zod';
 import { accessLevels } from './access.js';
+import { MAX_KEEP_SECONDS, ownCacheRulesSchema } from './cacheRules.js';
 import {
   FILE_LIMITS,
   RESERVED_FILE_PREFIX,
@@ -158,6 +159,7 @@ export const jobTypes = [
   'site.restart',
   'site.changePhp',
   'site.reconcile',
+  'site.objectCache',
   'site.updateDomains',
   'site.move',
   'site.moveFinalize',
@@ -1465,11 +1467,22 @@ export const MIN_CPU_CAP = 0.01;
 /** A CPU limit as Docker can run it: 0 for none, or a cap of at least MIN_CPU_CAP. */
 export const cpuLimitAllowed = (cores: number): boolean => cores === 0 || cores >= MIN_CPU_CAP;
 
+/**
+ * The smallest process limit a site can run on. nginx, Apache's threads and PHP-FPM's workers all
+ * count, and at 25 Apache cannot make its threads, exits, and takes the container with it, over and
+ * over. 64 kept a site up under 30 pages at once; 40 only just.
+ */
+export const MIN_PIDS_CAP = 64;
+
+/** A process limit a site can run on: 0 for none, or a cap of at least MIN_PIDS_CAP. */
+export const pidsLimitAllowed = (pids: number): boolean => pids === 0 || pids >= MIN_PIDS_CAP;
+
 /** Why a container limit cannot be saved, or null. `label` names the field as its form does. */
 export function siteLimitProblem(key: keyof typeof SITE_LIMIT_RANGES, label: string, n: number): string | null {
   const { min, max } = SITE_LIMIT_RANGES[key];
   const inRange = Number.isFinite(n) && n >= min && n <= max;
   if (key === 'cpuLimit') return inRange && cpuLimitAllowed(n) ? null : `${label}: 0, or a number from ${MIN_CPU_CAP} to ${max}.`;
+  if (key === 'pidsLimit') return inRange && Number.isInteger(n) && pidsLimitAllowed(n) ? null : `${label}: 0, or a whole number from ${MIN_PIDS_CAP} to ${max}.`;
   return inRange && Number.isInteger(n) ? null : `${label}: a whole number from ${min} to ${max}.`;
 }
 
@@ -1483,7 +1496,12 @@ const memoryLimitMbSchema = z
   .int()
   .min(SITE_LIMIT_RANGES.memoryLimitMb.min)
   .max(SITE_LIMIT_RANGES.memoryLimitMb.max);
-const pidsLimitSchema = z.number().int().min(SITE_LIMIT_RANGES.pidsLimit.min).max(SITE_LIMIT_RANGES.pidsLimit.max);
+const pidsLimitSchema = z
+  .number()
+  .int()
+  .min(SITE_LIMIT_RANGES.pidsLimit.min)
+  .max(SITE_LIMIT_RANGES.pidsLimit.max)
+  .refine(pidsLimitAllowed, `A process limit is 0 for none, or at least ${MIN_PIDS_CAP}`);
 
 /** A site's own limits. Each one left out is kept as it is; null puts it back on Settings. */
 export const siteLimitsBody = z
@@ -1497,6 +1515,33 @@ export const siteLimitsBody = z
     (b) => b.cpuLimit !== undefined || b.memoryLimitMb !== undefined || b.pidsLimit !== undefined,
     'Send cpuLimit, memoryLimitMb or pidsLimit to change',
   );
+
+/**
+ * A site's caches: each left out stays as it is. `off` and `own` replace the whole list, and `object`
+ * queues a job. A keep time of null follows Settings.
+ */
+export const siteCacheBody = z
+  .object({
+    page: z.enum(['default', 'on', 'off']).optional(),
+    object: z.boolean().optional(),
+    keepSeconds: z.number().int().min(1).max(MAX_KEEP_SECONDS).nullable().optional(),
+    off: z.array(z.string().max(64)).max(100).optional(),
+    own: ownCacheRulesSchema.optional(),
+  })
+  .strict()
+  .refine((b) => Object.values(b).some((v) => v !== undefined), 'Send page, object, keepSeconds, off or own to change');
+export type SiteCacheBody = z.infer<typeof siteCacheBody>;
+
+/** An address on the site, as a visitor would ask for it. The panel asks it from inside the container. */
+export const siteCacheCheckBody = z
+  .object({
+    path: z
+      .string()
+      .min(1)
+      .max(2000)
+      .regex(/^\/[^\s\u0000-\u001f\u007f]*$/u, 'A path on the site, starting with /, with no spaces'),
+  })
+  .strict();
 
 export const mailSuspensionBody = z
   .object({
@@ -1539,6 +1584,9 @@ export const settingsUpdateBody = z.object({
   siteCpuLimit: cpuLimitSchema.optional(),
   siteMemoryLimitMb: memoryLimitMbSchema.optional(),
   sitePidsLimit: pidsLimitSchema.optional(),
+  /** Whether a site keeps a page cache, and for how long, unless it says otherwise. */
+  sitePageCache: z.boolean().optional(),
+  sitePageCacheSeconds: z.number().int().min(1).max(MAX_KEEP_SECONDS).optional(),
   defaultPhpVersion: phpVersionSchema.optional(),
   defaultLocale: localeSchema.optional(),
   /** Prefilled in the New Site wizard and used by a create that leaves it out. '' = none. */

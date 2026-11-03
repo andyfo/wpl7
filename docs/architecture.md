@@ -1,8 +1,8 @@
 # Architecture
 
 ```
-Internet ──▶ Traefik v3 (:80/:443, Let's Encrypt, Docker-label routing)
-              ├─▶ wp-<slug>   one per site: wpl7-wordpress:php8.x (wordpress:apache + msmtp + wp-cli)
+Internet ──▶ Traefik v3 (:80/:443, UDP :443 for HTTP/3, Let's Encrypt, Docker-label routing)
+              ├─▶ wp-<slug>   one per site: wpl7-wordpress:php8.x (wordpress:fpm + nginx + Apache + Redis + msmtp + wp-cli)
               └─▶ wpl7-panel   Node/TS API + React UI (admin domain)
 wp-<slug>, panel ──▶ wpl7-mariadb (mariadb:11.4, per-site DB + user)     wpl7_db network (internal)
 wp-<slug> ──mail()──▶ wpl7-mail (postfix queue, alias "mail") ──DKIM──▶ wpl7-dkim ──▶ smarthost or direct MX
@@ -77,6 +77,8 @@ tables to get large.
 Every managed container carries labels `wpl7.managed=true`, `wpl7.site=<slug>`, `wpl7.role=wordpress`,
 `wpl7.php=<version>`, plus `traefik.docker.network=wpl7_site_<slug>` so Traefik — which is attached to
 many networks — routes to the right endpoint rather than the egress one, where traffic is dropped.
+`wpl7.stack=2` says the container runs nginx, Apache and PHP-FPM; one without it is the older Apache
+with mod_php (see [Site containers](#site-containers)).
 
 | Thing | Pattern | Example (`my-blog`) |
 |---|---|---|
@@ -98,6 +100,7 @@ spec no longer matches.
 /srv/sites/<slug>/config/msmtprc     bind → /etc/msmtprc:ro (this site's own relay login)
 /srv/sites/<slug>/config/security-apache.conf  bind → /etc/apache2/conf-enabled/zz-wpl7-security.conf:ro
 /srv/sites/<slug>/config/security/   bind → /etc/wpl7:ro - wp-config-extra.php (docs/security.md)
+/srv/sites/<slug>/config/runtime/    bind → /etc/wpl7-runtime:ro on stack 2 - nginx-site.conf, php-fpm-pool.conf, php.ini, wp-cache.php, redis.conf
 /srv/sites/<slug>/quarantine/        files moved out of the site (0700, uid 33); mounted into no site
 /srv/sites/<slug>/site.json          panel-written manifest (disaster-recovery aid)
 /srv/backups/<slug>/<ts>/            db.sql.gz + files.tar.gz + manifest.json + sha256sums
@@ -134,10 +137,79 @@ actually produced it (see [docs/backup-restore.md](backup-restore.md)).
 
 ## Site containers
 
-Image `wpl7-wordpress:php<X.Y>` = official `wordpress:php<X.Y>-apache` + msmtp/msmtp-mta (PHP `mail()`
-works) + wp-cli. Built locally from `deploy/wordpress-image/` (setup.sh pre-builds all offered versions;
-the panel rebuilds on demand). WP-CLI operations run via `docker exec -u 33:33` inside the site container,
-so PHP version and mail config always match the site.
+Image `wpl7-wordpress:php<X.Y>` = official `wordpress:php<X.Y>-fpm` + nginx, Apache, Redis and tini from
+Debian, phpredis from PECL, msmtp/msmtp-mta (PHP `mail()` works) and wp-cli. Built locally from
+`deploy/wordpress-image/` (setup.sh pre-builds all offered versions; the panel rebuilds on demand; keep
+the folder flat, because that build sends only its top-level files). WP-CLI operations run via
+`docker exec -u 33:33` inside the site container, so PHP version and mail config always match the site.
+
+### Stack 2: nginx, Apache and PHP-FPM
+
+```
+Traefik ─▶ nginx :8080       page cache, in /var/cache/nginx/wpl7
+            └▶ Apache 127.0.0.1:80   event MPM, .htaccess, static files, Brotli/gzip, cache times
+                 └▶ PHP-FPM /run/wpl7/php-fpm.sock   pool sized from the site's limits
+                      ├▶ MariaDB
+                      └▶ Redis /run/wpl7/redis.sock   only while the object cache is on
+```
+
+The image carries the label `wpl7.stack=2`, and `buildSiteContainerSpec` builds a container to match the
+image it finds (`siteContainerSpec`): Traefik's port 8080, the same label, the runtime mount and
+`wp-cache.php` in `WORDPRESS_CONFIG_EXTRA`. So a server that still has the older image keeps getting
+containers that image can run. What only works on stack 2 asks the container's label first and says
+why when it can't (`siteContainerStack`).
+
+`tini` is PID 1 and runs `wpl7-start`, which empties the page cache, runs the official entrypoint once
+as `docker-entrypoint.sh php-fpm -t` (it seeds WordPress and writes `wp-config.php` only for a `php-fpm`
+or `apache2` command), then starts PHP-FPM, Redis if its file is there, Apache and nginx in the foreground.
+When one exits by itself the rest stop and the container exits, so `unless-stopped` brings the whole site
+back. A file from the panel that is missing or refused at a start is not fatal: the site comes up on the
+image's defaults, with the page cache off (`nginx-passthrough.conf`). `wpl7-reload apache|nginx|php|redis`
+applies a change in place, and exits 1 with what runs left as it was when something is refused.
+
+**What the panel writes.** `services/siteStack.ts` renders nginx's site file, the FPM pool, the OPcache
+sizes and Redis's file; `services/wpCachePhp.ts` renders `wp-cache.php`; `services/siteCaches.ts` writes
+them to `config/runtime/` before every create and start, atomically and world-readable, and applies a
+change to a running container (`applySiteCaches`). Only what changed is reloaded, because an FPM reload
+empties OPcache and ends requests still running after 10 s. `pm.max_children` is (memory − OPcache) ÷ 32,
+at least 2 and at most 5 per CPU; OPcache is 3/8 of memory, 32 to 192 MB; Redis an eighth, at least 16 MB. All of
+it comes out of the site's own memory limit. A process limit under 64 restart-loops Apache, so
+`siteRuntimeFrom` lifts a lower stored value and the API refuses a new one.
+
+**The page cache** (`docs/site/src/content/docs/sites/caching.mdx` is the user's view). nginx has no
+default cache time: a response without `X-Accel-Expires` is not stored, and only `wp-cache.php` sends
+it, at the end of a page, so only WordPress pages are stored and a page can refuse for itself. The rules
+live in `shared/cacheRules.ts`: built-in groups improved by each release, plus a site's own in
+`sites.cache_rules`. `activeCacheRules` is the one function that decides what is in force, for nginx, PHP,
+the API and the card alike, and `cacheRuleProblem` checks every value again at render time, because rule
+values end up in nginx's config. Decisions behind the shape, each with a measurement in the PR:
+
+- No `proxy_cache_lock`: nginx has no hit-for-pass, so every page that turns out not to be stored would be
+  served one at a time per URL. A burst on a missing page is capped by FPM's pool instead.
+- Stale only on failure (`error timeout http_500 502 503 504`). Serving stale while refreshing would keep a
+  page public after the site was locked, and a background refresh blocks the connection Traefik reuses.
+- Request bodies are buffered, so a slow sender holds no PHP worker: `client_max_body_size` 1 GB, or
+  `post_max_size` + 16 MB when that is more, and 16 big bodies at once per site (429 after).
+- No upstream keep-alive between nginx and Apache: the event MPM closes idle connections when its workers
+  are busy, and nginx can't resend a POST that met one.
+- Timeouts are 3600 s in nginx, Apache and FPM, because mod_php had no wall clock.
+- A request with an unknown cookie or header can't store a page, though it can get one. `Referer` and
+  browser and Cloudflare headers are held back on the path that may store (`siteStack.ts`).
+
+**Clearing** is deleting files: nginx treats a missing one as a miss, and the mark file
+`generation.0000000000` going with them tells a page being drawn that a clear happened. WordPress's hooks
+clear through `wp-cache.php`, under WP-CLI too; the panel clears after `SITE_CONTENT_JOBS`
+(`jobs/worker.ts`) and in its Files, database and quarantine routes. A rule change clears twice, about 3 s
+apart, because OPcache can hold the old `wp-cache.php` that long. A watcher in `wpl7-start` empties the cache
+within 10 s of a change to the root `.htaccess`.
+
+**Moving a site** is `switchToStack2` in `jobs/handlers/sites.ts`, reached from `replaceContainer` whenever
+a stack 1 container's tag has become stack 2, so the image sweep (`services/siteImages.ts`) is the only
+trigger needed. It tags the old image `wpl7-rollback:<slug>`, moves the PHP lines (`services/siteMigration.ts`),
+replaces the container and probes it, and only a site that answered before can fail. A failure undoes the
+`.htaccess` edits, puts the old container back on its old image by id, and records `sites.stack_switch_error`
+and `stack_switch_image`. The sweep skips the site while the tag still points at that image; Retry, Recreate
+container (`retrySwitch`) or a newer image try again. A sweep's reconcile and `reconcile-all` leave it there.
 
 Key env on each site container: `WORDPRESS_DB_*` (generated wp-config.php reads them at runtime) and
 `WORDPRESS_CONFIG_EXTRA` containing the X-Forwarded-Proto→HTTPS fix (prevents redirect loops behind
@@ -147,7 +219,9 @@ from inside (docs/security.md#inside-the-container), mounted read-only from a fo
 whole, so a change needs no new container. Its Apache side is the other read-only mount,
 `zz-wpl7-security.conf`, rewritten in place (a single-file mount keeps its inode) and applied with
 `apache2ctl -t` and a graceful reload. A container carries the label `wpl7.hardening=1` once it has
-both; one without it is rebuilt by a `site.reconcile` the panel queues itself.
+both; one without it is rebuilt by a `site.reconcile` the panel queues itself. On stack 2 Apache's
+reload is the same graceful one, asked for from inside the container (`APACHE_RELOAD_COMMAND`), because
+`docker kill --signal` would turn the restart policy off (docs/internal/watchlist.md).
 
 New sites lose WordPress's bundled plugins (Akismet, Hello Dolly) right after `core install`, and gain
 one must-use plugin the panel maintains itself: `wpl7-login.php`, which spends the single-use tokens
@@ -201,9 +275,10 @@ A site container is built to be survivable when — not if — the WordPress ins
 | | |
 |---|---|
 | Networks | its own + egress only; it cannot address another site or the panel |
+| Ports | only nginx's 8080 on stack 2: Apache listens on the loopback, PHP-FPM and Redis on sockets |
 | Capabilities | Docker's defaults minus `NET_RAW MKNOD SYS_CHROOT AUDIT_WRITE SETFCAP SETPCAP`. `NET_RAW` is the one that matters: with it, root in the container can forge packets and poison ARP caches on the bridges it shares |
 | `no-new-privileges` | set, so the setuid binaries Debian ships (`su`, `mount`, `passwd`) cannot be used to escalate. wp-cli is unaffected — its uid comes from `docker exec -u 33:33`, which the daemon applies |
-| CPU / memory / pids | per-site ceilings from Settings (default 2 cores, 512 MB, 512 pids), or the site's own where it has one (`sites.cpu_limit`, `memory_limit_mb`, `pids_limit`), so one site cannot take the box down for its neighbours |
+| CPU / memory / pids | per-site ceilings from Settings (default 2 cores, 512 MB, 512 pids, at least 64), or the site's own where it has one (`sites.cpu_limit`, `memory_limit_mb`, `pids_limit`), so one site cannot take the box down for its neighbours |
 | Mail | its own SASL login; the relay refuses any sender domain owned by another site (docs/mail.md) |
 
 These are applied when the container is **built** — except the CPU, memory and pids ceilings,
@@ -222,7 +297,7 @@ The whole of it is docs/security.md; the moving parts:
 | Site protection | Traefik on the site's server | one file per site, `sec-<slug>.yml`, with routers above the site's own label router - which stays as the fallback, so a missing or refused file only means the site is served as before. Written by `services/security.ts` when it changes, never otherwise: a rewrite resets every rate limiter |
 | The visitor's own address | the panel | read from `ClientAddr` in Traefik's JSON access log, and from `Cf-Connecting-Ip`, `True-Client-Ip` or `Fastly-Client-Ip` only when the connection comes from a trusted proxy's ranges (`lib/clientIp.ts`). Traefik overwrites `ClientHost` from `X-Forwarded-For`, which anyone can send |
 | Attack detection | the panel | sliding-window counters per address (IPv6 by /64) over every server's access log, read each minute with the visitor statistics (`services/attackDetector.ts`). Rebuilt from the last ten minutes of log after a restart |
-| Blocked addresses | every server | `table inet wpl7` in nftables, at `prerouting` priority -310 - ahead of Docker's own forwarding - with allow sets first, then permanent and timed block sets; drops only `tcp dport {80, 443}`. Loaded by `wpl7-firewall` (`nft -c`, then one transaction), which refuses a file that touches any other table. Visitors behind a trusted proxy are refused by Traefik instead (`wpl7-blocked.yml`). The panel reaches server 1's host through `HostShell` and a worker over SSH with sudo (`servers/hostPort.ts`) |
+| Blocked addresses | every server | `table inet wpl7` in nftables, at `prerouting` priority -310 - ahead of Docker's own forwarding - with allow sets first, then permanent and timed block sets; drops only `tcp dport {80, 443}` and `udp dport 443` (HTTP/3). Loaded by `wpl7-firewall` (`nft -c`, then one transaction), which refuses a file that touches any other table. Visitors behind a trusted proxy are refused by Traefik instead (`wpl7-blocked.yml`). The panel reaches server 1's host through `HostShell` and a worker over SSH with sudo (`servers/hostPort.ts`) |
 | Malware scans | throwaway containers on the site's server | `--network none`, every capability dropped, `no-new-privileges`, a read-only root with a tmpfs, one CPU, a memory and pid ceiling, uid 33, and exactly one site's files mounted read-only. The check runs in the site's own image; AMWScan in its pinned image. Output is JSON lines, at most 500 findings, under the 1 MiB an exec or SSH read may return |
 | Quarantine | a throwaway container as uid 33 | the site's files and its `quarantine/` folder mounted, nothing else: no path through a link is followed, the hash is checked before and after the copy |
 

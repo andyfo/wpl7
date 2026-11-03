@@ -1,0 +1,213 @@
+#!/bin/bash
+# Runs a site's services in one container, under tini: PHP-FPM, Redis when the object cache is on,
+# Apache, nginx. Docker sees one process that runs while all of them do. When one of them exits by
+# itself the rest are stopped and this exits, so the restart policy brings the whole site back in a
+# known state, the way it did with Apache alone.
+#
+# Signals, which tini passes on:
+#   TERM  stop everything gracefully, within Docker's 20 s (the panel's stop timeout)
+#   USR1  Apache graceful reload, the signal the panel has always sent a site container
+#   USR2  start or stop Redis to match whether its config file exists (wpl7-reload redis)
+
+set -u
+
+# A command given to the image runs instead, as with the official image's entrypoint.
+if (($# > 0)); then
+    exec docker-entrypoint.sh "$@"
+fi
+
+source /usr/local/lib/wpl7-runtime.sh
+
+# Service name -> pid, for what is running on purpose. wait -n watches exactly these.
+declare -A running=()
+
+is_alive() {
+    kill -0 "$1" 2>/dev/null
+}
+
+# True once the command succeeds. False after that many tenths of a second, or once the service
+# it waits on has gone.
+wait_for() {
+    local pid=$1 tenths=$2
+    shift 2
+    while ((tenths-- > 0)); do
+        "$@" && return 0
+        is_alive "$pid" || return 1
+        sleep 0.1
+    done
+    "$@"
+}
+
+# True once the process has gone, false after that many tenths of a second.
+gone_within() {
+    local pid=$1 tenths=$2
+    while ((tenths-- > 0)); do
+        is_alive "$pid" || return 0
+        sleep 0.1
+    done
+    ! is_alive "$pid"
+}
+
+apache_listens() {
+    (exec 3<>/dev/tcp/127.0.0.1/80) 2>/dev/null
+}
+
+# Asks once a second, because a service that has only just started misses it: a background process
+# starts with QUIT ignored, and WINCH does nothing, until the service has set up its own handling.
+stop_service() {
+    local name=$1 signal=$2 seconds=$3 pid=${running[$1]:-}
+    [[ -n $pid ]] || return 0
+    unset "running[$name]"
+    while ((seconds-- > 0)); do
+        kill -"$signal" "$pid" 2>/dev/null
+        if gone_within "$pid" 10; then
+            wait "$pid" 2>/dev/null
+            return 0
+        fi
+    done
+    say "$name did not stop in time, killing it"
+    kill -KILL "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    return 1
+}
+
+# In the order that lets the requests in progress finish: nginx takes no new ones and waits for its
+# own, then Apache, then PHP, and Redis last because PHP uses it. nginx closes its port at once, so
+# the site is down from here on, and a recreate waits for this: 5 s is what a request gets to finish.
+# Once nginx has had to be killed there is nobody left to answer, so the rest go without waiting.
+stop_all() {
+    trap '' TERM INT QUIT HUP USR1 USR2
+    if stop_service nginx QUIT 5; then
+        stop_service apache WINCH 3
+        stop_service fpm QUIT 3
+    else
+        stop_service apache TERM 1
+        stop_service fpm TERM 1
+    fi
+    stop_service redis TERM 2
+    exit "$1"
+}
+
+reload_apache() {
+    if [[ -n ${running[apache]:-} ]]; then
+        kill -USR1 "${running[apache]}" 2>/dev/null
+    fi
+}
+
+# Redis dying right after its start means the panel's file is wrong. The site runs without it then
+# (the WordPress side is set to carry on), which beats a container restarting for ever on one line
+# of config. wpl7-reload reports the failure. From here on Redis counts like every other service.
+start_redis() {
+    # A dump Redis might still write goes to /tmp, never into the site's files. Its config comes
+    # from the panel alone, which turns dumps off.
+    (cd /tmp && exec setpriv --reuid=33 --regid=33 --clear-groups \
+        redis-server "$RUNTIME_DIR/redis.conf") &
+    local pid=$!
+    running[redis]=$pid
+    if ! wait_for "$pid" 30 test -S "$REDIS_SOCKET"; then
+        if is_alive "$pid"; then
+            say "Redis is running but has no socket at $REDIS_SOCKET yet"
+        else
+            unset "running[redis]"
+            wait "$pid" 2>/dev/null
+            say "Redis did not start: the site runs without its object cache"
+        fi
+    fi
+}
+
+match_redis() {
+    if [[ -f $RUNTIME_DIR/redis.conf ]]; then
+        if [[ -z ${running[redis]:-} ]]; then
+            start_redis
+        fi
+    elif [[ -n ${running[redis]:-} ]]; then
+        stop_service redis TERM 5
+        rm -f "$REDIS_SOCKET"
+    fi
+}
+
+# A stored page never reaches Apache, so a lock or a block added to the root .htaccess over SFTP
+# wouldn't apply to it until it expired. This is the one file that can limit a WordPress page, so a
+# change to it empties the cache, and the pages go through the new rules from then on. By content,
+# because some plugins write the same file again and again. It stops with the container.
+watch_htaccess() {
+    local file=/var/www/html/.htaccess last now
+    # 2> comes first, or bash's own message about a missing file would reach the log.
+    last=$(cksum 2>/dev/null < "$file")
+    while :; do
+        sleep 10
+        now=$(cksum 2>/dev/null < "$file")
+        if [[ $now != "$last" ]]; then
+            last=$now
+            find /var/cache/nginx/wpl7 -mindepth 1 -type f -delete 2>/dev/null
+        fi
+    done
+}
+
+# wait -n can report a service once only, and not at all if it ended while this shell was busy with
+# another command, such as a sleep in one of the signal handlers. So the list is checked as well.
+service_ended() {
+    local pid=$1 status=$2 name
+    for name in "${!running[@]}"; do
+        if [[ ${running[$name]} == "$pid" ]]; then
+            unset "running[$name]"
+            say "$name exited by itself (status $status), stopping the rest so it all restarts"
+            break
+        fi
+    done
+    stop_all 1
+}
+
+trap 'stop_all 0' TERM INT QUIT HUP
+trap reload_apache USR1
+trap match_redis USR2
+
+# Redis, as www-data, puts its socket in this folder. Sticky, so that user can't touch PHP-FPM's.
+install -d -o root -g www-data -m 1775 /run/wpl7
+
+# A restart keeps this container's files, so nothing of the last run may count. A stopped site
+# never serves a page from before: find doesn't follow links, whatever the site's user left there.
+rm -f /run/wpl7/* /run/nginx.pid "$FPM_PID_FILE" /var/run/apache2/apache2.pid
+rm -f "$POOL_FILE" "$INI_LINK"
+ln -sfn "$NGINX_PASSTHROUGH" "$NGINX_LINK"
+find /var/cache/nginx/wpl7 -mindepth 1 -delete
+
+# The official entrypoint seeds an empty folder with WordPress and writes wp-config.php, but only
+# for a php-fpm or apache2 command. -t tests the configuration and returns, leaving the start to us.
+docker-entrypoint.sh php-fpm -t || exit
+
+link_php || say "PHP-FPM starts with the image's default pool"
+link_nginx || say "nginx starts with the page cache off"
+
+php-fpm -F &
+running[fpm]=$!
+wait_for "${running[fpm]}" 100 test -S "$FPM_SOCKET" || say "PHP-FPM has no socket yet"
+
+if [[ -f $RUNTIME_DIR/redis.conf ]]; then
+    start_redis
+fi
+
+# In its own shell: the variables Apache needs are not for PHP, whose environment sites can read.
+# Debian's file reads a variable it may not have, which set -u would stop.
+(set +u && . /etc/apache2/envvars && exec apache2 -DFOREGROUND) &
+running[apache]=$!
+wait_for "${running[apache]}" 100 apache_listens || say "Apache isn't listening yet"
+
+nginx -e stderr &
+running[nginx]=$!
+
+watch_htaccess &
+
+while :; do
+    for name in "${!running[@]}"; do
+        pid=${running[$name]}
+        is_alive "$pid" || service_ended "$pid" unknown
+    done
+    unset exited
+    wait -n -p exited "${running[@]}"
+    status=$?
+    # A signal handler has just run if nothing exited.
+    if [[ -n ${exited:-} ]]; then
+        service_ended "$exited" "$status"
+    fi
+done

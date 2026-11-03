@@ -95,6 +95,14 @@ export interface SiteSecurityPatch {
 const digest = (text: string) => crypto.createHash('sha256').update(text).digest('hex');
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+
+/**
+ * A graceful reload, asked for from inside the container. `docker kill --signal` is the obvious way,
+ * but Docker counts a container it has signalled as stopped by hand, whatever the signal: unless-stopped
+ * then doesn't bring it back when it exits, or when the server reboots (docs/internal/watchlist.md).
+ */
+export const APACHE_RELOAD_COMMAND = ['sh', '-c', 'kill -USR1 1'];
+
 export class SecurityService {
   private readonly chains = new Map<number, Promise<void>>();
   private readonly waiting = new Map<number, Promise<void>>();
@@ -550,7 +558,8 @@ export class SecurityService {
       const said = lines.filter((l) => l && !/^AH00558/.test(l)).slice(0, 2).join(' ');
       return (said || `exit code ${check.exitCode}`).slice(0, 300);
     }
-    await handle.docker.signalContainer(container, 'SIGUSR1');
+    const reload = await handle.docker.exec(container, APACHE_RELOAD_COMMAND, { timeoutMs: 30_000 });
+    if (reload.exitCode !== 0) throw new Error(`Apache could not be told to reload: exit code ${reload.exitCode}`);
     return null;
   }
 

@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { backups, siteDatabases, type BackupRow, type SiteRow } from '../../db/schema.js';
 import { manifestDatabases } from '../../services/backup.js';
+import { migrateArrivedFiles } from '../../services/siteMigration.js';
 import { JobCanceledError } from '../../lib/errors.js';
 import { TABLE_PREFIX_RE, backupTypes } from '../../../shared/schemas.js';
 import type { CoreServices } from '../../services/index.js';
@@ -175,20 +176,19 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
         const { ensureSiteImage } = await import('./sites.js');
         await ensureSiteImage(ctx, server, s.config, recreate.phpVersion);
       }
+      const { failedSwitchToKeep } = await import('./sites.js');
+      // A site that could not move to the new PHP setup stays where it is, unless it is changing PHP.
+      const stayOn = recreate.phpVersion ? null : await failedSwitchToKeep(server, s, site);
       await server.docker.removeContainer(site.containerName);
       updateSiteRow(s.db, site.id, recreate);
-      const { buildSiteContainerSpec, siteRuntimeFrom, siteTlsFor } = await import('../../services/siteSpec.js');
+      const { siteContainerSpec, siteRuntimeFrom } = await import('../../services/siteSpec.js');
       const restored = loadSite(s.db, site.id);
-      await server.docker.createSiteContainer(
-        buildSiteContainerSpec(
-          s.config,
-          restored,
-          siteDomains(site),
-          siteTlsFor(s.dns, server.row),
-          siteRuntimeFrom(s.settings, restored),
-        ),
-      );
+      await server.docker.createSiteContainer(await siteContainerSpec(s, server, restored, siteDomains(site), siteRuntimeFrom(s.settings, restored), stayOn ? { from: stayOn } : {}));
     }
+
+    // After that recreate: it can be what takes the site to stack 2. A backup can be older than that,
+    // and then its .user.ini files never ran.
+    await migrateArrivedFiles(ctx, server, s, loadSite(s.db, site.id), { inForce: manifest?.stack === 2 });
 
     ctx.info('Starting site…');
     await startSiteContainer(server, s, site, ctx);
@@ -265,7 +265,7 @@ async function readManifest(
   s: CoreServices,
   serverId: number,
   dir: string,
-): Promise<{ phpVersion?: string; domains?: string[]; tablePrefix?: string; kind?: string; databases?: unknown } | null> {
+): Promise<{ phpVersion?: string; domains?: string[]; tablePrefix?: string; kind?: string; databases?: unknown; stack?: unknown } | null> {
   try {
     const files = s.servers.handleFor(serverId).files;
     return JSON.parse(await files.readFile(path.join(dir, 'manifest.json')));

@@ -32,7 +32,7 @@ with hotfixes, priority email support and a dedicated engineer. See [Support](/d
 ### What do I need?
 
 A fresh Ubuntu 26.04 server on x86-64 with root access, at least 2 GB of memory, and ports 80 and
-443 open to the internet. You also need a domain whose DNS you can edit, for the panel's address
+443 open to the internet. UDP port 443 adds HTTP/3. You also need a domain whose DNS you can edit, for the panel's address
 and a wildcard for new sites. See [Installation](/docs/get-started/installation/).
 
 ### Does it run on ARM?
@@ -74,6 +74,12 @@ PHP 8.2, 8.3, 8.4 and 8.5. Each site picks its own, and you can switch it later.
 A site picks the branch, such as 8.4. Each WPL7 release builds its site images on the newest PHP
 releases of that day, and an update rebuilds every site on them. The Sites list shows the release
 each site runs, such as 8.4.27. See [Updating WPL7](/docs/panel/updating/#what-the-panel-does-afterwards).
+
+### Does WPL7 cache?
+
+Yes. Every site has a page cache in nginx, on by default, and can switch on an object cache in
+Redis. PHP keeps OPcache, pages go out with Brotli or gzip, and browsers get HTTP/3 where UDP port
+443 is open. You do not need WP Rocket for page caching. See [Caching](/docs/sites/caching/).
 
 ### Can I bring my existing WordPress sites?
 
@@ -164,4 +170,4 @@ security problems privately. Businesses can buy the Enterprise package. See [Sup
 - [Quick start](/docs/get-started/quick-start/)
 - [Troubleshooting](/docs/help/troubleshooting/)
 - [Known limits](/docs/reference/limits/)
-- [Support](/docs/support/)
+- [Caching](/docs/sites/caching/)

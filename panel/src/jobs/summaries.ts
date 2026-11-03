@@ -159,6 +159,8 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
           return p.finalBackup === true ? 'Keeping only a final backup' : 'With its backups, no final one';
         }
         return p.finalBackup === true ? 'After a final backup' : p.finalBackup === false ? 'Without a final backup' : null;
+      case 'site.objectCache':
+        return p.on === true ? 'On' : p.on === false ? 'Off' : null;
       case 'site.changePhp':
         return str(p.phpVersion) ? `To PHP ${str(p.phpVersion)}` : null;
       case 'site.updateDomains': {
