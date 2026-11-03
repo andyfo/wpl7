@@ -1,5 +1,5 @@
 /**
- * The AI companies' published address lists as they were on 2026-10-31, checked and merged as a
+ * The AI companies' published address lists as they were on 2026-11-03, checked and merged as a
  * download is: what an install that has never fetched them uses (services/proxyRanges.ts, which
  * names the lists). Written by `npx tsx scripts/ai-ranges.ts` - not by hand.
  */
