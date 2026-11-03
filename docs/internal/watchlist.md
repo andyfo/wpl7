@@ -543,9 +543,9 @@ for a reason; remove one once there is nothing left to watch.
   starts. With the classic overlay2 store the image stays, without a name. Docker Compose treats such a
   container as a normal, lasting state ([docker/compose#14028](https://github.com/docker/compose/pull/14028),
   merged 2026-08-14). `test/engine/siteSwitch.test.ts` passes on both stores.
-- **The problem:** a site's way back from a new container can't be its old image. A rebuild of the site
-  images (`provision/deploy.sh`, `provision/build.sh`) may have deleted it, and then the move to PHP-FPM
-  failed on every site, before it had changed anything.
+- **The problem:** a site's way back from a new container can't be its old image. An install that builds
+  from source rebuilds its site images that way (`provision/setup.sh`, `deploy.sh`, `build.sh`), which may
+  delete it, and then the move to PHP-FPM failed on every site, before it had changed anything.
 - **What we do about it:** `replaceContainer` in `panel/src/jobs/handlers/sites.ts` keeps the old
   container aside, stopped, as `<name>.previous`, until the new one is up, and puts it back when that
   fails. `failedSwitchToKeep` keeps a site on its old image only while Docker still has that image.
