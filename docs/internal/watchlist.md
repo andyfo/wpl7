@@ -36,15 +36,15 @@ for a reason; remove one once there is nothing left to watch.
 | [PHP-FPM: the status line, and a header with no colon](#php-fpm-the-status-line-and-a-header-with-no-colon) | Low | 2026-11-01 09:08 UTC | `sapi_cgi_send_headers` on master still sends the stored status line first |
 | [Download Monitor and Complianz, as the page cache's design relies on them](#download-monitor-and-complianz-as-the-page-caches-design-relies-on-them) | Low | 2026-11-01 09:08 UTC | Download Monitor 5.3.6 and Complianz 7.5.6 as relied on; Cookiebot 4.7.5 reads its cookie in PHP |
 | [Cloudflare's request headers](#cloudflares-request-headers) | Low | 2026-11-01 09:08 UTC | Default and visitor location headers are on the list; `CF-Worker`, `CF-Connecting-O2O` and two managed transforms' are not |
-| [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-09-30 07:23 UTC | nftables backend still experimental |
+| [Docker: the firewall backend](#docker-the-firewall-backend) | Medium | 2026-11-03 08:38 UTC | Docker 29.9.2: nftables backend still experimental, iptables the default |
 | [Docker: the build cache and image names, as the nightly clean-up reads them](#docker-the-build-cache-and-image-names-as-the-nightly-clean-up-reads-them) | Medium | 2026-10-27 17:47 UTC | Docker 29.9.2: both prune parameters trim, `all` would remove shared layers first |
 | [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
 | [Docker: a signal counts as stopping a container by hand](#docker-a-signal-counts-as-stopping-a-container-by-hand) | Medium | 2026-11-01 06:30 UTC | Docker 28.1.1: after `docker kill --signal USR1`, a container with `unless-stopped` that exits stays down |
 | [Docker: a container whose image a build deleted](#docker-a-container-whose-image-a-build-deleted) | Low | 2026-11-03 09:08 UTC | Docker 29.9.2: a build deletes the image on the containerd store, and keeps it on overlay2; the container still stops, renames and starts |
 | [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-10-04 18:10 UTC | `latest` is v5.1.0; hostname logic as relied on |
-| [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-09-30 07:23 UTC | Both answer as expected |
-| [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-09-30 09:51 UTC | All six as listed |
-| [AI assistants' address lists](#ai-assistants-address-lists) | Medium | 2026-09-30 10:46 UTC | All 12 lists pass the checks |
+| [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-11-03 08:38 UTC | Both answer as expected for WordPress 7.1.4 and Akismet 5.7.2; no scan failed to fetch them |
+| [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-11-03 08:44 UTC | All six as listed; 174 of the 384 geo-crawl addresses in Google's list have Google Cloud names |
+| [AI assistants' address lists](#ai-assistants-address-lists) | Medium | 2026-11-03 09:24 UTC | All 13 lists pass; Google's and Perplexity's are read from their new URLs |
 | [Traefik: the Cloudflare token from a file](#traefik-the-cloudflare-token-from-a-file) | Medium | 2026-10-07 11:05 UTC | lego v5.5.2 reads the file; Traefik keeps the client |
 | [Cloudflare: API tokens as the panel takes them](#cloudflare-api-tokens-as-the-panel-takes-them) | Medium | 2026-10-04 18:36 UTC | Formats and permissions as validated |
 | [Cloudflare's and Jetpack's address lists](#cloudflares-and-jetpacks-address-lists) | Low | 2026-09-30 07:23 UTC | All three answer |
@@ -441,9 +441,14 @@ for a reason; remove one once there is nothing left to watch.
 ## Docker: the firewall backend
 
 - **Priority:** Medium
-- **Last checked:** 2026-09-30 07:23 UTC. Docker Engine 29.8.1 (2026-09-15) is the latest. Its
+- **Last checked:** 2026-11-03 08:38 UTC. Docker Engine 29.9.2 (2026-10-20) is the latest, after
+  29.8.2, 29.9.0 and 29.9.1. None of their notes changes the default backend or moves port
+  forwarding: their networking fixes are for inter-container communication, firewalld zones,
+  Swarm and overlay networks. The
   [nftables backend](https://docs.docker.com/engine/network/firewall-nftables/) is still marked
-  experimental, so the default is iptables (iptables-nft on Ubuntu).
+  experimental. `selectFirewallBackend` in moby's `daemon/libnetwork/firewall_linux.go`, at
+  v29.9.2 and on `master`, turns it on only when `firewall-backend` is `nftables`, so the default
+  is iptables (iptables-nft on Ubuntu).
 - **The problem:** blocked addresses are dropped by a table of our own, `inet wpl7`, hooked at
   `prerouting` priority -310, before Docker forwards the published ports (docs/security.md).
   This was tested on 2026-09-29 only with the iptables backend. That run used an Ubuntu 26.04
@@ -590,11 +595,16 @@ for a reason; remove one once there is nothing left to watch.
 ## wordpress.org's checksum lists
 
 - **Priority:** Medium
-- **Last checked:** 2026-09-30 07:23 UTC. Both answered 200 in the shape the panel reads:
-  - `https://api.wordpress.org/core/checksums/1.0/?version=7.1.2&locale=en_US` gives an md5 per
-    file.
+- **Last checked:** 2026-11-03 08:38 UTC. Both answered 200 in the shape the panel reads, for the
+  latest WordPress and Akismet:
+  - `https://api.wordpress.org/core/checksums/1.0/?version=7.1.4&locale=en_US` gives an md5 for
+    each of 3,782 files (3,872 for `de_DE`).
   - `https://downloads.wordpress.org/plugin-checksums/akismet/5.7.2.json` gives an md5 and a
-    sha256 per file.
+    sha256 for each of 47 files.
+  - Nothing published still reads as none: a plugin version with no list answers 404, and a core
+    version that does not exist `{"checksums":false}`.
+  - In a panel, no scan since the last check says the checksums could not be fetched, and none
+    is incomplete.
 - **The problem:** malware scans hold WordPress and directory plugins to these lists
   (`panel/src/services/integrityManifests.ts`), and neither is a documented, versioned API.
 - **Check:** fetch both. In the panel, look for scans that say "wordpress.org's checksums could
@@ -605,18 +615,26 @@ for a reason; remove one once there is nothing left to watch.
 ## Search engines' crawler host names
 
 - **Priority:** Medium
-- **Last checked:** 2026-09-30 09:51 UTC. Google's page lists `googlebot.com` for its common
-  crawlers and `google.com` for the special-case ones (AdsBot); `googleusercontent.com` is for
-  its user-triggered fetchers only. These resolved, and pointed back:
-  `crawl-66-249-66-1.googlebot.com`, `msnbot-157-55-39-1.search.msn.com` (from `bingbot.json`),
-  `baiduspider-220-181-108-100.crawl.baidu.com`, `petalbot-114-119-132-10.petalsearch.com` and
-  `5-255-231-1.spider.yandex.com`. Apple's page names `*.applebot.apple.com`.
+- **Last checked:** 2026-11-03 08:44 UTC. Google's page has moved to
+  [Verify Google requests](https://developers.google.com/crawling/docs/crawlers-fetchers/verify-google-requests),
+  and the old address redirects there; it was last updated 2026-03-20. It lists `googlebot.com`
+  for its common crawlers (`crawl-…`, and `geo-crawl-….geo.googlebot.com`) and `google.com` for
+  the special-case ones (AdsBot); `googleusercontent.com`, and `google-proxy-….google.com`, are
+  for its user-triggered fetchers. These resolved, and pointed back:
+  `crawl-66-249-66-1.googlebot.com` (and an IPv6 one), `geo-crawl-34-101-50-145.geo.googlebot.com`,
+  `rate-limited-proxy-66-249-90-77.google.com`, `msnbot-157-55-39-1.search.msn.com` (from
+  `bingbot.json`), `17-241-208-161.applebot.apple.com` (from Apple's `applebot.json`),
+  `5-255-231-1.spider.yandex.com`, `baiduspider-220-181-108-100.crawl.baidu.com` and
+  `petalbot-114-119-132-10.petalsearch.com`. Not every address in Google's `common-crawlers.json`
+  has a Googlebot name: of the 384 in its 23 geo-crawl prefixes, 174 answer to
+  `<ip>.bc.googleusercontent.com`, among them all of `34.22.85.0/27` and the page's own example,
+  `35.247.243.240`. A Googlebot crawl from one of those is not verified here.
 - **The problem:** attack detection never blocks a crawler it verified: reverse DNS under the
   engine's domain, confirmed forward (`CRAWLERS` in `panel/src/lib/crawlerVerify.ts`). A domain
   anyone can get a name under is a way past detection. Every Google Cloud machine answers to
   `<ip>.bc.googleusercontent.com`, which is why that domain is not on the list. A crawler that
   moves to a domain not on the list fails the check, and can be blocked like any visitor.
-- **Check:** Google's [Verifying Googlebot](https://developers.google.com/search/docs/crawling-indexing/verifying-googlebot)
+- **Check:** Google's [Verify Google requests](https://developers.google.com/crawling/docs/crawlers-fetchers/verify-google-requests)
   table. Then `dig -x` an address of each engine (Bing's are in
   `https://www.bing.com/toolbox/bingbot.json`): the name must be under the listed domain and
   resolve back to the address.
@@ -626,13 +644,24 @@ for a reason; remove one once there is nothing left to watch.
 ## AI assistants' address lists
 
 - **Priority:** Medium
-- **Last checked:** 2026-09-30 10:46 UTC. All 12 lists answered and passed the panel's checks
-  (1,014 ranges once merged), each named on its company's bot page: OpenAI's four (GPTBot,
-  OAI-SearchBot, ChatGPT-User, OAI-AdsBot), Anthropic's one (ClaudeBot, Claude-User,
-  Claude-SearchBot), Google's user-triggered fetchers and agents (Gemini Notebook,
-  `Google-Agent`), Perplexity's two, Mistral's two and DuckDuckGo's DuckAssistBot. The widest
-  ranges are Google's `136.122.0.0/16` and ChatGPT-User's `9.129.0.0/17`, the latter in
-  Microsoft's address space.
+- **Last checked:** 2026-11-03 09:24 UTC. All 13 lists answered and passed the panel's checks
+  (1,097 ranges once merged, the same as on 2026-10-31), each named on its company's bot page:
+  OpenAI's four (GPTBot, OAI-SearchBot, ChatGPT-User, OAI-AdsBot), Anthropic's one (ClaudeBot,
+  Claude-User, Claude-SearchBot), Google's three user-triggered lists (Gemini Notebook,
+  `Google-Agent`), Perplexity's two, Mistral's two and DuckDuckGo's DuckAssistBot. Two lists had
+  moved:
+  - Google's are now under `/static/crawling/ipranges/`. The old fetchers URL redirects, but the
+    old agents URL still answers with a copy last modified 2026-03-03: 4 ranges against 20,
+    missing `136.121.40.0/21` and `74.125.232.0/25`, and with a `2001:4860:c::/48` that Google
+    has since narrowed to eight /124s. `RANGE_SOURCES` now reads the new paths, and
+    `user-triggered-fetchers-google.json` (the Google-owned fetchers, `google-proxy-….google.com`),
+    which Google's page names with the other two.
+  - Perplexity's page links its two from `www.perplexity.ai`; the `www.perplexity.com` URLs
+    redirect there.
+  Mistral's page has a `MistralAI-Training` crawler with no published addresses, so there is no
+  list to add. The widest ranges are Google's `136.122.0.0/16` and ChatGPT-User's
+  `9.129.0.0/16`, which is Microsoft's and in Azure's `AzureCloud` service tag. It was a /17 on
+  2026-09-30 and is now at `AI_WIDEST`: one more doubling and the refresh refuses OpenAI's lists.
 - **The problem:** attack detection and blocking by hand leave these addresses alone
   (`AI_SOURCES` in `panel/src/services/proxyRanges.ts`; the copies shipped are in
   `panel/src/services/aiRanges.ts`). The panel refreshes the lists weekly and keeps the last
@@ -643,7 +672,7 @@ for a reason; remove one once there is nothing left to watch.
   company's bot page for bots or lists not in `RANGE_SOURCES`:
   [OpenAI](https://developers.openai.com/api/docs/bots),
   [Anthropic](https://support.claude.com/en/articles/8896518-does-anthropic-crawl-data-from-the-web-and-how-can-site-owners-block-the-crawler),
-  [Google](https://developers.google.com/search/docs/crawling-indexing/google-user-triggered-fetchers),
+  [Google](https://developers.google.com/crawling/docs/crawlers-fetchers/google-user-triggered-fetchers),
   [Perplexity](https://docs.perplexity.ai/guides/bots), [Mistral](https://docs.mistral.ai/robots)
   and [DuckDuckGo](https://duckduckgo.com/duckduckgo-help-pages/results/duckassistbot).
 - **When it changes:** add the list's URL to its company's entry in `RANGE_SOURCES` (a new
