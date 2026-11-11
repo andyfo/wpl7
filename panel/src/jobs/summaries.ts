@@ -239,6 +239,7 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
         return `${paths.length === 1 ? paths[0] : plural(paths.length, 'item')} → ${str(p.to)}`;
       }
       case 'database.create':
+        return p.own === true ? "The site's own" : str(p.name);
       case 'database.delete':
         return str(p.name);
       case 'database.import': {

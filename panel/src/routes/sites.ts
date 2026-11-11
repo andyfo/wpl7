@@ -88,6 +88,8 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
   }
 
   r.put('/api/sites/:slug/php', { schema: { params: slugParams, body: phpUpdateBody } }, async (req, reply) => {
+    const site = deps.sites.bySlug(req.params.slug);
+    await deps.sites.assertPhpImageOn(site, site.serverId, req.body.phpVersion);
     const job = deps.sites.changePhp(req.params.slug, req.body.phpVersion);
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });
@@ -241,6 +243,7 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
   );
 
   r.post('/api/sites/:slug/move', { schema: { params: slugParams, body: siteMoveBody } }, async (req, reply) => {
+    await deps.sites.assertPhpImageOn(deps.sites.bySlug(req.params.slug), req.body.targetServerId);
     const job = deps.sites.move(req.params.slug, req.body);
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });

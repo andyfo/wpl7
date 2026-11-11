@@ -197,7 +197,7 @@ export const JOB_TYPE_INFO = {
   },
   'database.create': {
     label: 'Add database',
-    description: "Creates another database for the site, on its server, for the site's own database user.",
+    description: "Creates another database for the site, for the site's own database user, or a PHP site's own database.",
     category: 'databases',
   },
   'database.delete': {
@@ -207,7 +207,7 @@ export const JOB_TYPE_INFO = {
   },
   'database.password': {
     label: 'Change database password',
-    description: "Gives the site's database user a new password and restarts the site with it.",
+    description: "Gives the site's database user a new password. A WordPress site restarts with it.",
     category: 'databases',
   },
   'database.import': {

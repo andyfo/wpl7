@@ -3,7 +3,7 @@ import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { backups, siteDatabases, type BackupRow, type SiteRow } from '../../db/schema.js';
-import { manifestDatabases } from '../../services/backup.js';
+import { manifestDatabases, otherAppRefusal } from '../../services/backup.js';
 import { migrateArrivedFiles } from '../../services/siteMigration.js';
 import { JobCanceledError } from '../../lib/errors.js';
 import { TABLE_PREFIX_RE, backupTypes } from '../../../shared/schemas.js';
@@ -21,7 +21,9 @@ import {
   updateSiteRow,
 } from './shared.js';
 import { sites } from '../../db/schema.js';
-import { isExternal } from '../../lib/siteKind.js';
+import { hasDatabase, isExternal, isPhpSite } from '../../lib/siteKind.js';
+import { imageRunsPhp, siteImage } from '../../services/siteSpec.js';
+import { createOwnDatabase } from './databases.js';
 
 export const backupCreatePayload = z.object({
   siteId: z.number().int(),
@@ -73,9 +75,12 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
   const site = s.db.select().from(sites).where(eq(sites.slug, backup.siteSlug)).get();
   if (!site) throw new Error(`Site "${backup.siteSlug}" no longer exists (restore-as-new-site is not supported yet)`);
   if (isExternal(site)) throw new Error('Restore a site hosted elsewhere by hand: download its files and database.');
-  if ((await readManifest(s, backup.serverId, backup.path))?.kind === 'external') {
+  const firstLook = await readManifest(s, backup.serverId, backup.path);
+  if (firstLook?.kind === 'external') {
     throw new Error('This is a backup of a site hosted elsewhere: restore it by hand from its download.');
   }
+  const otherApp = otherAppRefusal(site, firstLook);
+  if (otherApp) throw new Error(otherApp);
   if (backup.serverId !== site.serverId) {
     throw new Error(
       `Backup #${backup.id} lives on server #${backup.serverId} but the site now runs on server #${site.serverId}; ` +
@@ -113,9 +118,20 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
     touched = true;
     await server.docker.stopContainer(site.containerName);
 
-    ctx.info(`Restoring database ${site.dbName}…`);
-    await server.dbAdmin.recreateDb(site.dbName);
-    await s.backup.importDatabase(backup, site.dbName);
+    // A PHP site's database is optional, on either side. The database's owner is the row as it is
+    // once that is settled: a site made without one has it from here on.
+    let owner = site;
+    if (backup.hasDatabase === 1) {
+      if (!hasDatabase(site)) {
+        ctx.info('The backup has a database and the site has none: making it first…');
+        owner = await createOwnDatabase(ctx, s, server, site);
+      }
+      ctx.info(`Restoring database ${owner.dbName}…`);
+      await server.dbAdmin.recreateDb(owner.dbName);
+      await s.backup.importDatabase(backup, owner.dbName);
+    } else if (hasDatabase(site)) {
+      ctx.info(`The backup has no database: ${site.dbName} is left as it is.`);
+    }
     for (const { name, linked } of extras) {
       ctx.info(`Restoring database ${name}…`);
       if (linked) {
@@ -130,7 +146,7 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
           continue;
         }
         try {
-          await server.dbAdmin.createExtraDb(name, site.dbUser);
+          await server.dbAdmin.createExtraDb(name, owner.dbUser);
         } catch (err) {
           s.db.delete(siteDatabases).where(eq(siteDatabases.id, row)).run();
           ctx.warn(`Database ${name} could not be made again (${errMsg(err)}). Its dump stays in this backup.`);
@@ -155,19 +171,24 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
     const offered = s.settings.get('phpVersions') ?? [];
     const recreate: { phpVersion?: string; tablePrefix?: string } = {};
     if (manifest?.phpVersion && manifest.phpVersion !== site.phpVersion) {
-      if (offered.includes(manifest.phpVersion)) {
-        ctx.info(`Backup was taken on PHP ${manifest.phpVersion}; recreating container to match…`);
-        recreate.phpVersion = manifest.phpVersion;
-      } else {
+      if (!offered.includes(manifest.phpVersion)) {
         ctx.warn(
           `Backup was taken on PHP ${manifest.phpVersion}, which is no longer offered; keeping PHP ${site.phpVersion}.`,
         );
+      } else if (isPhpSite(site) && !(await phpImageFor(ctx, s, server, manifest.phpVersion))) {
+        ctx.warn(
+          `Backup was taken on PHP ${manifest.phpVersion}, but the site image for it on "${server.name}" is from before PHP sites; keeping PHP ${site.phpVersion}.`,
+        );
+      } else {
+        ctx.info(`Backup was taken on PHP ${manifest.phpVersion}; recreating container to match…`);
+        recreate.phpVersion = manifest.phpVersion;
       }
     }
     // The database just restored names its tables the way the backup's site did. That is this
     // site's prefix, unless the slug once belonged to a deleted site whose backups it now restores.
+    // WordPress's tables only: a PHP site's app names its own.
     const backupPrefix = manifest?.tablePrefix;
-    if (backupPrefix && TABLE_PREFIX_RE.test(backupPrefix) && backupPrefix !== site.tablePrefix) {
+    if (!isPhpSite(site) && backupPrefix && TABLE_PREFIX_RE.test(backupPrefix) && backupPrefix !== site.tablePrefix) {
       ctx.info(`The backup's tables start with ${backupPrefix}, not ${site.tablePrefix}; recreating the container to match…`);
       recreate.tablePrefix = backupPrefix;
     }
@@ -194,10 +215,13 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
     await startSiteContainer(server, s, site, ctx);
     updateSiteRow(s.db, site.id, { status: 'running' });
 
-    // If domains changed since the backup, point WordPress at the current primary.
+    // If domains changed since the backup, point WordPress at the current primary. A PHP site's
+    // own config is its own to change.
     const currentPrimary = siteDomains(site)[0]!;
     const backupPrimary = manifest?.domains?.[0];
-    if (backupPrimary && backupPrimary !== currentPrimary) {
+    if (isPhpSite(site) && backupPrimary && backupPrimary !== currentPrimary) {
+      ctx.info(`The backup used ${backupPrimary}. If the site's own config names its address, change it there to ${currentPrimary}.`);
+    } else if (backupPrimary && backupPrimary !== currentPrimary) {
       const oldUrl = siteUrl(s.config, backupPrimary);
       const newUrl = siteUrl(s.config, currentPrimary);
       ctx.info(`Backup used ${backupPrimary}; rewriting URLs to ${currentPrimary}…`);
@@ -261,11 +285,21 @@ async function planExtraDatabases(
   return inBackup.map((name) => ({ name, linked: current.has(name) }));
 }
 
+/**
+ * Whether the server's image for `phpVersion` can run a PHP site, building or pulling it first when
+ * the server doesn't have it: the panel's own can.
+ */
+async function phpImageFor(ctx: JobContext<unknown>, s: CoreServices, server: ReturnType<CoreServices['servers']['handleFor']>, phpVersion: string): Promise<boolean> {
+  const { ensureSiteImage } = await import('./sites.js');
+  await ensureSiteImage(ctx, server, s.config, phpVersion);
+  return imageRunsPhp(server.docker, siteImage(phpVersion));
+}
+
 async function readManifest(
   s: CoreServices,
   serverId: number,
   dir: string,
-): Promise<{ phpVersion?: string; domains?: string[]; tablePrefix?: string; kind?: string; databases?: unknown; stack?: unknown } | null> {
+): Promise<{ phpVersion?: string; domains?: string[]; tablePrefix?: string; kind?: string; app?: string; databases?: unknown; stack?: unknown } | null> {
   try {
     const files = s.servers.handleFor(serverId).files;
     return JSON.parse(await files.readFile(path.join(dir, 'manifest.json')));

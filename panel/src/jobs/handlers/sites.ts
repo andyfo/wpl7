@@ -472,8 +472,8 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
 
   // What the site's plugins want done before it goes: release their activations (Breakdance
   // counts sites, ACF PRO counts production URLs). Best effort - a vendor that cannot be
-  // reached must not keep a site from being deleted.
-  await releaseLicenses(ctx, s, server, site);
+  // reached must not keep a site from being deleted. A PHP site has no plugins.
+  if (!isPhpSite(site)) await releaseLicenses(ctx, s, server, site);
 
   // Teardown is absence-tolerant and safe to repeat, but any of these can still fail
   // (server unreachable mid-delete). Leaving the row on 'deleting' would then wedge the
@@ -489,8 +489,11 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
       await s.ftp.removeSite(server.id, site.slug);
     }
 
-    ctx.info(`Dropping database ${site.dbName}…`);
-    await server.dbAdmin.dropSiteDb(site.dbName, site.dbUser);
+    // A PHP site may have none of its own.
+    if (hasDatabase(site)) {
+      ctx.info(`Dropping database ${site.dbName}…`);
+      await server.dbAdmin.dropSiteDb(site.dbName, site.dbUser);
+    }
     for (const name of s.databases.extraNames(site.id)) {
       ctx.info(`Dropping database ${name}…`);
       await server.dbAdmin.dropDb(name);
@@ -1020,6 +1023,8 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
   const shouldRun = await siteShouldRun(server.docker, site, state);
 
   await ensureSiteImage(ctx, server, s.config, newVersion);
+  // Before the old container is set aside: the new version's image may be from before PHP sites.
+  if (isPhpSite(site)) await assertPhpImage(server, siteImage(newVersion));
   ctx.checkCanceled();
 
   // The registry keeps the OLD version until the new container is up and answers. Writing

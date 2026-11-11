@@ -78,3 +78,7 @@ export const hasDatabase = (site: Pick<SiteRow, 'dbName'>): boolean => site.dbNa
 export function noDatabase(slug: string) {
   return conflict(`"${slug}" has no database.`);
 }
+
+/** Why a PHP site's move can't be frozen by maintenance mode, which is WordPress's. */
+export const PHP_NO_MAINTENANCE = (slug: string) =>
+  `"${slug}" is a PHP site, which has no maintenance mode: stop it while it moves, or keep serving.`;

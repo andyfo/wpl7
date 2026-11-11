@@ -12,7 +12,7 @@ import type { CoreServices } from './index.js';
 import type { JobWorker } from '../jobs/worker.js';
 import { siteScheme } from './labels.js';
 import { assertDomainsFree } from './domainGuard.js';
-import { assertApp, assertKind, hasDatabase, hostedSites, isExternal, type SiteApps, type SiteKinds } from '../lib/siteKind.js';
+import { PHP_NO_MAINTENANCE, assertApp, assertKind, hasDatabase, hostedSites, isExternal, isPhpSite, type SiteApps, type SiteKinds } from '../lib/siteKind.js';
 import type { DockerPort } from './docker.js';
 import { SITE_ROOT_IN_CONTAINER } from './siteHardening.js';
 import { RuntimeRefusedError, applySiteCaches, effectivePageCache, siteContainerStack } from './siteCaches.js';
@@ -82,6 +82,16 @@ export class SitesService {
     const server = resolveTargetServer(this.s, body.serverId);
     const phpVersion = body.phpVersion ?? this.s.settings.get('defaultPhpVersion');
     await assertPhpImage(this.s.servers.handleFor(server.id), siteImage(phpVersion), { missingIsFine: true });
+  }
+
+  /**
+   * The early image check for a PHP site that is to get a container on `serverId` from the image of
+   * `phpVersion`: a move's target, a PHP version change. Refused, before anything is queued, where
+   * that image is from before PHP sites; one the server doesn't have yet is fine.
+   */
+  async assertPhpImageOn(site: SiteRow, serverId: number, phpVersion = site.phpVersion): Promise<void> {
+    if (!isPhpSite(site) || !this.s.servers.rowById(serverId)) return;
+    await assertPhpImage(this.s.servers.handleFor(serverId), siteImage(phpVersion), { missingIsFine: true });
   }
 
   create(body: SiteCreateBody): { site: SiteRow; job: JobRow } {
@@ -347,7 +357,10 @@ export class SitesService {
       throw conflict('A previous move is still awaiting cleanup; finalize it first (site page banner)');
     }
     const isLive = site.isLive === 1;
-    const quiesce = body.quiesce ?? (isLive ? 'maintenance' : 'none');
+    // Maintenance mode is WordPress's. A live PHP site is stopped while it is copied: a short
+    // outage, and nothing written meanwhile is lost.
+    if (body.quiesce === 'maintenance' && isPhpSite(site)) throw conflict(PHP_NO_MAINTENANCE(site.slug));
+    const quiesce = body.quiesce ?? (isLive ? (isPhpSite(site) ? 'stop' : 'maintenance') : 'none');
     // The old copy is never torn down inside the move itself - see siteMovePayload.decommission.
     const decommission = 'deferred';
     return this.worker.enqueue(

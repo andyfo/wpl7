@@ -971,7 +971,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
     title: 'Databases',
     changes: 'manage',
     intro:
-      "A site's databases - its own and the others it was given - and every server's. The browser's reads and writes run as the site's own database user, so they reach that site's databases and nothing else.",
+      "A site's databases - its own and the others it was given - and every server's. The browser's reads and writes run as the site's own database user, so they reach that site's databases and nothing else. A PHP site may have no database: then name and user are null, and everything but its creation answers 409.",
     endpoints: [
       {
         method: 'GET',
@@ -1006,9 +1006,18 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       },
       {
         method: 'POST',
+        path: '/api/sites/:slug/database',
+        summary: "Make the site's own database, wp_<slug>, and its user: for a PHP site made without one",
+        returns: '409 when the site has one',
+        job: true,
+        level: 'manage',
+      },
+      {
+        method: 'POST',
         path: '/api/sites/:slug/databases',
         summary: "Add another database to the site, for the site's own database user",
         input: '{name} - a-z, 0-9 and _, not starting with wp_',
+        returns: "409 when the site has no database of its own",
         job: true,
         level: 'manage',
       },
@@ -1031,7 +1040,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       {
         method: 'POST',
         path: '/api/sites/:slug/database-password',
-        summary: "Give the site's database user a new password and restart the site with it",
+        summary: "Give the site's database user a new password; a WordPress site restarts with it, a PHP site's config needs it",
         job: true,
         danger: true,
         level: 'manage',

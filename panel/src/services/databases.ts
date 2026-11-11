@@ -16,7 +16,7 @@ import {
 import type { Config } from '../config.js';
 import type { DatabaseListDto, DatabaseListItemDto, DatabaseUseDto, SiteDatabaseDto } from '../../shared/types.js';
 import { conflict, notFound } from '../lib/errors.js';
-import { hostedSites } from '../lib/siteKind.js';
+import { hasDatabase, hostedSites, noDatabase } from '../lib/siteKind.js';
 import { safeJoin } from '../lib/slug.js';
 import type { ServerRegistry } from '../servers/registry.js';
 import type { DbTarget } from './dbBrowser.js';
@@ -72,6 +72,8 @@ export class DatabasesService {
    * reach a database the site does not own, whatever its name.
    */
   targetFor(site: SiteRow, database: string): DbTarget {
+    // A PHP site may have none, and then no other ones either: they log in as its own user.
+    if (!hasDatabase(site)) throw noDatabase(site.slug);
     if (database !== site.dbName && !this.extraNames(site.id).includes(database)) {
       throw notFound(`"${database}" is not one of this site's databases`);
     }
@@ -96,14 +98,15 @@ export class DatabasesService {
       const size = sizes.get(name) ?? null;
       return { name, kind, size, missing: scan?.scannedAt != null && size === null, createdAt };
     };
+    const own = hasDatabase(site);
     return {
-      name: site.dbName,
-      user: site.dbUser,
+      name: own ? site.dbName : null,
+      user: own ? site.dbUser : null,
       host: this.config.mariadb.host,
       port: 3306,
       tablePrefix: site.tablePrefix,
       databases: [
-        entry(site.dbName, 'site', null),
+        ...(own ? [entry(site.dbName, 'site', null)] : []),
         ...this.extras(site.id).map((d) => entry(d.name, 'extra', d.createdAt)),
       ],
       serverName: this.servers.rowById(site.serverId)?.name ?? `#${site.serverId}`,
@@ -248,7 +251,8 @@ export class DatabasesService {
     const byId = new Map(hosted.map((s) => [s.id, s]));
     // Still being made, or going: its database may not be there yet, or any more.
     const settled = (s: SiteRow) => s.status !== 'provisioning' && s.status !== 'deleting';
-    for (const s of hosted) {
+    // A PHP site may have no database of its own to claim.
+    for (const s of hosted.filter((site) => hasDatabase(site))) {
       out.set(`${s.serverId}\u0000${s.dbName}`, {
         serverId: s.serverId,
         name: s.dbName,

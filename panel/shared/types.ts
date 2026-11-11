@@ -2408,13 +2408,16 @@ export interface SiteDatabaseEntryDto {
 }
 
 export interface SiteDatabaseDto {
-  /** The site's own database, its user (also the user of every other one) and where code reaches them. */
-  name: string;
-  user: string;
+  /**
+   * The site's own database, its user (also the user of every other one) and where code reaches
+   * them. Null for a PHP site that has no database: then it has no other ones either.
+   */
+  name: string | null;
+  user: string | null;
   host: string;
   port: number;
   tablePrefix: string;
-  /** The site's own first, then the others by name. */
+  /** The site's own first, then the others by name; none for a site with no database. */
   databases: SiteDatabaseEntryDto[];
   serverName: string;
   /** The last time the server's databases were read; null when never. */

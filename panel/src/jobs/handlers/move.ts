@@ -6,7 +6,8 @@ import { backups, moveCleanups, sites, type MoveCleanupRow } from '../../db/sche
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
-import { sitePaths, siteImage } from '../../services/siteSpec.js';
+import { assertPhpImage, sitePaths, siteImage } from '../../services/siteSpec.js';
+import { PHP_NO_MAINTENANCE, hasDatabase, isPhpSite } from '../../lib/siteKind.js';
 import { removeSiteNetwork } from '../../services/siteNetwork.js';
 import { loadSite, removeSiteContainers, siteDomains, siteUrl, startSiteContainer, updateSiteRow, writeSiteJson } from './shared.js';
 import { ensureSiteImage, wildcardCovers } from './sites.js';
@@ -53,6 +54,8 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
   }
   const source = s.servers.handleFor(p.sourceServerId);
   const target = s.servers.handleFor(p.targetServerId);
+  // Maintenance mode is WordPress's: a PHP site freezes by stopping, or not at all.
+  if (p.quiesce === 'maintenance' && isPhpSite(site)) throw new Error(PHP_NO_MAINTENANCE(site.slug));
   // Its drop-in would stay behind with no Redis to talk to, and no wp-cache.php to say what to do then.
   if (site.objectCache === 1 && (await target.docker.imageStack(siteImage(site.phpVersion))) === 1) {
     throw new Error(`"${target.name}" has no object cache yet, because it still has the old site image. Update that server first, or switch this site's object cache off.`);
@@ -97,7 +100,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
       ctx.warn(`Removing leftover files on "${target.name}" (previous attempt)`);
       await rmOn(target, s.config.paths.sites, site.slug);
     }
-    await target.dbAdmin.dropSiteDb(site.dbName, site.dbUser);
+    if (hasDatabase(site)) await target.dbAdmin.dropSiteDb(site.dbName, site.dbUser);
     // The site's other databases must land on names that are free there. Unlike its own (named for
     // its unique slug), one of those names on the target is not provably a leftover of this move:
     // it may hold someone's data, so the move stops rather than drop it.
@@ -135,6 +138,8 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     if (!disk) ctx.warn('Could not determine free disk space on the target; continuing.');
 
     await ensureSiteImage(ctx, target, s.config, site.phpVersion);
+    // Before anything is copied: the target's image may be from before PHP sites.
+    if (isPhpSite(site)) await assertPhpImage(target, siteImage(site.phpVersion));
     await target.files.mkdirp(s.config.paths.plugins);
     ctx.checkCanceled();
 
@@ -249,13 +254,13 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
       {
         kind: 'archive',
         filesTarGz: path.join(finalDir, 'files.tar.gz'),
-        dbSqlGz: path.join(finalDir, 'db.sql.gz'),
+        dbSqlGz: hasDatabase(site) ? path.join(finalDir, 'db.sql.gz') : null,
         extraDbs: extraNames.map((name) => ({ name, sqlGz: path.join(finalDir, extraDbFile(name)) })),
         ranOnFpm: (await source.docker.containerStack(site.containerName).catch(() => null))?.stack === 2,
       },
       {
         routing: true,
-        requireWpConfig: true,
+        requireWpConfig: !isPhpSite(site),
         protection,
         // Quarantined files travel with the site: they are restorable, and evidence. Not in the
         // snapshot - a backup restores a site's files, and must never put these back among them.
@@ -546,7 +551,8 @@ export async function finalizeCleanup(ctx: JobContext<unknown>, s: CoreServices,
   const source = s.servers.handleFor(cleanup.sourceServerId);
   ctx.info(`Removing the old copy of "${cleanup.siteSlug}" from "${source.name}"…`);
   await removeSiteContainers(source.docker, cleanup.containerName);
-  await source.dbAdmin.dropSiteDb(cleanup.dbName, cleanup.dbUser);
+  // '' for a site that has no database of its own.
+  if (cleanup.dbName !== '') await source.dbAdmin.dropSiteDb(cleanup.dbName, cleanup.dbUser);
   for (const name of parseNames(cleanup.extraDbs)) {
     // Its name may since belong to a database of a site on the source server: then it is not ours.
     const claim = s.databases.claimOf(cleanup.sourceServerId, name);
