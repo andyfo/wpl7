@@ -20,11 +20,11 @@ for a reason; remove one once there is nothing left to watch.
 | [RDAP: registry endpoints and bootstrap](#rdap-registry-endpoints-and-bootstrap) | Medium | 2026-10-13 08:35 UTC | .co, .io, .me and .us still absent from IANA; supplement used |
 | [Reminders: PHP and OS support dates](#reminders-php-and-os-support-dates) | Medium | 2026-10-13 08:35 UTC | PHP, Ubuntu and Debian dates match upstream tables |
 | [Reminders: Cloudflare token lifetime](#reminders-cloudflare-token-lifetime) | Medium | 2026-10-13 08:35 UTC | User and account verification endpoints expose status and optional expiry |
-| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-10-29 09:51 UTC | Open upstream, fix #13958 awaiting review; worked around |
-| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-10-29 09:51 UTC | 0.21.15 is the latest; same definitions as the pinned 0.21.12 |
+| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-11-08 17:22 UTC | Open upstream, fix #13958 awaiting review; not in v3.7.17; worked around |
+| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-11-08 17:21 UTC | 0.21.15 is the latest; same definitions as the pinned 0.21.12 |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-11-01 09:08 UTC | Both overrides still match in 0.21.15, the latest; `@preg_replace` is still 22c684e7; engine test not run at this check |
-| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-10-29 09:51 UTC | 2.7.6 is the latest; patch still needed |
-| [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-10-29 09:51 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12; CVE-2026-115560 unfixed, mitigated by upload progress off |
+| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-11-08 17:24 UTC | 2.7.6 is the latest; patch still needed |
+| [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-11-08 17:22 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12, still the latest; CVE-2026-115560 unfixed, mitigated by upload progress off |
 | [phpredis: the pinned 6.3.0](#phpredis-the-pinned-630) | Medium | 2026-11-01 09:08 UTC | 6.3.0 is the latest on PECL and GitHub |
 | [Redis in the site image](#redis-in-the-site-image) | Medium | 2026-11-01 09:08 UTC | Debian's 5:8.0.2-3+deb13u3; three open issues on trixie, none reachable here; `LICENSE.txt` still offers AGPLv3 |
 | [The Redis Object Cache plugin: its constants and `wp redis`](#the-redis-object-cache-plugin-its-constants-and-wp-redis) | Medium | 2026-11-01 09:08 UTC | 3.0.0 is the latest; all seven constants and `status`, `enable`, `disable` are in its code |
@@ -41,43 +41,45 @@ for a reason; remove one once there is nothing left to watch.
 | [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
 | [Docker: a signal counts as stopping a container by hand](#docker-a-signal-counts-as-stopping-a-container-by-hand) | Medium | 2026-11-01 06:30 UTC | Docker 28.1.1: after `docker kill --signal USR1`, a container with `unless-stopped` that exits stays down |
 | [Docker: a container whose image a build deleted](#docker-a-container-whose-image-a-build-deleted) | Low | 2026-11-03 09:08 UTC | Docker 29.9.2: a build deletes the image on the containerd store, and keeps it on overlay2; the container still stops, renames and starts |
-| [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-10-04 18:10 UTC | `latest` is v5.1.0; hostname logic as relied on |
+| [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-11-08 17:26 UTC | `latest` is v5.2.1; hostname logic as relied on; rspamd idle without keys |
 | [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-11-03 08:38 UTC | Both answer as expected for WordPress 7.1.4 and Akismet 5.7.2; no scan failed to fetch them |
 | [Search engines' crawler host names](#search-engines-crawler-host-names) | Medium | 2026-11-03 08:44 UTC | All six as listed; 174 of the 384 geo-crawl addresses in Google's list have Google Cloud names |
 | [AI assistants' address lists](#ai-assistants-address-lists) | Medium | 2026-11-03 09:24 UTC | All 13 lists pass; Google's and Perplexity's are read from their new URLs |
-| [Traefik: the Cloudflare token from a file](#traefik-the-cloudflare-token-from-a-file) | Medium | 2026-10-07 11:05 UTC | lego v5.5.2 reads the file; Traefik keeps the client |
-| [Cloudflare: API tokens as the panel takes them](#cloudflare-api-tokens-as-the-panel-takes-them) | Medium | 2026-10-04 18:36 UTC | Formats and permissions as validated |
+| [Traefik: the Cloudflare token from a file](#traefik-the-cloudflare-token-from-a-file) | Medium | 2026-11-08 17:27 UTC | lego v5.6.0 reads the file; Traefik keeps the client |
+| [Cloudflare: API tokens as the panel takes them](#cloudflare-api-tokens-as-the-panel-takes-them) | Medium | 2026-11-08 17:28 UTC | Formats and permissions as validated; new `cfoat_` (Wrangler OAuth, expiring) not refused |
 | [Cloudflare's and Jetpack's address lists](#cloudflares-and-jetpacks-address-lists) | Low | 2026-09-30 07:23 UTC | All three answer |
 | [Ubuntu's `nftables.service`](#ubuntus-nftablesservice) | Low | 2026-09-29 | Disabled by default on 26.04 |
 | [The docs site's toolchain and its screenshot image](#the-docs-sites-toolchain-and-its-screenshot-image) | Low | 2026-10-07 07:33 UTC | Starlight 0.42.5, Astro 7.3.6, Playwright 1.63.0, oxipng 10.2.1 are the latest; the `braces` and `postcss-selector-parser` advisories have no fix the site can take |
-| [The demo world's WordPress and plugin versions](#the-demo-worlds-wordpress-and-plugin-versions) | Medium | 2026-10-06 06:19 UTC | WordPress 7.1.2 and the newest plugins of the demo's date; Contact Form 7 6.2 left out |
+| [The demo world's WordPress and plugin versions](#the-demo-worlds-wordpress-and-plugin-versions) | Medium | 2026-11-08 17:25 UTC | Behind: WordPress 7.1.4 and 12 plugin releases are out; the demo's 7.1.2, 7.0.6 and 6.9.9 are now insecure, and four of its plugin versions have advisories |
 | [concurrently's pinned shell-quote](#concurrentlys-pinned-shell-quote) | Low | 2026-10-07 07:33 UTC | concurrently 10.0.5 pins 1.9.0; overridden to `^1.11.0` |
 | [The DKIM signer's image: x86-64 only](#the-dkim-signers-image-x86-64-only) | Low | 2026-10-07 11:05 UTC | Every tag is amd64 only |
 | [setup-php: PHP 7.0 in CI](#setup-php-php-70-in-ci) | Low | 2026-10-07 15:07 UTC | `v2` is the newest major, 2.37.2 the latest release; 7.0 and 8.5 supported |
-| [The migration plugin's floor: WordPress 5.0 and PHP 7.0](#the-migration-plugins-floor-wordpress-50-and-php-70) | Medium | 2026-10-07 15:07 UTC | PHP 7.0 on 0.58% of sites, WordPress before 5.0 on 2.6%; CI installs 7.0 |
+| [The migration plugin's floor: WordPress 5.0 and PHP 7.0](#the-migration-plugins-floor-wordpress-50-and-php-70) | Medium | 2026-11-08 17:27 UTC | PHP 7.0 on 0.54% of sites, WordPress before 5.0 on 2.5%; CI installs 7.0; PHP 8.6 due 2026-11-19 |
 | [The WordPress image's entrypoint, as an import and `wpl7-start` rely on it](#the-wordpress-images-entrypoint-as-an-import-and-wpl7-start-rely-on-it) | Medium | 2026-11-01 09:08 UTC | Acts on a `php-fpm` first argument; seeds only an empty folder; writes wp-config.php only when absent |
-| [WPL7 Connect's floor: WordPress 5.2 and PHP 7.0](#wpl7-connects-floor-wordpress-52-and-php-70) | Medium | 2026-10-09 15:55 UTC | PHP 7.0 on 0.58% of sites, WordPress before 5.2 on 3.1%; the Docker test passes on 5.2 with PHP 7.1 |
-| [WordPress's upgrader, as WPL7 Connect drives it](#wordpresss-upgrader-as-wpl7-connect-drives-it) | Medium | 2026-10-09 15:55 UTC | 7.1.3 is the latest; trunk's one change since is to skins, which WPL7 Connect leaves to WordPress |
-| [WordPress 7.2: sudo mode and Application Passwords](#wordpress-72-sudo-mode-and-application-passwords) | Medium | 2026-10-09 15:55 UTC | On the roadmap only; Beta 1 is due 2026-10-20 |
-| [WP Godmode's `godmode` command on WPL7 Connect](#wp-godmodes-godmode-command-on-wpl7-connect) | Medium | 2026-10-09 15:55 UTC | Not released: Godmode calls on an external site answer 409 |
+| [WPL7 Connect's floor: WordPress 5.2 and PHP 7.0](#wpl7-connects-floor-wordpress-52-and-php-70) | Medium | 2026-11-08 17:27 UTC | PHP 7.0 on 0.54% of sites, WordPress before 5.2 on 3.0%; CI installs 7.0; Docker test not run at this check |
+| [WordPress's upgrader, as WPL7 Connect drives it](#wordpresss-upgrader-as-wpl7-connect-drives-it) | Medium | 2026-11-08 17:30 UTC | 7.1.4 is the latest; it unpacks into a randomly named folder, which WPL7 Connect does not use; Docker test not run at this check |
+| [WordPress 7.2: sudo mode and Application Passwords](#wordpress-72-sudo-mode-and-application-passwords) | Medium | 2026-11-08 17:30 UTC | Beta 4 is out: no sudo mode; Application Passwords only gain an email on creation; beta tests not run at this check |
+| [WP Godmode's `godmode` command on WPL7 Connect](#wp-godmodes-godmode-command-on-wpl7-connect) | Medium | 2026-11-08 17:31 UTC | Not released: 1.3.2, the latest, registers no command with WPL7 Connect |
 | [WordPress's answer to a fatal error](#wordpresss-answer-to-a-fatal-error) | Low | 2026-10-09 15:55 UTC | 500, as relied on |
 | [WordPress's default From address](#wordpresss-default-from-address) | Medium | 2026-10-14 16:28 UTC | `wordpress@` and the home URL's host without `www.`, on 7.1.3 and trunk |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
 | [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 22:05 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
-| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-10-29 10:03 UTC | 6.2.0 (2026-10-23) is the latest, and pinned; no new advisory; `php:8.4-cli-alpine` is PHP 8.4.27 |
+| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-11-08 17:25 UTC | 6.3.0 (2026-11-03) is out, 6.2.0 still pinned; its sign-in answers 303, which the panel refuses; no new advisory; base is PHP 8.4.27 |
 | [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-10-20 12:22 UTC | The feed calls five listed bbPress plugins closed and misses `captcha`; the directory answers as `wporgListing` reads them |
 | [Google's crawler address lists](#googles-crawler-address-lists) | Medium | 2026-11-03 09:35 UTC | Both answer: 589 prefixes, none wider than a /27 or a /64 |
 
 ## Traefik: an idle visitor's rate limit refills
 
 - **Priority:** High
-- **Last checked:** 2026-10-29 09:51 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
+- **Last checked:** 2026-11-08 17:22 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
   is open, with nothing since the Traefik team said on 2026-09-28 they would reproduce it. Its
   fix, [traefik#13958](https://github.com/traefik/traefik/pull/13958) (against `v3.7`, milestone
-  3.7), still waits for review; since the last check it has only a user's comment asking for a
-  merge. No release since the last check: v3.7.16 (2026-10-20) is still the latest, which
-  `traefik:v3.7` in `deploy/docker-compose.yml` follows. Nothing under
-  `pkg/middlewares/ratelimiter` has changed on `v3.7` or `master` since 2026-10-01.
+  3.7), still waits for review, with nothing since a user's comment of 2026-10-29 asking for a
+  merge. v3.7.17 (2026-10-30) is now the latest, which `traefik:v3.7` in
+  `deploy/docker-compose.yml` follows. Neither it nor v2.11.61 and v3.8.0-rc.1, out the same day,
+  changes how the rate limiter expires a bucket: the rc's one rate-limiter item, #13825, takes
+  `table.maxn` out of the Redis limiter's Lua script and has been on `v3.7` since 2026-09-24.
+  Nothing under `pkg/middlewares/ratelimiter` has changed on `v3.7`, `v3.8` or `master` since.
 - **The problem:** Traefik drops a visitor's rate-limit bucket after `1 + 1/rate` seconds without
   a request - 2 seconds for limits of one a second or more, 4 for 20 a minute - and starts the
   next request on a full burst. With logins at 20 a minute in bursts of 30, a guesser who paused
@@ -97,13 +99,14 @@ for a reason; remove one once there is nothing left to watch.
 ## AMWScan: the pinned image and its signatures
 
 - **Priority:** High
-- **Last checked:** 2026-10-29 09:51 UTC. No release or commit since the last check. We pin
-  0.21.12, whose definitions are 2026.09.08.1. The latest release is still v0.21.15 (2026-10-03,
-  after 0.21.13 and 0.21.14 the day before). Its definitions are the same 2026.09.08.1: only the
-  manifest's `createdAt` differs. Its engine changes are prompts without a terminal, which
-  `--report-only` and `--silent` never reach, and trusted administrators for
-  `--scan-wordpress-db`, which WPL7 does not use. The pin stays: moving it would check every
-  catalog zip again for the same signatures.
+- **Last checked:** 2026-11-08 17:21 UTC. No release or commit since the last check: the
+  repository was last pushed on 2026-10-03, and Docker Hub's newest tag is still 0.21.15. We pin
+  0.21.12, whose definitions are 2026.09.08.1. The latest release, v0.21.15 (2026-10-03, after
+  0.21.13 and 0.21.14 the day before), has the same 2026.09.08.1 definitions: only the manifest's
+  `createdAt` differs. Its engine changes are prompts without a terminal, which `--report-only`
+  and `--silent` never reach, and trusted administrators for `--scan-wordpress-db`, which WPL7
+  does not use. The pin stays: moving it would check every catalog zip again for the same
+  signatures.
 - **The problem:** the scanner image is pinned by digest (`SCANNER_IMAGE` in
   `panel/src/services/scanEngines.ts`) and runs with `--disable-definitions-update`. Its
   signatures are the ones bundled in that image, and they age until the pin moves. Upstream
@@ -152,14 +155,17 @@ for a reason; remove one once there is nothing left to watch.
 ## SFTPGo: our build and its overwrite patch
 
 - **Priority:** High
-- **Last checked:** 2026-10-29 09:51 UTC. We build v2.7.6 (commit 62ae9ba3) with
+- **Last checked:** 2026-11-08 17:24 UTC. We build v2.7.6 (commit 62ae9ba3) with
   `deploy/sftpgo-image/staged-overwrite.patch`; v2.7.6 (2026-09-19) is still the latest release,
   and no advisory has been published since the four of that day, which 2.7.6 fixes (one high:
   stored XSS through directory names in the WebClient). The `2.7.x` branch has not moved since
-  2026-09-26. `main` got 14 commits in one push on 2026-10-22, among them hardening of SFTP's
-  per-host limit (open directories now count), aborted transfers, WebDAV times, OIDC logout and
-  API key logging. None changes how an upload replaces a file. The patch's code still applies to
-  `main`; one test hunk, in `internal/sftpd/sftpd_test.go`, does not.
+  2026-09-26. `main` got 25 commits, pushed 2026-11-01 to 2026-11-07, among them FTP's `COMB`
+  removed, FTP passive port multiplexing, ML-DSA keys enabled and DSA removed for SFTP, and SCP
+  and HTTP overwrites no longer getting the old file's size added to the per-file upload limit
+  (WPL7 sets none). None changes how an upload replaces a file: the rename that completes an
+  atomic upload (`BaseTransfer.Close`, `internal/common/transfer.go`) is unchanged since
+  2026-10-17, and the new same-entry checks are for a client's rename or copy. The patch's code
+  still applies to `main`; one test hunk, in `internal/sftpd/sftpd_test.go`, does not.
 - **The problem:** SFTPGo is on the internet (FTP and SFTP). Upstream's `upload_mode: 1` renames
   an existing file to a temporary name before an overwrite, so the file is missing for the whole
   transfer - WordPress without its `wp-config.php` shows the installer - and is deleted if the
@@ -178,16 +184,18 @@ for a reason; remove one once there is nothing left to watch.
 ## PHP security releases and the site image's floor
 
 - **Priority:** High
-- **Last checked:** 2026-10-29 09:51 UTC. No PHP release and no GitHub advisory since the last
+- **Last checked:** 2026-11-08 17:22 UTC. No PHP release and no GitHub advisory since the last
   check. PHP 8.5.12, 8.4.27, 8.3.36 and 8.2.35 (2026-10-21) are still the latest; they fix two
   critical remote code execution bugs, CVE-2026-109618 and CVE-2026-109619 (GHSA-w8hw-w9fx-j79w,
   GHSA-6wmf-4rv5-p3rp), and the floor is set to them. The official `php` images carry the same
-  four. On 2026-10-23 php.net published an informational advisory for CVE-2026-115560: an
-  unlikely remote code execution through session upload progress, when an application switches
-  `session.serialize_handler` to `php` at runtime. It asks for `session.upload_progress.enabled=0`
-  until the next regular release, which will carry the fix and the full advisory. The site image
-  already sets it off. The 2026-10-26 news, Windows builds with Brotli 1.2.1 for CVE-2026-111497,
-  leaves the PHP versions unchanged.
+  four. CVE-2026-115560, from php.net's informational advisory of 2026-10-23, is still unfixed:
+  an unlikely remote code execution through session upload progress, when an application
+  switches `session.serialize_handler` to `php` at runtime. php.net asks for
+  `session.upload_progress.enabled=0` until the next regular release, which will carry the fix
+  and the full advisory; the site image already sets it off. That release is near: 8.5.13RC1 and
+  8.4.28RC1 were tagged on 2026-11-03 and 2026-11-04. php.net's only news since the last check is
+  8.6.0 RC5 (2026-11-05), with 8.6.0 planned for 2026-11-19; `WP_PHP_VERSIONS` does not offer
+  8.6, so it needs no floor yet.
 - **The problem:** a site's PHP is whatever its `wordpress:php<X.Y>-fpm` base had when the site
   image was built. A stale base, cached on a server or in CI, ships an old PHP without anyone
   noticing, and a running container keeps its image until it is rebuilt.
@@ -567,11 +575,19 @@ for a reason; remove one once there is nothing left to watch.
 ## boky/postfix: how the relay picks its hostname
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-04 18:10 UTC. `boky/postfix:latest` is v5.1.0 (2026-01-04, digest
-  `sha256:aafc7723…`). There and on upstream `master`, `postfix_set_hostname` falls back to
-  `$HOSTNAME` when `POSTFIX_myhostname` is unset, and `run.sh` applies every `POSTFIX_*` setting
-  after it, on every start. `master` has since replaced OpenDKIM with rspamd (2026-07-23); no
-  release has that yet.
+- **Last checked:** 2026-11-08 17:26 UTC. `boky/postfix:latest` is v5.2.1 (2026-11-02, digest
+  `sha256:0632783c…`), after v5.2.0 (2026-10-29). At both, `postfix_set_hostname` still falls
+  back to `$HOSTNAME` when `POSTFIX_myhostname` and `AUTOSET_HOSTNAME` are unset (v5.2.0's fix,
+  #265, is to the `AUTOSET_HOSTNAME` branch), and `run.sh` still calls `postfix_setup_dkim` and
+  then `postfix_custom_commands` after it, on every start. `postfix_custom_commands` now skips
+  the upper-case `POSTFIX_MAIL_…` names Kubernetes injects; none of ours is one. `do_postconf -#`
+  now removes a key with `postconf -X`, no longer taking the two lines after it with it (#294).
+  v5.2.0 replaces OpenDKIM with rspamd: with no keys in the container it clears `smtpd_milters`
+  and `non_smtpd_milters` before the `POSTFIX_*` settings, as OpenDKIM's setup did, and rspamd
+  itself never starts. The relay host, sender domain and SASL setup are unchanged, and
+  `sasl2-bin` is still installed. The scripts moved from `scripts/` to `image_root/scripts/` in
+  v5.2.0, so the Check's path reads releases from v5.2.0 on. The live container test was not
+  run at this check.
 - **The problem:** `deploy/docker-compose.yml` runs `boky/postfix:latest`, unpinned, and an update
   pulls whatever release `latest` is then. The panel relies on how the image picks
   `myhostname`: `MAIL_HOSTNAME` reaches it as `HOSTNAME`, a name set in the panel as
@@ -683,14 +699,15 @@ for a reason; remove one once there is nothing left to watch.
 ## Traefik: the Cloudflare token from a file
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-07 11:05 UTC, early: Traefik v3.7.14 moved to another lego. v3.7.14
-  (commit 3bd7aa3), what `traefik:v3.7` runs, imports lego v5.5.2. There, as in v5.4.1,
-  `GetOrFile` (`platform/env/env.go`) returns `CF_DNS_API_TOKEN` when it has a value and only
-  otherwise reads the file `CF_DNS_API_TOKEN_FILE` names, trailing newline trimmed; the
-  Cloudflare provider asks for its token through it (`NewDNSProvider`,
-  `providers/dns/cloudflare/cloudflare.go`). Traefik builds its ACME client, DNS provider and all,
-  once per process: `getClient` in `pkg/provider/acme/provider.go` keeps `p.client`, and calls
-  itself only to get or renew a certificate.
+- **Last checked:** 2026-11-08 17:27 UTC. Traefik v3.7.17 (2026-10-30, commit 04e8ccf), what
+  `traefik:v3.7` now pulls, imports lego v5.6.0 (#14166); v3.7.15 and v3.7.16 kept v5.5.2. In
+  v5.6.0, as in v5.5.2, `GetOrFile` (`platform/env/env.go`, unchanged) returns
+  `CF_DNS_API_TOKEN` when it has a value and only otherwise reads the file
+  `CF_DNS_API_TOKEN_FILE` names, trailing newline trimmed; the Cloudflare provider asks for its
+  token through it (`NewDNSProvider`, `providers/dns/cloudflare/cloudflare.go`, unchanged).
+  Traefik builds its ACME client, DNS provider and all, once per process: `getClient` in
+  `pkg/provider/acme/provider.go`, unchanged since v3.7.14, keeps `p.client`, and is called only
+  to get or renew a certificate.
 - **The problem:** Settings → DNS keeps the Cloudflare token in the panel, and every server's
   Traefik reads it from `${SRV_ROOT}/traefik/dns/cloudflare-api-token` through
   `CF_DNS_API_TOKEN_FILE` (`deploy/docker-compose.yml`). Two upstream behaviours carry that. The
@@ -710,12 +727,16 @@ for a reason; remove one once there is nothing left to watch.
 ## Cloudflare: API tokens as the panel takes them
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-04 18:36 UTC. Cloudflare's
-  [token formats](https://developers.cloudflare.com/fundamentals/api/get-started/token-formats/):
-  since 2026 a prefix - `cfut_` for a user's token, `cfat_` for an account's - then 40 characters
-  and a checksum; older tokens are 40 characters and keep working; `cfk_` is a Global API Key. The
-  API reference accepts Zone Read for List Zones (`per_page` 5 to 50) and DNS Read or DNS Write for
-  List DNS Records.
+- **Last checked:** 2026-11-08 17:28 UTC. Cloudflare's
+  [token formats](https://developers.cloudflare.com/fundamentals/api/get-started/token-formats/)
+  (updated 2026-10-23): a prefix - `cfut_` for a user's token, `cfat_` for an account's - then 40
+  characters and a checksum; older tokens are 40 characters and keep working; `cfk_` is a Global
+  API Key, an older one 37 to 45 lowercase hex characters. New on the page: Wrangler's OAuth
+  access tokens, `cfoat_`, which expire and which `wrangler auth token` hands to other tools;
+  `cloudflareTokenSchema` does not refuse them by prefix, so one that fits its characters would
+  be saved, work until it expires, and then leave certificates unrenewed. Refusing the prefix, as `cfk_` is refused,
+  is a one-line refine; not done. The API reference accepts Zone Read for List Zones (`per_page`
+  5 to 50) and DNS Read or DNS Write for List DNS Records.
 - **The problem:** `cloudflareTokenSchema` (`panel/shared/schemas.ts`) refuses what does not look
   like a token: not one word of letters, digits, `-` and `_`, shorter than 30 or longer than 200
   characters, or a `cfk_` key. Settings → DNS asks for **Zone → Zone → Read** and **Zone → DNS →
@@ -790,11 +811,21 @@ for a reason; remove one once there is nothing left to watch.
 ## The demo world's WordPress and plugin versions
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-06 06:19 UTC. WordPress 7.1.2 (2026-09-22) is the newest release.
-  Every plugin and theme the demo sites run is at its newest release of 2026-10-05, the demo's
-  date, except where a site runs an older one on purpose. Contact Form 7 6.2 came out on
-  2026-10-06 and needs PHP 8.3 and WordPress 7.1, which three demo sites lack, so the demo keeps
-  6.1.7. `check-versions.ts` reports only that.
+- **Last checked:** 2026-11-08 17:25 UTC. The demo is behind, and `check-versions.ts` exits 1.
+  WordPress 7.1.4 (2026-10-28, after 7.1.3 on 2026-10-06) is the newest release; wordpress.org now
+  calls the demo's 7.1.2, 7.0.6 and 6.9.9 insecure. The newest of the older branches, 7.0.8 and
+  6.9.11 (both 2026-10-28), are outdated but not insecure, and have no advisory. Newer directory
+  releases, the latest updated 2026-11-05: Yoast SEO 28.8, WooCommerce 11.2.2, Safe SVG 2.5.2,
+  The Events Calendar 6.18.3.1, MC4WP 4.15.0, TablePress 3.4.1, Polylang 3.9.1, WP Super Cache
+  3.1.5 and Query Monitor 4.1.1. By hand: ACF PRO 6.8.11 (2026-11-02, security fixes), and
+  Breakdance 3.0 (2026-10-26) and 3.0.1 (2026-10-28); Breakdance Zero is still 1.0.0.
+  Redirection and Yoast Duplicate Post are now tested up to 7.1.4, Regenerate Thumbnails up to
+  6.8.12. Four plugin versions the demo runs now have advisories: The Events Calendar 6.17.5.1
+  (up to 6.18.2), WooCommerce 11.1.1 (below 11.2.0), Polylang 3.8.10 and MC4WP 4.14.1; The Events
+  Calendar 6.18.3 and WooCommerce 11.2.0 have none. Yoast SEO 28.8 needs WordPress 7.0, which the
+  site on 6.9 lacks; 28.7 (2026-10-13) needs only 6.9. Contact Form 7 6.2.4.1 still needs PHP 8.3
+  and WordPress 7.1, which three demo sites lack, so the demo keeps 6.1.7. The demo was not
+  updated at this check.
 - **The problem:** the docs' screenshots come from the demo world (`panel/scripts/demo/`), and it
   names real versions of WordPress, plugins and themes (`plugins.ts`). Once a newer release is
   out, a screenshot calls an old version up to date. An older version a demo site runs can also
@@ -870,10 +901,11 @@ for a reason; remove one once there is nothing left to watch.
 ## The migration plugin's floor: WordPress 5.0 and PHP 7.0
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-07 15:07 UTC. By wordpress.org's statistics, PHP 7.0 runs 0.58% of
-  WordPress sites, 7.1 0.35% and 5.x about 2%. WordPress before 5.0 runs 2.6%, and 5.0 itself 0.2%.
-  The `php` job still installs 7.0 (previous entry). PHP 8.5 is the newest release, and the
-  matrix's upper end.
+- **Last checked:** 2026-11-08 17:27 UTC. By wordpress.org's statistics, PHP 7.0 runs 0.54% of
+  WordPress sites, 7.1 0.32% (0.86% together) and 5.x 1.9%. WordPress before 5.0 runs 2.5%, and
+  5.0 itself 0.19%. The `php` job's 7.0 leg still runs: on 2026-11-04 setup-php installed PHP
+  7.0.33 on `ubuntu-24.04`, and it passed. PHP 8.5 (8.5.12) is still the newest release and the
+  matrix's upper end. 8.6.0 is at RC5 (2026-11-05), with GA set for 2026-11-19.
 - **The problem:** WPL7 Migrate runs on the old site, which can be anything. Its header and
   `readme.txt` say `Requires at least: 5.0` and `Requires PHP: 7.0`, activation refuses anything
   older, and the code keeps to what PHP 7.0 has: no nullable or void types, no arrow functions, no
@@ -925,10 +957,12 @@ for a reason; remove one once there is nothing left to watch.
 ## WPL7 Connect's floor: WordPress 5.2 and PHP 7.0
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-09 15:55 UTC. By wordpress.org's statistics, PHP 7.0 runs 0.58% of
-  WordPress sites and 7.1 0.35%. WordPress before 5.2 runs 3.1% (5.0 0.20%, 5.1 0.33%, older 2.6%).
-  The Docker test (`panel/test/e2e/connect/`) passes on WordPress 5.2 with PHP 7.1, which has no
-  sodium, and on the latest WordPress. The `php` job checks the vectors on PHP 7.0 and 8.5.
+- **Last checked:** 2026-11-08 17:27 UTC. By wordpress.org's statistics, PHP 7.0 runs 0.54% of
+  WordPress sites and 7.1 0.32%. WordPress before 5.2 runs 3.0% (5.0 0.19%, 5.1 0.32%, older
+  2.5%). The `php` job still checks the vectors on PHP 7.0 and 8.5: on 2026-11-04 its 7.0 leg got
+  PHP 7.0.33 on `ubuntu-24.04` and passed. PHP 8.6.0 is at RC5, with GA set for 2026-11-19. The
+  Docker test (`panel/test/e2e/connect/`) was not run at this check; at the last check it passed
+  on WordPress 5.2 with PHP 7.1, which has no sodium, and on the latest WordPress.
 - **The problem:** WPL7 Connect runs on a site the panel does not host, which can be old. Its
   header and `readme.txt` say `Requires at least: 5.2` and `Requires PHP: 7.0`, activation refuses
   anything older, and the code keeps to what PHP 7.0 and WordPress 5.2 have: 5.2 is the first
@@ -949,11 +983,18 @@ for a reason; remove one once there is nothing left to watch.
 ## WordPress's upgrader, as WPL7 Connect drives it
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-09 15:55 UTC. WordPress 7.1.3 is the latest release. On trunk,
-  `class-wp-upgrader.php` last changed on 2026-06-19 (a comment) and `class-core-upgrader.php` on
-  2026-02-13 (docs). `class-plugin-upgrader.php` and `class-theme-upgrader.php` changed on
-  2026-09-21 to stop passing a `WP_Error` to a skin's `before()`: WPL7 Connect uses WordPress's own
-  `WP_Ajax_Upgrader_Skin`, so nothing of it changes.
+- **Last checked:** 2026-11-08 17:30 UTC. WordPress 7.1.4 (2026-10-28) is the latest release. As
+  a security fix it changed `class-wp-upgrader.php` and `update-core.php` (r64877 on trunk,
+  backported to 7.0.8 and 6.9.11): `unpack_package()` now unpacks into
+  `wp-content/upgrade/<package>-<16 random characters>` and keeps an `index.php` in
+  `wp-content/upgrade/`, and `update_core()` never copies a `wp-config.php`. WPL7 Connect does not
+  use that folder, and its backups leave `wp-content/upgrade/` out. On trunk, the plugin and theme
+  upgraders changed only in their docs (r64435, 2026-10-16): `upgrade()` and `install()` are now
+  documented to return `null` when they fail before installing, which `upgrade_error()` already
+  counts as a failure. `update-core.php` also gained 7.2 file-list entries (two Gutenberg
+  updates, and the new default theme). `class-core-upgrader.php` is unchanged. No major release
+  since the last check: 7.2 is due 2026-12-08, and its field guide is not out yet. The Docker
+  test was not run on 7.1.4 at this check.
 - **The problem:** WPL7 Connect updates plugins, themes and WordPress through WordPress's own
   upgrader (`Plugin_Upgrader::bulk_upgrade`, `Theme_Upgrader::bulk_upgrade`, `Core_Upgrader::upgrade`)
   and reads its results to say whether an item was updated. Before an update it copies the plugin
@@ -972,11 +1013,15 @@ for a reason; remove one once there is nothing left to watch.
 ## WordPress 7.2: sudo mode and Application Passwords
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-09 15:55 UTC. The roadmap for 7.2 (make.wordpress.org/core, 2026-09-18)
-  says initial work is starting on a possible "sudo mode", which would gate highly privileged
-  administrative actions behind a re-authentication prompt even when logged in, and lists security
-  hardening and UX refinements for Application Passwords. It says items may not make the release.
-  Beta 1 is due 2026-10-20, the release 2026-12-08.
+- **Last checked:** 2026-11-08 17:30 UTC. 7.2 Beta 1 came out on 2026-10-20, Beta 2 on
+  2026-10-27, Beta 3 with 7.1.4 on 2026-10-28, and Beta 4 on 2026-11-03. RC1 is set for
+  2026-11-17 and the release for 2026-12-08. Sudo mode is in none of the beta announcements or
+  make/core posts, and no trunk commit or pull request mentions it. For Application Passwords,
+  trunk adds an email to the user whenever one is created (r63582, 2026-09-10; the
+  `wp_send_application_password_created_email` filter turns it off), and rewords the profile
+  screen's note for HTTP sites (r64091). How they authenticate is unchanged. The panel never
+  creates one: the user makes it in wp-admin, and gets that email once. The login link, the REST
+  request and the Docker test were not run on the beta at this check.
 - **The problem:** the panel signs administrators in without their password: **Log in to
   WordPress** on hosted sites, and WPL7 Connect's login links on external ones. A sudo prompt would
   ask that administrator for a password they may not know. The panel's REST requests
@@ -992,8 +1037,12 @@ for a reason; remove one once there is nothing left to watch.
 ## WP Godmode's `godmode` command on WPL7 Connect
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-09 15:55 UTC. Not released yet. Until it is, the panel's Godmode calls
-  on an external site (`/api/sites/:site/godmode/*`) answer 409, as on a site without WP Godmode.
+- **Last checked:** 2026-11-08 17:31 UTC. Not released yet. WP Godmode's latest release is 1.3.2
+  (2026-10-06), which added control through WP-CLI; no release note mentions WPL7 Connect. On an
+  external site running 1.3.2 and WPL7 Connect 1.0.0, `GET /api/sites/<site>/wp/cli/help` answers
+  "No commands are registered with WPL7 Connect", and `?command=godmode` answers 404. Until a
+  release registers it, the panel's Godmode calls on an external site (`/api/sites/:site/godmode/*`)
+  answer 409, as on a site without WP Godmode.
 - **The problem:** on a hosted site the panel drives WP Godmode through WP-CLI's `wp godmode`. An
   external site has no WP-CLI the panel can reach: there, WP Godmode has to register `godmode` with
   WPL7 Connect (the `wpl7_connect_commands` filter, docs/internal/connect-protocol.md section 8),
@@ -1130,12 +1179,21 @@ for a reason; remove one once there is nothing left to watch.
 ## Adminer: the pinned build and its advisories
 
 - **Priority:** High
-- **Last checked:** 2026-10-29 10:03 UTC. Adminer 6.2.0 (2026-10-23) is the latest release, and
-  the image now pins it. Its notes rename or remove no hook the plugin uses; they add optional
-  plugins and driver field keys. There are still 22 advisories, the newest GHSA-r9r5-j5q8-8c59
-  (2026-09-25), in the SQLite driver, which the MySQL-only build leaves out. The image's base,
-  `php:8.4-cli-alpine`, is PHP 8.4.27. The engine test `panel/test/engine/adminer.test.ts` passes
-  on 6.2.0: 5 of 5.
+- **Last checked:** 2026-11-08 17:25 UTC. Adminer 6.3.0 (2026-11-03) is the latest release; the
+  image still pins 6.2.0. 6.3.0 fixes a CSRF regression from 6.0.1 that has no advisory: a POST
+  with any `auth[]` field and a wrong token had the token replaced by a valid one, and ran its
+  action in the existing session (vrana/adminer#1375). It does not reach our build: `router.php`
+  refuses a POST with `auth` that lacks the panel's login key, and the panel's own sign-in posts
+  no token. The notes rename or remove no hook `wpl7.php` uses, and `connection()`,
+  `adminer_object()` and `X-Forwarded-Prefix` work as before; they add the plugin methods
+  `executeQuery()` and `donation()`. But redirects after a POST now answer 303, not 302, the
+  sign-in's and Logout's among them, and the panel takes anything but 302 as a refused sign-in
+  (`prepare()` in `panel/src/adminer/index.ts`). Moving the pin needs that check to accept 303
+  too, the tests that expect 302 changed, and the engine test run on 6.3.0, which this check did
+  not do. There are still 22 advisories, the newest
+  GHSA-r9r5-j5q8-8c59 (2026-09-25), in the SQLite driver, which the MySQL-only build leaves out.
+  The image's base, `php:8.4-cli-alpine`, is PHP 8.4.27 (rebuilt 2026-11-05). The engine test was
+  not run at this check.
 - **The problem:** "Open in Adminer" runs Adminer's MySQL-only English build on every server
   that uses it, pinned in `deploy/adminer-image/Dockerfile` by `ADMINER_VERSION` and
   `ADMINER_SHA256`. It sits behind the panel's front door, signs in as a site's own database
