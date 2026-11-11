@@ -33,7 +33,7 @@ import { jobToDto } from '../lib/dto.js';
 import type { AccessLevel } from '../../shared/access.js';
 import { currentActor, runAs, type JobActor } from './actor.js';
 import { checkTarget, fireAction, publicParams, withStoredSecrets } from './actions.js';
-import { externalSites } from '../lib/siteKind.js';
+import { externalSites, wordpressSites } from '../lib/siteKind.js';
 import { INVENTORY_EVERY_MS } from '../services/databases.js';
 
 /** How long a maintenance flag is left alone before it is treated as possibly stale. */
@@ -899,9 +899,10 @@ export class Schedulers {
     return { message: total > 0 ? `Re-attached ${plural(total, 'endpoint')}` : null };
   }
 
-  /** DISABLE_WP_CRON pairs with this: run due WP cron events for every running site. */
+  /** DISABLE_WP_CRON pairs with this: run due WP cron events for every running WordPress site. */
   private async wpCronTick(): Promise<TaskResult> {
-    const running = this.s.db.select().from(sites).where(eq(sites.status, 'running')).all();
+    // A PHP site has its own cron lines (site-cron).
+    const running = this.s.db.select().from(sites).where(and(eq(sites.status, 'running'), wordpressSites())).all();
     const byServer = new Map<number, typeof running>();
     for (const site of running) {
       const list = byServer.get(site.serverId) ?? [];
@@ -961,6 +962,8 @@ export class Schedulers {
       .leftJoin(siteWpStatus, eq(siteWpStatus.siteId, sites.id))
       .where(
         and(
+          // A PHP site is never scanned: counted, it would keep a scan due for ever.
+          wordpressSites(),
           or(eq(sites.status, 'running'), and(externalSites(), eq(sites.status, 'connected'))),
           or(isNull(siteWpStatus.scannedAt), lt(siteWpStatus.scannedAt, cutoff)),
         ),
@@ -991,7 +994,7 @@ export class Schedulers {
       .select({ at: sql<number>`min(coalesce(${siteWpStatus.scannedAt}, 0))` })
       .from(sites)
       .leftJoin(siteWpStatus, eq(siteWpStatus.siteId, sites.id))
-      .where(or(eq(sites.status, 'running'), and(externalSites(), eq(sites.status, 'connected'))))
+      .where(and(wordpressSites(), or(eq(sites.status, 'running'), and(externalSites(), eq(sites.status, 'connected')))))
       .get();
     if (oldest?.at === null || oldest?.at === undefined) return null;
     const lastPass = this.lastScanPassAt();

@@ -33,7 +33,7 @@ import type { AppDeps } from './deps.js';
 import type { SiteRow } from '../db/schema.js';
 import type { ServerHandle } from '../servers/registry.js';
 import { ContainerBackend, backendFor, type SiteBackend } from '../services/siteBackend.js';
-import { isExternal } from '../lib/siteKind.js';
+import { isExternal, type SiteApps } from '../lib/siteKind.js';
 
 // Addressing an existing site: no reserved-name check, see siteSlugParam.
 const slugParams = z.object({ slug: siteSlugParam });
@@ -70,8 +70,13 @@ function withoutGlobalParameters(help: string): string {
 export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
 
-  const requireRunningSite = async (slug: string): Promise<{ site: SiteRow; server: ServerHandle }> => {
-    const site = deps.sites.bySlug(slug);
+  /**
+   * Every lookup here refuses a PHP site with a 409 (`{ app: 'wordpress' }`): it has no WordPress
+   * for any of this to reach. /wp/rest would not even fail by itself, but call the site's own
+   * index.php. The shell is the one route here for any site, and says so.
+   */
+  const requireRunningSite = async (slug: string, apps: SiteApps = 'wordpress'): Promise<{ site: SiteRow; server: ServerHandle }> => {
+    const site = deps.sites.bySlug(slug, { app: apps });
     const server = deps.servers.handleFor(site.serverId);
     const state = await server.docker.containerState(site.containerName);
     if (state !== 'running') throw conflict(`Site container is ${state}; start the site first`);
@@ -83,7 +88,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
    * elsewhere whose WPL7 Connect is connected. The backend says how (services/siteBackend.ts).
    */
   const reachableSite = async (slug: string): Promise<{ site: SiteRow; backend: SiteBackend }> => {
-    const site = deps.sites.bySlug(slug, { kinds: 'any' });
+    const site = deps.sites.bySlug(slug, { kinds: 'any', app: 'wordpress' });
     if (isExternal(site)) {
       if (site.status !== 'connected') throw conflict(`"${site.slug}" is disconnected. Reconnect it from its Settings tab.`);
       return { site, backend: backendFor(deps, site) };
@@ -94,7 +99,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   /** A site a WordPress job can be queued for: either kind, an external one only while connected. */
   const jobSite = (slug: string): SiteRow => {
-    const site = deps.sites.bySlug(slug, { kinds: 'any' });
+    const site = deps.sites.bySlug(slug, { kinds: 'any', app: 'wordpress' });
     if (isExternal(site) && site.status !== 'connected') throw conflict(`"${site.slug}" is disconnected. Reconnect it from its Settings tab.`);
     return site;
   };
@@ -120,7 +125,7 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
    * scanned", which the UI shows as such.
    */
   r.get('/api/sites/:slug/wp/status', { schema: { params: slugParams } }, async (req) => {
-    const site = deps.sites.bySlug(req.params.slug, { kinds: 'any' });
+    const site = deps.sites.bySlug(req.params.slug, { kinds: 'any', app: 'wordpress' });
     return deps.wpInventory.statusFor(site);
   });
 
@@ -544,7 +549,8 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
   );
 
   r.post('/api/sites/:slug/shell', { schema: { params: slugParams, body: siteShellBody } }, async (req, reply) => {
-    const { site } = await requireRunningSite(req.params.slug);
+    // Any site's: a command in its folder, which a PHP site has as much as a WordPress one.
+    const { site } = await requireRunningSite(req.params.slug, 'any');
     const job = deps.worker.enqueue(
       'site.shell',
       { siteId: site.id, command: req.body.command, timeoutMin: req.body.timeoutMin },

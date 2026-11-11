@@ -368,6 +368,8 @@ export async function rewriteWordPressUrls(
   /** `skipExtensions`: the rewrite itself runs with the site's plugins and theme left out (WpService). */
   opts: { inside?: (container: string) => Promise<void>; skipExtensions?: boolean } = {},
 ): Promise<void> {
+  // A PHP site has no WordPress to rewrite; its callers skip it, and nothing is started for it.
+  if (isPhpSite(site)) return;
   // wp-cli runs via `docker exec`, so the container has to be up. Skipping the rewrite
   // for a stopped site left it flagged live while WordPress still redirected every
   // request to the old dev URL - visible only once someone started it again.
@@ -418,6 +420,8 @@ export async function runLicenseHook(
   vars: HookVars,
   opts: { only?: string } = {},
 ): Promise<RecipeOutcome[]> {
+  // Recipes are for WordPress plugins: a PHP site has none to activate. Its callers skip it too.
+  if (isPhpSite(site)) return [];
   try {
     return await s.licenses.runHook(server, site, hook, vars, { info: (m) => ctx.info(m), warn: (m, w) => ctx.warn(m, w) }, opts);
   } catch (err) {

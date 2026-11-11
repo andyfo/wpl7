@@ -6,6 +6,8 @@ import type { CoreServices } from '../../services/index.js';
 import { runtimeSizes, siteContainerStack, writeRedisConf } from '../../services/siteCaches.js';
 import type { JobContext } from '../context.js';
 import { loadSite, requireRunning, updateSiteRow } from './shared.js';
+import { isPhpSite } from '../../lib/siteKind.js';
+import { REDIS_SOCKET_IN_CONTAINER } from '../../services/siteStack.js';
 
 export const siteObjectCachePayload = z.object({
   siteId: z.number().int(),
@@ -36,6 +38,9 @@ async function matchRedis(ctx: JobContext<unknown>, server: ServerHandle, s: Cor
  * A site's object cache, a job because it installs a plugin: Redis in its container, and the Redis
  * Object Cache plugin to talk to it, whose settings come from wp-cache.php (services/wpCachePhp.ts).
  * The plugin refuses to replace another object cache's drop-in, and then this fails saying so.
+ *
+ * A PHP site gets Redis alone, on its socket, for its own app to use: there is no plugin to
+ * install, and the panel never empties it (services/siteCaches.ts clearAfterChange).
  */
 export async function siteObjectCache(ctx: JobContext<z.infer<typeof siteObjectCachePayload>>, s: CoreServices): Promise<void> {
   const site = loadSite(s.db, ctx.payload.siteId);
@@ -55,6 +60,11 @@ export async function siteObjectCache(ctx: JobContext<z.infer<typeof siteObjectC
 async function switchOn(ctx: JobContext<unknown>, s: CoreServices, server: ServerHandle, site: SiteRow): Promise<void> {
   try {
     await matchRedis(ctx, server, s, site, true);
+    if (isPhpSite(site)) {
+      updateSiteRow(s.db, site.id, { objectCache: 1 });
+      ctx.info(`Redis answers at ${REDIS_SOCKET_IN_CONTAINER}. It is emptied when the site restarts.`);
+      return;
+    }
     ctx.info('Installing the Redis Object Cache plugin…');
     await wpOk(server, site, ['plugin', 'install', 'redis-cache', '--activate']);
     await wpOk(server, site, ['redis', 'enable']);
@@ -74,7 +84,8 @@ async function switchOn(ctx: JobContext<unknown>, s: CoreServices, server: Serve
 /** The plugin stays installed, switched off. A second go only needs to turn it on again. */
 async function switchOff(ctx: JobContext<unknown>, s: CoreServices, server: ServerHandle, site: SiteRow): Promise<void> {
   // Each of these fails if someone removed the plugin by hand, which is no reason to keep Redis.
-  for (const args of [['redis', 'disable'], ['plugin', 'deactivate', 'redis-cache']]) {
+  // A PHP site has no plugin.
+  for (const args of isPhpSite(site) ? [] : [['redis', 'disable'], ['plugin', 'deactivate', 'redis-cache']]) {
     const res = await server.wp.run(site.containerName, args, WP_MS);
     if (res.exitCode !== 0) ctx.warn(`wp ${args.join(' ')}: ${said(res)}`);
   }

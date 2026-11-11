@@ -10,7 +10,7 @@ import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
 import { loadSite, requireRunning, siteDomains, siteUrl } from './shared.js';
 import { backendFor, type SiteBackend } from '../../services/siteBackend.js';
-import { isExternal } from '../../lib/siteKind.js';
+import { isExternal, wordpressSites } from '../../lib/siteKind.js';
 
 /**
  * The backup an update was asked to take before anything changes (routes decide it from the site's
@@ -31,7 +31,7 @@ export const wpCoreUpdatePayload = z.object({
 });
 
 export async function wpCoreUpdate(ctx: JobContext<z.infer<typeof wpCoreUpdatePayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
+  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any', app: 'wordpress' });
   const backend = backendFor(s, site);
   const restoreState = await backend.prepare(ctx);
   try {
@@ -66,7 +66,7 @@ export const wpPluginTaskPayload = z.object({
 });
 
 export async function wpPluginTask(ctx: JobContext<z.infer<typeof wpPluginTaskPayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
+  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any', app: 'wordpress' });
   const backend = backendFor(s, site);
   const restoreState = await backend.prepare(ctx);
   try {
@@ -139,7 +139,7 @@ export const wpRecipesPayload = z.object({
  * detail to fix afterwards.
  */
 export async function wpRecipes(ctx: JobContext<z.infer<typeof wpRecipesPayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
+  const site = loadSite(s.db, ctx.payload.siteId, { app: 'wordpress' });
   const server = s.servers.handleFor(site.serverId);
   const restoreState = await requireRunning(ctx, server, s, site);
   try {
@@ -181,7 +181,7 @@ export const wpThemeTaskPayload = z.object({
  * activating, updating and removing one is fleet maintenance.
  */
 export async function wpThemeTask(ctx: JobContext<z.infer<typeof wpThemeTaskPayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
+  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any', app: 'wordpress' });
   const backend = backendFor(s, site);
   const restoreState = await backend.prepare(ctx);
   try {
@@ -246,7 +246,7 @@ type BulkPayload = z.infer<typeof wpBulkTaskPayload>;
  * how a fleet quietly rots.
  */
 export async function wpBulkTask(ctx: JobContext<BulkPayload>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
+  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any', app: 'wordpress' });
   const backend = backendFor(s, site);
   const results: WpBulkOpResult[] = [];
   let backupId: number | null = null;
@@ -473,7 +473,9 @@ export const wpScanAllPayload = z.object({
  */
 export async function wpScanAll(ctx: JobContext<z.infer<typeof wpScanAllPayload>>, s: CoreServices): Promise<void> {
   const wanted = ctx.payload.siteIds ? new Set(ctx.payload.siteIds) : null;
-  const all = s.db.select().from(sites).orderBy(asc(sites.id)).all();
+  // WordPress sites only, whoever asked: a PHP site has nothing to scan, and a scan that fails
+  // records no time, which would keep the fleet's scan due for ever.
+  const all = s.db.select().from(sites).where(wordpressSites()).orderBy(asc(sites.id)).all();
   const candidates = all.filter((site) => (wanted ? wanted.has(site.id) : true));
   const byServer = new Map<number, SiteRow[]>();
   // Sites hosted elsewhere: asked through WPL7 Connect, one after another, beside the servers.

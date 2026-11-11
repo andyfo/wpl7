@@ -898,8 +898,30 @@ export class FakeDbAdmin implements DbAdminPort {
   /** The server's users and their passwords. */
   users = new Map<string, string>();
 
+  /**
+   * Which arguments name a database or a user, by method. The real one refuses an empty name
+   * (dbAdmin.ts assertDbIdentifier), and a site with no database of its own has '' for it: a test
+   * that lets one through to here fails as the real server would.
+   */
+  private static readonly NAMES: Record<string, number[]> = {
+    createSiteDb: [0, 1],
+    dropSiteDb: [0, 1],
+    recreateDb: [0],
+    dumpTo: [0],
+    importFrom: [1],
+    importFromAs: [1, 2],
+    createExtraDb: [0, 1],
+    dropDb: [0],
+    dropUser: [0],
+    setUserPassword: [0],
+    dumpToStream: [0],
+  };
+
   private record(method: string, args: unknown[]): void {
     this.calls.push({ method, args });
+    for (const i of FakeDbAdmin.NAMES[method] ?? []) {
+      if (args[i] === '') throw new Error(`Unsafe MySQL identifier: ""`);
+    }
     const fail = this.failOn.get(method);
     if (fail) throw new Error(fail);
   }

@@ -89,7 +89,7 @@ export function registerRecipeRoutes(app: FastifyInstance, deps: AppDeps): void 
    * A failure is told in what its step printed, which Read only is not shown.
    */
   r.get('/api/sites/:slug/wp/recipes', { schema: { params: slugParams } }, async (req) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'wordpress' });
     const installed = new Map<string, string>();
     for (const row of deps.wpInventory.componentsFor(site.id).values()) {
       if (row.kind === 'plugin') installed.set(row.slug, row.status);
@@ -102,7 +102,7 @@ export function registerRecipeRoutes(app: FastifyInstance, deps: AppDeps): void 
     '/api/sites/:slug/wp/recipes/apply',
     { schema: { params: slugParams, body: licenseApplyBody } },
     async (req, reply) => {
-      const site = deps.sites.bySlug(req.params.slug);
+      const site = deps.sites.bySlug(req.params.slug, { app: 'wordpress' });
       if (req.body.recipeId && !deps.licenses.catalog.byId(req.body.recipeId)) {
         throw notFound(`No recipe "${req.body.recipeId}" in the catalog`);
       }

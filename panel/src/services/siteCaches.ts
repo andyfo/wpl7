@@ -8,10 +8,11 @@ import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
 import { jobs, sites, type ServerRow, type SiteRow } from '../db/schema.js';
 import type { JobWorker } from '../jobs/worker.js';
-import { hostedSites, isExternal } from '../lib/siteKind.js';
+import { hostedSites, isExternal, isPhpSite } from '../lib/siteKind.js';
 import type { ServerHandle } from '../servers/registry.js';
 import { fitCpus, type DockerPort } from './docker.js';
 import { siteScheme } from './labels.js';
+import { defaultMailFrom } from './mailAuth.js';
 import type { PanelSettings } from './settings.js';
 import {
   PAGE_CACHE_DIR_IN_CONTAINER,
@@ -43,10 +44,13 @@ type CacheSettings = Pick<PanelSettings, 'sitePageCache' | 'sitePageCacheSeconds
 export type CacheSettingsReader = { get<K extends keyof CacheSettings>(key: K): CacheSettings[K] };
 
 /** What the files are worked out from. */
-export type SiteCacheRow = Pick<SiteRow, 'slug' | 'pageCache' | 'objectCache' | 'cacheRules' | 'cpuLimit' | 'memoryLimitMb' | 'pidsLimit'>;
+export type SiteCacheRow = Pick<SiteRow, 'slug' | 'app' | 'domains' | 'pageCache' | 'objectCache' | 'cacheRules' | 'cpuLimit' | 'memoryLimitMb' | 'pidsLimit'>;
 
 /** Whether the site keeps a page cache: what it says for itself, or what Settings says. */
-export function effectivePageCache(settings: CacheSettingsReader, site: Pick<SiteRow, 'pageCache'>): boolean {
+export function effectivePageCache(settings: CacheSettingsReader, site: Pick<SiteRow, 'pageCache' | 'app'>): boolean {
+  // nginx stores only what wp-cache.php marks, which a PHP site never loads: its nginx gets the
+  // pass-through, whatever the setting says.
+  if (isPhpSite(site)) return false;
   if (site.pageCache === 'on') return true;
   if (site.pageCache === 'off') return false;
   return settings.get('sitePageCache') ?? true;
@@ -77,7 +81,18 @@ export function runtimeFilePaths(config: Config, slug: string) {
     phpIni: path.join(dir, 'php.ini'),
     wpCache: path.join(dir, 'wp-cache.php'),
     redis: path.join(dir, 'redis.conf'),
+    /** Who the site's mail is from when a script names no sender (mailAuth.ts defaultMailFrom). */
+    mailFrom: path.join(dir, 'mail-from'),
   };
+}
+
+/**
+ * The site's default sender, which the image's wpl7-sendmail reads for each message that names
+ * none. Nothing reloads it. An image from before the wrapper doesn't read it, and is none the worse.
+ */
+export function writeMailFrom(server: Pick<ServerHandle, 'files'>, config: Config, site: Pick<SiteRow, 'slug' | 'app' | 'domains'>): Promise<void> {
+  const [primary] = JSON.parse(site.domains) as string[];
+  return writeRuntimeFile(server, runtimeFilePaths(config, site.slug).mailFrom, `${defaultMailFrom(site.app, primary ?? '')}\n`);
 }
 
 /**
@@ -140,6 +155,7 @@ export async function writeSiteRuntimeFiles(
   await writeRuntimeFile(server, files.phpIni, renderPhpIni(memoryMb));
   await writeRuntimeFile(server, files.wpCache, renderSiteWpCache(s.settings, site, rules, warn));
   await writeRedisConf(server, s.config, site, memoryMb);
+  await writeMailFrom(server, s.config, site);
 }
 
 /**
@@ -270,7 +286,8 @@ export async function applySiteCaches(
     reloaded.push('Redis');
   }
 
-  const stale = nginx !== oldNginx || wpCache !== oldWpCache;
+  // A PHP site has no page cache to clear, and its Redis is never emptied (clearSiteCaches).
+  const stale = (nginx !== oldNginx || wpCache !== oldWpCache) && !isPhpSite(site);
   if (stale) {
     await clearSiteCaches(server, site);
     await clearAgainSoon(server, s, site);
@@ -301,12 +318,13 @@ export const FLUSH_REDIS = ['redis-cli', '-s', REDIS_SOCKET_IN_CONTAINER, 'FLUSH
  * False when there was nothing to clear: stack 1 has no caches, and a stopped container empties
  * them when it starts.
  */
-export async function clearSiteCaches(server: Pick<ServerHandle, 'docker'>, site: Pick<SiteRow, 'containerName' | 'objectCache'>): Promise<boolean> {
+export async function clearSiteCaches(server: Pick<ServerHandle, 'docker'>, site: Pick<SiteRow, 'containerName' | 'objectCache' | 'app'>): Promise<boolean> {
   const { docker } = server;
   if ((await siteContainerStack(docker, site.containerName)) !== 2) return false;
   if ((await docker.containerState(site.containerName)) !== 'running') return false;
   await docker.exec(site.containerName, CLEAR_PAGE_CACHE, asSiteUser(60_000));
-  if (site.objectCache) await docker.exec(site.containerName, FLUSH_REDIS, asSiteUser(30_000));
+  // A PHP site's Redis holds its app's own data, which nothing here may empty.
+  if (site.objectCache && !isPhpSite(site)) await docker.exec(site.containerName, FLUSH_REDIS, asSiteUser(30_000));
   return true;
 }
 
@@ -318,7 +336,9 @@ const CLEAR_PATIENCE_MS = 90_000;
  * page stays stale for at most its keep time, and there is a button.
  */
 export async function clearAfterChange(s: { servers: { handleFor(id: number): Pick<ServerHandle, 'docker'> }; log: { warn(message: string): void } }, site: SiteRow): Promise<void> {
-  if (isExternal(site)) return;
+  // A PHP site has no page cache, and its Redis is its app's own: sessions, queues, whatever it
+  // keeps there. The panel never empties it.
+  if (isExternal(site) || isPhpSite(site)) return;
   let timer: NodeJS.Timeout | undefined;
   const patience = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error('its server did not answer in time')), CLEAR_PATIENCE_MS);

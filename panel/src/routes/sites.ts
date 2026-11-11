@@ -26,6 +26,7 @@ import { jobToDto, viewerOf } from '../lib/dto.js';
 import { requireAccess } from '../plugins/auth.js';
 import { checkSiteUrl, clearSiteCaches, siteContainerStack } from '../services/siteCaches.js';
 import type { AppDeps } from './deps.js';
+import { isPhpSite, phpNoPageCache } from '../lib/siteKind.js';
 
 // Addressing an existing site: no reserved-name check, see siteSlugParam.
 const slugParams = z.object({ slug: siteSlugParam });
@@ -195,6 +196,9 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
   };
 
   r.post('/api/sites/:slug/cache/clear', { schema: { params: slugParams } }, async (req) => {
+    // Whatever state it is in: a PHP site has nothing here to clear, and its Redis is its own.
+    const php = deps.sites.bySlug(req.params.slug);
+    if (isPhpSite(php)) throw conflict(phpNoPageCache(php.slug));
     const { site, server } = await liveCacheOf(req.params.slug);
     return { cleared: await clearSiteCaches(server, site) };
   });

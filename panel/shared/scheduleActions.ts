@@ -136,7 +136,15 @@ export interface ScheduleActionInfo {
   external: boolean;
   /** For a site hosted elsewhere that cannot take it: what it cannot be. */
   externalRefusal?: string;
+  /**
+   * It needs WordPress: a PHP site is left out of `all` and `server`, and skipped where it is
+   * named (PHP_SITE_SKIP).
+   */
+  wordpress?: boolean;
 }
+
+/** Why a PHP site is left out of a run of an action that needs WordPress. */
+export const PHP_SITE_SKIP = 'is a PHP site: it has no WordPress';
 
 const SITE_TARGETS = ['sites', 'server', 'all'] as const;
 
@@ -184,6 +192,7 @@ export const SCHEDULE_ACTION_INFO = {
     targets: SITE_TARGETS,
     jobType: 'wp.scanAll',
     external: true,
+    wordpress: true,
   },
   'wp.update': {
     label: 'Update plugins, themes and WordPress',
@@ -193,6 +202,7 @@ export const SCHEDULE_ACTION_INFO = {
     targets: SITE_TARGETS,
     jobType: 'wp.bulkTask',
     external: true,
+    wordpress: true,
   },
   'panel.snapshot': {
     label: 'Panel snapshot',
@@ -210,11 +220,12 @@ export const SCHEDULE_ACTION_INFO = {
     targets: SITE_TARGETS,
     jobType: 'wp.cli',
     external: true,
+    wordpress: true,
   },
   'site.shell': {
     label: 'Shell command',
     description:
-      "Runs a shell command in each site's container as www-data, in the WordPress folder. Its output goes to the job log.",
+      "Runs a shell command in each site's container as www-data, in the site's folder. Its output goes to the job log.",
     category: 'sites',
     targets: SITE_TARGETS,
     jobType: 'site.shell',
@@ -229,6 +240,7 @@ export const SCHEDULE_ACTION_INFO = {
     targets: SITE_TARGETS,
     jobType: 'wp.rest',
     external: true,
+    wordpress: true,
   },
 } as const satisfies Record<ScheduleAction, ScheduleActionInfo>;
 

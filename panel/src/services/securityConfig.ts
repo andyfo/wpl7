@@ -30,6 +30,7 @@ import {
   type RateLimit,
 } from '../../shared/security.js';
 import { headerRegex } from '../lib/addressRegex.js';
+import type { SiteApp } from '../../shared/schemas.js';
 import type { TrustedProxy } from '../lib/clientIp.js';
 
 // ---------------------------------------------------------------------------
@@ -152,6 +153,8 @@ function jetpackMatcher(input: SiteRulesInput): string | null {
 
 export interface SiteRulesInput {
   slug: string;
+  /** What the site runs: a PHP site's assets are anywhere in it, not under wp-content. */
+  app: SiteApp;
   /** Every host the site answers on; [0] is its canonical one. */
   domains: string[];
   policy: EffectivePolicy;
@@ -169,8 +172,17 @@ export interface SiteRulesInput {
   jetpack: readonly string[];
 }
 
-/** Assets a page pulls in: generous limits, and never counted as a request for the page. */
-const ASSET_PATH = String.raw`(?i)^/wp-(content|includes)/.+\.(css|js|mjs|map|png|jpe?g|gif|webp|avif|svg|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|mp3|ogg|wav|pdf)$`;
+/** What an asset's name ends in. */
+const ASSET_EXTENSIONS = String.raw`\.(css|js|mjs|map|png|jpe?g|gif|webp|avif|svg|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|mp3|ogg|wav|pdf)$`;
+
+/**
+ * Assets a page pulls in: generous limits, and never counted as a request for the page. A
+ * WordPress site's are under wp-content and wp-includes. A PHP site keeps them where its app does,
+ * so for it the name alone decides: without that every image and stylesheet would count against
+ * the request limit, and pages would hit 429 on Strict.
+ */
+const ASSET_PATH = String.raw`(?i)^/wp-(content|includes)/.+${ASSET_EXTENSIONS}`;
+const PHP_SITE_ASSET_PATH = String.raw`(?i)^/.+${ASSET_EXTENSIONS}`;
 
 /** The refusals: a matcher each, joined with the site's hosts. */
 function denyMatchers(input: SiteRulesInput): Partial<Record<(typeof DENY_ORDER)[number], string>> {
@@ -417,7 +429,7 @@ export function buildSiteSecurityConfig(input: SiteRulesInput): DynamicConfig | 
     const jetpack = jetpackMatcher(input);
     limited('xmlrpc', PRIORITY.xmlrpc, `PathRegexp(${lit(String.raw`^/xmlrpc\.php`, 'path')})${jetpack ? ` && !${jetpack}` : ''}`, 'xmlrpc');
   }
-  limited('static', PRIORITY.static, `PathRegexp(${lit(ASSET_PATH, 'path')})`, 'assets');
+  limited('static', PRIORITY.static, `PathRegexp(${lit(input.app === 'php' ? PHP_SITE_ASSET_PATH : ASSET_PATH, 'path')})`, 'assets');
   if (policy.limits.requests) limited('main', PRIORITY.main, null, 'requests');
   // No request limit: the headers still have to reach every response.
   else if (pass.length > 0) route('main', PRIORITY.main, null, pass);

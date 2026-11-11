@@ -166,8 +166,10 @@ export class SecurityService {
     };
   }
 
+  /** A site's policy, for what it runs: a PHP site has none of WordPress's parts. */
   policyFor(siteId: number): EffectivePolicy {
-    return effectivePolicy(this.fleet(), this.siteInput(siteId));
+    const app = this.db.select({ app: sites.app }).from(sites).where(eq(sites.id, siteId)).get()?.app ?? 'wordpress';
+    return effectivePolicy(this.fleet(), this.siteInput(siteId), app);
   }
 
   /** Save a site's own settings; its server's rules follow within moments. */
@@ -228,11 +230,12 @@ export class SecurityService {
     };
     const fleetPolicy = this.fleet();
     for (const site of here) {
-      const policy = effectivePolicy(fleetPolicy, this.siteInput(site.id));
+      const policy = effectivePolicy(fleetPolicy, this.siteInput(site.id), site.app);
       try {
         const config = buildSiteSecurityConfig({
           ...shared,
           slug: site.slug,
+          app: site.app,
           domains: JSON.parse(site.domains) as string[],
           policy,
         });
@@ -429,7 +432,7 @@ export class SecurityService {
       .where(and(eq(sites.serverId, serverId), eq(sites.status, 'running')))
       .all()
       .map((site) => {
-        const { container } = effectivePolicy(fleetPolicy, this.siteInput(site.id));
+        const { container } = effectivePolicy(fleetPolicy, this.siteInput(site.id), site.app);
         return { site, container, files: hardeningFiles(container, site) };
       });
   }

@@ -53,7 +53,7 @@ function change(w: TestWorld, site: SiteRow, patch: Partial<typeof sites.$inferI
   return w.db.update(sites).set(patch).where(eq(sites.id, site.id)).returning().get();
 }
 
-const ALL_FILES = ['nginx-site.conf', 'php-fpm-pool.conf', 'php.ini', 'wp-cache.php'];
+const ALL_FILES = ['nginx-site.conf', 'php-fpm-pool.conf', 'php.ini', 'wp-cache.php', 'mail-from'];
 
 describe('the runtime files', () => {
   afterEach(() => vi.restoreAllMocks());

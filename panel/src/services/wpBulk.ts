@@ -13,6 +13,7 @@ import type { BackupBeforeUpdates, JobStatus, WpBulkAction, WpComponentAction, W
 import { backupBeforeUpdatesOf, backupFirstFor, updatesSomething } from '../../shared/updateBackups.js';
 import type { BatchDto } from '../../shared/types.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
+import { isPhpSite, wordpressOnly } from '../lib/siteKind.js';
 import type { JobWorker } from '../jobs/worker.js';
 import type { CoreServices } from './index.js';
 import { actionsFor, CONNECT_PLUGIN, type WpInventoryService } from './wpInventory.js';
@@ -141,6 +142,9 @@ export class WpBulkService {
     options: BulkOptions,
   ): { batch: BatchRow; jobs: JobRow[]; skipped: BulkSkip[] } {
     const bySlug = new Map(this.db.select().from(sites).all().map((site) => [site.slug, site]));
+    // Not one of the problems a stale tab makes: a PHP site is never in the inventory.
+    const php = targets.map((t) => bySlug.get(t.siteSlug)).find((site) => site !== undefined && isPhpSite(site));
+    if (php) throw wordpressOnly(php.slug);
     const componentsFor = this.componentCache();
     const problems: string[] = [];
     const perSite = new Map<number, { site: SiteRow; ops: BulkOp[]; backupFirst?: boolean }>();

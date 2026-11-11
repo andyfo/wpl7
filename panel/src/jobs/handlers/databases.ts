@@ -13,7 +13,7 @@ import type { DbTarget } from '../../services/dbBrowser.js';
 import type { CoreServices } from '../../services/index.js';
 import { sitePaths, siteRuntimeFrom } from '../../services/siteSpec.js';
 import type { JobContext } from '../context.js';
-import { loadSite, probeSite, siteDomains, siteShouldRun, startSiteContainer, updateSiteRow } from './shared.js';
+import { loadSite, probeSite, siteDomains, siteShouldRun, startSiteContainer, updateSiteRow, writeSiteJson } from './shared.js';
 import { replaceContainer } from './sites.js';
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -71,11 +71,8 @@ export async function databaseCreate(ctx: JobContext<z.infer<typeof databaseCrea
  * whatever it holds is not known to be this site's.
  */
 export async function createOwnDatabase(ctx: JobContext<unknown>, s: CoreServices, server: ServerHandle, site: SiteRow): Promise<SiteRow> {
-  if (hasDatabase(site)) throw new Error(`"${site.slug}" has a database already: ${site.dbName}`);
+  await assertOwnDatabaseFree(server, site);
   const name = dbIdentifier(site.slug);
-  if ((await server.dbAdmin.inventory()).some((db) => db.name === name) || (await server.dbAdmin.userExists(name))) {
-    throw new Error(`"${server.name}" already has a database or a user called ${name}. Delete it under Databases if no site needs it, then try again.`);
-  }
   const password = generateSecret(24);
   ctx.info(`Creating database ${name} and its user on "${server.name}"…`);
   try {
@@ -88,7 +85,25 @@ export async function createOwnDatabase(ctx: JobContext<unknown>, s: CoreService
   } finally {
     s.databases.kick(site.serverId);
   }
-  return loadSite(s.db, site.id);
+  const made = loadSite(s.db, site.id);
+  await writeSiteJson(server, s.config, made);
+  return made;
+}
+
+/**
+ * Refuses, before anything is made, a site's own database where the server already has a
+ * database or a user of its name: nothing says whose it is. Asked again by createOwnDatabase, for
+ * a caller that has not.
+ */
+export async function assertOwnDatabaseFree(server: ServerHandle, site: SiteRow): Promise<void> {
+  if (hasDatabase(site)) throw new Error(`"${site.slug}" has a database already: ${site.dbName}`);
+  const name = dbIdentifier(site.slug);
+  if ((await server.dbAdmin.inventory()).some((db) => db.name === name)) {
+    throw new Error(`"${server.name}" already has a database called ${name}. Delete it under Databases if no site needs it, then try again.`);
+  }
+  if (await server.dbAdmin.userExists(name)) {
+    throw new Error(`"${server.name}" already has a database user called ${name}, which no database of the panel's uses. Remove it from the server's MariaDB, then try again.`);
+  }
 }
 
 export const databaseDeletePayload = z.object({

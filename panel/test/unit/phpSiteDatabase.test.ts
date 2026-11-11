@@ -274,7 +274,7 @@ describe("a PHP site's Database tab", () => {
     const job = w.worker.enqueue('database.create', { siteId: site.id, own: true }, site);
     const done = await runJob(w, job.id);
     expect(done.status).toBe('failed');
-    expect(done.error).toBe('"local" already has a database or a user called wp_plain. Delete it under Databases if no site needs it, then try again.');
+    expect(done.error).toBe('"local" already has a database called wp_plain. Delete it under Databases if no site needs it, then try again.');
     expect(w.dbAdmin.databases.has('wp_plain')).toBe(true);
     expect(row(w, site.id).dbName).toBe('');
   });

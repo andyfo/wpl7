@@ -69,7 +69,7 @@ export const wpReinstallPayload = z.object({
  * WP-CLI itself runs with every plugin and theme skipped. A scan is queued to show the result.
  */
 export async function wpReinstall(ctx: JobContext<z.infer<typeof wpReinstallPayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
+  const site = loadSite(s.db, ctx.payload.siteId, { app: 'wordpress' });
   const server = s.servers.handleFor(site.serverId);
   const inventory = await runInventory(server, siteImage(site.phpVersion), sitePaths(s.config, site.slug).wordpress, 2 * 60_000);
   const restoreState = await requireRunning(ctx, server, s, site);

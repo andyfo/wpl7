@@ -626,6 +626,8 @@ export interface BackupDto {
   sizeBytes: number | null;
   wpVersion: string | null;
   phpVersion: string | null;
+  /** False when it holds no dump of the site's own database: its site had none. */
+  hasDatabase: boolean;
   note: string | null;
   jobId: number | null;
   /** False = the files were pruned locally and this backup now exists only offsite. */
@@ -2430,7 +2432,8 @@ export interface SiteDatabaseDto {
 
 /** Who a database on a server belongs to, worked out from the sites and the moves in progress. */
 export type DatabaseUseDto =
-  | { kind: 'site'; siteId: number; slug: string; title: string }
+  /** A site's own database. `app` names what it belongs to: WordPress, or a PHP site's own code. */
+  | { kind: 'site'; siteId: number; slug: string; title: string; app: SiteApp }
   | { kind: 'extra'; siteId: number; slug: string; title: string }
   /** The copy a moved site left on its old server, until the move's clean-up drops it. */
   | { kind: 'moveCopy'; slug: string }

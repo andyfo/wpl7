@@ -7,6 +7,7 @@
 // @docs security/overview, security/site-protection
 import { z } from 'zod';
 import { WIDEST_PREFIX, parseCidr } from './cidr.js';
+import type { SiteApp } from './schemas.js';
 
 // ---------------------------------------------------------------------------
 // Trusted proxies
@@ -507,6 +508,56 @@ function applyOverrides(policy: ProtectionPolicy, sources: Record<string, Policy
   }
 }
 
+/**
+ * The parts of the protection that are WordPress's, by the keys EffectivePolicy.sources uses. A PHP
+ * site has them off whatever its level and the fleet default say, refuses an override that names
+ * one, and its Security tab leaves them out. The fleet default still sets them for WordPress sites.
+ * User enumeration would do harm there: it refuses any address with ?author=<digit>.
+ */
+export const WORDPRESS_ONLY_SETTINGS = [
+  'rules.uploads',
+  'rules.install',
+  'rules.enum',
+  'xmlrpc',
+  'wpcron',
+  'limits.login',
+  'limits.xmlrpc',
+  'container.blockPhpInUploads',
+  'container.disallowFileEdit',
+  'container.disallowFileMods',
+] as const;
+
+export const isWordPressOnlySetting = (key: string): boolean => (WORDPRESS_ONLY_SETTINGS as readonly string[]).includes(key);
+
+/** The settings an override object changes, by the keys of EffectivePolicy.sources. */
+export function overrideKeys(o: SecurityOverrides): string[] {
+  const set = (prefix: string, part: object | undefined) =>
+    Object.entries(part ?? {})
+      .filter(([, value]) => value !== undefined)
+      .map(([key]) => `${prefix}.${key}`);
+  return [
+    ...set('rules', o.rules),
+    ...(o.xmlrpc !== undefined ? ['xmlrpc'] : []),
+    ...(o.wpcron !== undefined ? ['wpcron'] : []),
+    ...set('limits', o.limits),
+    ...set('headers', o.headers),
+    ...set('container', o.container),
+  ];
+}
+
+/** What a PHP site has of a policy: everything but WordPress's own parts, which are off. */
+function withoutWordPress(policy: ProtectionPolicy, sources: Record<string, PolicySource>): void {
+  policy.rules.uploads = false;
+  policy.rules.install = false;
+  policy.rules.enum = false;
+  policy.xmlrpc = 'allow';
+  policy.wpcron = 'allow';
+  policy.limits.login = null;
+  policy.limits.xmlrpc = null;
+  policy.container = { blockPhpInUploads: false, disallowFileEdit: false, disallowFileMods: false };
+  for (const key of WORDPRESS_ONLY_SETTINGS) delete sources[key];
+}
+
 function clonePolicy(p: ProtectionPolicy): ProtectionPolicy {
   return JSON.parse(JSON.stringify(p)) as ProtectionPolicy;
 }
@@ -515,9 +566,10 @@ function clonePolicy(p: ProtectionPolicy): ProtectionPolicy {
  * The one answer to "what does this site get". A site that chose a level gets that level and
  * its own changes; a site that follows the default gets the fleet's level, the fleet's changes,
  * then its own. Off is off: no change can switch a rule on under it, so Off stays the one
- * switch that is guaranteed to take everything away.
+ * switch that is guaranteed to take everything away. A PHP site gets none of WordPress's parts
+ * (WORDPRESS_ONLY_SETTINGS); the fleet default, asked as it is, is a WordPress site's.
  */
-export function effectivePolicy(fleet: FleetSecurity, site: SiteSecurityInput): EffectivePolicy {
+export function effectivePolicy(fleet: FleetSecurity, site: SiteSecurityInput, app: SiteApp): EffectivePolicy {
   const levelFrom = site.level === null ? 'fleet' : 'site';
   const level = site.level ?? fleet.level;
   const policy = clonePolicy(LEVEL_PRESETS[level]);
@@ -526,6 +578,7 @@ export function effectivePolicy(fleet: FleetSecurity, site: SiteSecurityInput): 
     if (levelFrom === 'fleet') applyOverrides(policy, sources, fleet.overrides, 'fleet');
     applyOverrides(policy, sources, site.overrides, 'site');
   }
+  if (app === 'php') withoutWordPress(policy, sources);
   // A limit on XML-RPC means nothing unless XML-RPC is limited; a denied one has no limit.
   if (policy.xmlrpc !== 'limit') policy.limits.xmlrpc = null;
   return { level, levelFrom, ...policy, customRules: site.customRules, sources };

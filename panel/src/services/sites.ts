@@ -12,7 +12,7 @@ import type { CoreServices } from './index.js';
 import type { JobWorker } from '../jobs/worker.js';
 import { siteScheme } from './labels.js';
 import { assertDomainsFree } from './domainGuard.js';
-import { PHP_NO_MAINTENANCE, assertApp, assertKind, hasDatabase, hostedSites, isExternal, isPhpSite, type SiteApps, type SiteKinds } from '../lib/siteKind.js';
+import { PHP_NO_MAINTENANCE, assertApp, assertKind, hasDatabase, hostedSites, isExternal, isPhpSite, phpNoPageCache, type SiteApps, type SiteKinds } from '../lib/siteKind.js';
 import type { DockerPort } from './docker.js';
 import { SITE_ROOT_IN_CONTAINER } from './siteHardening.js';
 import { RuntimeRefusedError, applySiteCaches, effectivePageCache, siteContainerStack } from './siteCaches.js';
@@ -690,7 +690,9 @@ export class SitesService {
     }
 
     const { object, page, keepSeconds, off, own } = body;
-    if (page !== undefined || keepSeconds !== undefined || off !== undefined || own !== undefined) {
+    const pageCache = page !== undefined || keepSeconds !== undefined || off !== undefined || own !== undefined;
+    if (pageCache && isPhpSite(site)) throw conflict(phpNoPageCache(site.slug));
+    if (pageCache) {
       const rules = parseSiteCacheRules(site.cacheRules);
       const changes = {
         pageCache: page === undefined ? site.pageCache : page === 'default' ? null : page,

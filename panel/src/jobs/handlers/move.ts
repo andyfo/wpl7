@@ -483,7 +483,7 @@ function insertStagedBackupRow(
   s: CoreServices,
   site: ReturnType<typeof loadSite>,
   target: ServerHandle,
-  snapshot: { sizeBytes: number | null; wpVersion: string | null },
+  snapshot: { sizeBytes: number | null; wpVersion: string | null; hasDatabase: number },
   finalDir: string,
 ) {
   return s.db
@@ -499,6 +499,8 @@ function insertStagedBackupRow(
       sizeBytes: snapshot.sizeBytes,
       wpVersion: snapshot.wpVersion,
       phpVersion: site.phpVersion,
+      // What the snapshot it is a copy of holds: a site without a database has no dump in it.
+      hasDatabase: snapshot.hasDatabase,
       note: 'staged copy (move)',
       createdAt: Date.now(),
     })

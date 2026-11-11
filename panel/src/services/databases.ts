@@ -256,7 +256,7 @@ export class DatabasesService {
       out.set(`${s.serverId}\u0000${s.dbName}`, {
         serverId: s.serverId,
         name: s.dbName,
-        use: { kind: 'site', siteId: s.id, slug: s.slug, title: s.title },
+        use: { kind: 'site', siteId: s.id, slug: s.slug, title: s.title, app: s.app },
         expected: settled(s),
       });
     }
@@ -272,7 +272,8 @@ export class DatabasesService {
     }
     const pending = this.db.select().from(moveCleanups).where(eq(moveCleanups.status, 'pending')).all();
     for (const c of pending) {
-      for (const name of [c.dbName, ...parseNames(c.extraDbs)]) {
+      // '' for a site that had no database of its own.
+      for (const name of [c.dbName, ...parseNames(c.extraDbs)].filter((n) => n !== '')) {
         const k = `${c.sourceServerId}\u0000${name}`;
         if (!out.has(k)) out.set(k, { serverId: c.sourceServerId, name, use: { kind: 'moveCopy', slug: c.siteSlug }, expected: false });
       }

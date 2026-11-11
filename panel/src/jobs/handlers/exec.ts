@@ -152,7 +152,8 @@ export async function wpCli(ctx: JobContext<z.infer<typeof wpCliPayload>>, s: Co
 
 /** Where a command of a site runs: its running container, or WPL7 Connect for a site hosted elsewhere. */
 async function commandBackend(ctx: JobContext<{ siteId: number }>, s: CoreServices): Promise<SiteBackend> {
-  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
+  // WP-CLI and WordPress's REST API: a PHP site has neither. The shell runs anywhere (runningSite).
+  const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any', app: 'wordpress' });
   if (isExternal(site)) {
     if (site.status !== 'connected') throw new Error(`"${site.slug}" is disconnected. Reconnect it from its Settings tab.`);
     return backendFor(s, site);

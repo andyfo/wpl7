@@ -53,6 +53,7 @@ import {
 import { requireRunning } from './wp.js';
 import { hasDatabase, isExternal, isPhpSite } from '../../lib/siteKind.js';
 import { PLACEHOLDER_FILE, renderPlaceholderPage } from '../../services/phpSite.js';
+import { writeMailFrom } from '../../services/siteCaches.js';
 import { parseSiteCacheRules } from '../../../shared/cacheRules.js';
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -847,7 +848,8 @@ export const GEOLOCATE_OFF_REASON = "WooCommerce's Geolocate setting changes pri
  */
 async function keepGeolocateStoreOff(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, row: SiteRow): Promise<void> {
   const current = loadSite(s.db, row.id);
-  if (current.pageCache !== null) return;
+  // A PHP site has no page cache, and no WooCommerce of the panel's to ask.
+  if (current.pageCache !== null || isPhpSite(current)) return;
   try {
     const skip = ['--skip-plugins', '--skip-themes'];
     const active = await server.wp.run(row.containerName, ['plugin', 'is-active', 'woocommerce', ...skip], 30_000);
@@ -1272,7 +1274,10 @@ export async function siteUpdateDomains(
   // Running sites are always asked what URL WordPress currently uses (an earlier, partially
   // applied attempt may have left the database ahead of or behind the row); a stopped site
   // is only started for the rewrite when the primary actually changes, or to allow search engines.
-  if (wasRunning || newPrimary !== oldPrimary || allowSearch) {
+  // A PHP site has no WordPress to rewrite: its own config is its own to change.
+  if (isPhpSite(site)) {
+    if (newPrimary !== oldPrimary) ctx.info(`If the site's own config names its address, change it there to ${newUrl}.`);
+  } else if (wasRunning || newPrimary !== oldPrimary || allowSearch) {
     try {
       await rewriteWordPressUrls(ctx, s, server, site, siteUrl(s.config, oldPrimary), newUrl, wasRunning, { inside });
     } catch (err) {
@@ -1292,6 +1297,10 @@ export async function siteUpdateDomains(
     keepDevAlias: ctx.payload.keepDevAlias ? 1 : 0,
     isLive: ctx.payload.goLive ? 1 : site.isLive,
   });
+  // The containers above were made while the row still had the old domains, so the default sender
+  // they were given is the old one. Read for each message: a site that went live sends as its new
+  // domain from here on.
+  await writeMailFrom(server, s.config, loadSite(s.db, site.id));
   await writeSiteJson(server, s.config, loadSite(s.db, site.id));
   // Row is authoritative again: re-sync so domains dropped from the site stop being owned by it.
   await syncRelayAuth(ctx, s);

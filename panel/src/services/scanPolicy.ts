@@ -18,6 +18,7 @@
  */
 // @docs security/malware-scans
 import type { FindingConfidence, FindingKind, ScanOnFinding } from '../../shared/security.js';
+import type { SiteApp } from '../../shared/schemas.js';
 
 export const MAX_AUTO_QUARANTINE = 25;
 
@@ -100,27 +101,37 @@ interface ActionableFinding {
   package: string | null;
 }
 
-/** Why a finding's file cannot be moved to quarantine by hand; null when it can. */
-export function manualQuarantineProblem(f: ActionableFinding): string | null {
+/**
+ * Why a finding's file cannot be moved to quarantine by hand; null when it can. On a PHP site the
+ * panel puts nothing right: a WordPress installed into it by hand, and anything named like the
+ * panel's own files, is the site's, so such a file can be moved instead.
+ */
+export function manualQuarantineProblem(f: ActionableFinding, app: SiteApp): string | null {
   if (f.status === 'quarantined') return 'It is in quarantine already.';
   if (f.status === 'resolved') return 'It is not there any more.';
-  if (f.kind === 'panel-modified') return 'A changed WPL7 file is put right with Put back.';
+  if (f.kind === 'panel-modified' && app !== 'php') return 'A changed WPL7 file is put right with Put back.';
   if (isProtectedPath(f.path)) return 'The site needs this file to run: put it right instead.';
   if (f.kind === 'link-outside') return 'A link is never moved; remove it in the Files tab.';
-  if (f.kind === 'core-modified' || f.kind === 'plugin-modified') return 'A changed file of WordPress or a plugin is put right with Reinstall original.';
+  if ((f.kind === 'core-modified' || f.kind === 'plugin-modified') && app !== 'php') {
+    return 'A changed file of WordPress or a plugin is put right with Reinstall original.';
+  }
   if (f.kind === 'core-missing' || f.kind === 'plugin-missing') return 'The file is missing.';
   if (!f.sha256) return 'The scan did not record what the file held; scan again first.';
   return null;
 }
 
-/** WPL7's own file, changed: writing the panel's version again puts it right. */
-export function canPutBack(f: ActionableFinding): boolean {
-  return (f.status === 'open' || f.status === 'ignored') && f.kind === 'panel-modified';
+/** WPL7's own file, changed: writing the panel's version again puts it right. A PHP site has none. */
+export function canPutBack(f: ActionableFinding, app: SiteApp): boolean {
+  return app !== 'php' && (f.status === 'open' || f.status === 'ignored') && f.kind === 'panel-modified';
 }
 
-/** A package's own file, changed or missing, that downloading the package again puts right. */
-export function canReinstall(f: ActionableFinding): boolean {
+/**
+ * A package's own file, changed or missing, that downloading the package again puts right. Not on
+ * a PHP site: a WordPress installed into it is the site's own, which the panel doesn't update.
+ */
+export function canReinstall(f: ActionableFinding, app: SiteApp): boolean {
   return (
+    app !== 'php' &&
     (f.status === 'open' || f.status === 'ignored') &&
     /^(core|plugin)-(modified|missing)$/.test(f.kind) &&
     (f.package === 'core' || /^plugin:[a-z0-9][a-z0-9_.-]{0,99}$/.test(f.package ?? ''))

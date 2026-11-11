@@ -23,7 +23,7 @@ import {
 import { sites } from '../../db/schema.js';
 import { hasDatabase, isExternal, isPhpSite } from '../../lib/siteKind.js';
 import { imageRunsPhp, siteImage } from '../../services/siteSpec.js';
-import { createOwnDatabase } from './databases.js';
+import { assertOwnDatabaseFree, createOwnDatabase } from './databases.js';
 
 export const backupCreatePayload = z.object({
   siteId: z.number().int(),
@@ -101,6 +101,9 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
     ctx.info('Verifying backup checksums…');
     await s.backup.verifyChecksums(backup);
     const extras = await planExtraDatabases(ctx, s, site, backup);
+    // The site's own database is made below when the backup has one and the site has none: a name
+    // taken on the server stops the restore here, with nothing changed.
+    if (backup.hasDatabase === 1 && !hasDatabase(site)) await assertOwnDatabaseFree(server, site);
 
     if (!ctx.payload.skipPreRestoreBackup) {
       ctx.info('Taking pre-restore safety backup…');
@@ -125,6 +128,11 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
       if (!hasDatabase(site)) {
         ctx.info('The backup has a database and the site has none: making it first…');
         owner = await createOwnDatabase(ctx, s, server, site);
+        ctx.warn(`${owner.dbUser} has a new password, which the site's own config can't know: put it there from the Database tab.`);
+      } else if (isPhpSite(site)) {
+        // WordPress reads its password from the container; a PHP site from its own config, which
+        // comes back as it was in the backup.
+        ctx.info("The site's own config is as it was in the backup: if the database password has changed since, put the current one there from the Database tab.");
       }
       ctx.info(`Restoring database ${owner.dbName}…`);
       await server.dbAdmin.recreateDb(owner.dbName);
@@ -168,6 +176,11 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
 
     // Optionally move back to the PHP version the backup was taken with.
     const manifest = await readManifest(s, backup.serverId, backup.path);
+    // The web root is a setting of the site's, as it is now; the files may expect another.
+    if (isPhpSite(site) && typeof manifest?.webRoot === 'string' && manifest.webRoot !== site.webRoot) {
+      const where = (root: string) => (root === '' ? "the site's folder" : root);
+      ctx.warn(`The backup was taken with the web root ${where(manifest.webRoot)}; the site keeps ${where(site.webRoot)}. Change it in Settings if the restored files need the other.`);
+    }
     const offered = s.settings.get('phpVersions') ?? [];
     const recreate: { phpVersion?: string; tablePrefix?: string } = {};
     if (manifest?.phpVersion && manifest.phpVersion !== site.phpVersion) {
@@ -299,7 +312,7 @@ async function readManifest(
   s: CoreServices,
   serverId: number,
   dir: string,
-): Promise<{ phpVersion?: string; domains?: string[]; tablePrefix?: string; kind?: string; app?: string; databases?: unknown; stack?: unknown } | null> {
+): Promise<{ phpVersion?: string; domains?: string[]; tablePrefix?: string; kind?: string; app?: string; webRoot?: unknown; databases?: unknown; stack?: unknown } | null> {
   try {
     const files = s.servers.handleFor(serverId).files;
     return JSON.parse(await files.readFile(path.join(dir, 'manifest.json')));

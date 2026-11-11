@@ -96,6 +96,7 @@ export function backupToDto(row: BackupRow, copies: BackupCopyDto[] = [], deleti
     sizeBytes: row.sizeBytes,
     wpVersion: row.wpVersion,
     phpVersion: row.phpVersion,
+    hasDatabase: row.hasDatabase === 1,
     note: row.note,
     jobId: row.jobId,
     filesPresent: row.filesPresent === 1,
