@@ -27,6 +27,8 @@ import { LEVEL_PRESETS } from '../../shared/security.js';
 import { makeWorld, waitFor, type TestWorld } from '../helpers.js';
 
 const HAS_PHP = spawnSync('php', ['-v']).status === 0;
+/** What the site's own Apache file knows of a WordPress site, beside its protection. */
+const A_WORDPRESS_SITE = { app: 'wordpress', webRoot: '' } as const;
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-hardening-'));
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
@@ -94,7 +96,7 @@ async function makeOld(w: TestWorld, site: SiteRow): Promise<void> {
 
 describe('what the files say', () => {
   it('Standard: no PHP under uploads, and no file editor in wp-admin', () => {
-    const { apache, php: extra } = hardeningFiles(LEVEL_PRESETS.standard.container);
+    const { apache, php: extra } = hardeningFiles(LEVEL_PRESETS.standard.container, A_WORDPRESS_SITE);
     expect(apache).toContain('<Directory "/var/www/html/wp-content/uploads">');
     expect(apache).toContain('php_admin_flag engine off');
     expect(apache).toContain('Require all denied');
@@ -103,7 +105,7 @@ describe('what the files say', () => {
   });
 
   it('takes away PHP-FPM’s handler in uploads, and refuses what that would otherwise show', () => {
-    const apache = renderApacheHardening({ blockPhpInUploads: true });
+    const apache = renderApacheHardening({ blockPhpInUploads: true }, A_WORDPRESS_SITE);
     // Only where proxy_fcgi is loaded, so a stack 1 Apache has nothing new to do with this file.
     const part = /<IfModule proxy_fcgi_module>[\s\S]*?<\/IfModule>/.exec(apache)![0];
     expect(part).toContain('SetHandler none');
@@ -114,7 +116,7 @@ describe('what the files say', () => {
   });
 
   it('refuses the same file names in that part as the <LocationMatch> does', () => {
-    const apache = renderApacheHardening({ blockPhpInUploads: true });
+    const apache = renderApacheHardening({ blockPhpInUploads: true }, A_WORDPRESS_SITE);
     const files = new RegExp(/<FilesMatch "\(\?i\)(.+)">/.exec(apache)![1]!, 'i');
     const location = new RegExp(/<LocationMatch "\(\?i\)(.+)">/.exec(apache)![1]!, 'i');
     for (const name of ['shell.php', 'x.PHP7', 'a.phtml', 'a.phar', 'a.pht', 'a.phps', 'a.php.jpg', 'a.php5.png', 'photo.jpg', 'phpinfo.txt', 'a.phpx']) {
@@ -124,19 +126,19 @@ describe('what the files say', () => {
 
   it('refuses .user.ini at every level: the old image has no such line of its own', () => {
     for (const level of [LEVEL_PRESETS.off, LEVEL_PRESETS.strict]) {
-      expect(hardeningFiles(level.container).apache).toContain('<Files ".user.ini">\n    Require all denied\n</Files>');
+      expect(hardeningFiles(level.container, A_WORDPRESS_SITE).apache).toContain('<Files ".user.ini">\n    Require all denied\n</Files>');
     }
   });
 
   it('Strict adds no installs from wp-admin; Off adds nothing at all', () => {
     expect(renderWpConfigHardening(LEVEL_PRESETS.strict.container)).toContain("define('DISALLOW_FILE_MODS', true)");
-    const off = hardeningFiles(LEVEL_PRESETS.off.container);
+    const off = hardeningFiles(LEVEL_PRESETS.off.container, A_WORDPRESS_SITE);
     expect(off.apache).not.toMatch(/Directory|LocationMatch/);
     expect(off.php).not.toContain('define(');
   });
 
   it('refuses the same PHP files under uploads as the Traefik rule does, and nothing else', () => {
-    const pattern = /<LocationMatch "\(\?i\)(.+)">/.exec(renderApacheHardening({ blockPhpInUploads: true }))![1]!;
+    const pattern = /<LocationMatch "\(\?i\)(.+)">/.exec(renderApacheHardening({ blockPhpInUploads: true }, A_WORDPRESS_SITE))![1]!;
     const re = new RegExp(pattern, 'i');
     for (const p of ['/wp-content/uploads/2026/09/shell.php', '/wp-content/uploads/x.PHP7', '/wp-content/uploads/a.phtml', '/wp-content/uploads/a.phar', '/wp-content/uploads/a.php/more', '/wp-content/uploads/a.php.jpg']) {
       expect(re.test(p), p).toBe(true);
@@ -172,7 +174,7 @@ describe('a site container', () => {
     expect(spec.binds).toContain(`${p.securityApacheConf}:/etc/apache2/conf-enabled/zz-wpl7-security.conf:ro`);
     expect(spec.binds).toContain(`${p.securityDir}:/etc/wpl7:ro`);
     expect(spec.labels[HARDENING_LABEL]).toBe(HARDENING_VERSION);
-    const want = hardeningFiles(LEVEL_PRESETS.standard.container);
+    const want = hardeningFiles(LEVEL_PRESETS.standard.container, A_WORDPRESS_SITE);
     expect(read(p.securityApacheConf)).toBe(want.apache);
     expect(read(p.securityWpPhp)).toBe(want.php);
     expect(fs.statSync(p.securityWpPhp).mode & 0o777).toBe(0o644);
@@ -188,7 +190,7 @@ describe('a site container', () => {
     fs.writeFileSync(p.securityApacheConf, '# edited by hand\n');
 
     expect(await runJob(w, w.deps.sites.action(site.slug, 'start').id)).toBe('succeeded');
-    const want = hardeningFiles(LEVEL_PRESETS.strict.container);
+    const want = hardeningFiles(LEVEL_PRESETS.strict.container, A_WORDPRESS_SITE);
     expect(read(p.securityApacheConf)).toBe(want.apache);
     expect(read(p.securityWpPhp)).toBe(want.php);
   });
@@ -218,7 +220,7 @@ describe('a change of protection, on a running site', () => {
     w.core.security.updateSite(site, { level: 'off' }, 'alice');
     await w.core.security.idle();
 
-    const off = hardeningFiles(LEVEL_PRESETS.off.container);
+    const off = hardeningFiles(LEVEL_PRESETS.off.container, A_WORDPRESS_SITE);
     expect(read(p.securityWpPhp)).toBe(off.php);
     expect(inode(p.securityWpPhp)).not.toBe(phpInode);
     expect(read(p.securityApacheConf)).toBe(off.apache);
@@ -288,7 +290,7 @@ describe('a change of protection, on a running site', () => {
     w.docker.failOn.delete('exec');
     expect(w.core.security.tick().kicked).toBe(1);
     await w.core.security.idle();
-    expect(read(p.securityApacheConf)).toBe(renderApacheHardening({ blockPhpInUploads: false }));
+    expect(read(p.securityApacheConf)).toBe(renderApacheHardening({ blockPhpInUploads: false }, A_WORDPRESS_SITE));
     expect(w.docker.signals).toEqual([{ name: site.containerName, signal: 'SIGUSR1' }]);
     expect(w.core.security.siteStatus(w.deps.sites.bySlug(site.slug)).unprotected).toBeNull();
   });

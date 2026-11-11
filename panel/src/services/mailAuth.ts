@@ -1,6 +1,7 @@
 // @docs mail/overview, mail/traffic, security/overview
 import path from 'node:path';
 import type { Config } from '../config.js';
+import type { SiteApp } from '../../shared/schemas.js';
 
 /**
  * Per-site authentication for the outbound relay.
@@ -109,6 +110,14 @@ export interface SenderOwner {
  * without `www.` (wp_mail in wp-includes/pluggable.php; see docs/internal/watchlist.md).
  */
 export const mailDomainOf = (host: string): string => host.toLowerCase().replace(/^www\./, '');
+
+/**
+ * Who a site's mail is from when a script names no sender, neither `-f` nor a From header: the
+ * image's wpl7-sendmail reads it from config/runtime/mail-from for each message. A WordPress site's
+ * is the address WordPress uses itself, a PHP site's `noreply@` its domain.
+ */
+export const defaultMailFrom = (app: SiteApp, primaryDomain: string): string =>
+  `${app === 'php' ? 'noreply' : 'wordpress'}@${mailDomainOf(primaryDomain)}`;
 
 /**
  * `smtpd_sender_login_maps`: which login owns which sender domain. The `@domain` form

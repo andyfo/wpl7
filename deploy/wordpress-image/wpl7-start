@@ -174,7 +174,14 @@ find /var/cache/nginx/wpl7 -mindepth 1 -delete
 
 # The official entrypoint seeds an empty folder with WordPress and writes wp-config.php, but only
 # for a php-fpm or apache2 command. -t tests the configuration and returns, leaving the start to us.
-docker-entrypoint.sh php-fpm -t || exit
+# Only a WordPress site's container has WordPress's database settings. A PHP site's folder is the
+# site's own, and nothing is put into it: an index.php deleted by hand would otherwise bring back a
+# WordPress whose installer anyone could run.
+if [[ -n ${WORDPRESS_DB_HOST:-} ]]; then
+    docker-entrypoint.sh php-fpm -t || exit
+else
+    php-fpm -t || exit
+fi
 
 link_php || say "PHP-FPM starts with the image's default pool"
 link_nginx || say "nginx starts with the page cache off"

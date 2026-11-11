@@ -540,6 +540,7 @@ const config = {
 } as unknown as Config;
 const site = {
   slug: SLUG,
+  app: 'wordpress',
   phpVersion: PHP,
   dbName: 'wp_engine',
   dbUser: 'wp_engine',
@@ -638,7 +639,7 @@ function writeMountSources(): void {
   // The panel's default, with room for the 100 MB upload below.
   fs.writeFileSync(paths.uploadsIni, DEFAULT_UPLOADS_INI.replace(/64M/g, '200M'));
   fs.writeFileSync(paths.msmtprc, renderMsmtprc(mailLogin(SLUG), MAIL_PASSWORD), { mode: 0o644 });
-  fs.writeFileSync(paths.securityApacheConf, renderApacheHardening({ blockPhpInUploads: true }), { mode: 0o644 });
+  fs.writeFileSync(paths.securityApacheConf, renderApacheHardening({ blockPhpInUploads: true }, { app: 'wordpress', webRoot: '' }), { mode: 0o644 });
   fs.writeFileSync(paths.securityWpPhp, renderWpConfigHardening({ disallowFileEdit: true, disallowFileMods: false }), { mode: 0o644 });
   writeRuntime();
 }

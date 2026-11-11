@@ -119,7 +119,11 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   },
   'services/offsite.ts': { reconcileDestination: both('backups of either kind'), fetchBackup: both('backups of either kind') },
   'services/quarantine.ts': { prune: both('quarantined files, which only hosted sites have') },
-  'services/security.ts': { plan: hosted("s.status === 'running'"), hardeningPlan: hosted("'running'") },
+  'services/security.ts': {
+    plan: hosted("s.status === 'running'"),
+    hardeningPlan: hosted("'running'"),
+    prepareHardening: both('reads the row of the site it was handed, which only a job on a hosted site does'),
+  },
   'services/securityEvents.ts': { fold: NAMES, recent: NAMES },
   'services/securityViews.ts': { securityOverview: hosted('hostedSites()'), fleetScans: hosted('hostedSites()') },
   'services/phpReleases.ts': { readSitePhp: hosted('isExternal(site)'), sweepPhpReleases: hosted('hostedSites()') },

@@ -1,0 +1,22 @@
+#!/bin/sh
+# What PHP's mail() runs (sendmail_path = "/usr/local/bin/wpl7-sendmail -t"), and what
+# /usr/sbin/sendmail points at. msmtp takes the envelope sender from one place and refuses two,
+# so this picks it: -f from the caller, else the message's From header, else the site's default
+# sender, which the panel writes to /etc/wpl7-runtime/mail-from.
+default_from=
+[ -r /etc/wpl7-runtime/mail-from ] && default_from=$(head -n 1 /etc/wpl7-runtime/mail-from)
+
+for arg in "$@"; do
+    case $arg in
+        -f*|--from|--from=*) exec /usr/bin/msmtp "$@" ;;
+    esac
+done
+
+tmp=$(mktemp /tmp/wpl7-mail.XXXXXX) || exit 75
+trap 'rm -f "$tmp"' EXIT
+cat > "$tmp" || exit 75
+if [ -n "$default_from" ] && ! sed '/^\r\{0,1\}$/q' "$tmp" | grep -qi '^from[[:space:]]*:'; then
+    /usr/bin/msmtp -f "$default_from" "$@" < "$tmp"
+else
+    /usr/bin/msmtp --read-envelope-from "$@" < "$tmp"
+fi

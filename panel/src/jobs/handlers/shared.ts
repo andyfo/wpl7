@@ -205,7 +205,7 @@ export type MountServices = Pick<CoreServices, 'config' | 'security' | 'settings
 export async function ensureSiteMountSources(
   server: ServerHandle,
   s: MountServices,
-  site: Pick<SiteRow, 'id' | 'slug' | 'mailPassword'>,
+  site: Pick<SiteRow, 'id' | 'slug' | 'mailPassword' | 'app' | 'webRoot'>,
   ctx?: Pick<JobContext<unknown>, 'warn'>,
 ): Promise<void> {
   const p = sitePaths(s.config, site.slug);
@@ -275,7 +275,7 @@ export async function removeSiteContainers(docker: Pick<DockerPort, 'removeConta
 }
 
 /** A site, as much of it as the mount helpers need. */
-type StartableSite = Pick<SiteRow, 'id' | 'slug' | 'mailPassword' | 'containerName'>;
+type StartableSite = Pick<SiteRow, 'id' | 'slug' | 'mailPassword' | 'containerName' | 'app' | 'webRoot'>;
 
 /**
  * Start a site container, having first made the files it bind-mounts exist.

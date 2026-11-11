@@ -61,7 +61,7 @@ async function must(args: string[], input?: string): Promise<string> {
 }
 
 /** The file the panel renders, as it is, or with one of its parts left out. */
-const rendered = renderApacheHardening({ blockPhpInUploads: true });
+const rendered = renderApacheHardening({ blockPhpInUploads: true }, { app: 'wordpress', webRoot: '' });
 const withoutLocationDeny = rendered.replace(/<LocationMatch[\s\S]*?<\/LocationMatch>\n/, '');
 const withoutRequire = withoutLocationDeny.replace(/(SetHandler none\n) *Require all denied\n/, '$1');
 const withoutFpmPart = withoutLocationDeny.replace(/<IfModule proxy_fcgi_module>[\s\S]*?<\/IfModule>\n/, '');

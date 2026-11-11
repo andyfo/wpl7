@@ -106,6 +106,7 @@ import { SCRIPTS as SITE_FILE_SCRIPTS } from '../src/services/siteFilesScripts.j
 import { REMOVE_UNCHANGED_SCRIPT } from '../src/jobs/handlers/importRefresh.js';
 import { sitePaths } from '../src/services/siteSpec.js';
 import { stackFromLabels, type SiteStack } from '../src/services/siteStack.js';
+import type { SiteApp } from '../shared/schemas.js';
 
 /**
  * Every test gets a database of its own, but not a migration run of its own: the migrations run
@@ -248,6 +249,12 @@ export class FakeDocker implements DockerPort {
    * which is what every server has after this update. A test about stack 1 says so.
    */
   imageStacks = new Map<string, SiteStack>();
+  /**
+   * The sites each image can run, by image id; `appsOf` sets one by tag. An image not here runs
+   * both, as every image built since PHP sites does; one Docker doesn't have runs WordPress only.
+   * A test about an image from before PHP sites says so.
+   */
+  imageAppLists = new Map<string, SiteApp[]>();
   execQueue: RunResult[] = [];
   /** Scripted container logs, keyed by container name (mail-log ingest reads these). */
   logs = new Map<string, string>();
@@ -657,6 +664,16 @@ export class FakeDocker implements DockerPort {
     if (ref.startsWith('sha256:')) return 2;
     const id = await this.imageId(ref);
     return id ? (this.imageStacks.get(id) ?? 2) : 1;
+  }
+  /** Say what sites the image a tag names now can run. */
+  appsOf(tag: string, apps: SiteApp[]): void {
+    this.imageAppLists.set(this.imageIds.get(tag) ?? `sha256:${tag}`, apps);
+  }
+  async imageApps(ref: string): Promise<SiteApp[]> {
+    if (this.deletedImages.has(ref)) return ['wordpress'];
+    const id = ref.startsWith('sha256:') ? (this.knownImage(ref) || this.imageAppLists.has(ref) ? ref : null) : await this.imageId(ref);
+    if (!id) return ['wordpress'];
+    return this.imageAppLists.get(id) ?? ['wordpress', 'php'];
   }
   async imageTags(repository: string): Promise<string[]> {
     return [...this.images].filter((tag) => tag.startsWith(`${repository}:`));

@@ -7,7 +7,8 @@ import Docker from 'dockerode';
 import { collectDemuxed, demuxBuffer, demuxToStreams } from '../lib/demux.js';
 import { badGateway, timedOut } from '../lib/errors.js';
 import { phpReleaseOf } from '../lib/phpRelease.js';
-import { stackFromLabels, type SiteStack } from './siteStack.js';
+import type { SiteApp } from '../../shared/schemas.js';
+import { appsFromLabels, stackFromLabels, type SiteStack } from './siteStack.js';
 
 export interface RunResult {
   stdout: string;
@@ -362,6 +363,12 @@ export interface DockerPort {
    * be made from anyway.
    */
   imageStack(ref: string): Promise<SiteStack>;
+  /**
+   * The sites an image can run, by tag or id (services/siteStack.ts): its `wpl7.apps` label. An
+   * image with no label predates PHP sites and runs WordPress only, and so does one that is not
+   * there.
+   */
+  imageApps(ref: string): Promise<SiteApp[]>;
   /** Every `repository:tag` this daemon has of a repository, such as `wpl7-wordpress`. */
   imageTags(repository: string): Promise<string[]>;
   /**
@@ -1081,6 +1088,15 @@ export class DockerService implements DockerPort {
       return stackFromLabels((await this.docker.getImage(ref).inspect()).Config?.Labels);
     } catch (err) {
       if (isStatusError(err, 404)) return 1;
+      throw err;
+    }
+  }
+
+  async imageApps(ref: string): Promise<SiteApp[]> {
+    try {
+      return appsFromLabels((await this.docker.getImage(ref).inspect()).Config?.Labels);
+    } catch (err) {
+      if (isStatusError(err, 404)) return ['wordpress'];
       throw err;
     }
   }

@@ -430,7 +430,7 @@ export class SecurityService {
       .all()
       .map((site) => {
         const { container } = effectivePolicy(fleetPolicy, this.siteInput(site.id));
-        return { site, container, files: hardeningFiles(container) };
+        return { site, container, files: hardeningFiles(container, site) };
       });
   }
 
@@ -439,9 +439,12 @@ export class SecurityService {
    * sit in, and both files from its policy as it is now. The container about to start reads
    * them, so there is nothing to reload.
    */
-  async prepareHardening(handle: ServerHandle, site: Pick<SiteRow, 'id' | 'slug'>): Promise<void> {
+  async prepareHardening(handle: ServerHandle, site: Pick<SiteRow, 'id' | 'slug' | 'app' | 'webRoot'>): Promise<void> {
     const p = sitePaths(this.config, site.slug);
-    const files = hardeningFiles(this.policyFor(site.id).container);
+    // The web root as it is now: a job holds the row it began with, and a web root saved since must
+    // not be put back by this start.
+    const current = this.db.select({ app: sites.app, webRoot: sites.webRoot }).from(sites).where(eq(sites.id, site.id)).get() ?? site;
+    const files = hardeningFiles(this.policyFor(site.id).container, current);
     await handle.files.mkdirp(p.securityDir, { mode: 0o755 });
     await handle.files.writeFile(p.securityWpPhp, files.php, { atomic: true, mode: 0o644 });
     // In place: a single-file mount keeps the inode it was given (see siteHardening.ts).

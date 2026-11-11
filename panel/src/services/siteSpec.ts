@@ -6,6 +6,7 @@ import { MIN_PIDS_CAP } from '../../shared/schemas.js';
 import type { SiteLimits } from '../../shared/types.js';
 import type { ContainerLimits, DockerPort, SiteContainerSpec } from './docker.js';
 import type { DnsService } from './dns.js';
+import { conflict } from '../lib/errors.js';
 import { traefikLabels } from './labels.js';
 import type { PanelSettings } from './settings.js';
 import { siteNetworkName, siteNetworksFor } from './siteNetwork.js';
@@ -167,9 +168,12 @@ export function siteTlsFor(
   return { devDomain: server.devDomain, wildcardProvider: dns.wildcardProvider(server.dnsProvider) };
 }
 
+/** On a PHP site's container: what it runs, beside `wpl7.role=wordpress`, which every site's has. */
+export const SITE_APP_LABEL = 'wpl7.app';
+
 export function buildSiteContainerSpec(
   config: Config,
-  site: Pick<SiteRow, 'slug' | 'phpVersion' | 'dbName' | 'dbUser' | 'dbPassword' | 'containerName' | 'tablePrefix'>,
+  site: Pick<SiteRow, 'slug' | 'app' | 'phpVersion' | 'dbName' | 'dbUser' | 'dbPassword' | 'containerName' | 'tablePrefix'>,
   domains: string[],
   /** The server this container will run on - its dev domain and wildcard decide the certificate labels. */
   server: SiteTls,
@@ -192,18 +196,23 @@ export function buildSiteContainerSpec(
   const p = sitePaths(config, site.slug);
   const routing = opts.routing ?? true;
   const { stack } = opts;
+  // A PHP site's container gets none of WordPress's variables: the image puts WordPress into a
+  // folder only for a container that has them (deploy/wordpress-image/wpl7-start).
+  const wordpress = site.app !== 'php';
 
   return {
     name: site.containerName,
     image: opts.image ?? siteImage(site.phpVersion),
-    env: {
-      WORDPRESS_DB_HOST: config.mariadb.host,
-      WORDPRESS_DB_NAME: site.dbName,
-      WORDPRESS_DB_USER: site.dbUser,
-      WORDPRESS_DB_PASSWORD: site.dbPassword,
-      WORDPRESS_TABLE_PREFIX: site.tablePrefix,
-      WORDPRESS_CONFIG_EXTRA: stack === 2 ? WORDPRESS_CONFIG_EXTRA_STACK_2 : WORDPRESS_CONFIG_EXTRA,
-    },
+    env: wordpress
+      ? {
+          WORDPRESS_DB_HOST: config.mariadb.host,
+          WORDPRESS_DB_NAME: site.dbName,
+          WORDPRESS_DB_USER: site.dbUser,
+          WORDPRESS_DB_PASSWORD: site.dbPassword,
+          WORDPRESS_TABLE_PREFIX: site.tablePrefix,
+          WORDPRESS_CONFIG_EXTRA: stack === 2 ? WORDPRESS_CONFIG_EXTRA_STACK_2 : WORDPRESS_CONFIG_EXTRA,
+        }
+      : {},
     labels: {
       ...(routing
         ? traefikLabels({
@@ -219,7 +228,9 @@ export function buildSiteContainerSpec(
         : { 'traefik.enable': 'false' }),
       'wpl7.managed': 'true',
       'wpl7.site': site.slug,
+      // Every site's container, a PHP site's too: the sweeps find them by it.
       'wpl7.role': 'wordpress',
+      ...(wordpress ? {} : { [SITE_APP_LABEL]: 'php' }),
       'wpl7.php': site.phpVersion,
       'wpl7.routing': routing ? 'public' : 'none',
       [HARDENING_LABEL]: HARDENING_VERSION,
@@ -237,8 +248,8 @@ export function buildSiteContainerSpec(
       `${p.msmtprc}:/etc/msmtprc:ro`,
       `${p.securityApacheConf}:${APACHE_CONF_IN_CONTAINER}:ro`,
       `${p.securityDir}:${HARDENING_DIR_IN_CONTAINER}:ro`,
-      // Catalog zips readable from inside every site so `wp plugin install <path>.zip` just works.
-      `${config.paths.plugins}:${config.paths.plugins}:ro`,
+      // Catalog zips readable from inside every WordPress site so `wp plugin install <path>.zip` just works.
+      ...(wordpress ? [`${config.paths.plugins}:${config.paths.plugins}:ro`] : []),
       ...(stack === 2 ? [`${p.runtimeDir}:${RUNTIME_DIR_IN_CONTAINER}:ro`] : []),
     ],
     networks: siteNetworksFor(site.slug),
@@ -251,6 +262,34 @@ export function buildSiteContainerSpec(
 /** What buildSiteContainerSpec needs to know about a site (a row, or a row with in-memory edits). */
 export type SpecSite = Parameters<typeof buildSiteContainerSpec>[1];
 
+/** What a PHP site gets on a server whose site image is older than PHP sites. */
+export const phpImageRefusal = (serverName: string) =>
+  conflict(`The site image on "${serverName}" is from before PHP sites. Update the server, then try again.`);
+
+/**
+ * Whether an image can run a PHP site. An older one runs WordPress only: its wpl7-start puts
+ * WordPress into any folder that has none, so a PHP site's files would get a WordPress whose
+ * installer anyone could run. siteContainerSpec asks this of every PHP site's container; the jobs
+ * that make one ask it again before they change anything (assertPhpImage), so nothing is left half
+ * done.
+ */
+export const imageRunsPhp = async (docker: Pick<DockerPort, 'imageApps'>, image: string): Promise<boolean> =>
+  (await docker.imageApps(image)).includes('php');
+
+/**
+ * The early check, for a PHP site about to get a container from `image`: refused on an image from
+ * before PHP sites. With `missingIsFine`, an image the server doesn't have yet passes: the panel
+ * builds or pulls it at the panel's own version, which can.
+ */
+export async function assertPhpImage(
+  server: { docker: Pick<DockerPort, 'imageApps' | 'imageExists'>; row: Pick<ServerRow, 'name'> },
+  image: string,
+  opts: { missingIsFine?: boolean } = {},
+): Promise<void> {
+  if (opts.missingIsFine && !(await server.docker.imageExists(image))) return;
+  if (!(await imageRunsPhp(server.docker, image))) throw phpImageRefusal(server.row.name);
+}
+
 /**
  * The container a site gets on a server, from what the image there runs. Every container is built
  * through this, so none can come out with the port or the mounts of another stack: a server that
@@ -262,12 +301,16 @@ export type SpecSite = Parameters<typeof buildSiteContainerSpec>[1];
  */
 export async function siteContainerSpec(
   s: { config: Config; dns: Pick<DnsService, 'wildcardProvider'> },
-  server: { docker: Pick<DockerPort, 'imageStack'>; row: Pick<ServerRow, 'devDomain' | 'dnsProvider'> },
+  server: { docker: Pick<DockerPort, 'imageStack' | 'imageApps'>; row: Pick<ServerRow, 'name' | 'devDomain' | 'dnsProvider'> },
   site: SpecSite,
   domains: string[],
   runtime: SiteRuntime,
   opts: { routing?: boolean; from?: { imageId: string; stack: SiteStack } } = {},
 ): Promise<SiteContainerSpec> {
+  // The guard for a server that still has an image from before PHP sites, whichever job asked.
+  if (site.app === 'php' && !(await imageRunsPhp(server.docker, opts.from?.imageId ?? siteImage(site.phpVersion)))) {
+    throw phpImageRefusal(server.row.name);
+  }
   const stack = opts.from?.stack ?? (await server.docker.imageStack(siteImage(site.phpVersion)));
   return buildSiteContainerSpec(s.config, site, domains, siteTlsFor(s.dns, server.row), runtime, {
     routing: opts.routing,

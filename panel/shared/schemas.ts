@@ -147,6 +147,13 @@ export type SiteStatus = (typeof siteStatuses)[number];
 export const siteKinds = ['hosted', 'external'] as const;
 export type SiteKind = (typeof siteKinds)[number];
 
+/**
+ * What a hosted site runs: WordPress, or the site's own PHP and files, with no WordPress in it. An
+ * external site is always WordPress.
+ */
+export const siteApps = ['wordpress', 'php'] as const;
+export type SiteApp = (typeof siteApps)[number];
+
 export const jobStatuses = ['queued', 'running', 'succeeded', 'failed', 'canceled'] as const;
 export type JobStatus = (typeof jobStatuses)[number];
 

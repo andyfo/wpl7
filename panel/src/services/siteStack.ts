@@ -1,5 +1,6 @@
 // @docs reference/architecture, sites/caching, sites/settings
 import type { ContainerLimits } from './docker.js';
+import { siteApps, type SiteApp } from '../../shared/schemas.js';
 import { HARMLESS_COOKIES, cachePathRegex, cacheRegexEscape, cacheRuleReason, usableCacheRules, type CacheRule, type SiteCacheRules } from '../../shared/cacheRules.js';
 
 /**
@@ -18,6 +19,18 @@ export type SiteStack = 1 | 2;
 /** What a container's or an image's labels say. No label means it predates all of this. */
 export const stackFromLabels = (labels: Record<string, string> | null | undefined): SiteStack =>
   labels?.[SITE_STACK_LABEL] === '2' ? 2 : 1;
+
+/**
+ * The sites an image can run, space-separated: `wordpress php` since PHP sites came. An image
+ * without the label runs WordPress only, and is no image for a PHP site: its wpl7-start puts
+ * WordPress into any folder that has none (services/siteSpec.ts siteContainerSpec).
+ */
+export const SITE_APPS_LABEL = 'wpl7.apps';
+
+export function appsFromLabels(labels: Record<string, string> | null | undefined): SiteApp[] {
+  const listed = (labels?.[SITE_APPS_LABEL] ?? '').split(/\s+/).filter((app): app is SiteApp => (siteApps as readonly string[]).includes(app));
+  return listed.length > 0 ? listed : ['wordpress'];
+}
 
 /** Where Traefik reaches a stack 2 container: nginx, in front of Apache on 127.0.0.1:80. */
 export const SITE_STACK_PORT = 8080;
