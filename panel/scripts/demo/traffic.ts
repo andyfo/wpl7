@@ -35,6 +35,8 @@ const PAGES: Record<string, string[]> = {
   'pixel-press': ['/', '/2026/10/04/the-quiet-return-of-film-cameras/', '/2026/10/02/inside-a-type-foundry/', '/reviews/', '/2026/09/29/ten-desks-ten-designers/', '/newsletter/', '/2026/09/26/the-print-issue/', '/about/', '/contact/', '/advertise/'],
   'ridge-outfitters': ['/', '/shop/', '/product/alpine-shell-jacket/', '/product-category/tents/', '/cart/', '/product/trail-runner-gtx/', '/checkout/', '/stores/', '/returns/', '/blog/packing-list-for-a-weekend/'],
   'northwind-bakery': ['/', '/menu/', '/order-online/', '/our-story/', '/wholesale/', '/cakes/', '/visit/', '/blog/sourdough-starter-guide/', '/careers/', '/contact/'],
+  // The PHP site's booking app: its own routes (files.ts routes/web.php), no WordPress permalinks.
+  'bayside-bikes': ['/', '/book', '/bikes', '/bikes/e-bike', '/prices', '/my-booking', '/bikes/city', '/faq', '/bikes/tandem', '/contact'],
 };
 const DEFAULT_PAGES = ['/', '/services/', '/about/', '/contact/', '/team/', '/blog/', '/faq/', '/book/', '/news/', '/privacy-policy/'];
 

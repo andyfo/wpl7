@@ -7,7 +7,7 @@
 import { securityBlocks, securityNeverBlock, siteBlocked, siteBlockedRecent, siteQuarantine, siteScanFindings, siteScanStatus, siteScans, siteSecurity } from '../../src/db/schema.js';
 import type { TestWorld } from '../../test/helpers.js';
 import { DAY, HOUR, MINUTE, ago, DEMO_NOW } from './clock.js';
-import { SITES, rng, seedOf } from './data.js';
+import { SITES, isPhp, rng, seedOf } from './data.js';
 import { siteIds } from './sites.js';
 
 const RULES: [rule: string, share: number][] = [
@@ -31,6 +31,26 @@ const PROBES: [rule: string, method: string, path: string, status: number][] = [
   ['files', 'GET', '/.git/config', 403],
 ];
 
+/**
+ * A PHP site has none of WordPress's rules and limits (shared/security.ts WORDPRESS_ONLY_SETTINGS):
+ * what it turns away is sensitive files, scanners, blocked addresses and the odd burst over the
+ * request limit.
+ */
+const PHP_RULES: [rule: string, share: number][] = [
+  ['files', 0.5],
+  ['scanners', 0.3],
+  ['limit-requests', 0.06],
+  ['blocked-address', 0.14],
+];
+
+const PHP_PROBES: [rule: string, method: string, path: string, status: number][] = [
+  ['files', 'GET', '/.env', 403],
+  ['files', 'GET', '/.env.production', 403],
+  ['files', 'GET', '/.git/config', 403],
+  ['scanners', 'GET', '/', 403],
+  ['limit-requests', 'GET', '/bikes/e-bike', 429],
+];
+
 export function seedSecurity(world: TestWorld): void {
   const db = world.db;
   const today = Math.floor(DEMO_NOW / DAY) * DAY;
@@ -44,15 +64,16 @@ export function seedSecurity(world: TestWorld): void {
       const siteId = siteIds.get(site.slug)!;
       const next = rng(seedOf(`blocked:${site.slug}`));
       const scale = site.state === 'stopped' ? 0 : 40 + site.dailyVisitors * 0.18;
+      const [rules, probes] = isPhp(site) ? [PHP_RULES, PHP_PROBES] : [RULES, PROBES];
       for (let d = 6; d >= 0; d--) {
-        for (const [rule, share] of RULES) {
+        for (const [rule, share] of rules) {
           const requests = Math.round(scale * share * (0.6 + next() * 0.8));
           if (requests > 0) tx.insert(siteBlocked).values({ siteId, day: today - d * DAY, rule, requests }).run();
         }
       }
       if (scale === 0) continue;
       for (let i = 0, n = 4 + Math.round(site.dailyVisitors / 60); i < n; i++) {
-        const [rule, method, path, status] = PROBES[Math.floor(next() * PROBES.length)]!;
+        const [rule, method, path, status] = probes[Math.floor(next() * probes.length)]!;
         const ip = next() < 0.5 ? `198.51.100.${100 + Math.floor(next() * 120)}` : `192.0.2.${100 + Math.floor(next() * 120)}`;
         tx.insert(siteBlockedRecent)
           .values({ siteId, ts: ago(Math.round(next() * 20 * HOUR) + MINUTE), rule, ip, country: ip.startsWith('198') ? 'DE' : 'US', method, path, status })

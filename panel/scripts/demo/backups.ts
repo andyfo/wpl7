@@ -6,13 +6,15 @@
  * scheduled backup, with last night's copies from sin1 still waiting. Disk space is fixed, so the
  * Storage page does not show whatever machine the demo runs on.
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
-import { backupCopies, backupDestinations, backups, sites } from '../../src/db/schema.js';
+import { backupCopies, backupDestinations, backups, sites, type BackupRow } from '../../src/db/schema.js';
 import { tsStamp } from '../../src/services/backup.js';
 import type { TestWorld } from '../../test/helpers.js';
 import { DAY, HOUR, MINUTE, ago, DEMO_NOW } from './clock.js';
-import { DELETED_SITE, EXTERNAL_SITES, SERVERS, SITES, rng, seedOf } from './data.js';
+import { DELETED_SITE, EXTERNAL_SITES, SERVERS, SITES, devHostname, isPhp, rng, seedOf, siteDomains } from './data.js';
+import { onDisk } from './paths.js';
 import { INVENTORY, WORDPRESS } from './plugins.js';
 import { siteIds } from './sites.js';
 
@@ -41,8 +43,10 @@ export function seedBackups(world: TestWorld): void {
       rootPath: root,
       filesPresent: 1,
       sizeBytes,
-      wpVersion: INVENTORY[slug]?.core ?? WORDPRESS,
+      // A PHP site's backup names no WordPress; its database is in it, as every site's here is.
+      wpVersion: site && isPhp(site) ? null : (INVENTORY[slug]?.core ?? WORDPRESS),
       phpVersion: site?.php ?? '8.2',
+      hasDatabase: 1,
       createdAt,
       ...extra,
     });
@@ -75,6 +79,7 @@ export function seedBackups(world: TestWorld): void {
 
   rows.sort((a, b) => a.createdAt - b.createdAt);
   const inserted = world.db.transaction((tx) => rows.map((row) => tx.insert(backups).values(row).returning().get()));
+  writePhpManifests(world, inserted);
   // The law firm keeps its backups for a year, longer than the 30 days every other site does.
   world.db.update(sites).set({ backupKeepDays: 365 }).where(eq(sites.slug, 'lumen-law')).run();
 
@@ -137,5 +142,42 @@ export function seedBackups(world: TestWorld): void {
   for (const server of SERVERS) {
     const files = world.servers.handleFor(server.id).files;
     files.statvfs = async () => disks[server.id] ?? null;
+  }
+}
+
+/**
+ * A PHP site's backups carry their manifest.json, as BackupService writes it: a restore reads what
+ * the site ran from there, and refuses a WordPress site's backup for a PHP site. A backup without
+ * one counts as a WordPress site's, which is why the others need none.
+ */
+function writePhpManifests(world: TestWorld, rows: BackupRow[]): void {
+  for (const row of rows) {
+    const site = SITES.find((s) => s.slug === row.siteSlug);
+    if (!site || !isPhp(site)) continue;
+    const db = `wp_${site.slug.replace(/-/g, '_')}`;
+    const manifest = {
+      format: 1,
+      slug: site.slug,
+      title: site.title,
+      type: row.type,
+      createdAt: new Date(row.createdAt).toISOString(),
+      domains: siteDomains(site),
+      devHostname: devHostname(site.slug),
+      phpVersion: site.php,
+      wpVersion: null,
+      app: 'php',
+      webRoot: site.webRoot ?? '',
+      database: true,
+      locale: 'en_US',
+      dbName: db,
+      dbUser: db,
+      tablePrefix: 'wp_',
+      databases: [],
+      serverId: row.serverId,
+      serverName: world.servers.rowById(row.serverId)?.name ?? null,
+      stack: 2,
+    };
+    fs.mkdirSync(onDisk(row.path), { recursive: true });
+    fs.writeFileSync(path.join(onDisk(row.path), 'manifest.json'), JSON.stringify(manifest, null, 2));
   }
 }

@@ -62,7 +62,7 @@ export const SHOTS: Shot[] = [
   },
   { name: 'reminders-domains', what: 'Domains and their registry dates', path: '/reminders?tab=domains', theme: 'light' },
   { name: 'overview', what: 'The Dashboard: the fleet at a glance', path: '/', theme: 'both', hero: true },
-  { name: 'sites-list', what: 'Sites → All sites: eleven sites on three servers, and two hosted elsewhere', path: '/sites', theme: 'both', hero: true },
+  { name: 'sites-list', what: 'Sites → All sites: twelve sites on three servers, and two hosted elsewhere', path: '/sites', theme: 'both', hero: true },
   {
     name: 'site-new',
     what: 'The New site wizard, its first step filled in',
@@ -71,6 +71,16 @@ export const SHOTS: Shot[] = [
     prepare: async (page) => {
       await page.getByLabel('Site title').fill('Willow Pediatrics');
     },
+  },
+  {
+    name: 'site-new-php',
+    what: 'The New site wizard with Type set to PHP, its first step filled in',
+    path: '/sites/new',
+    theme: 'light',
+    prepare: steps(
+      async (page) => page.getByRole('group', { name: 'Type', exact: true }).getByRole('button', { name: 'PHP', exact: true }).click(),
+      async (page) => page.getByLabel('Site title').fill('Lantern Ticketing'),
+    ),
   },
   { name: 'site-overview', what: 'A live site’s Overview tab', path: '/sites/northwind-bakery', theme: 'both', hero: true },
   {
@@ -86,6 +96,15 @@ export const SHOTS: Shot[] = [
   { name: 'site-import', what: 'Importing a site: what the old site reported, on the Confirm step', path: '/sites/import?id=1', theme: 'light' },
   { name: 'site-connect', what: 'Connecting a site hosted elsewhere: what its plugin reported, on the Confirm step', path: '/sites/connect?id=3', theme: 'light' },
   { name: 'site-external', what: 'A site hosted elsewhere: its Overview tab', path: '/sites/meadow-vet', theme: 'light' },
+  { name: 'site-php', what: 'A PHP site’s Overview tab: its web root and database among the facts', path: '/sites/bayside-bikes', theme: 'light' },
+  {
+    name: 'site-php-settings',
+    what: 'A PHP site’s Settings tab: PHP version, web root and its cron lines',
+    path: '/sites/bayside-bikes',
+    theme: 'light',
+    // The cron lines arrive after the tab's own data: wait for the demo's first one.
+    prepare: steps(tab('Settings'), (page) => page.getByText('php artisan schedule:run').first().waitFor()),
+  },
   { name: 'sites-external', what: 'Sites → All sites: the sites hosted elsewhere, one whose plugin does not answer', path: '/sites', theme: 'light', prepare: scrollTo('External') },
   { name: 'site-wordpress', what: 'A site’s WordPress tab: updates and plugins', path: '/sites/northwind-bakery', theme: 'both', prepare: tab('WordPress') },
   { name: 'site-updates', what: 'A site’s WordPress tab: an update waiting and a known vulnerability', path: '/sites/blue-fern', theme: 'light', prepare: tab('WordPress') },

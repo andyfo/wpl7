@@ -1,16 +1,17 @@
 /**
- * The sites: eleven on three servers, live, dev-only and stopped, each with its container in
- * the state its row says, a day of uptime and resource samples, and its disk use. Every server
- * has a site image of each PHP branch.
+ * The sites: twelve on three servers, live, dev-only and stopped, one of them a PHP site with
+ * cron lines of its own, each with its container in the state its row says, a day of uptime and
+ * resource samples, and its disk use. Every server has a site image of each PHP branch.
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { siteStats, sites } from '../../src/db/schema.js';
-import { siteImage, sitePaths } from '../../src/services/siteSpec.js';
+import { siteCron, siteStats, sites } from '../../src/db/schema.js';
+import { nextCronRun } from '../../src/services/schedules.js';
+import { SITE_APP_LABEL, siteImage, sitePaths } from '../../src/services/siteSpec.js';
 import { SITE_STACK_LABEL } from '../../src/services/siteStack.js';
 import type { TestWorld } from '../../test/helpers.js';
-import { DAY, MINUTE, ago } from './clock.js';
-import { ADMIN_EMAIL, PHP_RELEASES, SERVERS, SITES, devHostname, rng, seedOf, siteDomains, type DemoSite } from './data.js';
+import { DAY, HOUR, MINUTE, ago, DEMO_NOW } from './clock.js';
+import { ADMIN_EMAIL, PHP_RELEASES, SERVERS, SITES, devHostname, isPhp, rng, seedOf, siteDomains, type DemoSite } from './data.js';
 import { onDisk } from './paths.js';
 
 const MB = 1024 * 1024;
@@ -19,6 +20,53 @@ const MB = 1024 * 1024;
 export const siteIds = new Map<string, number>();
 
 export const createdAt = (site: DemoSite): number => (site.ageDays === 0 ? ago(10 * MINUTE) : ago(site.ageDays * DAY + 3 * 3600_000));
+
+/** "2026-10-05 09:55:00", as Laravel writes the time in its own output. */
+const laravelTime = (ts: number): string => new Date(ts).toISOString().slice(0, 19).replace('T', ' ');
+
+interface DemoCronLine {
+  expr: string;
+  command: string;
+  timeoutMin: number;
+  /** The last run, which ended well. */
+  last: { startedAt: number; ms: number; output: string };
+}
+
+/**
+ * The last time the built-in `site-cron` task started a line, as the minute turned: the five-minute
+ * line's last run, and the task's own last run (jobs.ts).
+ */
+export const LAST_CRON_TICK = ago(5 * MINUTE);
+
+/**
+ * The PHP site's cron lines, as the `site-cron` task left them (services/siteCron.ts): Laravel's
+ * scheduler every five minutes, and every night the reminders for the day's bookings, of which
+ * its database holds two that were made by then (databases.ts).
+ */
+const CRON_LINES: Record<string, DemoCronLine[]> = {
+  'bayside-bikes': [
+    {
+      expr: '*/5 * * * *',
+      command: 'php artisan schedule:run',
+      timeoutMin: 5,
+      last: {
+        startedAt: LAST_CRON_TICK,
+        ms: 1_420,
+        output: `   INFO  Running scheduled tasks.\n\n  ${laravelTime(LAST_CRON_TICK)} Running ['artisan' bookings:release-holds] 318ms DONE\n`,
+      },
+    },
+    {
+      expr: '15 2 * * *',
+      command: 'php artisan bookings:send-reminders',
+      timeoutMin: 15,
+      last: {
+        startedAt: Math.floor(DEMO_NOW / DAY) * DAY + 2 * HOUR + 15 * MINUTE,
+        ms: 3_870,
+        output: `Sent 2 reminders for the bookings of ${laravelTime(DEMO_NOW).slice(0, 10)}.\n`,
+      },
+    },
+  ],
+};
 
 export function seedSites(world: TestWorld): void {
   // As setup.sh pulls them: one site image per branch on every server.
@@ -30,6 +78,9 @@ export function seedSites(world: TestWorld): void {
     }
   }
   for (const site of SITES) {
+    // A PHP site as site.create makes one: no WordPress administrator, and here a database of its
+    // own, named as the panel names every site's.
+    const php = isPhp(site);
     const row = world.db
       .insert(sites)
       .values({
@@ -43,18 +94,21 @@ export function seedSites(world: TestWorld): void {
         phpVersion: site.php,
         phpRelease: PHP_RELEASES[site.php] ?? null,
         locale: 'en_US',
+        app: php ? 'php' : 'wordpress',
+        webRoot: site.webRoot ?? '',
         status: site.state === 'stopped' ? 'stopped' : 'running',
         dbName: `wp_${site.slug.replace(/-/g, '_')}`,
         dbUser: `wp_${site.slug.replace(/-/g, '_')}`.slice(0, 32),
         dbPassword: 'demo-database-password',
-        wpAdminUser: 'admin',
-        wpAdminEmail: ADMIN_EMAIL,
+        wpAdminUser: php ? null : 'admin',
+        wpAdminEmail: php ? null : ADMIN_EMAIL,
         containerName: `wp-${site.slug}`,
         mailPassword: 'demo-relay-password',
         diskBytes: site.diskMb * MB,
         cpuLimit: site.limits?.cpuLimit ?? null,
         memoryLimitMb: site.limits?.memoryLimitMb ?? null,
         pidsLimit: site.limits?.pidsLimit ?? null,
+        objectCache: site.redis ? 1 : 0,
         createdAt: createdAt(site),
         updatedAt: createdAt(site),
       })
@@ -64,12 +118,41 @@ export function seedSites(world: TestWorld): void {
 
     const docker = site.server === 1 ? world.docker : world.remote(site.server).docker;
     docker.containers.set(`wp-${site.slug}`, site.state === 'stopped' ? 'exited' : 'running');
-    docker.labelsByContainer.set(`wp-${site.slug}`, { [SITE_STACK_LABEL]: '2' });
+    docker.labelsByContainer.set(`wp-${site.slug}`, { [SITE_STACK_LABEL]: '2', ...(php ? { [SITE_APP_LABEL]: 'php' } : {}) });
     docker.imageByContainer.set(`wp-${site.slug}`, `sha256:${site.slug}`);
-    // The site's folder, which the Files tab and the backup views look at.
-    fs.mkdirSync(onDisk(sitePaths(world.config, site.slug).wordpress), { recursive: true });
+    // The site's folder, which the Files tab and the backup views look at, and a PHP site's web root in it.
+    fs.mkdirSync(onDisk(path.join(sitePaths(world.config, site.slug).wordpress, site.webRoot ?? '')), { recursive: true });
   }
+  seedCron(world);
   seedMonitoring(world);
+}
+
+/** The PHP site's cron lines, each with its last run and its next, worked out from it as the task does. */
+function seedCron(world: TestWorld): void {
+  for (const [slug, lines] of Object.entries(CRON_LINES)) {
+    const site = SITES.find((s) => s.slug === slug)!;
+    const added = createdAt(site) + DAY;
+    for (const line of lines) {
+      world.db
+        .insert(siteCron)
+        .values({
+          siteId: siteIds.get(slug)!,
+          expr: line.expr,
+          command: line.command,
+          enabled: 1,
+          timeoutMin: line.timeoutMin,
+          nextRunAt: nextCronRun(line.expr, new Date(line.last.startedAt)),
+          lastStartedAt: line.last.startedAt,
+          lastMs: line.last.ms,
+          lastExit: 0,
+          lastOutput: line.last.output,
+          lastError: null,
+          createdAt: added,
+          updatedAt: added,
+        })
+        .run();
+    }
+  }
 }
 
 /** The uptime probe's and the container sampler's last day, and their latest readings. */

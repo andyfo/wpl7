@@ -4,6 +4,7 @@
  * TLD, the panel and dev domains are example.com names, and the servers' addresses come from
  * 203.0.113.0/24, a range reserved for documentation. Nothing may point at a real installation.
  */
+import type { SiteApp } from '../../shared/schemas.js';
 
 export const PANEL_DOMAIN = 'panel.example.com';
 export const DEV_DOMAIN = 'dev.example.com';
@@ -50,6 +51,15 @@ export interface DemoSite {
   dailyVisitors: number;
   /** Container limits of its own, where it has any; the rest follow Settings. */
   limits?: { cpuLimit?: number; memoryLimitMb?: number; pidsLimit?: number };
+  /**
+   * What it runs (sites.app): WordPress, unless it says PHP. A PHP site is its own PHP files with no
+   * WordPress in it, so no seed gives it WordPress's data: plugins, wp_ tables, WP-CLI answers.
+   */
+  app?: SiteApp;
+  /** A PHP site's web root (sites.web_root), the folder visitors reach inside its own. */
+  webRoot?: string;
+  /** Redis switched on in its container (sites.object_cache). */
+  redis?: boolean;
 }
 
 export const SITES: DemoSite[] = [
@@ -64,7 +74,16 @@ export const SITES: DemoSite[] = [
   { slug: 'summit-coffee', title: 'Summit Coffee Roasters', domain: null, php: '8.4', server: 2, state: 'dev', ageDays: 9, diskMb: 410, dailyVisitors: 6 },
   { slug: 'oak-and-ivy', title: 'Oak & Ivy Interiors', domain: null, php: '8.4', server: 1, state: 'dev', ageDays: 0, diskMb: 236, dailyVisitors: 0 },
   { slug: 'tidewater-realty', title: 'Tidewater Realty', domain: 'tidewaterrealty.example', php: '8.2', server: 2, state: 'stopped', ageDays: 302, diskMb: 1630, dailyVisitors: 0 },
+  // A PHP site: a bike rental's booking app of its own (Laravel), with its database, its web root,
+  // Redis for its cache and sessions, and two cron lines (sites.ts).
+  { slug: 'bayside-bikes', title: 'Bayside Bike Rentals', domain: 'baysidebikes.example', php: '8.4', server: 2, state: 'live', ageDays: 72, diskMb: 340, dailyVisitors: 420, app: 'php', webRoot: 'public', redis: true },
 ];
+
+/** A PHP site: no WordPress in it, so the seeds of WordPress's data leave it out. */
+export const isPhp = (site: Pick<DemoSite, 'app'>): boolean => site.app === 'php';
+
+/** Whether the site with this slug is a PHP site, for what answers by container name (docker.ts, files.ts). */
+export const isPhpSlug = (slug: string): boolean => SITES.some((s) => s.slug === slug && isPhp(s));
 
 /** The old site an import is connected to, waiting on its Confirm step (imports.ts). */
 export const IMPORT_SOURCE = 'https://willow-pediatrics.example';

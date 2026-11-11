@@ -4,8 +4,8 @@
  * and their recent calls, and the settings a well-used install has filled in.
  */
 import fs from 'node:fs';
-import { eq } from 'drizzle-orm';
-import { apiEvents, apiKeys, oauthClients, oauthGrants, users } from '../../src/db/schema.js';
+import { and, eq } from 'drizzle-orm';
+import { apiEvents, apiKeys, jobs, oauthClients, oauthGrants, users } from '../../src/db/schema.js';
 import { sha256Hex } from '../../src/lib/crypto.js';
 import type { TestWorld } from '../../test/helpers.js';
 import { DAY, HOUR, MINUTE, ago } from './clock.js';
@@ -77,7 +77,9 @@ export function seedAccounts(world: TestWorld): void {
   mcp(ago(2 * HOUR + 15 * MINUTE), claude.id, 'wpl7_api_get', 'GET', '/api/sites', '/api/sites', 200);
   mcp(ago(2 * HOUR + 14 * MINUTE + 30_000), claude.id, 'wpl7_api_get', 'GET', '/api/sites/harbor-yoga', '/api/sites/:slug', 200);
   mcp(ago(2 * HOUR + 14 * MINUTE), claude.id, 'wpl7_api_change', 'POST', '/api/sites/harbor-yoga/restart', '/api/sites/:slug/restart', 202);
-  mcp(ago(2 * HOUR + 13 * MINUTE), claude.id, 'wpl7_wait_for_job', 'GET', '/api/jobs/30', '/api/jobs/:id', 200);
+  // The restart that call queued (jobs.ts): its id depends on how many jobs are seeded before it.
+  const restart = db.select({ id: jobs.id }).from(jobs).where(and(eq(jobs.type, 'site.restart'), eq(jobs.siteSlug, 'harbor-yoga'))).get()!;
+  mcp(ago(2 * HOUR + 13 * MINUTE), claude.id, 'wpl7_wait_for_job', 'GET', `/api/jobs/${restart.id}`, '/api/jobs/:id', 200);
   mcp(ago(26 * HOUR), cursor.id, 'wpl7_api_get', 'GET', '/api/wp/inventory', '/api/wp/inventory', 200);
   mcp(ago(26 * HOUR - 40_000), cursor.id, 'wpl7_api_change', 'POST', '/api/sites/blue-fern/wp/plugins/update', '/api/sites/:slug/wp/plugins/update', 403, { errorCode: 'forbidden' });
   events.sort((a, b) => a.ts - b.ts);

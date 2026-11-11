@@ -41,18 +41,18 @@ export function WebRootCard({ site }: { site: SiteDetail }) {
 
   return (
     <Card title="Web root">
+      {/* The hint under the row, as on the PHP version card, so Save lines up with the field. */}
       <div className="flex items-end gap-2">
-        <Field
-          label="Folder"
-          width="sm"
-          hint={valid ? "The folder visitors reach. Empty: the site's folder." : 'A folder in the site, such as public: letters, digits, ".", "_" and "-", with "/" between folders.'}
-        >
+        <Field label="Folder" width="sm">
           <input className={inputClass} value={text ?? site.webRoot} placeholder="public" onChange={(e) => setText(e.target.value)} />
         </Field>
         <Button disabled={!changed || !valid} busy={saving} onClick={save}>
           Save
         </Button>
       </div>
+      <p className={`mt-2 text-xs ${valid ? 'text-neutral-500' : 'text-red-700'}`}>
+        {valid ? "The folder visitors reach. Empty: the site's folder." : 'A folder in the site, such as public: letters, digits, ".", "_" and "-", with "/" between folders.'}
+      </p>
       {site.webRootMissing && <p className="mt-2 text-sm text-amber-800">{webRootMissingText(site.webRoot)}</p>}
       <ErrorNote error={error} />
     </Card>

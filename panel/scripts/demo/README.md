@@ -1,6 +1,6 @@
 # The demo world
 
-A fictional, well-used WPL7 install: three servers, eleven sites and one deleted one, backups
+A fictional, well-used WPL7 install: three servers, twelve sites and one deleted one, backups
 and an encrypted offsite destination, jobs in every state, mail traffic, security findings,
 admins, API keys and two AI apps connected over MCP. It is the real panel - its routes, services
 and web app - over the test suite's fakes (`test/helpers.ts` `makeWorld`): in-memory SQLite, fake
@@ -36,7 +36,7 @@ The docs' screenshots are taken from it: `npm run shoot` in `docs/site`.
 | `data.ts` | the data sheet: servers, sites, people, and the seeded random generator |
 | `world.ts` | the fake world with the demo's names, server facts, DNS answers and a release |
 | `servers.ts` | the three servers and a week of load, memory and disk samples |
-| `sites.ts` | the sites, their containers and a day of uptime and resource samples |
+| `sites.ts` | the sites, their containers, the PHP site's cron lines and a day of uptime and resource samples |
 | `inventory.ts`, `plugins.ts` | plugins and themes per site, the vulnerability feed, the plugin catalog |
 | `traffic.ts` | two weeks of visitor statistics |
 | `backups.ts` | backups, the offsite destination and its copies, disk sizes |

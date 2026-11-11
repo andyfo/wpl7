@@ -102,7 +102,7 @@ export function CronCard({ slug }: { slug: string }) {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className={line.enabled ? 'font-medium' : 'font-medium text-neutral-400'}>
-                    {line.schedule} <code className="ml-1 text-xs font-normal text-neutral-400">{line.expr}</code>
+                    {line.schedule.replace(/\.$/, '')} <code className="ml-1 text-xs font-normal text-neutral-400">{line.expr}</code>
                   </div>
                   <code className="mt-0.5 block break-all text-xs text-neutral-700">{line.command}</code>
                   <div className="mt-1 text-xs text-neutral-500">
