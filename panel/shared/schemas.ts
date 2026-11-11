@@ -106,6 +106,22 @@ export const localeSchema = z
 
 export const phpVersionSchema = z.string().regex(/^8\.\d{1,2}$/, 'not a valid PHP version');
 
+/** One folder of a web root: letters, digits, `.`, `_` and `-`, and never `.` or `..` alone. */
+const WEB_ROOT_FOLDER = String.raw`(?!\.\.?(?:/|$))[A-Za-z0-9._-]+`;
+
+/**
+ * A PHP site's web root: the folder visitors reach, inside the site's own, such as `public`.
+ * Folders separated by `/`; '' is the site's folder itself. It goes into Apache's DocumentRoot as
+ * it is (services/siteHardening.ts), which is why nothing else may be in it.
+ */
+export const webRootSchema = z
+  .string()
+  .max(100)
+  .regex(
+    new RegExp(`^(?:${WEB_ROOT_FOLDER}(?:/${WEB_ROOT_FOLDER})*)?$`),
+    'A folder in the site, such as public: letters, digits, ".", "_" and "-", with "/" between folders.',
+  );
+
 /**
  * A WordPress table prefix as the panel keeps one: what `$table_prefix` in wp-config.php may hold
  * (WordPress itself allows letters, digits and underscores), kept short enough for MariaDB's
@@ -384,6 +400,11 @@ export const sitePluginSelection = z.object({
   extraWporgSlugs: z.array(z.string().regex(/^[a-z0-9-]{1,100}$/)).max(50).default([]),
 }).strict();
 
+/** What a new WordPress site is given, and a PHP site is not. */
+const WORDPRESS_CREATE_FIELDS = ['locale', 'adminUser', 'adminEmail', 'adminPassword', 'plugins', 'discourageSearchEngines'] as const;
+/** What a new PHP site may be given, and a WordPress site may not. */
+const PHP_CREATE_FIELDS = ['database', 'webRoot'] as const;
+
 export const siteCreateBody = z.object({
   title: z.string().min(1).max(200),
   slug: slugSchema.optional(),
@@ -392,21 +413,43 @@ export const siteCreateBody = z.object({
   domainMode: z.enum(['dev', 'custom']).default('dev'),
   domains: z.array(domainSchema).min(1).max(10).optional(),
   phpVersion: phpVersionSchema.optional(),
+  /** What the site runs: WordPress, or the site's own PHP and files with no WordPress in it. */
+  app: z.enum(siteApps).default('wordpress'),
   locale: localeSchema.optional(),
-  adminUser: z.string().regex(/^[a-zA-Z0-9._@ -]{1,60}$/),
-  /** Left out, the `defaultAdminEmail` setting; refused when that is empty too. */
+  /** WordPress only, and required there. */
+  adminUser: z.string().regex(/^[a-zA-Z0-9._@ -]{1,60}$/).optional(),
+  /** Left out, the `defaultAdminEmail` setting; refused when that is empty too. WordPress only. */
   adminEmail: z.email().optional(),
   adminPassword: z.string().min(10).max(200).optional(),
   plugins: sitePluginSelection.optional(),
   /**
    * WordPress's "Discourage search engines from indexing this site" (Settings -> Reading).
-   * On by default: a new site is reachable on its dev hostname from the first minute, and an
+   * Left out, on: a new site is reachable on its dev hostname from the first minute, and an
    * indexed dev copy competing with the customer's real site is far more expensive to undo
    * than a checkbox. Going live flips it back, unless the Go live dialog says otherwise
-   * (`goLiveBody.allowSearchEngines`).
+   * (`goLiveBody.allowSearchEngines`). WordPress only: SitesService.create applies the default,
+   * so that a PHP site's body never carries it.
    */
-  discourageSearchEngines: z.boolean().default(true),
+  discourageSearchEngines: z.boolean().optional(),
+  /** PHP only: a database of the site's own, made with it. Left out, none; one can be made later. */
+  database: z.boolean().optional(),
+  /** PHP only: the folder visitors reach (webRootSchema). Left out, the site's folder. */
+  webRoot: webRootSchema.optional(),
 }).strict()
+  .superRefine((v, ctx) => {
+    // Each refusal names its field, so the wizard and an API client see which one.
+    const refuse = (fields: readonly (keyof typeof v)[], sites: string) => {
+      for (const field of fields) {
+        if (v[field] !== undefined) ctx.addIssue({ code: 'custom', message: `${field} is for ${sites} only`, path: [field] });
+      }
+    };
+    if (v.app === 'php') {
+      refuse(WORDPRESS_CREATE_FIELDS, 'WordPress sites');
+    } else {
+      refuse(PHP_CREATE_FIELDS, 'PHP sites');
+      if (v.adminUser === undefined) ctx.addIssue({ code: 'custom', message: 'adminUser is required for a WordPress site', path: ['adminUser'] });
+    }
+  })
   .refine((v) => v.domainMode === 'dev' || (v.domains && v.domains.length > 0), {
     message: 'domains required when domainMode is "custom"',
     path: ['domains'],

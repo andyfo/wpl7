@@ -17,17 +17,22 @@ import type { ServerHandle } from '../../servers/registry.js';
 import { httpProbe, httpProbeAttempts, type ProbeAttempt } from '../../lib/httpProbe.js';
 import type { RecipeHook } from '../../../shared/recipes.js';
 import type { HookVars, RecipeOutcome } from '../../services/licenses.js';
-import { isExternal, type SiteKinds } from '../../lib/siteKind.js';
+import { hasDatabase, isExternal, isPhpSite, type SiteApps, type SiteKinds } from '../../lib/siteKind.js';
 
 /**
  * The site a job works on. An external site is refused unless the job is one that works for both
- * kinds and says so: a job written for hosted sites must never reach Docker with one.
+ * kinds and says so: a job written for hosted sites must never reach Docker with one. A PHP site
+ * is refused by a job for WordPress only, which says so with `{ app: 'wordpress' }`: the second
+ * line behind the routes' own refusal.
  */
-export function loadSite(db: Db, siteId: number, opts: { kinds?: SiteKinds } = {}): SiteRow {
+export function loadSite(db: Db, siteId: number, opts: { kinds?: SiteKinds; app?: SiteApps } = {}): SiteRow {
   const site = db.select().from(sites).where(eq(sites.id, siteId)).get();
   if (!site) throw new Error(`Site #${siteId} no longer exists`);
   if ((opts.kinds ?? 'hosted') === 'hosted' && isExternal(site)) {
     throw new Error(`"${site.slug}" is an external site: this job works only for sites the panel hosts.`);
+  }
+  if (opts.app === 'wordpress' && isPhpSite(site)) {
+    throw new Error(`"${site.slug}" is a PHP site: this job works only for WordPress sites.`);
   }
   return site;
 }
@@ -134,6 +139,9 @@ export async function writeSiteJson(server: ServerHandle, config: Config, site: 
     domains: JSON.parse(site.domains),
     devHostname: site.devHostname,
     phpVersion: site.phpVersion,
+    app: site.app,
+    webRoot: site.webRoot,
+    database: hasDatabase(site),
     locale: site.locale,
     status: site.status,
     dbName: site.dbName,

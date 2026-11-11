@@ -17,6 +17,7 @@ import type {
   ServerKind,
   ServerStatus,
   ConnectionStatus,
+  SiteApp,
   SiteKind,
   SiteStatus,
   WpBulkAction,
@@ -81,6 +82,8 @@ export interface SiteSummary {
    * says how the connection stands.
    */
   kind: SiteKind;
+  /** What it runs: WordPress, or the site's own PHP and files (a hosted site only; an external one is WordPress). */
+  app: SiteApp;
   external: ExternalSiteSummary | null;
   /**
    * After how many days this site's backups are deleted, when it says so itself: 0 = never. null =
@@ -156,7 +159,17 @@ export interface SiteDetail extends SiteSummary {
   locale: string;
   adminUser: string | null;
   adminEmail: string | null;
+  /** '' when the site has no database of its own: a PHP site's is optional. */
   dbName: string;
+  /** Whether it has a database of its own. A WordPress site always has; a PHP site when one was made. */
+  hasDatabase: boolean;
+  /** A PHP site's web root, the folder visitors reach inside its own; '' = the site's folder. */
+  webRoot: string;
+  /**
+   * Whether that folder is missing, so that every visitor gets a 404. Asked inside the running
+   * container, as the Files tab asks; null while it isn't running. False with no web root set.
+   */
+  webRootMissing: boolean | null;
   /** The prefix of the site's WordPress tables: `wp_`, or what an imported site came with. */
   tablePrefix: string;
   /** 'unknown' = the hosting server could not be asked (unreachable); the rest of the detail is served from the registry. */

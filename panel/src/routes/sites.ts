@@ -62,6 +62,7 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   r.post('/api/sites', { schema: { body: siteCreateBody } }, async (req, reply) => {
     holdSigningDomains(req, req.body.domains ?? []);
+    await deps.sites.assertCanCreate(req.body);
     const { job } = deps.sites.create(req.body);
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });

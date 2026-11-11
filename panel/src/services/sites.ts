@@ -12,9 +12,11 @@ import type { CoreServices } from './index.js';
 import type { JobWorker } from '../jobs/worker.js';
 import { siteScheme } from './labels.js';
 import { assertDomainsFree } from './domainGuard.js';
-import { assertKind, hostedSites, isExternal, type SiteKinds } from '../lib/siteKind.js';
+import { assertApp, assertKind, hasDatabase, hostedSites, isExternal, type SiteApps, type SiteKinds } from '../lib/siteKind.js';
+import type { DockerPort } from './docker.js';
+import { SITE_ROOT_IN_CONTAINER } from './siteHardening.js';
 import { RuntimeRefusedError, applySiteCaches, effectivePageCache, siteContainerStack } from './siteCaches.js';
-import { defaultSiteLimits, limitsChange, siteRuntimeFrom, type OwnSiteLimits } from './siteSpec.js';
+import { assertPhpImage, defaultSiteLimits, limitsChange, siteImage, siteRuntimeFrom, type OwnSiteLimits } from './siteSpec.js';
 
 /** The server a new site goes on: the one asked for, else the default in Settings - and it has to be up. */
 export function resolveTargetServer(s: Pick<CoreServices, 'settings' | 'servers'>, requestedId?: number): ServerRow {
@@ -29,6 +31,15 @@ export function resolveTargetServer(s: Pick<CoreServices, 'settings' | 'servers'
     throw conflict(`Server "${server.name}" is ${server.status}; pick another server`);
   }
   return server;
+}
+
+/**
+ * Whether a PHP site's web root is there, asked inside its container as www-data, as the Files tab
+ * asks. Apache answers every request with a 404 while it is not (services/siteHardening.ts).
+ */
+async function webRootExists(docker: Pick<DockerPort, 'exec'>, site: Pick<SiteRow, 'containerName' | 'webRoot'>): Promise<boolean> {
+  const res = await docker.exec(site.containerName, ['test', '-d', `${SITE_ROOT_IN_CONTAINER}/${site.webRoot}`], { user: '33:33', timeoutMs: 10_000 });
+  return res.exitCode === 0;
 }
 
 /** A backup reads the files and the database, and a save here reloads nothing it depends on. */
@@ -48,26 +59,43 @@ export class SitesService {
    * The site by its slug. An external site (hosted elsewhere, through WPL7 Connect) is refused
    * with a 409 unless the caller asks for either kind: only the routes that work for both pass
    * `{ kinds: 'any' }`, so a new route that forgets is safe rather than handed an empty container.
+   * A PHP site is refused with a 409 where the caller asks for `{ app: 'wordpress' }`.
    */
-  bySlug(slug: string, opts: { kinds?: SiteKinds } = {}): SiteRow {
+  bySlug(slug: string, opts: { kinds?: SiteKinds; app?: SiteApps } = {}): SiteRow {
     const site = this.db.select().from(sites).where(eq(sites.slug, slug)).get();
     if (!site) throw notFound(`Site "${slug}" not found`);
-    return assertKind(site, opts.kinds);
+    return assertApp(assertKind(site, opts.kinds), opts.app);
   }
 
   private assertDomainsFree(domains: string[], excludeSiteId?: number, allowDevHostname?: string | null): void {
     assertDomainsFree(this.s, domains, { excludeSiteId, allowDevHostname });
   }
 
+  /**
+   * The early half of the image check for a new PHP site (services/siteSpec.ts siteContainerSpec):
+   * a server whose site image is from before PHP sites refuses one before anything is made. An
+   * image the server doesn't have yet is fine: the create job builds or pulls it at the panel's own
+   * version, which can run one.
+   */
+  async assertCanCreate(body: SiteCreateBody): Promise<void> {
+    if (body.app !== 'php') return;
+    const server = resolveTargetServer(this.s, body.serverId);
+    const phpVersion = body.phpVersion ?? this.s.settings.get('defaultPhpVersion');
+    await assertPhpImage(this.s.servers.handleFor(server.id), siteImage(phpVersion), { missingIsFine: true });
+  }
+
   create(body: SiteCreateBody): { site: SiteRow; job: JobRow } {
+    // Left out by callers inside the panel that predate PHP sites.
+    const php = (body.app ?? 'wordpress') === 'php';
     const offered = this.s.settings.get('phpVersions') ?? [];
     const phpVersion = body.phpVersion ?? this.s.settings.get('defaultPhpVersion');
     if (!offered.includes(phpVersion)) {
       throw badRequest(`PHP ${phpVersion} is not offered (available: ${offered.join(', ')})`);
     }
     const locale = body.locale ?? this.s.settings.get('defaultLocale') ?? 'en_US';
-    const adminEmail = body.adminEmail ?? (this.s.settings.get('defaultAdminEmail') || null);
-    if (!adminEmail) throw badRequest('No default admin email is set in Settings; provide "adminEmail"');
+    // WordPress's administrator: a PHP site has none.
+    const adminEmail = php ? null : (body.adminEmail ?? (this.s.settings.get('defaultAdminEmail') || null));
+    if (!php && !adminEmail) throw badRequest('No default admin email is set in Settings; provide "adminEmail"');
     const server = resolveTargetServer(this.s, body.serverId);
 
     const slug = body.slug ?? slugify(body.domainMode === 'custom' ? body.domains![0]! : body.title);
@@ -93,16 +121,18 @@ export class SitesService {
     const passwordGenerated = !body.adminPassword;
 
     // Resolve plugin selection to concrete slugs/zips now, so the job is self-contained. No
-    // catalog choice at all is the catalog's defaults, in the order the wizard lists them.
-    const catalogIds =
-      body.plugins?.catalogIds ??
-      this.db
-        .select({ id: plugins.id })
-        .from(plugins)
-        .where(eq(plugins.isDefault, 1))
-        .orderBy(asc(plugins.id))
-        .all()
-        .map((p) => p.id);
+    // catalog choice at all is the catalog's defaults, in the order the wizard lists them. A PHP
+    // site gets none.
+    const catalogIds = php
+      ? []
+      : (body.plugins?.catalogIds ??
+        this.db
+          .select({ id: plugins.id })
+          .from(plugins)
+          .where(eq(plugins.isDefault, 1))
+          .orderBy(asc(plugins.id))
+          .all()
+          .map((p) => p.id));
     const pluginSlugs: string[] = [];
     const pluginZipPaths: string[] = [];
     for (const id of catalogIds) {
@@ -115,6 +145,9 @@ export class SitesService {
       if (!pluginSlugs.includes(extra)) pluginSlugs.push(extra);
     }
 
+    // A WordPress site always has its own database; a PHP site only when asked. Without one the
+    // three columns are '' (lib/siteKind.ts hasDatabase), and it can be made later.
+    const withDatabase = !php || body.database === true;
     const now = Date.now();
     try {
       return this.db.transaction(() => {
@@ -129,15 +162,17 @@ export class SitesService {
             isLive: body.domainMode === 'custom' ? 1 : 0,
             keepDevAlias: 1,
             phpVersion,
-            locale,
+            app: php ? 'php' : 'wordpress',
+            webRoot: php ? (body.webRoot ?? '') : '',
+            ...(php ? {} : { locale }),
             status: 'provisioning',
-            dbName: dbIdentifier(slug),
-            dbUser: dbIdentifier(slug),
-            dbPassword: generateSecret(24),
+            dbName: withDatabase ? dbIdentifier(slug) : '',
+            dbUser: withDatabase ? dbIdentifier(slug) : '',
+            dbPassword: withDatabase ? generateSecret(24) : '',
             // The site's own relay credential; the relay uses it to tell whose mail this is,
             // and refuses senders belonging to another site (services/mailAuth.ts).
             mailPassword: generateSecret(24),
-            wpAdminUser: body.adminUser,
+            wpAdminUser: php ? null : body.adminUser,
             wpAdminEmail: adminEmail,
             containerName: containerName(slug),
             createdAt: now,
@@ -147,14 +182,16 @@ export class SitesService {
           .get();
         const job = this.worker.enqueue(
           'site.create',
-          {
-            siteId: site.id,
-            adminPassword,
-            passwordGenerated,
-            pluginSlugs,
-            pluginZipPaths,
-            discourageSearchEngines: body.discourageSearchEngines,
-          },
+          php
+            ? { siteId: site.id }
+            : {
+                siteId: site.id,
+                adminPassword,
+                passwordGenerated,
+                pluginSlugs,
+                pluginZipPaths,
+                discourageSearchEngines: body.discourageSearchEngines ?? true,
+              },
           { id: site.id, slug, serverId: server.id },
         );
         return { site, job };
@@ -507,6 +544,7 @@ export class SitesService {
       recentTraffic: traffic,
       wp,
       kind: site.kind as SiteSummary['kind'],
+      app: site.app,
       external: this.s.connections.externalSummary(site),
       backupKeepDays: site.backupKeepDays,
       backupBeforeUpdates: isBackupBeforeUpdates(site.backupBeforeUpdates) ? site.backupBeforeUpdates : null,
@@ -528,10 +566,12 @@ export class SitesService {
     if (isExternal(site)) return this.externalDetail(site, summary);
     let containerState: SiteDetail['containerState'];
     let stack: SiteDetail['stack'] = null;
+    let webRootMissing: SiteDetail['webRootMissing'] = site.webRoot === '' ? false : null;
     try {
       const { docker } = this.s.servers.handleFor(site.serverId);
       containerState = await docker.containerState(site.containerName);
       stack = await siteContainerStack(docker, site.containerName);
+      if (site.webRoot !== '' && containerState === 'running') webRootMissing = !(await webRootExists(docker, site));
     } catch (err) {
       // The registry still answers when the hosting server cannot be reached: the metadata,
       // backups and recovery actions are exactly what an operator needs at that moment.
@@ -552,6 +592,9 @@ export class SitesService {
       adminUser: site.wpAdminUser,
       adminEmail: site.wpAdminEmail,
       dbName: site.dbName,
+      hasDatabase: hasDatabase(site),
+      webRoot: site.webRoot,
+      webRootMissing,
       tablePrefix: site.tablePrefix,
       containerState,
       url: `${siteScheme(this.s.config.tlsMode)}://${summary.primaryDomain}`,
@@ -678,6 +721,9 @@ export class SitesService {
       adminUser: site.wpAdminUser,
       adminEmail: site.wpAdminEmail,
       dbName: '',
+      hasDatabase: false,
+      webRoot: '',
+      webRootMissing: false,
       tablePrefix: site.tablePrefix,
       containerState: 'missing',
       url: summary.external?.home ?? `https://${summary.primaryDomain}`,

@@ -35,7 +35,7 @@ import { packetLimitFor, type DbAdminPort, type DbInventoryRow } from '../src/se
 import { FakeDbBrowser } from './dbBrowserFake.js';
 import { hostExec, type ExecPort, type ExecResult } from '../src/lib/exec.js';
 import { LocalFiles, type FilesPort } from '../src/lib/files.js';
-import { servers as serversTable } from '../src/db/schema.js';
+import { servers as serversTable, sites, type SiteRow } from '../src/db/schema.js';
 import type { CoreServices } from '../src/services/index.js';
 import { ServerRegistry, type HandlePorts } from '../src/servers/registry.js';
 import { BackupService } from '../src/services/backup.js';
@@ -1990,4 +1990,42 @@ export function mcpClient(
       return { isError: message.result.isError === true, value };
     },
   };
+}
+
+/**
+ * A PHP site's row, as site.create leaves one: no WordPress administrator, and a database of its
+ * own only with `database`, else '' in its three columns. Its container is running unless the
+ * status says otherwise.
+ */
+export function addPhpSite(
+  w: TestWorld,
+  slug: string,
+  opts: { database?: boolean; webRoot?: string; serverId?: number; status?: string; domains?: string[] } = {},
+): SiteRow {
+  const now = Date.now();
+  const db = opts.database ? `wp_${slug.replace(/-/g, '_')}` : '';
+  const site = w.db
+    .insert(sites)
+    .values({
+      slug,
+      serverId: opts.serverId ?? 1,
+      title: slug,
+      domains: JSON.stringify(opts.domains ?? [`${slug}.example.test`]),
+      phpVersion: '8.3',
+      app: 'php',
+      webRoot: opts.webRoot ?? '',
+      status: opts.status ?? 'running',
+      dbName: db,
+      dbUser: db,
+      dbPassword: opts.database ? 'db-secret' : '',
+      mailPassword: 'mail-secret',
+      containerName: `wp-${slug}`,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning()
+    .get();
+  const docker = opts.serverId && opts.serverId !== 1 ? w.remote(opts.serverId).docker : w.docker;
+  if ((opts.status ?? 'running') === 'running') docker.containers.set(site.containerName, 'running');
+  return site;
 }
