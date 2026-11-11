@@ -1,4 +1,5 @@
 import { ReminderService } from '../src/services/reminders.js';
+import { SiteCronService } from '../src/services/siteCron.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1781,6 +1782,7 @@ export async function makeWorld(
   core.alerts = new AlertService(core);
   const serverInfo = new SystemInfoService(servers, log, null, opts.resolver);
   core.reminders = new ReminderService(core, serverInfo);
+  core.siteCron = new SiteCronService(core);
   // The hourly check of each external site and every uptime probe are what the alerts hear from.
   core.connections.attachEvents({ checked: (site, conn) => core.alerts.connectorChecked(site, conn) });
   core.monitor.attachExternal(core.connections, {

@@ -13,6 +13,7 @@ import {
   attachSiteNetwork,
   ensureSiteMountSources,
   loadSite,
+  probeOptsFor,
   probeSite,
   runLicenseHook,
   siteDomains,
@@ -245,7 +246,7 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
       await runLicenseHook(ctx, s, server, site, 'afterUrlChange', { url: newUrl, oldUrl, newUrl });
     }
 
-    const up = await probeSite(server, site.containerName, currentPrimary, s.config.probeTimeoutMs);
+    const up = await probeSite(server, site.containerName, currentPrimary, s.config.probeTimeoutMs, probeOptsFor(site));
     if (!up) ctx.warn('Site did not answer the post-restore smoke check - check container logs.');
     ctx.info('Restore complete.');
     ctx.setResult({ backupId: backup.id });

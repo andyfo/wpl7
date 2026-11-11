@@ -13,6 +13,19 @@ export interface ProbeAttempt {
   empty?: boolean;
 }
 
+export interface ProbeOpts {
+  /**
+   * A PHP site: a 4xx its own nginx sent counts as an answer. Such an app may answer 404 at its
+   * address on purpose (an API, an app with no home page), or 405. Every answer from a site's nginx
+   * carries X-Cache-Status, and Traefik's own 404 for a host it doesn't route never does. 5xx is down
+   * whoever sent it.
+   */
+  siteOwn4xx?: boolean;
+}
+
+/** What a site's nginx puts on every answer it gives (services/siteStack.ts). */
+const SITE_ANSWER_HEADER = 'x-cache-status';
+
 /**
  * `Host`-header-accurate liveness probe.
  *
@@ -26,13 +39,18 @@ export interface ProbeAttempt {
  * this hostname to a live backend", and a site being probed may still be waiting for
  * its ACME certificate (or running under the staging CA).
  */
-export function httpProbeOnce(url: string, hostHeader: string, timeoutMs = 8000): Promise<ProbeAttempt> {
+export function httpProbeOnce(url: string, hostHeader: string, timeoutMs = 8000, opts: ProbeOpts = {}): Promise<ProbeAttempt> {
   const target = new URL(url);
   const secure = target.protocol === 'https:';
   const started = Date.now();
   return new Promise((resolve) => {
-    const done = (status: number | null, empty = false) =>
-      resolve({ ok: status !== null && isUp(status), status, ms: Date.now() - started, ...(empty ? { empty } : {}) });
+    const done = (status: number | null, empty = false, fromSite = false) =>
+      resolve({
+        ok: status !== null && (isUp(status) || (opts.siteOwn4xx === true && fromSite && status >= 400 && status < 500)),
+        status,
+        ms: Date.now() - started,
+        ...(empty ? { empty } : {}),
+      });
     const req = (secure ? https : http).request(
       {
         protocol: target.protocol,
@@ -50,7 +68,7 @@ export function httpProbeOnce(url: string, hostHeader: string, timeoutMs = 8000)
       },
       (res) => {
         res.resume(); // drain so the socket can be released
-        done(res.statusCode ?? null, res.statusCode === 200 && res.headers['content-length'] === '0');
+        done(res.statusCode ?? null, res.statusCode === 200 && res.headers['content-length'] === '0', res.headers[SITE_ANSWER_HEADER] !== undefined);
       },
     );
     req.on('timeout', () => req.destroy(new Error('probe timed out')));
@@ -75,11 +93,11 @@ export async function httpProbeAttempts(
   url: string,
   hostHeader: string,
   timeoutMs: number,
-  opts: { attemptTimeoutMs?: number; intervalMs?: number } = {},
+  opts: { attemptTimeoutMs?: number; intervalMs?: number } & ProbeOpts = {},
 ): Promise<ProbeAttempt> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const attempt = await httpProbeOnce(url, hostHeader, opts.attemptTimeoutMs ?? 8000);
+    const attempt = await httpProbeOnce(url, hostHeader, opts.attemptTimeoutMs ?? 8000, opts);
     if (attempt.ok) return attempt;
     // >= not >: with timeoutMs 0 (the test setting) a failure inside the same millisecond
     // would otherwise sleep and retry instead of returning immediately.
@@ -93,7 +111,7 @@ export async function httpProbe(
   url: string,
   hostHeader: string,
   timeoutMs: number,
-  opts: { attemptTimeoutMs?: number; intervalMs?: number } = {},
+  opts: { attemptTimeoutMs?: number; intervalMs?: number } & ProbeOpts = {},
 ): Promise<boolean> {
   return (await httpProbeAttempts(url, hostHeader, timeoutMs, opts)).ok;
 }

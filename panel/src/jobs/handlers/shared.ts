@@ -14,7 +14,7 @@ import type { CoreServices } from '../../services/index.js';
 import type { FilesPort } from '../../lib/files.js';
 import type { ContainerState, DockerPort } from '../../services/docker.js';
 import type { ServerHandle } from '../../servers/registry.js';
-import { httpProbe, httpProbeAttempts, type ProbeAttempt } from '../../lib/httpProbe.js';
+import { httpProbe, httpProbeAttempts, type ProbeAttempt, type ProbeOpts } from '../../lib/httpProbe.js';
 import type { RecipeHook } from '../../../shared/recipes.js';
 import type { HookVars, RecipeOutcome } from '../../services/licenses.js';
 import { hasDatabase, isExternal, isPhpSite, type SiteApps, type SiteKinds } from '../../lib/siteKind.js';
@@ -122,14 +122,25 @@ export async function probeSite(
   containerName: string,
   hostHeader: string,
   timeoutMs = 30_000,
+  opts: ProbeOpts = {},
 ): Promise<boolean> {
-  return httpProbe(server.probeUrlFor(containerName), hostHeader, timeoutMs);
+  return httpProbe(server.probeUrlFor(containerName), hostHeader, timeoutMs, opts);
 }
 
 /** `probeSite`, for a caller who has to say what the site answered. `attemptTimeoutMs`: how long one try may take. */
-export function probeSiteAttempt(server: ServerHandle, containerName: string, hostHeader: string, timeoutMs = 30_000, attemptTimeoutMs?: number): Promise<ProbeAttempt> {
-  return httpProbeAttempts(server.probeUrlFor(containerName), hostHeader, timeoutMs, { attemptTimeoutMs });
+export function probeSiteAttempt(
+  server: ServerHandle,
+  containerName: string,
+  hostHeader: string,
+  timeoutMs = 30_000,
+  attemptTimeoutMs?: number,
+  opts: ProbeOpts = {},
+): Promise<ProbeAttempt> {
+  return httpProbeAttempts(server.probeUrlFor(containerName), hostHeader, timeoutMs, { attemptTimeoutMs, ...opts });
 }
+
+/** How a site's probe is to read its answer: a PHP site's own 4xx is an answer (lib/httpProbe.ts). */
+export const probeOptsFor = (site: Pick<SiteRow, 'app'>): ProbeOpts => (isPhpSite(site) ? { siteOwn4xx: true } : {});
 
 export async function writeSiteJson(server: ServerHandle, config: Config, site: SiteRow): Promise<void> {
   const p = sitePaths(config, site.slug);

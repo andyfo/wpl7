@@ -20,6 +20,7 @@
  * picks the PHP version (8.4 by default).
  */
 import { spawn } from 'node:child_process';
+import { Writable } from 'node:stream';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,6 +31,8 @@ import type { Config } from '../../src/config.js';
 import { DockerService } from '../../src/services/docker.js';
 import { defaultMailFrom, mailLogin, renderMsmtprc } from '../../src/services/mailAuth.js';
 import { PLACEHOLDER_FILE, renderPlaceholderPage } from '../../src/services/phpSite.js';
+import { cronExec } from '../../src/services/siteCron.js';
+import { asSiteUser } from '../../src/services/wp.js';
 import { renderApacheHardening, renderWpConfigHardening, type ApacheSite } from '../../src/services/siteHardening.js';
 import { siteNetworkName } from '../../src/services/siteNetwork.js';
 import { DEFAULT_UPLOADS_INI, SITE_APP_LABEL, buildSiteContainerSpec, sitePaths } from '../../src/services/siteSpec.js';
@@ -527,6 +530,42 @@ echo $db->query('SELECT 6 * 7')->fetchColumn(), ' ', $db->getAttribute(PDO::ATTR
       const both = await sends("echo json_encode(mail('someone@example.com', 'Engine marker ' . $marker, \"The body.\\n\", 'From: app@php.example.com', '-fbounce@php.example.com'));");
       expect(both).toContain('MAIL FROM:<bounce@php.example.com>');
       expect(both).toContain('From: app@php.example.com');
+    });
+  });
+
+  describe('cron', () => {
+    /** A cron line run as services/siteCron.ts runs one, through the panel's own DockerService. */
+    /** What the last run printed, kept whatever became of it. */
+    let lastCronOutput: string[] = [];
+
+    async function cronRun(command: string, timeoutMs: number): Promise<{ exitCode: number; output: string }> {
+      const chunks: Buffer[] = [];
+      lastCronOutput = [];
+      const out = new Writable({
+        write(chunk: Buffer, _encoding, done) {
+          chunks.push(chunk);
+          lastCronOutput.push(chunk.toString('utf8'));
+          done();
+        },
+      });
+      const { exitCode } = await dockerService.execToStream(SITE, cronExec(command), out, asSiteUser(timeoutMs));
+      return { exitCode, output: Buffer.concat(chunks).toString('utf8') };
+    }
+
+    it("runs as www-data in the site's folder, with what it prints to stderr among the rest", async () => {
+      const run = await cronRun('id -u; pwd; echo "$HOME"; echo oops >&2; exit 3', 60_000);
+      expect(run).toEqual({ exitCode: 3, output: '33\n/var/www/html\n/tmp\noops\n' });
+    });
+
+    it('is stopped at its time inside the container, and what it printed until then is there', async () => {
+      const started = Date.now();
+      // DockerService reads timeout's exit as a timeout; services/siteCron.ts keeps the output it got.
+      const run = await cronRun('echo started; sleep 30', 2_000).catch((err: unknown) => ({ exitCode: -1, output: String(err) }));
+      expect(run.output).toContain('timed out after 2000ms');
+      expect(lastCronOutput.join('')).toBe('started\n');
+      expect(Date.now() - started).toBeLessThan(15_000);
+      // Nothing of it is left running.
+      expect((await inSite(['pgrep', '-f', 'sleep 30'])).status).toBe(1);
     });
   });
 

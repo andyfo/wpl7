@@ -44,7 +44,7 @@ import { startSiteContainer } from '../../src/jobs/handlers/shared.js';
 import { GEOLOCATE_OFF_REASON } from '../../src/jobs/handlers/sites.js';
 import { hostExec, type ExecPort } from '../../src/lib/exec.js';
 import { DockerService, type ConnectOpts, type NetworkSpec, type SiteContainerSpec } from '../../src/services/docker.js';
-import { mailLogin, renderMsmtprc } from '../../src/services/mailAuth.js';
+import { defaultMailFrom, mailLogin, renderMsmtprc } from '../../src/services/mailAuth.js';
 import { renderApacheHardening, renderWpConfigHardening } from '../../src/services/siteHardening.js';
 import { sweepSiteImages } from '../../src/services/siteImages.js';
 import { checkSiteUrl, clearSiteCaches } from '../../src/services/siteCaches.js';
@@ -246,6 +246,13 @@ add_action('template_redirect', function () {
             break;
         case 'mail':
             wpl7t_json(['sent' => mail('someone@example.com', 'Engine marker ' . $parts[1], "The body.\n", 'From: wordpress@stack.example.com')]);
+            exit;
+        case 'mail-return-path':
+            // How a plugin sets its return path: a From header, and -f beside it.
+            wpl7t_json(['sent' => mail('someone@example.com', 'Engine marker ' . $parts[1], "The body.\n", 'From: shop@stack.example.com', '-fbounces@stack.example.com')]);
+            exit;
+        case 'mail-no-from':
+            wpl7t_json(['sent' => mail('someone@example.com', 'Engine marker ' . $parts[1], "The body.\n")]);
             exit;
         case 'upload':
             $file = $_FILES['f'] ?? null;
@@ -585,6 +592,7 @@ function writeRuntime(choice: RuntimeChoice = {}): void {
   writeFileWhole(path.join(paths.runtimeDir, 'wp-cache.php'), renderWpCachePhp({ pageCache, keepSeconds: choice.keepSeconds ?? 3600, rules, warn }));
   writeFileWhole(path.join(paths.runtimeDir, 'php-fpm-pool.conf'), renderFpmPool(memoryMb, cpus));
   writeFileWhole(path.join(paths.runtimeDir, 'php.ini'), renderPhpIni(memoryMb));
+  writeFileWhole(path.join(paths.runtimeDir, 'mail-from'), `${defaultMailFrom('wordpress', HOST)}\n`);
   const redisConf = path.join(paths.runtimeDir, 'redis.conf');
   if (choice.redis) writeFileWhole(redisConf, renderRedisConf(memoryMb));
   else fs.rmSync(redisConf, { force: true });
@@ -2174,6 +2182,39 @@ if (strpos($_SERVER['REQUEST_URI'] ?? '', '/t/login-late/') === 0) add_action('t
       const log = await logsOf(RELAY);
       expect(log).toContain('MAIL FROM:<wordpress@stack.example.com>');
       expect(log).toContain(`AUTH PLAIN ${Buffer.from(`\0${mailLogin(SLUG)}\0${MAIL_PASSWORD}`).toString('base64')}`);
+    });
+
+    /** The relay's lines for the message with this marker, from the connection it came in on. */
+    async function relaySession(marker: string): Promise<string> {
+      await waitFor('the relay to see it', async () => (await logsOf(RELAY)).includes(`Subject: Engine marker ${marker}`), 15_000);
+      const log = await logsOf(RELAY);
+      const at = log.indexOf(`Subject: Engine marker ${marker}`);
+      return log.slice(log.lastIndexOf('EHLO', at), log.indexOf('\n.', at));
+    }
+
+    it('mail() with a From header and -f beside it leaves with the -f address as its envelope sender', async () => {
+      const marker = `r${Date.now()}`;
+      expect((await ask(`/t/mail-return-path/${marker}/`)).json).toEqual({ sent: true });
+      const session = await relaySession(marker);
+      expect(session).toContain('MAIL FROM:<bounces@stack.example.com>');
+      expect(session).toContain('From: shop@stack.example.com');
+    });
+
+    it("mail() with no From header leaves as the site's default sender, which is added as its From", async () => {
+      const marker = `n${Date.now()}`;
+      expect((await ask(`/t/mail-no-from/${marker}/`)).json).toEqual({ sent: true });
+      const session = await relaySession(marker);
+      expect(session).toContain('MAIL FROM:<wordpress@stack.example.com>');
+      expect(session).toContain('From: wordpress@stack.example.com');
+    });
+
+    it('a message handed to /usr/sbin/sendmail -oi -t leaves with its From header as the envelope sender', async () => {
+      const marker = `s${Date.now()}`;
+      await must(
+        inSite(['/usr/sbin/sendmail', '-oi', '-t'], { ...asSite, input: `To: someone@example.com\nFrom: app@stack.example.com\nSubject: Engine marker ${marker}\n\nThe body.\n` }),
+        'sendmail',
+      );
+      expect(await relaySession(marker)).toContain('MAIL FROM:<app@stack.example.com>');
     });
 
     it('PHP errors reach docker logs', async () => {

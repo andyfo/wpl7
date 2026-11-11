@@ -7,7 +7,7 @@ import type { JobContext } from '../context.js';
 import { migrateArrivedFiles } from '../../services/siteMigration.js';
 import { siteContainerSpec, sitePaths, siteRuntimeFrom } from '../../services/siteSpec.js';
 import { ensureSiteNetwork, removeSiteNetwork } from '../../services/siteNetwork.js';
-import { ensureSiteMountSources, probeSite, startSiteContainer, syncRelayAuth } from './shared.js';
+import { ensureSiteMountSources, probeOptsFor, probeSite, startSiteContainer, syncRelayAuth } from './shared.js';
 import { hasDatabase } from '../../lib/siteKind.js';
 import { rmOn } from './moveHelpers.js';
 
@@ -162,7 +162,7 @@ export async function restoreSiteOnServer(
       const state = await target.docker.containerState(site.containerName);
       if (state !== 'running') throw new Error('Site container is not running on the target - rolling back');
     } else {
-      const up = await probeSite(target, site.containerName, opts.probe.host, opts.probe.timeoutMs);
+      const up = await probeSite(target, site.containerName, opts.probe.host, opts.probe.timeoutMs, probeOptsFor(site));
       if (!up) throw new Error('Site did not answer on the target - rolling back (source untouched)');
     }
   }

@@ -8,7 +8,7 @@ import type { Config } from '../config.js';
 import type { ServerMonitorDto, ServerStatsDto, SiteMonitorDto } from '../../shared/types.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
 import { httpProbeOnce, type ExternalProbe } from '../lib/httpProbe.js';
-import { externalSites, isExternal } from '../lib/siteKind.js';
+import { externalSites, isExternal, isPhpSite } from '../lib/siteKind.js';
 import { sitePaths } from './siteSpec.js';
 
 /** The site states the monitor looks at; mid-create and mid-delete are a job's to report. */
@@ -187,6 +187,11 @@ export class MonitorService {
     };
   }
 
+  /** Whether a job is stopping, starting or replacing the site's container now (holdChecks). */
+  held(siteId: number): boolean {
+    return (this.changes.get(siteId)?.holds ?? 0) > 0;
+  }
+
   /**
    * Where the count of jobs beginning and ending on sites stands now. A reading of a site taken
    * after this has gone stale once changedSince says so, here and in services/phpReleases.ts.
@@ -248,10 +253,12 @@ export class MonitorService {
     const url = handle.probeUrlFor(site.containerName);
     const primary = (JSON.parse(site.domains) as string[])[0] ?? site.slug;
     const deadline = Date.now() + settleMs;
-    let attempt = await httpProbeOnce(url, primary, 5000);
+    // A PHP site's own 404 is an answer: an app may have no page at its address (lib/httpProbe.ts).
+    const opts = isPhpSite(site) ? { siteOwn4xx: true } : {};
+    let attempt = await httpProbeOnce(url, primary, 5000, opts);
     while (!attempt.ok && Date.now() < deadline && !stale()) {
       await new Promise((r) => setTimeout(r, 1000));
-      attempt = await httpProbeOnce(url, primary, 5000);
+      attempt = await httpProbeOnce(url, primary, 5000, opts);
     }
     // A job that began on the site while the request was out may be what it answered.
     if (stale()) return;

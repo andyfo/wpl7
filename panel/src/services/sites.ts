@@ -15,6 +15,7 @@ import { assertDomainsFree } from './domainGuard.js';
 import { PHP_NO_MAINTENANCE, assertApp, assertKind, hasDatabase, hostedSites, isExternal, isPhpSite, phpNoPageCache, type SiteApps, type SiteKinds } from '../lib/siteKind.js';
 import type { DockerPort } from './docker.js';
 import { SITE_ROOT_IN_CONTAINER } from './siteHardening.js';
+import { asSiteUser } from './wp.js';
 import { RuntimeRefusedError, applySiteCaches, effectivePageCache, siteContainerStack } from './siteCaches.js';
 import { assertPhpImage, defaultSiteLimits, limitsChange, siteImage, siteRuntimeFrom, type OwnSiteLimits } from './siteSpec.js';
 
@@ -720,6 +721,62 @@ export class SitesService {
     }
     if (object === undefined || object === (site.objectCache === 1)) return { job: null };
     return { job: this.worker.enqueue('site.objectCache', { siteId: site.id, on: object }, { id: site.id, slug, serverId: site.serverId }) };
+  }
+
+  /**
+   * A PHP site's web root (sites.web_root). In force at once on a running site: the protection's
+   * sync writes it into the site's own Apache file, checks it and reloads Apache, as for a change of
+   * protection (services/siteHardening.ts). A file Apache refuses puts the old value back, and the
+   * answer is what Apache said. A stopped site gets it at its next start.
+   */
+  async setWebRoot(slug: string, webRoot: string): Promise<void> {
+    const site = this.bySlug(slug);
+    if (!isPhpSite(site)) throw conflict(`"${site.slug}" is a WordPress site: a web root is for PHP sites.`);
+    if (site.status === 'provisioning' || site.status === 'deleting') throw conflict(`Site is ${site.status}; wait for it to finish`);
+    if (webRoot === site.webRoot) return;
+    this.db.update(sites).set({ webRoot, updatedAt: Date.now() }).where(eq(sites.id, site.id)).run();
+    await this.s.security.kick(site.serverId);
+    const refusal = this.s.security.apacheRefusal(site.id);
+    if (refusal === null) return;
+    this.db.update(sites).set({ webRoot: site.webRoot, updatedAt: Date.now() }).where(eq(sites.id, site.id)).run();
+    await this.s.security.kick(site.serverId);
+    throw conflict(`Apache refused it, so the web root is as it was: ${refusal}`);
+  }
+
+  /**
+   * One test message from the site, as its own code would send it: wp_mail() on a WordPress site,
+   * PHP's mail() with no From header on a PHP site, so its default sender is what it is tested with
+   * (services/mailAuth.ts defaultMailFrom). Accepted means handed to the relay; delivery is the mail
+   * log's to tell.
+   */
+  async testMail(slug: string, to: string): Promise<{ accepted: boolean; detail: string }> {
+    const site = this.bySlug(slug);
+    const server = this.s.servers.handleFor(site.serverId);
+    const state = await server.docker.containerState(site.containerName);
+    if (state !== 'running') throw conflict(`Site container is ${state}; start the site first`);
+    if (!isPhpSite(site)) {
+      const res = await server.wp.testEmail(site.containerName, to, site.title);
+      const accepted = res.stdout.includes('true');
+      return {
+        accepted,
+        detail: accepted
+          ? `wp_mail() accepted the message for ${to} - check the inbox (and the mail log if it never arrives)`
+          : `wp_mail() returned false: ${(res.stderr || res.stdout).trim().slice(0, 500)}`,
+      };
+    }
+    // The address and the words go in the environment, never into the code.
+    const res = await server.docker.exec(
+      site.containerName,
+      ['php', '-r', "var_export(mail(getenv('WPL7_TO'), getenv('WPL7_SUBJECT'), getenv('WPL7_BODY')));"],
+      asSiteUser(60_000, [`WPL7_TO=${to}`, `WPL7_SUBJECT=Test email from ${site.title}`, 'WPL7_BODY=This is a test email sent from the WPL7 control panel. If you can read this, mail() works.']),
+    );
+    const accepted = res.exitCode === 0 && res.stdout.trim() === 'true';
+    return {
+      accepted,
+      detail: accepted
+        ? `mail() accepted the message for ${to} - check the inbox (and the mail log if it never arrives)`
+        : `mail() returned false: ${(res.stderr || res.stdout).trim().slice(0, 500)}`,
+    };
   }
 
   /** The job holding the site, for its page to show: a new site's `site.create`, among others. */

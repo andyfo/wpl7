@@ -517,6 +517,34 @@ export type ScheduleKind = 'builtin' | 'custom';
 export type ScheduleGroup = 'jobs' | 'background' | 'custom';
 export type ScheduleOutcome = 'ok' | 'failed' | 'skipped';
 
+/** One of a PHP site's cron lines, with its last run (GET /api/sites/:slug/cron). */
+export interface SiteCronLineDto {
+  id: number;
+  /** Five fields, on the panel's clock. */
+  expr: string;
+  /** The schedule in words, as the schedules page says it. */
+  schedule: string;
+  command: string;
+  enabled: boolean;
+  /** Minutes it may run before it is stopped. */
+  timeoutMin: number;
+  /** When it is next due; null while it is off. In the past while it waits for its site. */
+  nextRunAt: number | null;
+  /** It is running now. */
+  running: boolean;
+  /** The last run; null before the first. */
+  last: {
+    startedAt: number;
+    /** How long it took; null while it runs, or when the panel lost sight of it (a restart). */
+    ms: number | null;
+    exitCode: number | null;
+    /** The end of what it printed, stdout and stderr together: up to 4 KB. */
+    output: string | null;
+    /** Why it did not start or did not finish, in the panel's words. */
+    error: string | null;
+  } | null;
+}
+
 export interface ScheduleSkip {
   siteSlug: string | null;
   reason: string;

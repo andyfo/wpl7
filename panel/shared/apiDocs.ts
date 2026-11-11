@@ -116,10 +116,10 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       {
         method: 'POST',
         path: '/api/sites',
-        summary: 'Create a site (dev hostname or a live domain) and install WordPress',
+        summary: 'Create a site (dev hostname or a live domain): WordPress, or a PHP site with no WordPress in it',
         input:
-          '{title, slug?, serverId?, domainMode: "dev"|"custom", domains?, phpVersion?, locale?, adminUser, adminEmail?, adminPassword?, discourageSearchEngines?, plugins?: {catalogIds?, extraWporgSlugs?}} - adminEmail left out uses the defaultAdminEmail setting (400 when that is empty); catalogIds left out installs the catalog\'s default plugins, [] none of them',
-        returns: 'job.result: {url, adminPassword}',
+          '{title, slug?, serverId?, domainMode: "dev"|"custom", domains?, phpVersion?, app?: "wordpress"|"php"} and, for WordPress: {locale?, adminUser, adminEmail?, adminPassword?, discourageSearchEngines?, plugins?: {catalogIds?, extraWporgSlugs?}} - adminEmail left out uses the defaultAdminEmail setting (400 when that is empty); catalogIds left out installs the catalog\'s default plugins, [] none of them. For a PHP site (app "php"): {database?: true for a database of its own, webRoot?: a folder in the site, such as public}, and none of WordPress\'s fields (400 naming each)',
+        returns: 'job.result: {url, adminPassword} (WordPress), {url} (PHP); 409 for a PHP site on a server whose image is from before PHP sites',
         job: true,
         level: 'manage',
       },
@@ -149,6 +149,48 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         summary: 'Switch PHP version, rolling back if the site stops answering',
         input: '{phpVersion}',
         job: true,
+        level: 'manage',
+      },
+      {
+        method: 'PUT',
+        path: '/api/sites/:slug/web-root',
+        summary: "A PHP site's web root: the folder visitors reach, in force at once",
+        input: "{webRoot} - a folder inside the site's, such as public; '' is the site's folder",
+        returns: "SiteDetail; 409 for a WordPress site, or with Apache's words when it refuses the file",
+        level: 'manage',
+      },
+      {
+        method: 'GET',
+        path: '/api/sites/:slug/cron',
+        summary: "A PHP site's cron lines, each with its schedule in words and its last run",
+        returns: '{lines: SiteCronLineDto[]}; 409 for a WordPress site',
+        level: 'manage',
+        levelReason: 'The lines are commands, and the output of the last runs is shown with them',
+      },
+      {
+        method: 'PUT',
+        path: '/api/sites/:slug/cron',
+        summary: "Set a PHP site's cron lines: up to 10 commands run in its folder on a schedule, outside the job queue",
+        input:
+          '{lines: [{id?, expr: "*/5 * * * *", command, enabled?, timeoutMin?: 1-60, default 5}]} - every line as it is to be: one with an id keeps its last run, one left out is deleted; five fields on the panel\'s clock, every minute allowed',
+        returns: '{lines: SiteCronLineDto[]}',
+        danger: true,
+        level: 'manage',
+      },
+      {
+        method: 'POST',
+        path: '/api/sites/:slug/cron/:id/run',
+        summary: 'Run one cron line now, as the next minute would; its result lands on the line',
+        returns: '{line: SiteCronLineDto}; 409 while it runs, while the site is stopped or busy, or with 2 already running on its server',
+        danger: true,
+        level: 'manage',
+      },
+      {
+        method: 'POST',
+        path: '/api/sites/:slug/mail/test',
+        summary: "Send a test message as the site's own code would: wp_mail(), or PHP's mail() on a PHP site",
+        input: '{to}',
+        returns: '{accepted, detail}',
         level: 'manage',
       },
       {
@@ -537,7 +579,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
     title: 'WordPress on one site',
     changes: 'manage',
     intro:
-      'The snapshot (`/wp/status`) is a database read and answers instantly, even for a stopped site. Anything that changes the install is a job. A site hosted elsewhere takes the same calls through WPL7 Connect: WP-CLI runs only the commands its plugins registered, and a REST request runs as `auth.username` with no application password.',
+      'The snapshot (`/wp/status`) is a database read and answers instantly, even for a stopped site. Anything that changes the install is a job. A site hosted elsewhere takes the same calls through WPL7 Connect: WP-CLI runs only the commands its plugins registered, and a REST request runs as `auth.username` with no application password. A PHP site answers 409 to all of these but /shell, which runs in any site\'s folder.',
     endpoints: [
       {
         method: 'GET',
@@ -738,8 +780,8 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       {
         method: 'POST',
         path: '/api/sites/:slug/shell',
-        summary: "Queue a shell command in the site's container, run as www-data in the WordPress folder",
-        input: '{command: "ls -la wp-content", timeoutMin?: 1-60}',
+        summary: "Queue a shell command in the site's container, run as www-data in the site's folder",
+        input: '{command: "ls -la", timeoutMin?: 1-60}',
         returns: '202 {job}; output in the job log',
         job: true,
         danger: true,

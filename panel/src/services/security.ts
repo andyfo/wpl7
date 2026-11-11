@@ -122,6 +122,8 @@ export class SecurityService {
   private readonly hardeningProblems = new Map<number, string>();
   /** `<serverId>:<file>` -> digest of an Apache file its check refused; not tried again as it is. */
   private readonly refused = new Map<string, string>();
+  /** Site id -> what `apache2ctl -t` said of its file at the last sync that refused it. */
+  private readonly apacheRefusals = new Map<number, string>();
   private readonly debounceMs: number;
 
   constructor(
@@ -455,6 +457,7 @@ export class SecurityService {
     this.written.set(`${handle.id}:${p.securityWpPhp}`, digest(files.php));
     this.written.set(`${handle.id}:${p.securityApacheConf}`, digest(files.apache));
     this.refused.delete(`${handle.id}:${p.securityApacheConf}`);
+    this.apacheRefusals.delete(site.id);
     this.hardeningProblems.delete(site.id);
   }
 
@@ -519,6 +522,7 @@ export class SecurityService {
       if (refusal !== null) {
         await handle.files.writeFile(p.securityApacheConf, apache.current, { mode: 0o644 });
         this.refused.set(key, digest(files.apache));
+        this.apacheRefusals.set(site.id, refusal);
         this.hardeningProblems.set(site.id, `Apache refused the new protection inside its container, so it keeps the previous one: ${refusal}`);
         this.log.warn(`Site protection inside "${site.slug}": Apache refused the new file (${refusal}); the previous one is back`);
         return changed;
@@ -527,8 +531,18 @@ export class SecurityService {
       changed = true;
     }
     this.refused.delete(key);
+    this.apacheRefusals.delete(site.id);
     this.hardeningProblems.delete(site.id);
     return changed;
+  }
+
+  /**
+   * What Apache said of the site's own file when it last refused one, in its own words; null when
+   * it took what it was given. For a change that must not stand when Apache refuses it, asked after
+   * the kick that applied it: the web root.
+   */
+  apacheRefusal(siteId: number): string | null {
+    return this.apacheRefusals.get(siteId) ?? null;
   }
 
   /**

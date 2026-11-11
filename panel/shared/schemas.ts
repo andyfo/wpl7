@@ -5,6 +5,7 @@
 // @docs sites/create, sites/domains, sites/move
 import { z } from 'zod';
 import { accessLevels } from './access.js';
+import { cronError } from './cron.js';
 import { MAX_KEEP_SECONDS, ownCacheRulesSchema } from './cacheRules.js';
 import {
   FILE_LIMITS,
@@ -467,6 +468,12 @@ export const goLiveBody = z.object({
 export const domainsUpdateBody = z.object({
   domains: z.array(domainSchema).min(1).max(10),
 }).strict();
+
+/** A PHP site's web root (sites.web_root): '' is the site's folder. */
+export const siteWebRootBody = z.object({ webRoot: webRootSchema }).strict();
+
+/** One test message from a site, to this address. */
+export const siteMailTestBody = z.object({ to: z.email() }).strict();
 
 export const phpUpdateBody = z.object({
   phpVersion: phpVersionSchema,
@@ -944,6 +951,39 @@ export const siteShellBody = z.object({
   command: siteShellCommand,
   timeoutMin: execTimeoutMin,
 }).strict();
+
+// ---------------------------------------------------------------------------
+// A PHP site's cron lines (services/siteCron.ts)
+
+/** How many lines a site may have. */
+export const MAX_SITE_CRON_LINES = 10;
+
+/** One cron line as it is saved: an id keeps a line's last run, a line without one is new. */
+export const siteCronLineInput = z
+  .object({
+    id: z.number().int().positive().optional(),
+    /** Five fields, on the panel's clock; every minute is allowed (shared/cron.ts). */
+    expr: z.string().trim().max(200).superRefine((expr, ctx) => {
+      const problem = cronError(expr);
+      if (problem) ctx.addIssue({ code: 'custom', message: problem });
+    }),
+    command: siteShellCommand,
+    enabled: z.boolean().default(true),
+    /** Minutes it may run before it is stopped. */
+    timeoutMin: z.number().int().min(1).max(60).default(5),
+  })
+  .strict();
+export type SiteCronLineInput = z.infer<typeof siteCronLineInput>;
+
+/** Every line of the site, as it is to be: a saved line left out is deleted. */
+export const siteCronBody = z
+  .object({ lines: z.array(siteCronLineInput).max(MAX_SITE_CRON_LINES) })
+  .strict()
+  .refine((b) => new Set(b.lines.flatMap((l) => (l.id === undefined ? [] : [l.id]))).size === b.lines.filter((l) => l.id !== undefined).length, {
+    message: 'a line is named twice',
+    path: ['lines'],
+  });
+
 
 export const wpRestMethods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const;
 export type WpRestMethod = (typeof wpRestMethods)[number];

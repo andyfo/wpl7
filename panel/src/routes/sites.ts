@@ -17,8 +17,11 @@ import {
   siteCreateBody,
   siteDeleteQuery,
   siteLimitsBody,
+  siteCronBody,
+  siteMailTestBody,
   siteMoveBody,
   siteSlugParam,
+  siteWebRootBody,
 } from '../../shared/schemas.js';
 import { moveCleanups } from '../db/schema.js';
 import { conflict, notFound } from '../lib/errors.js';
@@ -27,9 +30,11 @@ import { requireAccess } from '../plugins/auth.js';
 import { checkSiteUrl, clearSiteCaches, siteContainerStack } from '../services/siteCaches.js';
 import type { AppDeps } from './deps.js';
 import { isPhpSite, phpNoPageCache } from '../lib/siteKind.js';
+import { audit } from '../lib/audit.js';
 
 // Addressing an existing site: no reserved-name check, see siteSlugParam.
 const slugParams = z.object({ slug: siteSlugParam });
+const cronLineParams = z.object({ slug: siteSlugParam, id: z.coerce.number().int().positive() });
 
 export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
@@ -87,6 +92,36 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
       return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
     });
   }
+
+  // A PHP site's cron lines (services/siteCron.ts). They run commands, so they are Manage's, as the shell is.
+  r.get('/api/sites/:slug/cron', { schema: { params: slugParams } }, async (req) => ({
+    lines: deps.siteCron.list(deps.sites.bySlug(req.params.slug)),
+  }));
+
+  r.put('/api/sites/:slug/cron', { schema: { params: slugParams, body: siteCronBody } }, async (req) => {
+    const site = deps.sites.bySlug(req.params.slug);
+    const lines = deps.siteCron.save(site, req.body.lines);
+    audit(req, 'cron', site.slug, 'save', { lines: lines.length });
+    return { lines };
+  });
+
+  r.post('/api/sites/:slug/cron/:id/run', { schema: { params: cronLineParams } }, async (req) => {
+    const site = deps.sites.bySlug(req.params.slug);
+    const line = deps.siteCron.runNow(site, req.params.id);
+    audit(req, 'cron', site.slug, 'run now', { line: line.id });
+    return { line };
+  });
+
+  /** A PHP site's web root, in force at once on a running site; 409 with Apache's words when it refuses it. */
+  r.put('/api/sites/:slug/web-root', { schema: { params: slugParams, body: siteWebRootBody } }, async (req, reply) => {
+    await deps.sites.setWebRoot(req.params.slug, req.body.webRoot);
+    return reply.send(await deps.sites.detail(req.params.slug));
+  });
+
+  /** A test message from the site, as its own code sends one: wp_mail(), or PHP's mail() on a PHP site. */
+  r.post('/api/sites/:slug/mail/test', { schema: { params: slugParams, body: siteMailTestBody } }, async (req) =>
+    deps.sites.testMail(req.params.slug, req.body.to),
+  );
 
   r.put('/api/sites/:slug/php', { schema: { params: slugParams, body: phpUpdateBody } }, async (req, reply) => {
     const site = deps.sites.bySlug(req.params.slug);

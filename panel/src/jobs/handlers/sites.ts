@@ -35,6 +35,7 @@ import {
   dnsPreflight,
   ensureSiteMountSources,
   loadSite,
+  probeOptsFor,
   probeSite,
   probeSiteAttempt,
   removeSiteContainers,
@@ -166,7 +167,7 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
     }
 
     ctx.info('Verifying site responds…');
-    const up = await probeSite(server, site.containerName, primary, s.config.probeTimeoutMs);
+    const up = await probeSite(server, site.containerName, primary, s.config.probeTimeoutMs, probeOptsFor(site));
     if (!up) ctx.warn('Site did not answer the smoke check yet - check container logs if it stays down.');
     if (s.config.tlsMode === 'letsencrypt') {
       ctx.info('HTTPS certificate is issued on first request; allow up to a minute after DNS is in place.');
@@ -1041,7 +1042,7 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
     answered =
       s.config.nodeEnv === 'test'
         ? (await server.docker.containerState(site.containerName)) === 'running'
-        : await probeSite(server, site.containerName, domains[0]!, s.config.probeTimeoutMs);
+        : await probeSite(server, site.containerName, domains[0]!, s.config.probeTimeoutMs, probeOptsFor(site));
     return answered ? null : `the site is not responding on PHP ${newVersion}`;
   };
   try {
@@ -1142,7 +1143,7 @@ export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcile
     const up =
       s.config.nodeEnv === 'test'
         ? (await server.docker.containerState(site.containerName)) === 'running'
-        : await probeSite(server, site.containerName, domains[0]!, s.config.probeTimeoutMs);
+        : await probeSite(server, site.containerName, domains[0]!, s.config.probeTimeoutMs, probeOptsFor(site));
     // Not fatal and not rolled back - see the note on this function. The job's own log is where
     // this has to be visible.
     if (!up) ctx.warn('Site did not answer the smoke check after reconciling; check its container logs.');
@@ -1306,7 +1307,7 @@ export async function siteUpdateDomains(
   await syncRelayAuth(ctx, s);
   // Its rules name its hosts, so they follow the new list.
   await s.security.kick(server.id);
-  const up = !wasRunning || (await probeSite(server, site.containerName, newPrimary, s.config.probeTimeoutMs));
+  const up = !wasRunning || (await probeSite(server, site.containerName, newPrimary, s.config.probeTimeoutMs, probeOptsFor(site)));
   if (!up) ctx.warn('Site did not answer the post-change smoke check.');
   ctx.info(ctx.payload.goLive ? `Site is live at ${newUrl}` : 'Domains updated.');
   ctx.setResult({ url: newUrl, domains: newList });

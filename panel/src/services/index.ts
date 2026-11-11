@@ -38,6 +38,7 @@ import type { ExternalBackupService } from './externalBackup.js';
 import type { ReminderService } from './reminders.js';
 import type { AlertService } from './alerts.js';
 import type { DatabasesService } from './databases.js';
+import type { SiteCronService } from './siteCron.js';
 
 export interface Logger {
   info(msg: string): void;
@@ -125,5 +126,7 @@ export interface CoreServices {
   /** Emails about sites: down and back up, new vulnerabilities, failed backups, external sites' plugin and certificate. */
   alerts: AlertService;
   reminders: ReminderService;
+  /** PHP sites' cron lines, and the runs the `site-cron` task starts. */
+  siteCron: SiteCronService;
   log: Logger;
 }
