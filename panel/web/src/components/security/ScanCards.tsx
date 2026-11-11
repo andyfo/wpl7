@@ -82,7 +82,7 @@ function LastScan({ scan }: { scan: ScanDto }) {
  * The site's scans: the one under way, the last, the next and the earlier ones. Whether it is
  * scanned, and what a finding does, are in its settings (SiteSecuritySettings).
  */
-export function MalwareScanCard({ slug, scan }: { slug: string; scan: SiteScanDto }) {
+export function MalwareScanCard({ slug, scan, php = false }: { slug: string; scan: SiteScanDto; php?: boolean }) {
   const scanNow = useScanNow(slug);
   const history = useSiteScanHistory(slug);
   // The history starts with the scan under way and the last one, which the card already shows.
@@ -111,6 +111,7 @@ export function MalwareScanCard({ slug, scan }: { slug: string; scan: SiteScanDt
             </Link>
           </p>
         )}
+        {php && <p className="text-xs text-neutral-500">Every file is checked for known malware. There are no published originals to compare a PHP site with.</p>}
         {scan.last ? <LastScan scan={scan.last} /> : !scan.active && <p className="text-sm text-neutral-500">Not scanned yet.</p>}
         {(next || !scan.effective.signatures || scan.failures >= 2) && (
           <p className="text-xs text-neutral-500">

@@ -122,6 +122,20 @@ export const SECURITY_LEVEL_INFO: Record<SecurityLevel, { label: string; summary
   },
 };
 
+/**
+ * A PHP site's wording, where WordPress's names what such a site doesn't have: it gets none of
+ * WordPress's rules (WORDPRESS_ONLY_SETTINGS).
+ */
+export const PHP_SITE_SECURITY_INFO = {
+  levels: {
+    off: SECURITY_LEVEL_INFO.off.summary,
+    standard: 'Refuses requests no visitor makes - secret files, scanners - and limits request rates generously.',
+    strict: 'Standard, plus tighter limits and more headers.',
+  } satisfies Record<SecurityLevel, string>,
+  files: '.env and .git, debug.log and SQL dumps. Nothing a visitor ever asks for, and the first thing a scanner does.',
+  assets: 'Stylesheets, scripts, images and fonts, wherever they are in the site, per address.',
+};
+
 /** Requests refused outright (403), whoever sends them. */
 export const denyRuleIds = ['files', 'uploads', 'install', 'scanners', 'enum'] as const;
 export type DenyRuleId = (typeof denyRuleIds)[number];

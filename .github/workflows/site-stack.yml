@@ -1,6 +1,6 @@
 # A real site on the real image: nginx, Apache, PHP-FPM, Redis, MariaDB, real WooCommerce, a stack 1
-# site moving to all that and back. Ten minutes or so, so only when something it covers changes, and
-# apart from the gate (test.yml), which stays quick.
+# site moving to all that and back, and a PHP site with no WordPress in it. Ten minutes or so, so only
+# when something it covers changes, and apart from the gate (test.yml), which stays quick.
 name: Site image
 
 on:
@@ -8,7 +8,10 @@ on:
     paths:
       - deploy/wordpress-image/**
       - panel/shared/cacheRules.ts
+      - panel/src/services/mailAuth.ts
+      - panel/src/services/phpSite.ts
       - panel/src/services/siteCaches.ts
+      - panel/src/services/siteCron.ts
       - panel/src/services/siteHardening.ts
       - panel/src/services/siteMigration.ts
       - panel/src/services/siteMigrationHtaccess.ts
@@ -16,6 +19,7 @@ on:
       - panel/src/services/siteStack.ts
       - panel/src/services/wpCachePhp.ts
       - panel/src/jobs/handlers/sites.ts
+      - panel/test/engine/phpSite.test.ts
       - panel/test/engine/siteHardening.test.ts
       - panel/test/engine/siteStack.test.ts
       - panel/test/engine/siteSwitch.test.ts
@@ -52,3 +56,11 @@ jobs:
         working-directory: panel
         env:
           WPL7_ENGINE_TESTS: '1'
+      # A PHP site, on the image the first step built: nothing put into its folder, its web root,
+      # PDO, mail with and without a sender, Redis, cron.
+      - name: A PHP site on the image
+        run: npx vitest run test/engine/phpSite.test.ts
+        working-directory: panel
+        env:
+          WPL7_ENGINE_TESTS: '1'
+          WPL7_ENGINE_SITE_IMAGE: wpl7-wordpress:php8.4-engine

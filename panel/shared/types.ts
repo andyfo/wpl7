@@ -84,6 +84,8 @@ export interface SiteSummary {
   kind: SiteKind;
   /** What it runs: WordPress, or the site's own PHP and files (a hosted site only; an external one is WordPress). */
   app: SiteApp;
+  /** Whether it has a database of its own. A WordPress site always has; a PHP site when one was made. */
+  hasDatabase: boolean;
   external: ExternalSiteSummary | null;
   /**
    * After how many days this site's backups are deleted, when it says so itself: 0 = never. null =
@@ -161,8 +163,6 @@ export interface SiteDetail extends SiteSummary {
   adminEmail: string | null;
   /** '' when the site has no database of its own: a PHP site's is optional. */
   dbName: string;
-  /** Whether it has a database of its own. A WordPress site always has; a PHP site when one was made. */
-  hasDatabase: boolean;
   /** A PHP site's web root, the folder visitors reach inside its own; '' = the site's folder. */
   webRoot: string;
   /**
@@ -2307,6 +2307,8 @@ export interface SiteScanDto {
 
 export interface SiteSecurityDto {
   slug: string;
+  /** A PHP site has none of WordPress's rules (shared/security.ts WORDPRESS_ONLY_SETTINGS). */
+  app: SiteApp;
   /** The site's own level; null = it follows the default. */
   level: SecurityLevel | null;
   overrides: SecurityOverrides;

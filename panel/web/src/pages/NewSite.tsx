@@ -4,13 +4,36 @@ import { Link, useLocation, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { PluginDto, RecipeDto, WporgPluginDto } from '../../../shared/types';
 import { useMeta, usePluginCatalog, useRecipes, useRunJob } from '../api/hooks';
-import { Button, Card, ErrorNote, Field, OutLink, Toggle, inputClass } from '../components/ui';
+import { webRootSchema, type SiteApp } from '../../../shared/schemas';
+import { Button, Card, ErrorNote, Field, OutLink, Segmented, Toggle, inputClass } from '../components/ui';
 import { WporgPluginSearch } from '../components/WporgPluginSearch';
 import { LocaleSelect } from '../components/LocaleSelect';
 import { localeName } from '../lib/format';
 import { draftOf, keepDraft, type NewSiteDraft } from '../lib/siteCreation';
 
-const STEPS = ['Name & domain', 'WordPress', 'Plugins', 'Review'];
+type StepId = 'name' | 'wordpress' | 'plugins' | 'php' | 'review';
+
+const STEP_LABELS: Record<StepId, string> = {
+  name: 'Name & domain',
+  wordpress: 'WordPress',
+  plugins: 'Plugins',
+  php: 'PHP',
+  review: 'Review',
+};
+
+/** Each type's steps. The first and the last are the same for both, so the type can change on the first. */
+const STEPS: Record<SiteApp, StepId[]> = {
+  wordpress: ['name', 'wordpress', 'plugins', 'review'],
+  php: ['name', 'php', 'review'],
+};
+
+const APP_OPTIONS = [
+  { id: 'wordpress', label: 'WordPress' },
+  { id: 'php', label: 'PHP' },
+] as const;
+
+/** A web root as the API takes it: a slash typed at either end is no folder. */
+const cleanWebRoot = (raw: string) => raw.trim().replace(/^\/+|\/+$/g, '');
 
 // Mirrors slugify() in src/lib/slug.ts - note the trailing-dash trim happens AFTER the
 // truncation, otherwise a long title can produce a slug the API rejects at the last step.
@@ -43,7 +66,8 @@ export function NewSite() {
     const jobId = (location.state as { draftOf?: unknown } | null)?.draftOf;
     return typeof jobId === 'number' ? draftOf(jobId) : null;
   });
-  const [step, setStep] = useState(draft ? STEPS.length - 1 : 0);
+  const [app, setApp] = useState<SiteApp>(draft?.app ?? 'wordpress');
+  const [stepId, setStepId] = useState<StepId>(draft ? 'review' : 'name');
   const [title, setTitle] = useState(draft?.title ?? '');
   const [slugEdited, setSlugEdited] = useState(draft?.slugEdited ?? '');
   const [serverId, setServerId] = useState<number | null>(draft?.serverId ?? null);
@@ -59,6 +83,13 @@ export function NewSite() {
   /** Catalog plugins ticked or unticked by hand. The others follow the catalog's defaults. */
   const [catalogTicks, setCatalogTicks] = useState<ReadonlyMap<number, boolean>>(new Map(draft?.catalogTicks));
   const [extraPlugins, setExtraPlugins] = useState<WporgPluginDto[]>(draft?.extraPlugins ?? []);
+  const [database, setDatabase] = useState(draft?.database ?? false);
+  const [webRoot, setWebRoot] = useState(draft?.webRoot ?? '');
+
+  const steps = STEPS[app];
+  const step = Math.max(0, steps.indexOf(stepId));
+  const webRootValue = cleanWebRoot(webRoot);
+  const webRootOk = webRootSchema.safeParse(webRootValue).success;
 
   const slug = slugEdited || slugPreview(title);
   const servers = meta.data?.servers ?? [];
@@ -85,15 +116,41 @@ export function NewSite() {
   const pluginDirs = new Set([...selectedCatalog.map((p) => p.pluginDir), ...extraPlugins.map((p) => p.slug)]);
   const siteRecipes = (recipes.data ?? []).filter((r) => r.enabled && pluginDirs.has(r.plugin));
 
-  const canNext = [
-    title.trim().length > 0 && SLUG_RE.test(slug) && (!customDomain || domains.length > 0),
-    adminUser.length > 0 && /.+@.+\..+/.test(effAdminEmail) && (generatePw || adminPassword.length >= 10),
-    true,
-    true,
-  ][step];
+  const canNext: Record<StepId, boolean> = {
+    name: title.trim().length > 0 && SLUG_RE.test(slug) && (!customDomain || domains.length > 0),
+    wordpress: adminUser.length > 0 && /.+@.+\..+/.test(effAdminEmail) && (generatePw || adminPassword.length >= 10),
+    plugins: true,
+    php: webRootOk,
+    review: true,
+  };
+
+  const common = {
+    title: title.trim(),
+    slug: slug || undefined,
+    serverId: multiServer ? effServerId : undefined,
+    domainMode: customDomain ? 'custom' : 'dev',
+    domains: customDomain ? domains : undefined,
+    phpVersion: effPhp,
+  };
+  const body =
+    app === 'php'
+      ? { ...common, app, database, ...(webRootValue ? { webRoot: webRootValue } : {}) }
+      : {
+          ...common,
+          locale: effLocale,
+          adminUser,
+          adminEmail: effAdminEmail,
+          adminPassword: generatePw ? undefined : adminPassword,
+          discourageSearchEngines: discourageSearch,
+          plugins: {
+            catalogIds: selectedCatalog.map((p) => p.id),
+            extraWporgSlugs: extraPlugins.map((p) => p.slug),
+          },
+        };
 
   const create = () => {
     const sent: NewSiteDraft = {
+      app,
       title,
       slugEdited,
       serverId,
@@ -108,28 +165,11 @@ export function NewSite() {
       discourageSearch,
       catalogTicks: [...catalogTicks],
       extraPlugins,
+      database,
+      webRoot,
     };
     run.mutate(
-      {
-        path: '/api/sites',
-        body: {
-          title: title.trim(),
-          slug: slug || undefined,
-          serverId: multiServer ? effServerId : undefined,
-          domainMode: customDomain ? 'custom' : 'dev',
-          domains: customDomain ? domains : undefined,
-          phpVersion: effPhp,
-          locale: effLocale,
-          adminUser,
-          adminEmail: effAdminEmail,
-          adminPassword: generatePw ? undefined : adminPassword,
-          discourageSearchEngines: discourageSearch,
-          plugins: {
-            catalogIds: selectedCatalog.map((p) => p.id),
-            extraWporgSlugs: extraPlugins.map((p) => p.slug),
-          },
-        },
-      },
+      { path: '/api/sites', body },
       {
         // The site's own page shows it being made, then the password; the form is done with.
         onSuccess: (job) => {
@@ -147,19 +187,22 @@ export function NewSite() {
     <div className="space-y-6">
       <h1 className="page-title">New site</h1>
       <div className="flex gap-2 text-xs">
-        {STEPS.map((label, i) => (
+        {steps.map((id, i) => (
           <span
-            key={label}
+            key={id}
             className={`rounded-full px-3 py-1 font-medium ${i === step ? 'bg-[#18191c] text-white' : i < step ? 'bg-neutral-300 text-neutral-700' : 'bg-neutral-200 text-neutral-500'}`}
           >
-            {i + 1}. {label}
+            {i + 1}. {STEP_LABELS[id]}
           </span>
         ))}
       </div>
 
       <Card>
-        {step === 0 && (
+        {stepId === 'name' && (
           <div className="space-y-4">
+            <Field label="Type" hint={app === 'php' ? 'An empty site for your own PHP or HTML files.' : undefined}>
+              <Segmented options={APP_OPTIONS} value={app} onChange={setApp} label="Type" />
+            </Field>
             <Field label="Site title">
               <input className={inputClass} value={title} onChange={(e) => setTitle(e.target.value)} autoFocus placeholder="My Customer's Site" />
             </Field>
@@ -207,7 +250,25 @@ export function NewSite() {
           </div>
         )}
 
-        {step === 1 && (
+        {stepId === 'php' && (
+          <div className="space-y-4">
+            <Field label="PHP version">
+              <PhpVersionSelect value={effPhp} versions={meta.data?.phpVersions ?? []} onChange={setPhpVersion} />
+            </Field>
+            <div>
+              <Toggle checked={database} onChange={setDatabase} label="Database" />
+              <p className="mt-1 text-xs text-neutral-500">A MariaDB database for this site. You can add one later.</p>
+            </div>
+            <Field
+              label="Web root"
+              hint={webRootOk ? 'The folder visitors reach. Empty: the site\'s folder.' : 'A folder in the site, such as public: letters, digits, ".", "_" and "-", with "/" between folders.'}
+            >
+              <input className={inputClass} value={webRoot} onChange={(e) => setWebRoot(e.target.value)} placeholder="public" />
+            </Field>
+          </div>
+        )}
+
+        {stepId === 'wordpress' && (
           <div className="space-y-4">
             <div className="grid max-w-2xl grid-cols-2 gap-4">
               <Field label="Admin username">
@@ -228,13 +289,7 @@ export function NewSite() {
                 <LocaleSelect value={effLocale} onChange={setLocale} />
               </Field>
               <Field label="PHP version">
-                <select className={inputClass} value={effPhp} onChange={(e) => setPhpVersion(e.target.value)}>
-                  {(meta.data?.phpVersions ?? []).map((v) => (
-                    <option key={v} value={v}>
-                      PHP {v}
-                    </option>
-                  ))}
-                </select>
+                <PhpVersionSelect value={effPhp} versions={meta.data?.phpVersions ?? []} onChange={setPhpVersion} />
               </Field>
             </div>
             <div>
@@ -250,7 +305,7 @@ export function NewSite() {
           </div>
         )}
 
-        {step === 2 && (
+        {stepId === 'plugins' && (
           <div className="space-y-4">
             <div>
               <div className="mb-2 text-sm font-medium">Catalog plugins</div>
@@ -311,7 +366,20 @@ export function NewSite() {
           </div>
         )}
 
-        {step === 3 && (
+        {stepId === 'review' && app === 'php' && (
+          <div className="space-y-3 text-sm">
+            <ReviewRow label="Type" value="PHP" />
+            <ReviewRow label="Title" value={title} />
+            {multiServer && <ReviewRow label="Server" value={selectedServer?.name ?? `#${effServerId}`} />}
+            <ReviewRow label="Address" value={customDomain ? domains.join(', ') : devHostname} />
+            <ReviewRow label="PHP" value={effPhp} />
+            <ReviewRow label="Database" value={database ? `wp_${slug.replace(/-/g, '_')}` : 'None'} />
+            <ReviewRow label="Web root" value={webRootValue || "The site's folder"} />
+            <ErrorNote error={run.error} />
+          </div>
+        )}
+
+        {stepId === 'review' && app === 'wordpress' && (
           <div className="space-y-3 text-sm">
             <ReviewRow label="Title" value={title} />
             {multiServer && <ReviewRow label="Server" value={selectedServer?.name ?? `#${effServerId}`} />}
@@ -333,11 +401,11 @@ export function NewSite() {
         )}
 
         <div className="mt-6 flex justify-between border-t border-neutral-100 pt-4">
-          <Button variant="secondary" onClick={() => setStep(Math.max(0, step - 1))} disabled={step === 0}>
+          <Button variant="secondary" onClick={() => setStepId(steps[Math.max(0, step - 1)]!)} disabled={step === 0}>
             Back
           </Button>
-          {step < STEPS.length - 1 ? (
-            <Button onClick={() => setStep(step + 1)} disabled={!canNext}>
+          {step < steps.length - 1 ? (
+            <Button onClick={() => setStepId(steps[step + 1]!)} disabled={!canNext[stepId]}>
               Continue
             </Button>
           ) : (
@@ -348,6 +416,18 @@ export function NewSite() {
         </div>
       </Card>
     </div>
+  );
+}
+
+function PhpVersionSelect({ value, versions, onChange }: { value: string; versions: string[]; onChange: (version: string) => void }) {
+  return (
+    <select className={inputClass} value={value} onChange={(e) => onChange(e.target.value)}>
+      {versions.map((v) => (
+        <option key={v} value={v}>
+          PHP {v}
+        </option>
+      ))}
+    </select>
   );
 }
 

@@ -27,7 +27,7 @@ export const JOB_TYPE_INFO = {
   'site.create': {
     label: 'Create site',
     description:
-      "Creates the site's database and container, installs WordPress, and applies the plugins and recipes chosen on the New site form.",
+      "Creates the site's container and database, installs WordPress, and applies the plugins and recipes chosen on the New site form. A PHP site gets a placeholder page, and a database only when asked.",
     category: 'sites',
   },
   'site.delete': {
@@ -68,7 +68,7 @@ export const JOB_TYPE_INFO = {
   },
   'site.updateDomains': {
     label: 'Change domains',
-    description: "Changes the site's hostnames - going live, adding or removing a domain - and updates WordPress's own URLs to match.",
+    description: "Changes the site's hostnames - going live, adding or removing a domain - and updates WordPress's own URLs to match. A PHP site's own config is left to you.",
     category: 'sites',
   },
   'site.move': {
@@ -101,12 +101,12 @@ export const JOB_TYPE_INFO = {
   },
   'site.shell': {
     label: 'Shell command',
-    description: "Runs a shell command inside the site's container as www-data and keeps its output in the job log.",
+    description: "Runs a shell command in the site's folder, inside its container, as www-data, and keeps its output in the job log.",
     category: 'sites',
   },
   'backup.create': {
     label: 'Back up site',
-    description: "Dumps the site's database and archives its files into a new backup.",
+    description: "Dumps the site's database, when it has one, and archives its files into a new backup.",
     category: 'backups',
   },
   'backup.restore': {

@@ -28,7 +28,8 @@ export function AddDatabaseDialog({
   onDone?: () => void;
 }) {
   const run = useRunJob([['site-databases'], ['databases']]);
-  const choices = (sites ?? []).filter((s) => s.kind !== 'external' && s.status !== 'provisioning' && s.status !== 'deleting');
+  // Another database logs in as the site's own user: a PHP site made without one has none yet.
+  const choices = (sites ?? []).filter((s) => s.kind !== 'external' && s.hasDatabase && s.status !== 'provisioning' && s.status !== 'deleting');
   const [site, setSite] = useState(slug ?? choices[0]?.slug ?? '');
   const [name, setName] = useState(site ? suggestion(site) : '');
   const [touched, setTouched] = useState(false);

@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   SCAN_ON_FINDING_INFO,
+  PHP_SITE_SECURITY_INFO,
   SECURITY_LEVEL_INFO,
   effectivePolicy,
   scanOnFindingModes,
@@ -85,11 +86,15 @@ export function SiteSecuritySettings({ slug, title, onClose }: { slug: string; t
 
   const preview = useMemo(() => {
     if (!sec.data || !draft) return null;
-    return effectivePolicy(sec.data.fleet, {
-      level: draft.level,
-      overrides: draft.overrides,
-      customRules: draft.customRules.map((r, i) => ({ ...r, id: r.id ?? `new${i}` })) as CustomRule[],
-    });
+    return effectivePolicy(
+      sec.data.fleet,
+      {
+        level: draft.level,
+        overrides: draft.overrides,
+        customRules: draft.customRules.map((r, i) => ({ ...r, id: r.id ?? `new${i}` })) as CustomRule[],
+      },
+      sec.data.app,
+    );
   }, [sec.data, draft]);
 
   const saved = sec.data ? draftOf(sec.data) : null;
@@ -159,7 +164,9 @@ export function SiteSecuritySettings({ slug, title, onClose }: { slug: string; t
                 value={draft.level ?? 'default'}
                 onChange={(v) => setDraft({ ...draft, level: v === 'default' ? null : (v as SecurityLevel) })}
               />
-              <p className="measure mt-2 text-sm text-neutral-600">{SECURITY_LEVEL_INFO[preview.level].summary}</p>
+              <p className="measure mt-2 text-sm text-neutral-600">
+                {sec.data.app === 'php' ? PHP_SITE_SECURITY_INFO.levels[preview.level] : SECURITY_LEVEL_INFO[preview.level].summary}
+              </p>
               {draft.level === null && sec.data.fleet.level !== 'off' && (
                 <p className="mt-1 text-xs text-neutral-500">The default is set on Sites → Security → Settings; changes made there reach this site at once.</p>
               )}
@@ -170,6 +177,7 @@ export function SiteSecuritySettings({ slug, title, onClose }: { slug: string; t
                   scope="site"
                   onChange={(overrides) => setDraft({ ...draft, overrides })}
                   hits={sec.data.blocked7d}
+                  app={sec.data.app}
                 />
               </div>
             </Section>

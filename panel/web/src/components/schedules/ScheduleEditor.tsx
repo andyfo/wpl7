@@ -228,6 +228,7 @@ const sameTarget = (a: ScheduleTarget | null, b: ScheduleTarget | null): boolean
 /** Why a site would be left out of a run of this action, or null. Mirrors ineligible() in src/jobs/actions.ts. */
 function skipReason(action: ScheduleAction, site: SiteSummary): string | null {
   if (site.status === 'provisioning' || site.status === 'deleting') return site.status;
+  if (site.app === 'php' && (SCHEDULE_ACTION_INFO[action] as { wordpress?: boolean }).wordpress) return 'PHP site: no WordPress';
   if (site.kind === 'external') {
     const info: { external: boolean; externalRefusal?: string } = SCHEDULE_ACTION_INFO[action];
     if (!info.external) return `external: ${info.externalRefusal ?? 'cannot take this'}`;

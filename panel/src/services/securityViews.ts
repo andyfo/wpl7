@@ -113,6 +113,7 @@ export function siteSecurityDto(s: Deps, site: SiteRow): SiteSecurityDto {
   const input = s.security.siteInput(site.id);
   return {
     slug: site.slug,
+    app: site.app,
     level: input.level,
     overrides: input.overrides,
     customRules: input.customRules,

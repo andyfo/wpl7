@@ -35,7 +35,7 @@ export function SiteSecurityTab({ slug }: { slug: string }) {
     <div className="space-y-6">
       <ProtectionNotices s={s} />
       <SettingsSummary s={s} onEdit={() => setEditing(true)} />
-      <MalwareScanCard slug={slug} scan={s.scan} />
+      <MalwareScanCard slug={slug} scan={s.scan} php={s.app === 'php'} />
       <FindingsCard slug={slug} />
       <QuarantineCard slug={slug} />
       <BlockedCard slug={slug} rules={s.customRules} />

@@ -191,7 +191,8 @@ function TestSendCard({ onSent }: { onSent: () => void }) {
         });
         setResult(res.detail);
       } else {
-        const res = await api<{ accepted: boolean; detail: string }>(`/api/sites/${slug}/wp/test-email`, {
+        // wp_mail() on a WordPress site, PHP's mail() with no From header on a PHP site.
+        const res = await api<{ accepted: boolean; detail: string }>(`/api/sites/${slug}/mail/test`, {
           method: 'POST',
           body: { to: to.trim() },
         });
@@ -221,13 +222,15 @@ function TestSendCard({ onSent }: { onSent: () => void }) {
             className={`flex-1 rounded-md px-3 py-1.5 ${mode === 'site' ? 'bg-surface shadow-sm' : 'text-neutral-600'}`}
             onClick={() => setMode('site')}
           >
-            From a site (wp_mail)
+            From a site
           </button>
         </div>
         <p className="text-neutral-600">
           {mode === 'relay'
-            ? 'Injects a message straight into postfix, skipping WordPress.'
-            : 'Runs wp_mail() inside the site container — the full path a plugin takes.'}
+            ? 'Injects a message straight into postfix, skipping the sites.'
+            : (runnableSites.find((s) => s.slug === slug)?.app === 'php'
+                ? "Runs PHP's mail() inside the site container, with no From header: it goes out as the site's default sender."
+                : 'Runs wp_mail() inside the site container — the full path a plugin takes.')}
         </p>
         <div className="grid max-w-2xl gap-3 sm:grid-cols-2">
           {mode === 'relay' ? (

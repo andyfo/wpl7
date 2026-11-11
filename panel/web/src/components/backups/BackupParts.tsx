@@ -84,7 +84,7 @@ export function BackupActions({
               <Button small variant="ghost">Download</Button>
             </a>
           ) : (
-            <DownloadMenu backupId={backup.id} />
+            <DownloadMenu backupId={backup.id} hasDatabase={backup.hasDatabase} />
           )}
           {canRestore && (
             <Button small variant="secondary" busy={busy('restore')} onClick={onRestore}>
@@ -115,7 +115,7 @@ export function BackupActions({
  * A site backup's downloads: the whole of it as the panel keeps it, or one half to restore by
  * hand - the files for FTP, the database for phpMyAdmin.
  */
-function DownloadMenu({ backupId }: { backupId: number }) {
+function DownloadMenu({ backupId, hasDatabase }: { backupId: number; hasDatabase: boolean }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -137,7 +137,8 @@ function DownloadMenu({ backupId }: { backupId: number }) {
   const items = [
     { label: 'Everything', sub: '.tar', href },
     { label: 'Files', sub: '.tar.gz', href: `${href}?part=files` },
-    { label: 'Database', sub: '.sql.gz', href: `${href}?part=database` },
+    // A site with no database of its own made a backup with no dump in it.
+    ...(hasDatabase ? [{ label: 'Database', sub: '.sql.gz', href: `${href}?part=database` }] : []),
   ];
   return (
     <div ref={ref} className="relative inline-block text-left">

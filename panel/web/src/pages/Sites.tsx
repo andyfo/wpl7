@@ -8,6 +8,7 @@ import { SeverityBadge } from '../components/wp/severity';
 import { formatBytes, sitePhp, timeAgo } from '../lib/format';
 import { siteHealth } from '../lib/siteHealth';
 import { layoutFrom, sitesView, type SitesLayout } from './sitesLayout';
+import { PhpLabel } from '../components/php/PhpLabel';
 
 const LAYOUTS = [
   { id: 'split', label: 'Split', title: 'Sites hosted elsewhere in a list of their own' },
@@ -182,6 +183,11 @@ function SiteCell({ site, href }: { site: SiteSummary; href?: string }) {
       <Link to={`/sites/${site.slug}`} className="font-medium hover:underline">
         {site.title}
       </Link>
+      {site.app === 'php' && (
+        <span className="ml-2 align-middle">
+          <PhpLabel />
+        </span>
+      )}
       <div className="text-xs text-neutral-500">
         <a
           href={href ?? site.external?.home ?? `https://${site.primaryDomain}`}
@@ -247,6 +253,14 @@ function ExternalSitesCard({ sites }: { sites: SiteSummary[] }) {
 
 /** Updates the last scan found, and the worst known vulnerability. */
 function UpdatesCell({ site }: { site: SiteSummary }) {
+  // No WordPress to update.
+  if (site.app === 'php') {
+    return (
+      <span className="text-neutral-300" title="A PHP site has no WordPress updates">
+        –
+      </span>
+    );
+  }
   if (!site.wp) {
     return (
       <span className="text-neutral-300" title="Not scanned yet">
