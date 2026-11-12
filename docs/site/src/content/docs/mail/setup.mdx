@@ -45,7 +45,8 @@ providers.
 ## Which domains are listed
 
 WordPress sends a site's mail from its primary domain, without `www.`: a site on `www.example.com`
-sends as `wordpress@example.com`. So each site adds one sending domain.
+sends as `wordpress@example.com`. A [PHP site](/docs/sites/php/)'s mail with no sender of its own
+goes out as `noreply@example.com`. So each site adds one sending domain.
 
 - A site's other domains are not listed. They redirect to the primary, and no mail comes from them.
 - All dev addresses count as one sending domain, the dev domain, since a key there signs every site

@@ -2,7 +2,7 @@
 title: Site settings
 description: "Switch PHP, change PHP settings, set CPU, memory and process limits, stop, recreate or delete a site."
 sidebar:
-  order: 13
+  order: 14
 sources:
   - panel/web/src/pages/SiteDetail.tsx
   - panel/web/src/components/SiteLimits.tsx
@@ -27,6 +27,9 @@ import Since from '~/components/Since.astro';
 A site's **Settings** tab switches its PHP version, changes its domains, sets its
 [caches](/docs/sites/caching/) and its container limits, and deletes the site. Stopping, starting
 and rebuilding its container are on the **Overview** tab.
+
+A [PHP site](/docs/sites/php/)'s tab also has **Web root**, **Cron** and **Run a command**, and of the
+caches only **Redis**.
 
 <Screenshot name="site-settings" alt="A site's Settings tab: PHP version, domains and the danger zone" />
 
@@ -61,7 +64,8 @@ nothing.
 
 The panel moves these lines to `.user.ini` when a site moves to PHP-FPM. It does the same after an
 import, a refresh, a restore, a move to another server, and an update of WordPress, a plugin or a
-theme. Each line stays in the `.htaccess`, commented out, after `# Moved to .user.ini by WPL7:`.
+theme. On a PHP site, it does so after a zip is unpacked on the **Files** tab. Each line stays in
+the `.htaccess`, commented out, after `# Moved to .user.ini by WPL7:`.
 `php_flag engine off` has no such setting, so a deny for PHP files takes its place.
 
 The same pass reads every `.user.ini` that PHP-FPM has not run with yet: when a site moves to it,

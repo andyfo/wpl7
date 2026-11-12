@@ -40,6 +40,7 @@ server's clock, which the page names at the top.
 | Background task | Runs | While it is paused |
 |---|---|---|
 | WordPress cron | Every 5 minutes | Scheduled posts, plugin tasks and WooCommerce emails stop on every site |
+| PHP site cron | <Since v="0.3.3" /> Every minute | No [PHP site](/docs/sites/php/#run-commands-on-a-schedule)'s cron lines run. Those due meanwhile run once on resume |
 | Uptime checks | Every minute by default | A site that goes down is not noticed |
 | External sites check | <Since v="0.3.0-beta.3" /> Every hour | A [site hosted elsewhere](/docs/sites/external/) whose plugin stops answering is not noticed |
 | Site resource stats and Server resource stats | Every minute by default | The charts and the dashboard stop updating |

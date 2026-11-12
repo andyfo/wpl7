@@ -1,4 +1,4 @@
-// @docs get-started/first-site, get-started/quick-start, sites/create
+// @docs get-started/first-site, get-started/quick-start, sites/create, sites/php
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';

@@ -27,9 +27,9 @@ root is `/srv/backups` unless the server's location was moved on **Backups → S
 
 | File | Content |
 |---|---|
-| `db.sql.gz` | A `mariadb-dump --single-transaction` of the site's database |
+| `db.sql.gz` | A `mariadb-dump --single-transaction` of the site's database. Not there for a PHP site without one |
 | `files.tar.gz` | The site's `wordpress/` folder, its `config/` folder and `site.json` |
-| `manifest.json` | The slug, title, domains, dev address, PHP and WordPress versions, locale, database name and user, and the table prefix: `wp_`, unless the site was imported |
+| `manifest.json` | The slug, title, domains, dev address, PHP and WordPress versions, locale, database name and user, and the table prefix: `wp_`, unless the site was imported. `app` is `php` for a PHP site, with its `webRoot` and whether it has a `database` |
 | `sha256sums` | The SHA-256 checksums of the archive and every dump |
 | `databases/<name>.sql.gz` | A dump of each database added to the site, imported the same way as `db.sql.gz` |
 
@@ -221,12 +221,16 @@ snapshot are gone, and logins deleted since come back.
   from the environment. An imported site also needs `WORDPRESS_TABLE_PREFIX`, set to the table
   prefix in the manifest; every other site's is `wp_`, the image's default.
 
+A [PHP site](/docs/sites/php/) needs a PHP image with Apache and the extensions its code uses
+instead, with its `webRoot` as the document root. Its own config names its database host, name,
+user and password. Make the new database and user match them, or change the config.
+
 ## Limits
 
 - The steps restore the files and the database. A site rebuilt on another host runs without what
   the panel adds: its own mail login, its protection rules and its resource limits.
-- The database password of a site is not in its backup. On another host, the site gets a new
-  database user.
+- The database password of a WordPress site is not in its backup. On another host, the site gets
+  a new database user.
 - The `-apache` image's mod_php does not read `.user.ini`, so settings the panel moved there do not
   apply. In each `.htaccess`, take the `# Moved to .user.ini by WPL7:` mark off the line to bring one
   back.

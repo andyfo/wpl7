@@ -2,7 +2,7 @@
 title: Move a site to another server
 description: Move a site between your servers while the old one forwards visitors until DNS catches up.
 sidebar:
-  order: 14
+  order: 15
 sources:
   - panel/web/src/pages/SiteDetail.tsx
   - panel/src/services/sites.ts
@@ -30,7 +30,9 @@ server forwards visitors to the new one until DNS has caught up.
 1. On the site's **Overview** tab, choose **Move server**.
 2. Pick the **Target server**.
 3. For a live site, choose **Freeze the site (maintenance page) — nothing gets lost** or
-   **Keep serving — changes made during the copy are lost**.
+   **Keep serving — changes made during the copy are lost**. A live [PHP site](/docs/sites/php/)
+   has no maintenance page: choose **Stop the site while it moves: nothing gets lost** or **Keep
+   serving: changes made during the copy are lost**.
 4. Note the `A` records the dialog lists, if any, then choose **Move site**.
 
 ## What happens
@@ -74,6 +76,8 @@ target, and the job log names the step that failed.
   first.
 - The old server cannot be removed while a cleanup is pending.
 - The site's added databases stay on the old server until the move is finalized, as its own does.
+- A live PHP site that is stopped for the move is offline while it is copied.
+- A PHP site moves only to a server whose site image can run one. Update that server first.
 
 ## Related
 

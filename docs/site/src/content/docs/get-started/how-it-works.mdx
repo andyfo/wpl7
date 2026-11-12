@@ -35,8 +35,11 @@ Every site container runs with Linux capabilities removed, without privilege esc
 under the CPU, memory and process limits set in **Settings → Sites**, or on the site itself.
 
 WordPress's own cron is switched off. The panel runs each site's due cron events every five
-minutes instead. Mail from `wp_mail()` goes to the server's relay with the site's own login,
-so a site cannot send as another site's domain.
+minutes instead. Mail from `mail()` and `wp_mail()` goes to the server's relay with the site's own
+login, so a site cannot send as another site's domain.
+
+A [PHP site](/docs/sites/php/) runs in the same kind of container, with no WordPress in it. Its
+database is optional, and its nginx stores no pages. The panel runs the site's own cron lines.
 
 ## Inside a site's container
 

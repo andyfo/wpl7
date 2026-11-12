@@ -74,12 +74,15 @@ export const SHOTS: Shot[] = [
   },
   {
     name: 'site-new-php',
-    what: 'The New site wizard with Type set to PHP, its first step filled in',
+    what: 'The New site wizard for a PHP site, on its PHP step: a database and a web root',
     path: '/sites/new',
     theme: 'light',
     prepare: steps(
       async (page) => page.getByRole('group', { name: 'Type', exact: true }).getByRole('button', { name: 'PHP', exact: true }).click(),
       async (page) => page.getByLabel('Site title').fill('Lantern Ticketing'),
+      async (page) => page.getByRole('button', { name: 'Continue', exact: true }).click(),
+      async (page) => page.getByRole('switch', { name: 'Database' }).click(),
+      async (page) => page.getByLabel('Web root').fill('public'),
     ),
   },
   { name: 'site-overview', what: 'A live site’s Overview tab', path: '/sites/northwind-bakery', theme: 'both', hero: true },

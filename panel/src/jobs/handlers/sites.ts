@@ -1,4 +1,4 @@
-// @docs backups/delete, get-started/first-site, integrations/cloudflare, integrations/dns, panel/updating, sites/create, sites/domains, sites/settings
+// @docs backups/delete, get-started/first-site, integrations/cloudflare, integrations/dns, panel/updating, sites/create, sites/domains, sites/php, sites/settings
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { siteConnections, backups, moveCleanups, sites, type SiteRow } from '../../db/schema.js';

@@ -49,6 +49,15 @@ address. A site that does not answer afterwards is a warning in the log, not a f
 A failure after the site was stopped leaves the site in **Error**. The job's log then says where
 the previous files are.
 
+On a [PHP site](/docs/sites/php/), a restore rewrites no URLs and keeps the site's web root. Its
+database is optional, so a restore does one of these:
+
+| The backup | The site now | What happens |
+|---|---|---|
+| Has a database | Has one | The database is replaced, as above |
+| Has a database | Has none | The database is made first, then filled. Its user gets a new password. Put it in the site's config, from the **Database** tab |
+| Has none | Has one | The database is left as it is |
+
 ## What changes for logins and jobs
 
 - WordPress accounts and their passwords are those in the backup.
@@ -66,7 +75,7 @@ and the backup's time, and streams from the server that keeps the backup.
 |---|---|
 | **Everything** | One `.tar` file that holds the four backup files. |
 | **Files** | The site's files, as `files.tar.gz`. They are its `wordpress` folder. |
-| **Database** | The site's own database, as one `.sql.gz` file. **Import** on a site's **Database** tab takes it as it is. |
+| **Database** | The site's own database, as one `.sql.gz` file. **Import** on a site's **Database** tab takes it as it is. A backup of a site with no database has none. |
 
 To restore a hosted site without the panel, follow [Manual recovery without the
 panel](/docs/reference/manual-recovery/).
@@ -96,6 +105,8 @@ settings are in the database, so the site stays connected after a restore.
   or sits on the server unused.
 - A backup restores only onto the site of the same name, on the server that holds the backup.
   From another server, fetch it back from an offsite copy, or move the site back first.
+- A PHP site's backup restores only into a PHP site, and a WordPress site's only into a WordPress
+  site.
 - A deleted site's backup has no **Restore**. Create a site with the same name first.
 - A site hosted elsewhere is restored by hand, as above.
 - The panel's own database is restored by hand, never from the panel.

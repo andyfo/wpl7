@@ -34,12 +34,12 @@ when these pages were built, read from the files in the last column.
 | The official WordPress image | The base of every site image, with PHP and PHP-FPM | `wordpress:php8.2-fpm` to `wordpress:php8.5-fpm` | WordPress: GPL-2.0-or-later. The image: GPL-2.0 | `deploy/wordpress-image/Dockerfile` |
 | nginx | The [page cache](/docs/sites/caching/), in front of Apache in each site's container | Debian's package, in the site image | BSD-2-Clause | `deploy/wordpress-image/Dockerfile` |
 | Apache HTTP Server | `.htaccess`, static files, Brotli and gzip in each site's container | Debian's package, in the site image | Apache-2.0 | `deploy/wordpress-image/Dockerfile` |
-| Redis | The [object cache](/docs/sites/caching/#turn-on-the-object-cache), only on a site with it switched on | Debian's package, in the site image | RSALv2, SSPLv1 or AGPL-3.0, at the user's choice. WPL7 uses it under AGPL-3.0 | `deploy/wordpress-image/Dockerfile` |
+| Redis | The [object cache](/docs/sites/caching/#turn-on-the-object-cache), or a [PHP site](/docs/sites/php/#turn-on-redis)'s own Redis, only on a site with it switched on | Debian's package, in the site image | RSALv2, SSPLv1 or AGPL-3.0, at the user's choice. WPL7 uses it under AGPL-3.0 | `deploy/wordpress-image/Dockerfile` |
 | phpredis | The client PHP talks to Redis with | 6.3.0, from PECL | PHP-3.01 | `deploy/wordpress-image/Dockerfile` |
-| Redis Object Cache plugin | Connects WordPress to Redis. Installed on a site when its object cache is switched on | The latest release on wordpress.org | GPL-3.0 | `panel/src/jobs/handlers/caches.ts` |
+| Redis Object Cache plugin | Connects WordPress to Redis. Installed on a WordPress site when its object cache is switched on | The latest release on wordpress.org | GPL-3.0 | `panel/src/jobs/handlers/caches.ts` |
 | tini | Process 1 in each site's container | Debian's package, in the site image | MIT | `deploy/wordpress-image/Dockerfile` |
 | WP-CLI | WordPress commands inside each site | The latest stable release when the site image is built | MIT | `deploy/wordpress-image/Dockerfile` |
-| msmtp | Hands PHP's `mail()` to the relay | Debian's package, in the site image | GPL-3.0 | `deploy/wordpress-image/Dockerfile` |
+| msmtp | Hands PHP's `mail()` and `sendmail` to the relay, through WPL7's `wpl7-sendmail` | Debian's package, in the site image | GPL-3.0 | `deploy/wordpress-image/Dockerfile` |
 | Node.js | Runs the panel | 22, from `node:22-bookworm-slim` | MIT | `panel/Dockerfile` |
 | Inter | The panel's typeface, served by the panel itself | 4.001 | SIL Open Font License 1.1 | `panel/web/src/fonts/` |
 
@@ -49,6 +49,8 @@ when these pages were built, read from the files in the last column.
   their projects publish them.
 - nginx, Apache, Redis and tini are Debian's packages, unmodified. WPL7 does not modify phpredis or
   the Redis Object Cache plugin either. Redis has no network port, and runs as a separate process.
+- msmtp is Debian's package, unmodified. WPL7's `wpl7-sendmail` runs it, and gives it one sender for
+  each message.
 - SFTPGo is the one modified component. WPL7 builds it from a fixed upstream commit with one
   patch: an overwrite keeps the old file until the new one is complete. The patch ships inside
   the image, in `/usr/share/doc/wpl7-sftpgo/`.

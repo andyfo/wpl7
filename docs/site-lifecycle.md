@@ -48,6 +48,17 @@ is registered *before* the operation it undoes, so a step that half-succeeds (co
 attached) still gets cleaned up. If a rollback step itself fails the site is marked `error` — resolve
 with Delete, which is safe to repeat.
 
+### A PHP site
+
+`app: "php"` in the body (docs/api.md) takes the same job without WordPress's block
+(`installWordPress`, `publishWordPress` in `jobs/handlers/sites.ts`): the folder and the web root are
+made, the placeholder `index.html` goes into the web root, and the whole folder is `chown -R 33:33`ed,
+which fails the job when it fails. The database and its user are made only with `database: true`. The
+image is checked for `wpl7.apps` containing `php` before the container is made. The container is
+created with its router from the start, after the protection is pinned: the unrouted phase exists to
+hide WordPress's installer, and a PHP site has none. No password is returned: `job.result` is
+`{url, slug}`. Rollback is the same.
+
 ## One-click WordPress login
 
 **Log in to WordPress** on the site page (`POST /api/sites/:slug/wp/admin-login`) opens `wp-admin`
@@ -83,9 +94,15 @@ must-use ones included, while `.maintenance` is in place.
    Inside that same window the plugin recipes' `afterUrlChange` hook runs: licensed plugins are
    re-activated for the new URL, and Breakdance's own URL replacement (its content keeps URLs in
    JSON, out of `search-replace`'s reach) and cache clear run (docs/licenses.md).
-6. The registry row (domains, live flag) is written **last**. If the container swap or the rewrite
-   fails, the transition router is put back and the job fails; re-running the change repairs it — the
-   current URL is read from WordPress itself, never assumed from the row.
+6. The registry row (domains, live flag) is written only after the container swap and the
+   rewrite. If either fails, the transition router is put back and the job fails; re-running the
+   change repairs it — the current URL is read from WordPress itself, never assumed from the row.
+7. The site's default mail sender (`config/runtime/mail-from`) is written again from the new row, so
+   a site that went live sends as its new domain at once: the containers above were made while the
+   row still had the old domains.
+
+A PHP site skips step 5's rewrite, the search-engine switch and the recipes; the log says to change
+the address in the site's own config if it names one.
 
 ## Move to another server
 
@@ -97,7 +114,8 @@ copy + cutover + DNS:
 2. Source quiesced — live sites default to the maintenance page, which the job re-arms every 5 minutes
    for as long as the copy runs (WordPress ignores a `.maintenance` marker older than 10 minutes), so
    nothing written can be lost; dev sites default to `none`, where edits made during the copy are
-   lost; `stop` is the hard-offline option.
+   lost; `stop` is the hard-offline option. Maintenance mode is WordPress's: a PHP site takes `stop`
+   (a live one's default) or `none`, and `maintenance` is a 409.
 3. Snapshot (backup type `move`) → streamed source→panel→target, sha256-verified; the staged copy is
    registered as a backup on the target.
 4. Restore on the target + probe. A failed probe rolls the target back completely and the source
@@ -144,10 +162,11 @@ from a zip the panel builds for that import (it carries the import's token).
 ## PHP switch
 
 Recreates the container with the new `wpl7-wordpress:php<X.Y>` image. Files and DB are untouched (the
-image only seeds an *empty* directory). The recorded PHP version changes only once the new container
-is up and answers: if Docker fails to create or start it, or the smoke check fails, the previous
-container is put back and the job fails (safe to retry). "Already on that version" is only believed
-while the container actually exists.
+image only seeds an *empty* directory, and never a PHP site's). For a PHP site the route and the job
+both refuse an image from before PHP sites, before the old container is set aside. The recorded PHP
+version changes only once the new container is up and answers: if Docker fails to create or start
+it, or the smoke check fails, the previous container is put back and the job fails (safe to retry).
+"Already on that version" is only believed while the container actually exists.
 
 ## Stop / start / delete
 
@@ -167,6 +186,7 @@ while the container actually exists.
   (docs/licenses.md).
 - Backups cannot be deleted (API or retention) while a job that may use them — restore, backup, move
   or delete of that site — is queued or running (`409`).
+- A PHP site has no licensed plugins to release, and its database is dropped only when it has one.
 - Delete = optional **final backup** (kept until you delete it) → remove container → drop DB + user →
   remove files → remove the site's network → remove registry row → revoke its relay login. Backups
   survive site deletion, listed under **Backups → Deleted sites**: the final one stays until you delete
@@ -191,7 +211,9 @@ regularly contradicted each other:
   own `Host` header, every `monitor.uptimeSec`. The only one of the two that knows whether a visitor
   sees anything. Traefik answers its catch-all **404** for a hostname no router matches, which is
   precisely what a site whose container was recreated without its labels looks like from outside —
-  so a 404 counts as down (`panel/src/lib/httpProbe.ts`).
+  so a 404 counts as down (`panel/src/lib/httpProbe.ts`). A PHP site may answer 404, or another 4xx,
+  at its address on purpose, so for it a 4xx carrying `X-Cache-Status` counts as up: the site's nginx
+  puts that header on every answer, and Traefik's own 404 never has it. 5xx is down either way.
 
 The panel collapses them (plus a live `docker inspect` on the site page, which costs a round trip and
 so is not in the list) into one badge per site — `panel/web/src/lib/siteHealth.ts`:

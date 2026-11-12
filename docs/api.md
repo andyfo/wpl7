@@ -183,7 +183,7 @@ The same `403` answers three more cases:
 | Method & path | Body / query | Returns |
 |---|---|---|
 | `GET /sites` | – | `{items: SiteSummary[]}` — `status` is the registry's lifecycle state (what the last job left the site as, never re-read from Docker); `up`, `httpStatus` and `lastCheckedAt` are the uptime probe's own answer. They can disagree, and that disagreement is the interesting case — docs/site-lifecycle.md → Status vs. health |
-| `POST /sites` | `{title, slug?, serverId?, domainMode: "dev"\|"custom", domains?, phpVersion?, locale?, adminUser, adminEmail?, adminPassword?, discourageSearchEngines?, plugins?: {catalogIds?[], extraWporgSlugs?[]}}` | `202 {job}` — omitted `adminPassword` is generated and returned once in `job.result.adminPassword`; omitted `adminEmail` uses the `defaultAdminEmail` setting, and is a `400` while that is empty; omitted `serverId` uses the `defaultServerId` setting; omitted `catalogIds` (or `plugins`) installs the catalog's `isDefault` plugins, as the New Site wizard preselects them, and `catalogIds: []` installs none of the catalog. `extraWporgSlugs` are installed as given, not verified up front — a slug the directory does not have becomes a warning in the create job. Use `GET /plugins/search` to resolve names to slugs first |
+| `POST /sites` | `{title, slug?, serverId?, domainMode: "dev"\|"custom", domains?, phpVersion?, app?: "wordpress"\|"php", locale?, adminUser, adminEmail?, adminPassword?, discourageSearchEngines?, plugins?: {catalogIds?[], extraWporgSlugs?[]}}` — for `app: "php"`: `{database?: false, webRoot?: ""}` instead of WordPress's fields, which are a `400` naming each (and `database`/`webRoot` are one for WordPress) | `202 {job}` — omitted `adminPassword` is generated and returned once in `job.result.adminPassword`; omitted `adminEmail` uses the `defaultAdminEmail` setting, and is a `400` while that is empty; omitted `serverId` uses the `defaultServerId` setting; omitted `catalogIds` (or `plugins`) installs the catalog's `isDefault` plugins, as the New Site wizard preselects them, and `catalogIds: []` installs none of the catalog. `extraWporgSlugs` are installed as given, not verified up front — a slug the directory does not have becomes a warning in the create job. Use `GET /plugins/search` to resolve names to slugs first |
 
 `locale` takes any wp.org locale code (`cs_CZ`, `de_DE_formal`, `pt_PT_ao90`, …); `GET /meta` lists the
 ones the panel's pickers offer. Every new site has WordPress's bundled plugins — Akismet and Hello
@@ -192,13 +192,29 @@ Dolly — removed right after the install, before the requested plugins go on.
 search engines from indexing this site" (Settings → Reading) switched on. Pass `false` for a site
 that should be indexed from the start. Going live turns it off unless its `allowSearchEngines` is
 `false`.
+
+`app: "php"` makes a PHP site: no WordPress, a placeholder `index.html` in its web root, a database
+only with `database: true`, and `job.result` `{url, slug}`. It is a `409` before anything is made when
+the target server's site image is from before PHP sites (an image it does not have yet is fine: the
+job builds or pulls the panel's own). Every `/sites/:slug/wp/*` and `/godmode/*` endpoint, recipes,
+the page cache settings and `cache/clear` answer a PHP site with `409` ("is a PHP site"); `/shell`
+works for it. `SiteSummary.app`, and `SiteDetail.hasDatabase`, `webRoot` and `webRootMissing` (asked
+inside the running container; `null` while it is not running) say what it is.
+
+| Method & path | Body / query | Returns |
+|---|---|---|
 | `GET /sites/:slug` | – | `SiteDetail` (incl. `containerState` — `unknown` when the hosting server cannot be reached; the rest is served from the registry — `url`, monitoring snapshot, `activeJob` — `{id, type}` of the queued or running job holding the site, such as a new site's `site.create`, else `null`) |
 | `DELETE /sites/:slug` | `?finalBackup=true\|false` (default true; `false` skips the final backup) `&deleteBackups=true\|false` (default false) | `202 {job}` — `deleteBackups=true` also deletes the backups the site already has, offsite copies included: once the site is gone, its job queues a `backup.delete` for them (`result.backupDeleteJobId`). The final backup is not among them, so with both the site leaves exactly one backup behind (`result.finalBackupId`); when a final backup was asked for but the files were already gone, its newest complete backup stays instead |
 | `POST /sites/:slug/start` · `/stop` · `/restart` | – | `202 {job}` |
-| `PUT /sites/:slug/php` | `{phpVersion}` | `202 {job}` — auto-rollback if the site stops responding |
+| `PUT /sites/:slug/php` | `{phpVersion}` | `202 {job}` — auto-rollback if the site stops responding; `409` for a PHP site when that version's image is from before PHP sites |
+| `PUT /sites/:slug/web-root` | `{webRoot}` — a folder in the site, such as `public`: letters, digits, `.`, `_`, `-` per folder, `/` between, no `.` or `..`, at most 100 characters; `""` is the site's folder | `SiteDetail` (sync) — PHP sites only; in force at once through the site's Apache file; `409` with Apache's words when it refuses it, and the old value stays |
+| `GET /sites/:slug/cron` | – | `{lines: SiteCronLineDto[]}` — a PHP site's cron lines, each with `schedule` in words, `nextRunAt`, `running` and `last` (`startedAt`, `ms`, `exitCode`, the last 4 KB of `output`, `error`); `409` for a WordPress site |
+| `PUT /sites/:slug/cron` | `{lines: [{id?, expr, command, enabled?: true, timeoutMin?: 5}]}` — every line as it is to be, at most 10: one with an `id` keeps its last run, one left out is deleted; `expr` five fields on the panel's clock, every minute allowed; `command` up to 4,000 characters; `timeoutMin` 1-60 | `{lines}` — Manage, and dangerous: they run commands, as www-data in the site's folder |
+| `POST /sites/:slug/cron/:id/run` | – | `{line}` — runs it now, as the next minute would; `409` while it runs, while the site is stopped or busy, or with 2 already running on its server |
+| `POST /sites/:slug/mail/test` | `{to}` | `{accepted, detail}` — as the site's code sends: `wp_mail()`, or PHP's `mail()` with no sender on a PHP site, so its default sender is what is tested |
 | `POST /sites/:slug/go-live` | `{domains: [primary, ...aliases], keepDevAlias?: true, allowSearchEngines?: true, manageDns?: false}` | `202 {job}` — `manageDns: true` creates the A records first, through the Cloudflare token in Settings → DNS, for the domains whose zone it reaches; `allowSearchEngines` unticks WordPress's "Discourage search engines" once the URLs are rewritten |
 | `PUT /sites/:slug/domains` | `{domains}` | `202 {job}` — general domain edit |
-| `POST /sites/:slug/move` | `{targetServerId, quiesce?: "maintenance"\|"stop"\|"none"}` | `202 {job}` — default quiesce: live site `maintenance`, dev site `none`; see docs/multi-server.md |
+| `POST /sites/:slug/move` | `{targetServerId, quiesce?: "maintenance"\|"stop"\|"none"}` | `202 {job}` — default quiesce: live site `maintenance` (a live PHP site `stop`; `maintenance` is a `409` for one), dev site `none`; see docs/multi-server.md |
 | `POST /sites/:slug/move/finalize` | – | `202 {job}` — tear down the source copy of a moved site now instead of waiting for DNS verification |
 | `POST /sites/:slug/reconcile` | – | `202 {job}` — re-apply the current isolation policy (network, capability drops, resource ceilings, mail credential). Rolls back only if Docker refuses to create or start the replacement: a container that starts and then fails the HTTP smoke check is left in place and the job still **succeeds**, with the warning in its log |
 | `POST /sites/reconcile-all` | – | `202 {jobs}` — the same for every site, one job each, serialized per server |
@@ -480,11 +496,12 @@ the site is being created or deleted. Values come back as text (`null` for NULL)
 | `GET /databases` | – | `{databases[], servers[]}` — per database: `serverId`, `name`, `size: {tables, bytes}`, `use` (`site`\|`extra`\|`moveCopy`\|`unused`), `missing`; per server: `scannedAt`, `error`. Sizes are as last read: hourly, and after every job that changes a database |
 | `POST /databases/scan` | – | the same, after reading every server now |
 | `DELETE /databases/:serverId/:name` | – | `202 {job}` (`database.deleteUnused`) — only a database no site or move claims; Full |
-| `GET /sites/:slug/databases` | – | `{name, user, host, port, tablePrefix, databases[], serverName, scannedAt, scanError}` |
-| `POST /sites/:slug/databases` | `{name}` (`a-z0-9_`, not `wp_…`) | `202 {job}` (`database.create`) — granted to the site's user; unique across the panel |
+| `GET /sites/:slug/databases` | – | `{name, user, host, port, tablePrefix, databases[], serverName, scannedAt, scanError}` — `name` and `user` are `null` for a PHP site with no database, and then everything below answers `409`, but its creation, `DELETE …/databases/:db` (`404`) and `DELETE …/database-uploads/:id` (`204`) |
+| `POST /sites/:slug/database` | – | `202 {job}` (`database.create` with `own: true`) — the site's own database, `wp_<slug>`, and its user, for a PHP site made without one; `409` when it has one |
+| `POST /sites/:slug/databases` | `{name}` (`a-z0-9_`, not `wp_…`) | `202 {job}` (`database.create`) — granted to the site's user; unique across the panel; `409` for a site with no database of its own |
 | `DELETE /sites/:slug/databases/:db` | – | `202 {job}` (`database.delete`) — an added one; the site's own goes only with the site |
 | `POST /sites/:slug/database-password/reveal` | – | `{password}` — logged |
-| `POST /sites/:slug/database-password` | – | `202 {job}` (`database.password`) — a new password, and the container recreated with it. Refused when `wp-config.php` sets the password itself |
+| `POST /sites/:slug/database-password` | – | `202 {job}` (`database.password`) — a new password, and the container recreated with it. Refused when `wp-config.php` sets the password itself. On a PHP site only MariaDB and the panel get it, and the site's own config needs the new one |
 | `GET /sites/:slug/databases/:db/export` | – | the dump, gzipped (`.sql.gz`), streamed |
 | `PUT /sites/:slug/database-uploads/:id` | `?offset=&size=`; body: one chunk ≤ 8 MiB of a gzipped dump | `{received, complete}` — `409` with `details.received` when `offset` is not what the server has |
 | `DELETE /sites/:slug/database-uploads/:id` | – | `204` |

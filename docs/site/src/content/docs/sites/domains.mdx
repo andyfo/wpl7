@@ -2,7 +2,7 @@
 title: Domains and going live
 description: Move a site from its dev address to the customer's domain with no downtime, and change domains later.
 sidebar:
-  order: 5
+  order: 6
 sources:
   - panel/src/routes/sites.ts
   - panel/src/jobs/handlers/sites.ts
@@ -60,6 +60,10 @@ site is started for this step and stopped again.
 
 If a step fails, the old addresses keep working and the job says what went wrong. Running the
 change again repairs it.
+
+A [PHP site](/docs/sites/php/) gets no URL rewrite and no change for search engines, and its
+**Go live** dialog has no **Allow search engines**. If the site's own config names its address,
+change it there too.
 
 ## Limits
 

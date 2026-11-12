@@ -161,6 +161,13 @@ deny PHP files in that folder instead. One response header of 8 KB or more also 
 plugin sending one has to send less. See
 [Change a PHP setting](/docs/sites/settings/#change-a-php-setting).
 
+### A PHP site's folder answers 500
+
+The site's log says `Invalid command 'php_value'`, or `'php_flag'`: a `.htaccess` that came with the
+site's files has a PHP setting. A zip unpacked on the **Files** tab has such lines moved to
+`.user.ini` by itself. Files uploaded any other way keep them, so move each line by hand, as the
+entry above shows. See [PHP sites](/docs/sites/php/#upload-the-sites-files).
+
 ### A file answers 403, or sends its source, after the move
 
 PHP runs only in files named `.php`. A `.htaccess` line that hands another file to PHP, with
@@ -267,6 +274,16 @@ answers. See [Cloudflare DNS](/docs/integrations/cloudflare/).
 
 Mail that lands in spam needs its records: **Mail → DKIM & DMARC** checks SPF, DKIM and DMARC
 against live DNS. See [How mail works](/docs/mail/overview/).
+
+### A script's mail never leaves
+
+**Mail → Traffic** shows whether the relay took the message.
+
+| What you see | Cause and fix |
+|---|---|
+| The message is `rejected` | The sender's domain belongs to another site, or has a DKIM key and no site. A script sends as its `-f` address, else its `From:` header, else the site's default, as [How mail works](/docs/mail/overview/#how-a-message-leaves-a-site) shows. |
+| Nothing, from an app that sends through sendmail | The app runs `sendmail -bs`, a mode the site's sendmail does not have. Symfony's and Laravel's sendmail transports do, unless told otherwise. Set the app's sendmail command to `/usr/sbin/sendmail -oi -t`. |
+| Nothing, from an app that sends by SMTP | The panel gives a site no SMTP details. Send with PHP's `mail()` or sendmail instead. |
 
 ### A site suddenly sends a lot of mail
 

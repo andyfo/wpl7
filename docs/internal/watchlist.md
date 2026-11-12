@@ -30,7 +30,7 @@ for a reason; remove one once there is nothing left to watch.
 | [The Redis Object Cache plugin: its constants and `wp redis`](#the-redis-object-cache-plugin-its-constants-and-wp-redis) | Medium | 2026-11-01 09:08 UTC | 3.0.0 is the latest; all seven constants and `status`, `enable`, `disable` are in its code |
 | [The cache plugins' clear hooks](#the-cache-plugins-clear-hooks) | Medium | 2026-11-01 09:08 UTC | Every hook is in the latest releases: WP Rocket 3.24, W3 Total Cache 2.11.0, WP Super Cache 3.1.4, LiteSpeed Cache 7.9.2, Autoptimize 3.1.17, Elementor 4.3.5, WooCommerce 11.2.1 |
 | [The built-in cache rules' cookies and parameters](#the-built-in-cache-rules-cookies-and-parameters) | Medium | 2026-11-01 09:08 UTC | Every name is in the latest code or WP Rocket 3.24's lists; `wp_is_mobile()` tests the same words |
-| [Debian's nginx and Apache, as the page cache relies on them](#debians-nginx-and-apache-as-the-page-cache-relies-on-them) | Low | 2026-11-01 09:08 UTC | nginx 1.26.3-3+deb13u10 and Apache 2.4.69-1~deb13u1 on trixie-security, as tested; engine test not run at this check |
+| [Debian's nginx and Apache, as the page cache and PHP sites rely on them](#debians-nginx-and-apache-as-the-page-cache-and-php-sites-rely-on-them) | Low | 2026-11-01 09:08 UTC | nginx 1.26.3-3+deb13u10 and Apache 2.4.69-1~deb13u1 on trixie-security, as tested; engine test not run at this check |
 | [PHP-FPM: `[PATH=]` and `[HOST=]` in a `.user.ini`](#php-fpm-path-and-host-in-a-userini) | Low | 2026-11-01 09:08 UTC | No upstream issue found; `php_ini_parser_cb` unchanged in its handling; not re-run at this check |
 | [PHP-FPM: `ondemand` and requests arriving together](#php-fpm-ondemand-and-requests-arriving-together) | Low | 2026-11-01 12:13 UTC | On PHP 8.4.27, two 4 s requests at once take 8 s on `ondemand` and 4 s on `dynamic` |
 | [PHP-FPM: the status line, and a header with no colon](#php-fpm-the-status-line-and-a-header-with-no-colon) | Low | 2026-11-01 09:08 UTC | `sapi_cgi_send_headers` on master still sends the stored status line first |
@@ -62,6 +62,7 @@ for a reason; remove one once there is nothing left to watch.
 | [WP Godmode's `godmode` command on WPL7 Connect](#wp-godmodes-godmode-command-on-wpl7-connect) | Medium | 2026-11-08 17:31 UTC | Not released: 1.3.2, the latest, registers no command with WPL7 Connect |
 | [WordPress's answer to a fatal error](#wordpresss-answer-to-a-fatal-error) | Low | 2026-10-09 15:55 UTC | 500, as relied on |
 | [WordPress's default From address](#wordpresss-default-from-address) | Medium | 2026-10-14 16:28 UTC | `wordpress@` and the home URL's host without `www.`, on 7.1.3 and trunk |
+| [msmtp: one envelope sender, as `wpl7-sendmail` relies on it](#msmtp-one-envelope-sender-as-wpl7-sendmail-relies-on-it) | Low | 2026-11-11 23:04 UTC | msmtp 1.8.28 in the image, 1.8.34 upstream; nothing since changes the four behaviours; the engine mail tests pass |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
 | [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 22:05 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
 | [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-11-08 17:25 UTC | 6.3.0 (2026-11-03) is out, 6.2.0 still pinned; its sign-in answers 303, which the panel refuses; no new advisory; base is PHP 8.4.27 |
@@ -336,12 +337,12 @@ for a reason; remove one once there is nothing left to watch.
   use it are around. `runtimeChangedSinceLastApply` brings a release's new rules to every site at the next
   boot, and the page cache clears. Anything new gets the same check, in the plugin's own code.
 
-## Debian's nginx and Apache, as the page cache relies on them
+## Debian's nginx and Apache, as the page cache and PHP sites rely on them
 
 - **Priority:** Low
 - **Last checked:** 2026-11-01 09:08 UTC. trixie-security has nginx 1.26.3-3+deb13u10 and apache2 2.4.69-1~deb13u1, the
   versions the engine test last passed on. The test needs Docker, and was not run at this check.
-- **The problem:** the page cache leans on behaviour no one promises to keep:
+- **The problem:** the page cache and PHP sites lean on behaviour no one promises to keep:
   - nginx: `X-Accel-Expires` outranks `Cache-Control`, and with no `proxy_cache_valid` a response without it
     is not stored. `proxy_ignore_headers Vary` stores regardless of `Vary`. Deleting a cache file counts as a
     purge: a missing one is a miss, with a harmless `[crit] unlink()` in the log. The mark file
@@ -351,11 +352,15 @@ for a reason; remove one once there is nothing left to watch.
     `Content-Length`, and `req_novary()` in `ProxyFCGISetEnvIf` adds no `Vary`, which would stop nginx storing
     every page. The event MPM closes idle connections when its workers are busy, which is why nginx keeps none
     open to it. The Dockerfile removes Debian's `mpm_event.conf` and `deflate.conf`.
+  - Apache, for a PHP site: a `DocumentRoot` that does not exist is a warning (AH00112) inside a
+    `<VirtualHost *:80>`, and every request answers 404. In the main server it fails the reload and the
+    next start. `SetEnvIf X-Forwarded-Proto "^https$" HTTPS=on` reaches PHP-FPM as `$_SERVER['HTTPS']`.
 - **Check:** `curl -s 'https://qa.debian.org/madison.php?package=nginx&table=debian&s=trixie,trixie-security&text=on'`,
   the same for `apache2`. For a new version, build the image and run
-  `WPL7_ENGINE_TESTS=1 npx vitest run test/engine/siteStack.test.ts`, which pins each of these.
-- **When it changes:** the test names what moved. Fix it in `deploy/wordpress-image/` or
-  `panel/src/services/siteStack.ts`. When the image moves to the next Debian release, read nginx's `CHANGES` and
+  `WPL7_ENGINE_TESTS=1 npx vitest run test/engine/siteStack.test.ts test/engine/phpSite.test.ts`, which
+  pin each of these.
+- **When it changes:** the tests name what moved. Fix it in `deploy/wordpress-image/`,
+  `panel/src/services/siteStack.ts` or `panel/src/services/siteHardening.ts`. When the image moves to the next Debian release, read nginx's `CHANGES` and
   Apache's `CHANGES_2.4` for these names, and run `panel/scripts/site-load-test.ts` against the old image.
 
 ## PHP-FPM: `[PATH=]` and `[HOST=]` in a `.user.ini`
@@ -942,13 +947,19 @@ for a reason; remove one once there is nothing left to watch.
   `wp-config.php` of its own, with the site's prefix, which the import then adds the carried settings
   to with `wp config set` (placed above the "stop editing" line). The image copies its own `.htaccess`
   only into an empty folder, which is why the finish job writes WordPress's standard one when the old
-  site had none.
+  site had none. PHP sites rely on the other side of it: `wpl7-start` runs the entrypoint only for a
+  container with `WORDPRESS_DB_HOST`, which every WordPress site's container has and a PHP site's
+  never does, and plain `php-fpm -t` otherwise, so nothing is put into a PHP site's folder.
+  `test/engine/phpSite.test.ts` proves that an empty folder stays empty without the variable, and
+  that a WordPress container on the same image is still seeded.
 - **Check:** `gh api repos/docker-library/wordpress/contents/docker-entrypoint.sh --jq .content | base64 -d`
   around the first `if`, and the `index.php` and `wp-config.php` tests, and
   `gh api repos/docker-library/wordpress/contents/wp-config-docker.php --jq .content | base64 -d | grep -n 'table_prefix\|stop editing'`.
 - **When it changes:**
   - **It stops acting on `php-fpm`:** `wpl7-start` has to run it with whatever it takes instead. A new
-    site would otherwise get an empty folder. Run `WPL7_ENGINE_TESTS=1 npx vitest run test/engine/siteStack.test.ts`.
+    site would otherwise get an empty folder. Run `WPL7_ENGINE_TESTS=1 npx vitest run test/engine/siteStack.test.ts`,
+    and `test/engine/phpSite.test.ts`, which starts a WordPress container and a PHP site's on the same
+    image.
   - **It starts seeding a folder that has WordPress in it:** the import must write its files after the
     first start instead of before.
   - **It stops writing `wp-config.php`:** the finish job has to write one itself. Then run the import's
@@ -1077,10 +1088,53 @@ for a reason; remove one once there is nothing left to watch.
   `panel/src/services/mailAuth.ts`). A site on `www.example.com` also owns `example.com` for the
   relay and the signer (`MailService.senderOwners`). If WordPress sent from another address, the
   guide would ask for records where no mail comes from, and the mail it does send would go out
-  unsigned.
+  unsigned. A WordPress site's default sender, for mail that names no sender of its own, is the same
+  address: `wordpress@` and the primary domain without `www.` (`defaultMailFrom` in
+  `panel/src/services/mailAuth.ts`, written to `config/runtime/mail-from` for the image's
+  `wpl7-sendmail`). So a change there changes this too.
 - **Check:** `gh api repos/WordPress/wordpress-develop/contents/src/wp-includes/pluggable.php --jq .content | base64 -d | grep -n "get rid of www" -A6`.
-- **When it changes:** make `mailDomainOf` follow it, and update "Which domains are listed" on
-  `docs/site/src/content/docs/mail/setup.mdx` and the owner rule on `mail/overview.mdx`.
+- **When it changes:** make `mailDomainOf` and `defaultMailFrom` follow it, and update "Which domains
+  are listed" on `docs/site/src/content/docs/mail/setup.mdx`, and the owner rule and the sender rule
+  on `mail/overview.mdx`.
+
+## msmtp: one envelope sender, as `wpl7-sendmail` relies on it
+
+- **Priority:** Low
+- **Last checked:** 2026-11-11 23:04 UTC. The site image has msmtp 1.8.28, Debian trixie's
+  1.8.28-3, with nothing newer in trixie-security or trixie-updates. On 2026-11-11 the wrapper was
+  run through 14 cases of PHP's `mail()` and `sendmail` with it, on PHP 8.4.27, and the engine mail
+  tests pass on PHP 8.4 (arm64). Upstream is at 1.8.34 (2026-07-31). Since 1.8.28, 1.8.29 added `%F`
+  to the `from` command, which sets the envelope sender from the From header, and the 1.8.31
+  announcement lists a fix to the error checks of `--read-envelope-from` (its NEWS entry says no
+  significant changes). Nothing else since touches the four behaviours below, and neither change is
+  in Debian's package. Master's `src/msmtp.c` still refuses every `-b` mode but `-bm`.
+- **What we rely on:** msmtp takes the envelope sender from one place: `-f` (`--from`), or
+  `--read-envelope-from`, which reads it from the From header. It refuses the two together ("cannot
+  use both --from and --read-envelope-from"), and a message with neither fails ("envelope-from
+  address is missing"). Given `-f` and a message with no From header, it adds one
+  (`set_from_header auto`, the default). It refuses every `-b` mode but `-bm` at once, before it
+  reads anything ("unsupported operation mode"). `deploy/wordpress-image/wpl7-sendmail`, which is
+  PHP's `sendmail_path` and `/usr/sbin/sendmail`, relies on all four: it passes a caller's `-f` on as
+  it is, runs `--read-envelope-from` for a message with a From header, and gives a message with
+  neither the site's default sender with `-f`, which msmtp then writes as its From header too. It
+  hands any other `-b` mode to msmtp untouched: read by the wrapper, `-bs` would hang, because its
+  caller waits for an SMTP greeting and never closes stdin. A `from` line
+  in msmtprc is no substitute: beside `--read-envelope-from` msmtp ignores it, and without that flag
+  it replaces every message's envelope sender.
+- **Check:** `curl -s 'https://qa.debian.org/madison.php?package=msmtp&table=debian&s=trixie,trixie-security,trixie-updates&text=on'`
+  for the image's version, and NEWS and the release announcements since that version
+  (<https://marlam.de/msmtp/news/>) for `--from`, `--read-envelope-from` and `set_from_header`. For a
+  new version, build the image and run
+  `WPL7_ENGINE_TESTS=1 npx vitest run test/engine/siteStack.test.ts test/engine/phpSite.test.ts -t mail`,
+  whose mail cases send all three kinds and assert each one's `MAIL FROM`, and see `-bs` refused at
+  once.
+- **When it changes:** rework `wpl7-sendmail`. If msmtp stops adding a missing From header, or `-f`
+  or `--read-envelope-from` takes the sender from somewhere else, a message the wrapper hands it
+  leaves with no From header, or with another sender than the one it picked. msmtp taking both flags
+  together breaks nothing: the wrapper adds only one of them. If it starts speaking
+  SMTP for `-bs`, the wrapper can keep handing `-bs` on, but has to give it the sender too. Once the image's msmtp
+  has `%F` (1.8.29 on, so not before Debian's next release), `from %F` in msmtprc may do the
+  wrapper's second rule; test it before relying on it.
 
 ## sodium_compat for PHP 7.0 in CI
 

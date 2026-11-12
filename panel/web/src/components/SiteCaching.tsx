@@ -1,4 +1,4 @@
-// @docs sites/caching
+// @docs sites/caching, sites/php
 import { useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {

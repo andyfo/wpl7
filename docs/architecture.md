@@ -2,7 +2,7 @@
 
 ```
 Internet ──▶ Traefik v3 (:80/:443, UDP :443 for HTTP/3, Let's Encrypt, Docker-label routing)
-              ├─▶ wp-<slug>   one per site: wpl7-wordpress:php8.x (wordpress:fpm + nginx + Apache + Redis + msmtp + wp-cli)
+              ├─▶ wp-<slug>   one per site, WordPress or PHP: wpl7-wordpress:php8.x (wordpress:fpm + nginx + Apache + Redis + msmtp + wp-cli)
               └─▶ wpl7-panel   Node/TS API + React UI (admin domain)
 wp-<slug>, panel ──▶ wpl7-mariadb (mariadb:11.4, per-site DB + user)     wpl7_db network (internal)
 wp-<slug> ──mail()──▶ wpl7-mail (postfix queue, alias "mail") ──DKIM──▶ wpl7-dkim ──▶ smarthost or direct MX
@@ -78,7 +78,9 @@ Every managed container carries labels `wpl7.managed=true`, `wpl7.site=<slug>`, 
 `wpl7.php=<version>`, plus `traefik.docker.network=wpl7_site_<slug>` so Traefik — which is attached to
 many networks — routes to the right endpoint rather than the egress one, where traffic is dropped.
 `wpl7.stack=2` says the container runs nginx, Apache and PHP-FPM; one without it is the older Apache
-with mod_php (see [Site containers](#site-containers)).
+with mod_php (see [Site containers](#site-containers)). A PHP site's container also carries
+`wpl7.app=php` (see [PHP sites](#php-sites)); `wpl7.role=wordpress` stays on it, because the sweeps
+find site containers by that label.
 
 | Thing | Pattern | Example (`my-blog`) |
 |---|---|---|
@@ -100,12 +102,12 @@ spec no longer matches.
 /srv/sites/<slug>/config/msmtprc     bind → /etc/msmtprc:ro (this site's own relay login)
 /srv/sites/<slug>/config/security-apache.conf  bind → /etc/apache2/conf-enabled/zz-wpl7-security.conf:ro
 /srv/sites/<slug>/config/security/   bind → /etc/wpl7:ro - wp-config-extra.php (docs/security.md)
-/srv/sites/<slug>/config/runtime/    bind → /etc/wpl7-runtime:ro on stack 2 - nginx-site.conf, php-fpm-pool.conf, php.ini, wp-cache.php, redis.conf
+/srv/sites/<slug>/config/runtime/    bind → /etc/wpl7-runtime:ro on stack 2 - nginx-site.conf, php-fpm-pool.conf, php.ini, wp-cache.php, redis.conf, mail-from
 /srv/sites/<slug>/quarantine/        files moved out of the site (0700, uid 33); mounted into no site
 /srv/sites/<slug>/site.json          panel-written manifest (disaster-recovery aid)
 /srv/backups/<slug>/<ts>/            db.sql.gz + files.tar.gz + manifest.json + sha256sums
 /srv/backups/panel/<ts>/             panel.db.gz + manifest.json + sha256sums (server 1 only)
-/srv/plugins/                        uploaded plugin zips (mounted ro into every site)
+/srv/plugins/                        uploaded plugin zips (mounted ro into every WordPress site)
 /srv/mysql/                          MariaDB data
 /srv/mail/policy/sender_login        which SASL login owns which sender domain
 /srv/mail/policy/sasl_block          logins the relay currently refuses (abuse guard)
@@ -138,7 +140,9 @@ actually produced it (see [docs/backup-restore.md](backup-restore.md)).
 ## Site containers
 
 Image `wpl7-wordpress:php<X.Y>` = official `wordpress:php<X.Y>-fpm` + nginx, Apache, Redis and tini from
-Debian, phpredis from PECL, msmtp/msmtp-mta (PHP `mail()` works) and wp-cli. Built locally from
+Debian, phpredis from PECL, `pdo_mysql`, msmtp/msmtp-mta behind `wpl7-sendmail` (PHP `mail()` and
+`/usr/sbin/sendmail` work, see docs/mail.md) and wp-cli. Its label `wpl7.apps="wordpress php"` says it
+can run PHP sites. Built locally from
 `deploy/wordpress-image/` (setup.sh pre-builds all offered versions; the panel rebuilds on demand; keep
 the folder flat, because that build sends only its top-level files). WP-CLI operations run via
 `docker exec -u 33:33` inside the site container, so PHP version and mail config always match the site.
@@ -161,7 +165,9 @@ why when it can't (`siteContainerStack`).
 
 `tini` is PID 1 and runs `wpl7-start`, which empties the page cache, runs the official entrypoint once
 as `docker-entrypoint.sh php-fpm -t` (it seeds WordPress and writes `wp-config.php` only for a `php-fpm`
-or `apache2` command), then starts PHP-FPM, Redis if its file is there, Apache and nginx in the foreground.
+or `apache2` command) - only for a container with `WORDPRESS_DB_HOST`, so a PHP site's runs plain
+`php-fpm -t` and nothing is put into its folder - then starts PHP-FPM, Redis if its file is there,
+Apache and nginx in the foreground.
 When one exits by itself the rest stop and the container exits, so `unless-stopped` brings the whole site
 back. A file from the panel that is missing or refused at a start is not fatal: the site comes up on the
 image's defaults, with the page cache off (`nginx-passthrough.conf`). `wpl7-reload apache|nginx|php|redis`
@@ -211,7 +217,8 @@ replaces the container and probes it, and only a site that answered before can f
 and `stack_switch_image`. The sweep skips the site while the tag still points at that image; Retry, Recreate
 container (`retrySwitch`) or a newer image try again. A sweep's reconcile and `reconcile-all` leave it there.
 
-Key env on each site container: `WORDPRESS_DB_*` (generated wp-config.php reads them at runtime) and
+Key env on each WordPress site's container (a PHP site's has none of these): `WORDPRESS_DB_*`
+(generated wp-config.php reads them at runtime) and
 `WORDPRESS_CONFIG_EXTRA` containing the X-Forwarded-Proto→HTTPS fix (prevents redirect loops behind
 Traefik's TLS termination), `DISABLE_WP_CRON` (the panel runs `wp cron event run --due-now` per site
 every 5 minutes instead), and a `require_once` of `/etc/wpl7/wp-config-extra.php` - the site's protection
@@ -228,6 +235,41 @@ one must-use plugin the panel maintains itself: `wpl7-login.php`, which spends t
 behind **Log in to WordPress** (docs/site-lifecycle.md). It lives in the site directory rather than the
 image because `/var/www/html` is a bind mount — the image's copy would be shadowed by it. The panel
 writes it, and the license constants drop-in, from inside the container (below), owned by `www-data`.
+
+### PHP sites
+
+`sites.app = 'php'`: a hosted site with no WordPress, in the same image and container, with the same
+files, FTP, backups, scans, protection and uptime check. The user's view is
+`docs/site/src/content/docs/sites/php.mdx`.
+
+- **The container** (`buildSiteContainerSpec`): no `WORDPRESS_*` variables, no `/srv/plugins` mount,
+  the label `wpl7.app=php`. `siteContainerSpec` refuses one on an image whose `wpl7.apps` label
+  (`DockerPort.imageApps`; no label = `['wordpress']`) lacks `php`, because an older `wpl7-start`
+  would seed WordPress into the folder; `assertPhpImage` asks the same early, at create, PHP switch
+  and move, so nothing is half done, and a restore that would change the PHP version onto such an
+  image keeps the current one. `sweepSiteImages` leaves a PHP site alone while its tag names such an
+  image.
+- **Create** puts only `index.html` (`services/phpSite.ts`) into the web root, `chown -R 33:33`s the
+  folder (WordPress's entrypoint does that for a WordPress site), and routes the container at once:
+  there is no installer to hide. The database is optional (`hasDatabase`: `''` in `db_name`,
+  `db_user` and `db_password`, as an external row has), and `POST /api/sites/:slug/database` makes it
+  later. Its login lives only in the panel and the site's own config.
+- **Web root** (`sites.web_root`) goes into the site's own Apache file (`renderApacheHardening`), in a
+  `<VirtualHost *:80>`: a bare `DocumentRoot` is the main server's, where Apache treats a missing folder
+  as an error and refuses the reload and the next start. Every PHP site's file also has
+  `SetEnvIf X-Forwarded-Proto "^https$" HTTPS=on`, which WordPress gets from its wp-config.php.
+- **Caches**: `effectivePageCache` is false, so nginx gets the pass-through file. Redis is on request,
+  with no plugin, and is never emptied by the panel (`clearSiteCaches`, `clearAfterChange`): it holds
+  the app's own data.
+- **Cron lines** (`site_cron`, `services/siteCron.ts`): up to 10 per site, started by the built-in task
+  `site-cron` every minute, outside the job queue (a job holds its site, so a line every minute would
+  hold off backups and saves). `sh -c` as www-data in the site's folder, no overlap, at most 2 per
+  server, the deadline enforced in the container by `timeout`, the last 4 KB of output kept.
+- **Uptime**: a 4xx that carries `X-Cache-Status`, which the site's nginx puts on every answer, counts
+  as up (`ProbeOpts.siteOwn4xx`); Traefik's own 404 never carries it.
+- **WordPress paths refuse it**: `bySlug`/`loadSite` with `{ app: 'wordpress' }` (409 "is a PHP site"),
+  `wordpressSites()` in every loop over WordPress sites. `test/unit/siteKindAudit.test.ts` holds every
+  query on `sites` to a reviewed verdict for the app too (`SITE_APP_REVIEW`).
 
 ### Site files: always from inside the container
 

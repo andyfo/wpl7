@@ -1,0 +1,168 @@
+---
+title: PHP sites
+description: Host your own PHP or HTML files in a site without WordPress, with an optional database, a web root and cron.
+sidebar:
+  order: 5
+since: 0.3.3
+sources:
+  - panel/src/services/phpSite.ts
+  - panel/src/services/siteCron.ts
+  - panel/src/services/siteHardening.ts
+  - panel/src/jobs/handlers/sites.ts
+  - panel/src/lib/siteKind.ts
+  - deploy/wordpress-image/wpl7-sendmail
+  - deploy/wordpress-image/wpl7-start
+  - panel/web/src/pages/NewSite.tsx
+  - panel/web/src/components/SiteCaching.tsx
+  - panel/web/src/components/php/*.tsx
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A PHP site runs your own PHP or HTML files instead of WordPress. It has the same container as a
+WordPress site, with the **Files** tab, FTP, backups, malware scans, protection and an uptime check.
+
+<Screenshot name="site-php" alt="A PHP site's Overview tab, with its web root and its database among the facts" />
+
+## Create a PHP site
+
+1. Open **Sites** and choose **New site**.
+2. Under **Type**, choose **PHP**.
+3. Fill in **Name & domain** as for [any site](/docs/sites/create/), then choose **Continue**.
+4. On the **PHP** step, pick the **PHP version**. Switch on **Database** if the site needs one.
+   Enter a **Web root** if visitors should reach a folder in the site, such as `public`. Choose
+   **Continue**.
+5. Check the **Review** step and choose **Create site**.
+
+<Screenshot name="site-new-php" alt="The New site wizard's PHP step, with a database and the web root public" />
+
+The new site has one page, `index.html`, with its title and "This site is ready. Upload your files
+to replace this page." The page asks search engines not to index it.
+
+## Upload the site's files
+
+Upload them into the site's folder. If the site has a web root, the files visitors open go in there.
+Use an [FTP or SFTP login](/docs/sites/ftp-sftp/) or the **Files** tab, and replace `index.html`.
+
+`.htaccess` files work, and `.user.ini` files set PHP's settings per folder. A `php_value` or
+`php_flag` line in a `.htaccess` gives a 500, as [Change a PHP setting](/docs/sites/settings/#change-a-php-setting)
+explains. A zip unpacked on the **Files** tab has such lines moved to `.user.ini` by itself.
+
+`$_SERVER['HTTPS']` is `on` for a visitor who came over HTTPS, so an app that redirects to HTTPS does
+not loop.
+
+## Add a database
+
+Switch on **Database** in the wizard, or choose **Create database** on the site's **Database** tab
+later. The site gets a MariaDB database and a user, both named `wp_` and the
+[slug](/docs/reference/glossary/#slug) with dashes turned into underscores.
+
+The **Database** tab shows the host, the name, the user and the password. Put them in the site's own
+config, because nothing in the container holds them. PHP connects with PDO or mysqli.
+
+More databases can be added once the site has its own, because they log in as its user. **Change
+password** restarts nothing on a PHP site. Put the new password in the site's config, or the site
+loses its database. See [A site's database](/docs/sites/database/).
+
+## Set the web root
+
+Files above the web root, such as `.env`, `vendor/` and the app's code, stay reachable over FTP and
+on the **Files** tab, but not from the web.
+
+1. On the site's **Settings** tab, under **Web root**, enter the **Folder**. Leave it empty for the
+   site's folder.
+2. Choose **Save**. The change applies at once, without a restart.
+
+<Screenshot name="site-php-settings" alt="A PHP site's Settings tab with its PHP version, web root and cron lines" />
+
+A web root that does not exist answers 404 to every visitor, and the site's page says so. The site
+answers again as soon as the folder is back.
+
+## Run commands on a schedule
+
+**Cron** on the **Settings** tab holds the site's cron lines.
+
+1. Choose **Add line**.
+2. Fill in the **Schedule**, on the panel's clock, and the **Command**.
+3. **Stop after** ends a command that runs too long. With **On** switched off, the line is kept but
+   does not run.
+4. Choose **Save**.
+
+The built-in task **PHP site cron** starts the lines that are due, every minute. A command runs as
+www-data, the site's own user, in the site's folder. **Run now** runs a line at once. Each line shows
+its last run and exit code, and **Last output** shows the end of what it printed.
+
+A line still running is not started again. A line waits while its site is stopped, or while a job
+such as a backup, a restore, a move or a restart works on it, and runs once it can. Pausing
+**PHP site cron** under **Automations → Schedules** keeps every PHP site's lines from starting on
+schedule. Those due meanwhile run once on resume.
+
+## Run a command once
+
+Type a command under **Run a command** on the **Settings** tab and choose **Run**. It runs as a
+[job](/docs/reference/glossary/#job), and the [job console](/docs/automations/jobs/#watch-the-jobs-you-start)
+shows its output.
+
+## Turn on Redis
+
+On the **Settings** tab, switch on **Redis**. A job starts Redis in the site's container, for the
+site's own code. It answers on the socket `/run/wpl7/redis.sock`, and PHP has the
+`redis` extension. Redis keeps nothing on disk, so it is emptied when the site restarts. The panel
+never empties it otherwise.
+
+## What happens
+
+The `site.create` job makes the site's folder and its web root, puts the placeholder page there, and
+hands the folder to www-data. It makes the site's network, its mail login and, if you asked, its
+database. It starts the container with its route at once, then checks that the site answers. If a
+step fails, the job removes what it made.
+
+Mail that names no sender goes out as `noreply@` the site's domain. The uptime check counts a 4xx the
+site sent itself as an answer, so an app with no page at its address still shows as **Online**.
+
+## Limits
+
+| Limit | Value |
+|---|---|
+| Cron lines per site | 10 |
+| How often a line can run | Every minute at most |
+| Lines running at once, per server | 2. The others wait for the next minute |
+| **Stop after** | 1 to 60 minutes, 5 by default |
+| A command | 4,000 characters |
+| What is kept of a run's output | The last 4 KB |
+| Redis memory | An eighth of the site's memory limit, at least 16 MB. It counts toward that limit |
+
+- There is no [page cache](/docs/reference/glossary/#page-cache), and none of WordPress's tools:
+  updates, the plugin list, [recipes](/docs/reference/glossary/#recipe),
+  [one-click login](/docs/reference/glossary/#one-click-login) and [Bulk management](/docs/sites/bulk/).
+- A site cannot switch between WordPress and PHP. A backup restores only into a site of its own kind.
+- A PHP site has the PHP versions a WordPress site has. Older PHP is not offered.
+- The site's own database cannot be deleted without the site.
+- Nothing keeps search engines off the [dev address](/docs/reference/glossary/#dev-domain) once the
+  site's own files are up. Add a `robots.txt` of your own until it goes live.
+- A panel restart, or a lost connection to the server, loses the result of a line that was running.
+  The command runs on to its stop time, and the line counts as running until then.
+- When Redis is full, it drops the least recently used keys, whichever they are.
+- A scan moves files to [quarantine](/docs/reference/glossary/#quarantine) by itself only among
+  WordPress's files. On a PHP site, move a finding by hand, as
+  [Malware scans](/docs/security/malware-scans/#on-a-php-site) explains.
+- The [login limit](/docs/security/site-protection/#on-a-php-site) and attack detection know only
+  WordPress's login. An app's own login page gets the request limit only.
+- Attack detection reads a PHP site's 404s as any site's. An API that answers 404 for many addresses
+  can get a busy client blocked.
+- Attack detection counts every path under a folder such as `/phpmyadmin/` or `/adminer/` as
+  **Probing**. An app served from such a folder can get its own visitors blocked.
+- PHP runs in any folder. **No PHP in uploads** is for WordPress sites.
+- There are no Git or Composer deploys. Upload `composer.phar` and run it with **Run a command**.
+- An app that sends by SMTP gets no SMTP details. Send with PHP's `mail()` or sendmail, without
+  sendmail's `-bs` mode.
+- A server whose site image is from before PHP sites cannot take one. Update the server first.
+
+## Related
+
+- [Create a site](/docs/sites/create/)
+- [A site's database](/docs/sites/database/)
+- [Files](/docs/sites/files/)
+- [Site settings](/docs/sites/settings/)
+- [Site protection](/docs/security/site-protection/)
+- [How mail works](/docs/mail/overview/)

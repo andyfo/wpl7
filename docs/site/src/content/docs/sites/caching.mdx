@@ -2,7 +2,7 @@
 title: Caching
 description: "Store finished pages in front of PHP, keep database answers in Redis, and decide what the cache may keep."
 sidebar:
-  order: 12
+  order: 13
 since: 0.3.3
 sources:
   - panel/web/src/components/SiteCaching.tsx
@@ -240,6 +240,8 @@ Most reasons say what they mean, such as `logged in`, `page sets a cookie` or
   has a query and the request has a separate-copy parameter.
 - A [site hosted elsewhere](/docs/sites/external/) has no caches. Neither has a site that still runs
   the old PHP setup: see [Updating WPL7](/docs/panel/updating/#if-a-site-cannot-move).
+- A [PHP site](/docs/sites/php/) has no page cache. Its Redis is for its own code. The panel never
+  clears it, but every restart empties it.
 
 ## Related
 

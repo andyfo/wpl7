@@ -2,7 +2,7 @@
 title: A site's database
 description: "See how a site connects to its database, browse and edit its tables and their structure, run SQL, and export or import a dump."
 sidebar:
-  order: 9
+  order: 10
 sources:
   - panel/web/src/components/database/DatabaseTab.tsx
   - panel/web/src/components/database/TablesView.tsx
@@ -17,16 +17,20 @@ sources:
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
+import Since from '~/components/Since.astro';
 
 A site keeps its WordPress data in a MariaDB database on its server. The site's **Database** tab
 shows how to connect to it, and a browser for its tables and rows.
+
+<Since v="0.3.3" /> A [PHP site](/docs/sites/php/) may have no database. Its tab then says "This
+site has no database." and offers **Create database**.
 
 <Screenshot name="site-database" alt="A site's Database tab with its connection, two databases and the wp_options table open" />
 
 ## Connect from the site's code
 
-The **Connection** card names the **Database**, the **User**, the **Host** and the **Table
-prefix**. **Show** reveals the password, and the panel logs who asked. Only the sites on the same
+The **Connection** card names the **Database**, the **User**, the **Host** and, on a WordPress
+site, the **Table prefix**. **Show** reveals the password, and the panel logs who asked. Only the sites on the same
 server can connect. MariaDB has no port open to the internet.
 
 ## Browse and edit rows
@@ -69,8 +73,8 @@ every length counted again. A length that is off by one byte would empty the who
 the first error. Each statement shows its rows, or how many rows it changed. **Recent queries**
 keeps what you ran, in this browser.
 
-A change on this tab empties the site's [caches](/docs/sites/caching/). A single `SELECT`, `SHOW`,
-`DESCRIBE` or `EXPLAIN` does not.
+A change on this tab empties a WordPress site's [caches](/docs/sites/caching/). A single `SELECT`,
+`SHOW`, `DESCRIBE` or `EXPLAIN` does not.
 
 <Screenshot name="site-database-sql" alt="The SQL view with a query and its result" />
 
@@ -84,17 +88,22 @@ A change on this tab empties the site's [caches](/docs/sites/caching/). A single
 The site is stopped while a dump goes into its own database. It is started again only if the
 database then holds a WordPress installation, whether the import worked or failed: without one,
 anyone could run WordPress's installer. A dump whose tables have another prefix leaves none, for
-example. Restore the backup taken before the import to undo it.
+example. A PHP site is started again whatever the dump held. To undo an import, restore the backup
+taken before it.
 
-The panel reads the dump before it changes anything. It refuses a file that is not a dump, a
-dump that switches to another database with `USE` or `CREATE DATABASE`, and, with every table
-deleted first, a dump without the site's options table, such as `wp_options`.
+The panel reads the dump before it changes anything. It refuses a file that is not a dump, and a
+dump that switches to another database with `USE` or `CREATE DATABASE`. With every table of a
+WordPress site's own database deleted first, it also refuses a dump without the site's options
+table, such as `wp_options`.
 
 ## Change the password
 
 **Change password** gives the database user a new password. WordPress restarts with it, so the site
 is offline for a few seconds. The panel refuses when `wp-config.php` sets the password itself, or
 cannot be read. If the site stops answering with the new password, the old one is put back.
+
+On a PHP site, nothing restarts, and the site's own config keeps the old password. **Show** reveals
+the new one. Put it in the config, or the site loses its database.
 
 ## What the browser can reach
 

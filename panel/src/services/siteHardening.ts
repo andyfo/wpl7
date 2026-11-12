@@ -1,4 +1,4 @@
-// @docs security/overview, security/site-protection
+// @docs security/overview, security/site-protection, sites/php
 import { asc } from 'drizzle-orm';
 import { sites, type SiteRow } from '../db/schema.js';
 import type { JobWorker } from '../jobs/worker.js';

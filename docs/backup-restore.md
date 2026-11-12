@@ -8,10 +8,15 @@
 |---|---|
 | `db.sql.gz` | `mariadb-dump --single-transaction` of the site database (consistent InnoDB snapshot, no locks) |
 | `files.tar.gz` | `wordpress/` tree + `config/` (php overrides) + `site.json` |
-| `manifest.json` | slug, title, domains, PHP + WP versions, locale, db name/user, timestamp |
+| `manifest.json` | slug, title, domains, PHP + WP versions, locale, db name/user, timestamp; `app`, `webRoot` and `database` (whether `db.sql.gz` is there) |
 | `sha256sums` | checksums of both archives, verified before every restore |
 
 Files are archived live (uploads are append-mostly; a few seconds of skew vs the dump is accepted).
+
+A PHP site may have no database of its own: its backup then has no `db.sql.gz`, `sha256sums` lists
+what is there, and the row says `has_database = 0` (`BackupDto.hasDatabase`), so the download menu
+offers no database part and `?part=database` is a `409`. A PHP site's `wpVersion` is `null`, even
+when someone installed a WordPress into it.
 
 The **backup root** defaults to `${SRV_ROOT}/backups` and is set per server — see
 [Choosing where backups are stored](#choosing-where-backups-are-stored).
@@ -78,6 +83,17 @@ the URLs from the old domain to the new site's.
    the same slug), and the site takes that prefix. If the domains changed since the backup, URLs are
    rewritten to the current primary.
 4. Site started + smoke-checked.
+
+A PHP site's restore skips the table prefix and the URL rewrite (the log says to change the address
+in the site's own config), and keeps the site's web root, warning when the backup's was another. A
+backup is refused, before anything changes, when it is of the other app; a manifest from before PHP
+sites names none and is a WordPress site's. The database follows the table:
+
+| Backup | Site now | What happens |
+|---|---|---|
+| has a database | has one | as above |
+| has a database | has none | the database and its user are made first (refused before anything changes when the server has a database or user of that name), then filled; the user's new password is for the site's own config |
+| has none | has one | the database is left as it is, and the log says so |
 
 If step 1 fails (checksum mismatch, no disk for the safety copy) the site is untouched and keeps
 running — only failures from step 2 onwards mark it `error`. A failure after the file swap leaves the
