@@ -3007,8 +3007,8 @@ echo json_encode([
      */
     const SLOW_FOR_THE_CHECK = 'wp-content/mu-plugins/wpl7-engine-slow-for-the-check.php';
     const STALE_RUNTIME_FILES = ['nginx-site.conf', 'redis.conf', 'from-another-version.conf'];
-    /** What the panel writes there for this site: no object cache. */
-    const RUNTIME_FILES = ['nginx-site.conf', 'php-fpm-pool.conf', 'php.ini', 'wp-cache.php'];
+    /** What the panel writes there for this site: no object cache, and its default mail sender. */
+    const RUNTIME_FILES = ['mail-from', 'nginx-site.conf', 'php-fpm-pool.conf', 'php.ini', 'wp-cache.php'];
 
     /**
      * A server's Docker, on a Docker that may have a real stack on it (see above). Everything else is
