@@ -174,7 +174,9 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
       if (backup.status !== 'complete') throw conflict('Only complete backups can be restored');
       const manifest = await deps.backup.readManifest(backup);
       if (manifest?.kind === 'external') throw conflict(EXTERNAL_RESTORE);
-      const otherApp = otherAppRefusal(site, manifest);
+      // A manifest that can't be read here (an offsite-only backup has none on the server) is the
+      // job's to judge, once the files are back.
+      const otherApp = manifest ? otherAppRefusal(site, manifest) : null;
       if (otherApp) throw conflict(otherApp);
       deps.backup.assertNotBeingDeleted(backup);
       if (backup.filesPresent === 0) {

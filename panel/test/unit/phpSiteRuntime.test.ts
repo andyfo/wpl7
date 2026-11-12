@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { eq } from 'drizzle-orm';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { jobs, sites } from '../../src/db/schema.js';
 import { httpProbeOnce } from '../../src/lib/httpProbe.js';
 import { defaultMailFrom } from '../../src/services/mailAuth.js';
@@ -91,6 +91,18 @@ describe('the web root', () => {
     expect((await app.inject({ method: 'GET', url: '/api/sites/plain', headers })).json()).toMatchObject({ webRootMissing: false });
     w.docker.containers.set('wp-plain', 'exited');
     expect((await app.inject({ method: 'GET', url: '/api/sites/plain', headers })).json()).toMatchObject({ webRootMissing: null });
+  });
+
+  it('is not known, and the container still running, when the question gets no answer', async () => {
+    const w = await makeWorld();
+    addPhpSite(w, 'plain', { webRoot: 'public' });
+    const { app, headers } = await authed(w);
+    // `test` that could not start (a process limit): no answer, not a missing folder.
+    w.docker.execDefault = { stdout: '', stderr: '', exitCode: 126 };
+    expect((await app.inject({ method: 'GET', url: '/api/sites/plain', headers })).json()).toMatchObject({ containerState: 'running', webRootMissing: null });
+    // An exec refused, as by a container that is restarting.
+    vi.spyOn(w.docker, 'exec').mockRejectedValue(new Error('(HTTP code 409) container is restarting'));
+    expect((await app.inject({ method: 'GET', url: '/api/sites/plain', headers })).json()).toMatchObject({ containerState: 'running', webRootMissing: null });
   });
 });
 

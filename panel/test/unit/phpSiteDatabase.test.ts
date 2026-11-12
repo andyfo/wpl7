@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { jobLogs, jobs, moveCleanups, sites, type SiteRow } from '../../src/db/schema.js';
+import { backups, jobLogs, jobs, moveCleanups, sites, type SiteRow } from '../../src/db/schema.js';
 import { hostExec } from '../../src/lib/exec.js';
 import { sitePaths } from '../../src/services/siteSpec.js';
 import { addPhpSite, makeApp, makeWorld, waitFor, type TestWorld } from '../helpers.js';
@@ -163,6 +163,29 @@ describe('restoring a PHP site', () => {
     const done = await runJob(w, restore(w, site, backup.id).id);
     expect(done.status).toBe('failed');
     expect(done.error).toMatch(/^This is a backup of a WordPress site, and "shop" is a PHP site/);
+  });
+
+  it("a manifest that can't be read: the API leaves it to the job, which refuses it for a PHP site in its own words", async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = phpSite(w, 'shop', { database: true });
+    const backup = await w.core.backup.create(site, 'manual');
+    // As an offsite-only backup is on its server: nothing, manifest.json included.
+    fs.rmSync(path.join(backup.path, 'manifest.json'));
+    w.db.update(backups).set({ filesPresent: 0 }).where(eq(backups.id, backup.id)).run();
+    const { app } = await makeApp(w);
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'admin', password: 'correct-horse-battery' } });
+    const c = login.cookies.find((x) => x.name === 'panel.sid')!;
+    const res = await app.inject({ method: 'POST', url: `/api/backups/${backup.id}/restore`, headers: { cookie: `${c.name}=${c.value}`, 'x-csrf': '1' }, payload: { skipPreRestoreBackup: true } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toMatch(/^This backup exists only at a remote destination/);
+
+    w.db.update(backups).set({ filesPresent: 1 }).where(eq(backups.id, backup.id)).run();
+    const done = await runJob(w, restore(w, site, backup.id).id);
+    expect([done.status, done.error]).toEqual([
+      'failed',
+      'The backup\'s manifest.json can\'t be read, so it can\'t be told whose backup it is: it isn\'t restored into the PHP site "shop". Nothing was changed.',
+    ]);
+    expect(row(w, site.id).status).toBe('running');
   });
 });
 

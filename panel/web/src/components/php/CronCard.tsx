@@ -79,15 +79,23 @@ export function CronCard({ slug }: { slug: string }) {
       .finally(() => setStarting(null));
   };
   const full = lines.length >= MAX_SITE_CRON_LINES;
+  /** The dialog starts with no error: one left from a switch or Run now isn't about this line. */
+  const openDialog = (d: Draft) => {
+    setError(null);
+    setDraft(d);
+  };
 
   return (
     <Card
       title="Cron"
       action={
-        <span title={full ? `${MAX_SITE_CRON_LINES} lines at most.` : undefined}>
-          <Button small disabled={full} onClick={() => setDraft({ expr: '*/5 * * * *', command: '', enabled: true, timeoutMin: 5 })}>
-            Add line
-          </Button>
+        <span className="flex items-center gap-2">
+          {full && <span className="text-xs text-neutral-500">{MAX_SITE_CRON_LINES} lines at most.</span>}
+          <span title={full ? `${MAX_SITE_CRON_LINES} lines at most.` : undefined}>
+            <Button small disabled={full} onClick={() => openDialog({ expr: '*/5 * * * *', command: '', enabled: true, timeoutMin: 5 })}>
+              Add line
+            </Button>
+          </span>
         </span>
       }
     >
@@ -121,7 +129,7 @@ export function CronCard({ slug }: { slug: string }) {
                       Run now
                     </Button>
                   </span>
-                  <Button small variant="ghost" onClick={() => setDraft({ ...inputOf(line), enabled: line.enabled })}>
+                  <Button small variant="ghost" onClick={() => openDialog({ ...inputOf(line), enabled: line.enabled })}>
                     Edit
                   </Button>
                   <Button small variant="ghost" disabled={saving} onClick={() => void put(lines.filter((l) => l.id !== line.id).map(inputOf))}>
@@ -149,12 +157,13 @@ export function CronCard({ slug }: { slug: string }) {
 
 function LastRun({ line }: { line: SiteCronLineDto }) {
   const last = line.last;
-  // Due for longer than a tick takes is a line waiting for its site: it runs once the site can.
+  // Due for longer than a tick takes: the site is stopped or busy, its server is unreachable or
+  // runs two lines already, or PHP site cron is paused. It runs once it can.
   const next =
     !line.enabled || line.nextRunAt === null || line.running
       ? ''
       : line.nextRunAt < Date.now() - 90_000
-        ? ' · waiting for the site'
+        ? ' · waiting to run'
         : ` · next ${timeUntil(line.nextRunAt)}`;
   if (line.running) return <span className="text-sky-700">Running since {timeAgo(last?.startedAt ?? Date.now())}</span>;
   if (!last) return <span>Not run yet{next}</span>;

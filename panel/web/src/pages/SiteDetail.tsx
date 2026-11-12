@@ -458,7 +458,7 @@ function MoveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
               </select>
             </Field>
             <div className="rounded-lg bg-neutral-50 p-3 text-xs text-neutral-600">
-              Files and database are copied over, the site starts on the new server, then traffic switches:
+              {s.hasDatabase ? 'Files and database are' : 'Files are'} copied over, the site starts on the new server, then traffic switches:
               {s.devHostname && (
                 <div className="mt-1">
                   • <code>{s.devHostname}</code>{' '}
@@ -1201,6 +1201,7 @@ function BackupsTab({ slug }: { slug: string }) {
 
       {restoreId !== null && (
         <RestoreBackupDialog
+          hasDatabase={(backups.data ?? []).find((b) => b.id === restoreId)?.hasDatabase ?? true}
           onConfirm={() => run.mutate({ path: `/api/backups/${restoreId}/restore`, body: {}, action: `restore:${restoreId}` })}
           onClose={() => setRestoreId(null)}
         />
@@ -1277,6 +1278,7 @@ function SettingsTab({ slug }: { slug: string }) {
         <p className="mt-2 text-xs text-neutral-500">
           The container is recreated with the new PHP image. Rolls back if the site stops responding.
         </p>
+        {run.variables?.action === 'php' && <ErrorNote error={run.error} />}
       </Card>
 
       {php && <WebRootCard site={s} />}
@@ -1311,7 +1313,7 @@ function SettingsTab({ slug }: { slug: string }) {
         </div>
       </Card>
 
-      <ErrorNote error={run.error} />
+      {run.variables?.action !== 'php' && <ErrorNote error={run.error} />}
 
       {php ? <RunCommandCard slug={slug} running={s.containerState === 'running'} /> : <SiteCachingCard site={s} />}
       {!php && <SiteLimitsCard site={s} />}

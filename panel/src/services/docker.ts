@@ -170,6 +170,12 @@ export interface ExecOpts {
    * every line, those past `outputCap` included: the cap bounds what is kept, not what is seen.
    */
   onOutput?: (line: string) => void;
+  /**
+   * execToStream: called once Docker has made the exec, before it starts it. An error before this
+   * means the command never ran. One after it may leave the command running inside the container
+   * until its deadline: a lost connection doesn't stop it.
+   */
+  onStarted?: () => void;
 }
 
 export interface ExecDuplexOpts {
@@ -943,6 +949,7 @@ export class DockerService implements DockerPort {
       Env: opts.env,
       WorkingDir: opts.workdir,
     });
+    opts.onStarted?.();
     const startedAt = Date.now();
     const stream = await exec.start({ hijack: true, stdin: false });
     // Hanging up is how a reader that is gone gets out of the way: with the connection

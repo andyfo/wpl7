@@ -142,7 +142,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   'services/traffic.ts': { apply: both("slugs from Traefik's log, which only hosted sites are in") },
   'services/wildcardSites.ts': { sweepWildcardSites: hosted('hostedSites()') },
   'services/wpBulk.ts': { createBatch: both('bulk runs reach both kinds') },
-  'services/siteCron.ts': { tick: hosted('hostedSites()') },
+  'services/siteCron.ts': { tick: hosted('hostedSites()'), runningOn: both('by its cron lines, which only a PHP site has, and PHP sites are hosted') },
   'services/wpInventory.ts': { fleetInventory: both('Bulk management shows both kinds') },
   'updates/hooks.ts': { run: hosted('hostedSites()') },
 };
@@ -270,7 +270,10 @@ const SITE_APP_REVIEW: Record<string, Record<string, AppVerdict>> = {
   'services/traffic.ts': { apply: apps('a PHP site has visitor statistics too') },
   'services/wildcardSites.ts': { sweepWildcardSites: ANY_SITE },
   'services/wpBulk.ts': { createBatch: wordpress('isPhpSite(') },
-  'services/siteCron.ts': { tick: apps("PHP sites' own cron lines: the query asks for app php itself") },
+  'services/siteCron.ts': {
+    tick: apps("PHP sites' own cron lines: the query asks for app php itself"),
+    runningOn: apps('by its cron lines, which only a PHP site has'),
+  },
   'services/wpInventory.ts': { fleetInventory: wordpress('wordpressSites()') },
   'updates/hooks.ts': { run: ANY_SITE },
 };

@@ -98,10 +98,15 @@ export const tsStamp = (d: Date) =>
 /** What a backup's site ran: one from before PHP sites names nothing, and is a WordPress site's. */
 export const backupApp = (manifest: { app?: unknown } | null): 'wordpress' | 'php' => (manifest?.app === 'php' ? 'php' : 'wordpress');
 
-/** Why a backup can't go into a site, when it is of the other app; null when it can. */
+/**
+ * Why a backup can't go into a site, when it is of the other app; null when it can. With no
+ * manifest to read (null), a WordPress site takes it, as before PHP sites, and a PHP site does not:
+ * the backup may be an old WordPress site's of the same name.
+ */
 export function otherAppRefusal(site: Pick<SiteRow, 'slug' | 'app'>, manifest: { app?: unknown } | null): string | null {
   const app = backupApp(manifest);
   if (app === site.app) return null;
+  if (manifest === null) return `The backup's manifest.json can't be read, so it can't be told whose backup it is: it isn't restored into the PHP site "${site.slug}". Nothing was changed.`;
   const name = (a: string) => (a === 'php' ? 'a PHP site' : 'a WordPress site');
   return `This is a backup of ${name(app)}, and "${site.slug}" is ${name(site.app)}: it can't be restored into it. Nothing was changed.`;
 }

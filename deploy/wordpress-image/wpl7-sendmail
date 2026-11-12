@@ -3,12 +3,15 @@
 # /usr/sbin/sendmail points at. msmtp takes the envelope sender from one place and refuses two,
 # so this picks it: -f from the caller, else the message's From header, else the site's default
 # sender, which the panel writes to /etc/wpl7-runtime/mail-from.
+#
+# A -b mode other than -bm goes to msmtp as it is, which refuses it at once. Read here, -bs
+# would hang: its caller waits for an SMTP greeting before it writes, and never closes stdin.
 default_from=
 [ -r /etc/wpl7-runtime/mail-from ] && default_from=$(head -n 1 /etc/wpl7-runtime/mail-from)
 
 for arg in "$@"; do
     case $arg in
-        -f*|--from|--from=*) exec /usr/bin/msmtp "$@" ;;
+        -f*|--from|--from=*|-b|-b[!m]*) exec /usr/bin/msmtp "$@" ;;
     esac
 done
 

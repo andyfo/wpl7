@@ -580,6 +580,7 @@ export class FakeDocker implements DockerPort {
     opts?: ExecOpts,
   ): Promise<{ exitCode: number; stderr: string }> {
     this.record('execToStream', [name, cmd, opts]);
+    opts?.onStarted?.();
     const scripted = this.streamQueue.shift();
     if (scripted) {
       if (scripted.stdout.length > 0) stdout.write(scripted.stdout);

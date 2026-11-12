@@ -200,9 +200,12 @@ export function NewSite() {
       <Card>
         {stepId === 'name' && (
           <div className="space-y-4">
-            <Field label="Type" hint={app === 'php' ? 'An empty site for your own PHP or HTML files.' : undefined}>
+            {/* Not a Field: a <label> hands a click anywhere on it to its first button, WordPress. */}
+            <div>
+              <div className="mb-1 text-sm font-medium text-neutral-700">Type</div>
               <Segmented options={APP_OPTIONS} value={app} onChange={setApp} label="Type" />
-            </Field>
+              {app === 'php' && <p className="measure mt-1 text-xs text-neutral-500">An empty site for your own PHP or HTML files.</p>}
+            </div>
             <Field label="Site title">
               <input className={inputClass} value={title} onChange={(e) => setTitle(e.target.value)} autoFocus placeholder="My Customer's Site" />
             </Field>

@@ -250,7 +250,11 @@ function ScanFields({
               </option>
             ))}
           </select>
-          <span className="measure mt-1 block text-xs text-neutral-500">{SCAN_ON_FINDING_INFO[onFinding].description}</span>
+          <span className="measure mt-1 block text-xs text-neutral-500">
+            {s.app === 'php' && onFinding !== 'report'
+              ? 'On a PHP site nothing is moved on its own: quarantine a finding by hand.'
+              : SCAN_ON_FINDING_INFO[onFinding].description}
+          </span>
         </label>
       </div>
       <p className="text-xs text-neutral-500">How often a site is scanned, and with how much memory and time, is set for every site on Settings → Security → Malware scans.</p>

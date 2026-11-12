@@ -168,11 +168,14 @@ function DownloadMenu({ backupId, hasDatabase }: { backupId: number; hasDatabase
 /** Restoring replaces a live site; the dialog says which one when the page lists several. */
 export function RestoreBackupDialog({
   site,
+  hasDatabase = true,
   onConfirm,
   onClose,
 }: {
   /** The site's name, where it is not obvious from the page. */
   site?: string;
+  /** False for a PHP site's backup without a database: a restore leaves the site's database alone. */
+  hasDatabase?: boolean;
   onConfirm: () => void;
   onClose: () => void;
 }) {
@@ -181,8 +184,9 @@ export function RestoreBackupDialog({
       title="Restore backup"
       message={
         <>
-          Replaces {site ? <><b>{site}</b>'s</> : "the site's"} <b>files and database</b>. A safety backup is
-          taken first, and the site is briefly stopped.
+          Replaces {site ? <><b>{site}</b>'s</> : "the site's"}{' '}
+          {hasDatabase ? <b>files and database</b> : <><b>files</b>: the backup has no database</>}. A safety
+          backup is taken first, and the site is briefly stopped.
         </>
       }
       confirmLabel="Restore"

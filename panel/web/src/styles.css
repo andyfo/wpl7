@@ -95,6 +95,9 @@
   --color-sky-800: #a6daee;
   --color-violet-100: #362e4a;
   --color-violet-800: #cebae9;
+  /* The PHP site label (components/php/PhpLabel.tsx). */
+  --color-indigo-100: #2c3150;
+  --color-indigo-800: #c3cbf5;
 }
 
 /* Theme colors share neutral surfaces in both light and dark mode. */

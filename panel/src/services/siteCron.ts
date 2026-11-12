@@ -1,6 +1,6 @@
 // @docs sites/php
 import { Writable } from 'node:stream';
-import { and, asc, eq, lte } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, lte } from 'drizzle-orm';
 import { describeCron } from '../../shared/cron.js';
 import type { SiteCronLineInput } from '../../shared/schemas.js';
 import type { SiteCronLineDto } from '../../shared/types.js';
@@ -21,7 +21,9 @@ import { asSiteUser } from './wp.js';
  * it: the scheduler lets one run of a task exist at a time, so a tick that waited on a long command
  * would hold up every other site's lines. What a run printed and how it ended is kept on its line
  * once it is over. Its deadline is enforced inside the container (DockerService's `timeout`), so a
- * command outlives a panel restart only until its stop-after time.
+ * command outlives a panel restart, or a lost connection to its server, only until its stop-after
+ * time. Until then such a run counts as running: its line doesn't start again, and it counts
+ * toward its server's CRON_PER_SERVER.
  */
 
 /** What is kept of a run's output: the end of it, where a failing command says why. */
@@ -29,8 +31,9 @@ export const CRON_OUTPUT_KEEP = 4096;
 /** Commands running at once per server; the rest wait for the next tick. */
 export const CRON_PER_SERVER = 2;
 /**
- * After its stop-after time, how long a run the panel lost sight of (a restart) may still be
- * going: `timeout` gives it 5 s after its deadline before it kills it, and Docker a moment more.
+ * After its stop-after time, how long a run the panel lost sight of (a restart, a lost connection)
+ * may still be going: `timeout` gives it 5 s after its deadline before it kills it, and Docker a
+ * moment more.
  */
 const LOST_RUN_GRACE_MS = 15_000;
 
@@ -136,7 +139,7 @@ export class SiteCronService {
     if (this.isRunning(row, now)) throw conflict('This line is running already.');
     const why = this.cannotRun(site);
     if (why) throw conflict(why);
-    if (this.runningOn(site.serverId) >= CRON_PER_SERVER) {
+    if (this.runningOn(site.serverId, now) >= CRON_PER_SERVER) {
       throw conflict(`${CRON_PER_SERVER} cron commands are running on this site's server already; try again in a moment.`);
     }
     this.start(site, row, now, { advance: false });
@@ -169,7 +172,7 @@ export class SiteCronService {
         continue;
       }
       const server = this.s.servers.rowById(site.serverId);
-      if (this.cannotRun(site) || !server || server.status === 'unreachable' || this.runningOn(site.serverId) >= CRON_PER_SERVER) {
+      if (this.cannotRun(site) || !server || server.status === 'unreachable' || this.runningOn(site.serverId, now) >= CRON_PER_SERVER) {
         waiting++;
         continue;
       }
@@ -193,17 +196,28 @@ export class SiteCronService {
     return null;
   }
 
-  private runningOn(serverId: number): number {
-    return [...this.running.values()].filter((r) => r.serverId === serverId).length;
+  /** The lines running on a server: this panel's runs, and those it lost sight of. */
+  private runningOn(serverId: number, now: number): number {
+    const ids = new Set<number>();
+    for (const [id, run] of this.running) if (run.serverId === serverId) ids.add(id);
+    const unseen = this.s.db
+      .select({ line: siteCron })
+      .from(siteCron)
+      .innerJoin(sites, eq(sites.id, siteCron.siteId))
+      .where(and(eq(sites.serverId, serverId), isNotNull(siteCron.lastStartedAt), isNull(siteCron.lastMs)))
+      .all();
+    for (const { line } of unseen) if (this.isRunning(line, now)) ids.add(line.id);
+    return ids.size;
   }
 
   /**
-   * Running: started by this panel and not yet seen to end, or started before a restart with no end
-   * recorded and still inside its stop-after time, where the container may still be running it.
+   * Running: started by this panel and not yet seen to end, or started with no end seen (a panel
+   * restart, a lost connection) and still inside its stop-after time, where the container may still
+   * be running it. A run seen to end, or refused before it started, has its time (lastMs) recorded.
    */
   private isRunning(row: SiteCronRow, now: number): boolean {
     if (this.running.has(row.id)) return true;
-    if (row.lastStartedAt === null || row.lastMs !== null || row.lastExit !== null || row.lastError !== null) return false;
+    if (row.lastStartedAt === null || row.lastMs !== null) return false;
     return now < row.lastStartedAt + row.timeoutMin * 60_000 + LOST_RUN_GRACE_MS;
   }
 
@@ -232,28 +246,40 @@ export class SiteCronService {
     this.inFlight.add(run);
   }
 
-  /** The run itself; its end is written to its line, whatever it was. */
+  /**
+   * The run itself; how it ended is written to its line, whatever it was. One whose end the panel
+   * did not see keeps no time (lastMs), so it counts as running until its stop-after time.
+   */
   private async execute(site: SiteRow, row: SiteCronRow, startedAt: number): Promise<void> {
     const tail = new OutputTail();
     const timeoutMs = row.timeoutMin * 60_000;
     const stopped = `Stopped after ${row.timeoutMin} ${row.timeoutMin === 1 ? 'minute' : 'minutes'}.`;
-    let end: { exit: number | null; error: string | null };
+    let started = false;
+    let end: { exit: number | null; error: string | null; seen: boolean };
     try {
       const docker = this.s.servers.handleFor(site.serverId).docker;
-      const res = await docker.execToStream(site.containerName, cronExec(row.command), tail, asSiteUser(timeoutMs));
-      end = { exit: res.exitCode, error: null };
+      const opts = { ...asSiteUser(timeoutMs), onStarted: () => (started = true) };
+      const res = await docker.execToStream(site.containerName, cronExec(row.command), tail, opts);
+      end = { exit: res.exitCode, error: null, seen: true };
     } catch (err) {
-      // `timeout` ended it at its time (DockerService reads its 124 as a timeout): what it printed
-      // until then is in the tail all the same.
-      end =
-        err instanceof AppError && err.code === 'timeout'
-          ? { exit: 124, error: stopped }
-          : { exit: null, error: `It did not run to its end: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500) };
+      const message = err instanceof Error ? err.message : String(err);
+      if (err instanceof AppError && err.code === 'timeout') {
+        // `timeout` ended it at its time (DockerService reads its 124 as a timeout): what it
+        // printed until then is in the tail all the same.
+        end = { exit: 124, error: stopped, seen: true };
+      } else if (!started) {
+        end = { exit: null, error: `It did not start: ${message}`.slice(0, 500), seen: true };
+      } else {
+        // The connection went, not the command (DockerService says so): it runs on to its deadline.
+        this.s.log.warn(`Cron line #${row.id} of "${site.slug}": lost sight of its run: ${message}`);
+        const why = err instanceof AppError && err.code === 'bad_gateway' ? 'the connection to its server was lost while it ran.' : message;
+        end = { exit: null, error: `How it ended is not known: ${why}`.slice(0, 500), seen: false };
+      }
     }
     try {
       this.s.db
         .update(siteCron)
-        .set({ lastMs: Date.now() - startedAt, lastExit: end.exit, lastOutput: tail.text(), lastError: end.error })
+        .set({ lastMs: end.seen ? Date.now() - startedAt : null, lastExit: end.exit, lastOutput: tail.text(), lastError: end.error })
         // Not when the line was saved again with another command meanwhile: that is a run of the old one.
         .where(and(eq(siteCron.id, row.id), eq(siteCron.lastStartedAt, startedAt)))
         .run();

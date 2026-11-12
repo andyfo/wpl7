@@ -7,6 +7,7 @@ import { eq } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import { jobs, siteCron, sites, type SiteRow } from '../../src/db/schema.js';
 import { nextCronRun } from '../../src/services/schedules.js';
+import type { ExecOpts } from '../../src/services/docker.js';
 import { addPhpSite, makeApp, makeWorld, type TestWorld } from '../helpers.js';
 
 const MIN = 60_000;
@@ -169,6 +170,50 @@ describe("a PHP site's cron lines", () => {
     w.db.update(siteCron).set({ lastStartedAt: Date.now() - 6 * MIN, nextRunAt: Date.now() - 1000 }).where(eq(siteCron.id, id)).run();
     expect(w.core.siteCron.tick().started).toBe(1);
     await w.core.siteCron.idle();
+  });
+
+  it('count a run whose connection went as running until its stop-after time, on its server too', async () => {
+    const w = await makeWorld();
+    const site = addPhpSite(w, 'plain');
+    const lost = dueLine(w, site, 'php import.php', { timeoutMin: 30 });
+    const { badGateway } = await import('../../src/lib/errors.js');
+    const spy = vi.spyOn(w.docker, 'execToStream').mockImplementation(async (_n: string, _c: string[], out: Writable, opts?: ExecOpts) => {
+      opts?.onStarted?.();
+      out.write('row 1\n');
+      throw badGateway('Lost the connection to sh while it was still running inside the container - it may yet finish, so do not run it again until it has');
+    });
+    w.core.siteCron.tick();
+    await w.core.siteCron.idle();
+    spy.mockRestore();
+    expect(lineRow(w, lost)).toMatchObject({ lastMs: null, lastExit: null, lastOutput: 'row 1\n', lastError: 'How it ended is not known: the connection to its server was lost while it ran.' });
+    expect(w.core.siteCron.list(w.deps.sites.bySlug('plain'))[0]!.running).toBe(true);
+    // Due again: not started beside the first, which still takes one of the server's two.
+    const first = lineRow(w, lost);
+    w.db.update(siteCron).set({ nextRunAt: Date.now() - 1000 }).where(eq(siteCron.id, lost)).run();
+    dueLine(w, addPhpSite(w, 'other'), 'true');
+    dueLine(w, site, 'true');
+    expect(w.core.siteCron.tick()).toEqual({ started: 1, waiting: 1 });
+    await w.core.siteCron.idle();
+    expect(lineRow(w, lost)).toMatchObject({ lastStartedAt: first.lastStartedAt, lastError: first.lastError });
+    // Past its stop-after time it has ended, whatever happened to it.
+    w.db.update(siteCron).set({ lastStartedAt: Date.now() - 31 * MIN }).where(eq(siteCron.id, lost)).run();
+    expect(w.core.siteCron.list(w.deps.sites.bySlug('plain'))[0]!.running).toBe(false);
+  });
+
+  it('end a run that Docker refused before it started, and run its line again when due', async () => {
+    const w = await makeWorld();
+    const site = addPhpSite(w, 'plain');
+    const id = dueLine(w, site, 'php report.php');
+    vi.spyOn(w.docker, 'execToStream').mockRejectedValueOnce(Object.assign(new Error('(HTTP code 409) container is restarting'), { statusCode: 409 }));
+    w.core.siteCron.tick();
+    await w.core.siteCron.idle();
+    expect(lineRow(w, id)).toMatchObject({ lastExit: null, lastError: 'It did not start: (HTTP code 409) container is restarting' });
+    expect(lineRow(w, id).lastMs).not.toBeNull();
+    expect(w.core.siteCron.list(site)[0]!.running).toBe(false);
+    w.db.update(siteCron).set({ nextRunAt: Date.now() - 1000 }).where(eq(siteCron.id, id)).run();
+    expect(w.core.siteCron.tick().started).toBe(1);
+    await w.core.siteCron.idle();
+    expect(lineRow(w, id)).toMatchObject({ lastExit: 0, lastError: null });
   });
 
   it('run now: started at once, refused while it runs', async () => {

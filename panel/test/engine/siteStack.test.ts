@@ -2217,6 +2217,21 @@ if (strpos($_SERVER['REQUEST_URI'] ?? '', '/t/login-late/') === 0) add_action('t
       expect(await relaySession(marker)).toContain('MAIL FROM:<app@stack.example.com>');
     });
 
+    it('/usr/sbin/sendmail -bs is refused at once, as msmtp refuses it, though its caller never closes stdin', async () => {
+      // The FIFO, open for writing too, is a stdin that never ends: how a -bs caller holds it.
+      const out = await must(
+        inSite(
+          ['sh', '-c', 'mkfifo /tmp/wpl7t-bs && exec 3<>/tmp/wpl7t-bs && s=$(date +%s); timeout 10 /usr/sbin/sendmail -bs <&3 >/dev/null 2>&1; e=$?; rm -f /tmp/wpl7t-bs; echo "$e $(( $(date +%s) - s ))"'],
+          asSite,
+        ),
+        'sendmail -bs',
+      );
+      const [exit, seconds] = out.trim().split(' ').map(Number);
+      expect(exit, 'refused, not stopped by the 10 s timeout').not.toBe(124);
+      expect(exit).not.toBe(0);
+      expect(seconds).toBeLessThan(5);
+    });
+
     it('PHP errors reach docker logs', async () => {
       const marker = `e${Date.now()}`;
       await ask(`/t/error/${marker}/`);

@@ -546,10 +546,14 @@ export function ScheduleEditor({
     .filter(Boolean)
     .join(' · ');
 
-  const runningCount = sites.filter((s) => s.status === 'running').length;
+  // An action that needs WordPress leaves PHP sites out of All sites and Server.
+  const wordpressOnly = (info as { wordpress?: boolean }).wordpress === true;
+  const takes = (s: SiteSummary) => !(wordpressOnly && s.app === 'php');
+  const runningCount = sites.filter((s) => s.status === 'running' && takes(s)).length;
   const externalCount = sites.filter((s) => s.kind === 'external' && s.status === 'connected').length;
+  const phpLeftOut = sites.some((s) => !takes(s));
   const serverSites = (id: number | null) =>
-    sites.filter((s) => s.serverId === id && (d.action === 'site.start' ? s.status === 'stopped' : s.status === 'running')).length;
+    sites.filter((s) => s.serverId === id && takes(s) && (d.action === 'site.start' ? s.status === 'stopped' : s.status === 'running')).length;
   const chosenSite = siteBySlug.get(d.site);
   const chosenSkip = chosenSite ? skipReason(d.action, chosenSite) : null;
   const groupOf = (s: SiteSummary) => (s.kind === 'external' ? 'External' : s.serverName);
@@ -655,6 +659,7 @@ export function ScheduleEditor({
                 (info.external
                   ? ` Connected external sites are included too (${externalCount} now).`
                   : ' External sites are left out.')}
+              {phpLeftOut && ' PHP sites are left out.'}
             </p>
           )}
           {d.mode === 'server' && (

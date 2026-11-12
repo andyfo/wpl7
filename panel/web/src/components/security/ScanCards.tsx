@@ -111,12 +111,17 @@ export function MalwareScanCard({ slug, scan, php = false }: { slug: string; sca
             </Link>
           </p>
         )}
-        {php && <p className="text-xs text-neutral-500">Every file is checked for known malware. There are no published originals to compare a PHP site with.</p>}
+        {php && scan.effective.signatures && (
+          <p className="text-xs text-neutral-500">Every file is checked for known malware. There are no published originals to compare a PHP site with.</p>
+        )}
         {scan.last ? <LastScan scan={scan.last} /> : !scan.active && <p className="text-sm text-neutral-500">Not scanned yet.</p>}
         {(next || !scan.effective.signatures || scan.failures >= 2) && (
           <p className="text-xs text-neutral-500">
             {next}
-            {!scan.effective.signatures && ' Signatures are off (Settings): only the checksum check runs.'}
+            {!scan.effective.signatures &&
+              (php
+                ? " Signatures are off (Settings): this site's files are not checked for known malware."
+                : ' Signatures are off (Settings): only the checksum check runs.')}
             {scan.failures >= 2 && <span className="text-amber-800"> The last {scan.failures} scans failed.</span>}
           </p>
         )}

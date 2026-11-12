@@ -35,12 +35,19 @@ export function resolveTargetServer(s: Pick<CoreServices, 'settings' | 'servers'
 }
 
 /**
- * Whether a PHP site's web root is there, asked inside its container as www-data, as the Files tab
- * asks. Apache answers every request with a 404 while it is not (services/siteHardening.ts).
+ * Whether a PHP site's web root is missing, asked inside its container as www-data, as the Files tab
+ * asks. Apache answers every request with a 404 while it is (services/siteHardening.ts). Null when
+ * the question got no answer: `test -d` says 1 for a missing folder, and anything else but 0 (an
+ * exec refused, a command that could not start) is no answer.
  */
-async function webRootExists(docker: Pick<DockerPort, 'exec'>, site: Pick<SiteRow, 'containerName' | 'webRoot'>): Promise<boolean> {
-  const res = await docker.exec(site.containerName, ['test', '-d', `${SITE_ROOT_IN_CONTAINER}/${site.webRoot}`], { user: '33:33', timeoutMs: 10_000 });
-  return res.exitCode === 0;
+async function webRootMissingIn(docker: Pick<DockerPort, 'exec'>, site: Pick<SiteRow, 'containerName' | 'webRoot'>): Promise<boolean | null> {
+  try {
+    const res = await docker.exec(site.containerName, ['test', '-d', `${SITE_ROOT_IN_CONTAINER}/${site.webRoot}`], { user: '33:33', timeoutMs: 10_000 });
+    return res.exitCode === 0 ? false : res.exitCode === 1 ? true : null;
+  } catch {
+    // A container that is restarting reads as running, and refuses an exec.
+    return null;
+  }
 }
 
 /** A backup reads the files and the database, and a save here reloads nothing it depends on. */
@@ -586,7 +593,7 @@ export class SitesService {
       const { docker } = this.s.servers.handleFor(site.serverId);
       containerState = await docker.containerState(site.containerName);
       stack = await siteContainerStack(docker, site.containerName);
-      if (site.webRoot !== '' && containerState === 'running') webRootMissing = !(await webRootExists(docker, site));
+      if (site.webRoot !== '' && containerState === 'running') webRootMissing = await webRootMissingIn(docker, site);
     } catch (err) {
       // The registry still answers when the hosting server cannot be reached: the metadata,
       // backups and recovery actions are exactly what an operator needs at that moment.
