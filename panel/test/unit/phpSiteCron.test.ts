@@ -200,6 +200,31 @@ describe("a PHP site's cron lines", () => {
     expect(w.core.siteCron.list(w.deps.sites.bySlug('plain'))[0]!.running).toBe(false);
   });
 
+  it('hold a run lost from sight to the stop-after time it started with, though the line is given a shorter one', async () => {
+    const w = await makeWorld();
+    const site = addPhpSite(w, 'plain');
+    const id = dueLine(w, site, 'php import.php', { timeoutMin: 30 });
+    const { badGateway } = await import('../../src/lib/errors.js');
+    const spy = vi.spyOn(w.docker, 'execToStream').mockImplementation(async (_n: string, _c: string[], _out: Writable, opts?: ExecOpts) => {
+      opts?.onStarted?.();
+      throw badGateway('Lost the connection to sh while it was still running inside the container');
+    });
+    w.core.siteCron.tick();
+    await w.core.siteCron.idle();
+    spy.mockRestore();
+    expect(lineRow(w, id).lastTimeoutMin).toBe(30);
+    // Two minutes in, the line's stop-after time goes down to one minute: Docker still gives the
+    // run its 30, so it is still running, and the line is not started beside it.
+    w.db.update(siteCron).set({ lastStartedAt: Date.now() - 2 * MIN }).where(eq(siteCron.id, id)).run();
+    const [line] = w.core.siteCron.save(site, [{ id, expr: '* * * * *', command: 'php import.php', enabled: true, timeoutMin: 1 }]);
+    expect(line).toMatchObject({ timeoutMin: 1, running: true });
+    w.db.update(siteCron).set({ nextRunAt: Date.now() - 1000 }).where(eq(siteCron.id, id)).run();
+    expect(w.core.siteCron.tick()).toEqual({ started: 0, waiting: 0 });
+    // Past the 30 minutes it started with, it has ended.
+    w.db.update(siteCron).set({ lastStartedAt: Date.now() - 31 * MIN }).where(eq(siteCron.id, id)).run();
+    expect(w.core.siteCron.list(site)[0]!.running).toBe(false);
+  });
+
   it('end a run that Docker refused before it started, and run its line again when due', async () => {
     const w = await makeWorld();
     const site = addPhpSite(w, 'plain');

@@ -214,11 +214,13 @@ export class SiteCronService {
    * Running: started by this panel and not yet seen to end, or started with no end seen (a panel
    * restart, a lost connection) and still inside its stop-after time, where the container may still
    * be running it. A run seen to end, or refused before it started, has its time (lastMs) recorded.
+   * The stop-after time is the one the run started with: the line's may have been changed since,
+   * and Docker's `timeout` still holds the run to its own.
    */
   private isRunning(row: SiteCronRow, now: number): boolean {
     if (this.running.has(row.id)) return true;
     if (row.lastStartedAt === null || row.lastMs !== null) return false;
-    return now < row.lastStartedAt + row.timeoutMin * 60_000 + LOST_RUN_GRACE_MS;
+    return now < row.lastStartedAt + (row.lastTimeoutMin ?? row.timeoutMin) * 60_000 + LOST_RUN_GRACE_MS;
   }
 
   private advance(row: SiteCronRow, now: number): void {
@@ -231,6 +233,7 @@ export class SiteCronService {
       .update(siteCron)
       .set({
         lastStartedAt: now,
+        lastTimeoutMin: row.timeoutMin,
         lastMs: null,
         lastExit: null,
         lastOutput: null,

@@ -7,6 +7,7 @@ CREATE TABLE `site_cron` (
 	`timeout_min` integer DEFAULT 5 NOT NULL,
 	`next_run_at` integer,
 	`last_started_at` integer,
+	`last_timeout_min` integer,
 	`last_ms` integer,
 	`last_exit` integer,
 	`last_output` text,

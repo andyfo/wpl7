@@ -4264,6 +4264,13 @@
           "notNull": false,
           "autoincrement": false
         },
+        "last_timeout_min": {
+          "name": "last_timeout_min",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "last_ms": {
           "name": "last_ms",
           "type": "integer",

@@ -1874,6 +1874,11 @@ export const siteCron = sqliteTable(
     /** When it is next due; NULL while it is off. A due line waits while its site can't run it. */
     nextRunAt: integer('next_run_at'),
     lastStartedAt: integer('last_started_at'),
+    /**
+     * The stop-after time the last run started with. Its deadline is that run's own: Docker's
+     * `timeout` keeps it whatever the line is changed to meanwhile.
+     */
+    lastTimeoutMin: integer('last_timeout_min'),
     /** How long the last run took; NULL while it runs, or when its end was not seen. */
     lastMs: integer('last_ms'),
     lastExit: integer('last_exit'),

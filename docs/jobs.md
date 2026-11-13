@@ -211,7 +211,9 @@ server; the rest stay due. `timeoutMin` (1-60, default 5) is enforced inside the
 4 KB of what it printed, stdout and stderr together. A panel restart, or a connection to the server
 lost while a line runs (`execToStream`'s `onStarted` tells it from an exec Docker refused), loses
 that run's result; the command runs on to its deadline. Until then the line counts as running, on its
-server's count of 2 too: a run with no time (`lastMs`) recorded is one whose end was not seen.
+server's count of 2 too: a run with no time (`lastMs`) recorded is one whose end was not seen. Its
+deadline is the stop-after time it started with (`lastTimeoutMin`), which an edit of the line's
+doesn't move, as Docker's `timeout` doesn't.
 
 ### REST API requests
 
