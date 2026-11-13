@@ -17,9 +17,9 @@ for a reason; remove one once there is nothing left to watch.
 
 | Entry | Priority | Last checked | Status |
 |---|---|---|---|
-| [RDAP: registry endpoints and bootstrap](#rdap-registry-endpoints-and-bootstrap) | Medium | 2026-10-13 08:35 UTC | .co, .io, .me and .us still absent from IANA; supplement used |
-| [Reminders: PHP and OS support dates](#reminders-php-and-os-support-dates) | Medium | 2026-10-13 08:35 UTC | PHP, Ubuntu and Debian dates match upstream tables |
-| [Reminders: Cloudflare token lifetime](#reminders-cloudflare-token-lifetime) | Medium | 2026-10-13 08:35 UTC | User and account verification endpoints expose status and optional expiry |
+| [RDAP: registry endpoints and bootstrap](#rdap-registry-endpoints-and-bootstrap) | Medium | 2026-11-13 13:08 UTC | .co, .io, .me and .us still absent from IANA; all four supplement endpoints publish `expiration`; RFC 8056 and ICANN's profile unchanged |
+| [Reminders: PHP and OS support dates](#reminders-php-and-os-support-dates) | Medium | 2026-11-13 13:02 UTC | All dates match; PHP 8.6 not out (GA due 2026-11-19); the interim Ubuntu 26.10 is not in the map |
+| [Reminders: Cloudflare token lifetime](#reminders-cloudflare-token-lifetime) | Medium | 2026-11-13 13:15 UTC | Contracts unchanged; neither verify endpoint is documented to take `cfoat_` OAuth tokens, so one would get no date |
 | [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-11-08 17:22 UTC | Open upstream, fix #13958 awaiting review; not in v3.7.17; worked around |
 | [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-11-08 17:21 UTC | 0.21.15 is the latest; same definitions as the pinned 0.21.12 |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-11-01 09:08 UTC | Both overrides still match in 0.21.15, the latest; `@preg_replace` is still 22c684e7; engine test not run at this check |
@@ -61,7 +61,7 @@ for a reason; remove one once there is nothing left to watch.
 | [WordPress 7.2: sudo mode and Application Passwords](#wordpress-72-sudo-mode-and-application-passwords) | Medium | 2026-11-08 17:30 UTC | Beta 4 is out: no sudo mode; Application Passwords only gain an email on creation; beta tests not run at this check |
 | [WP Godmode's `godmode` command on WPL7 Connect](#wp-godmodes-godmode-command-on-wpl7-connect) | Medium | 2026-11-08 17:31 UTC | Not released: 1.3.2, the latest, registers no command with WPL7 Connect |
 | [WordPress's answer to a fatal error](#wordpresss-answer-to-a-fatal-error) | Low | 2026-10-09 15:55 UTC | 500, as relied on |
-| [WordPress's default From address](#wordpresss-default-from-address) | Medium | 2026-10-14 16:28 UTC | `wordpress@` and the home URL's host without `www.`, on 7.1.3 and trunk |
+| [WordPress's default From address](#wordpresss-default-from-address) | Medium | 2026-11-13 13:00 UTC | `wordpress@` and the home URL's host without `www.`, on 7.1.4, trunk and 7.2 Beta 5 |
 | [msmtp: one envelope sender, as `wpl7-sendmail` relies on it](#msmtp-one-envelope-sender-as-wpl7-sendmail-relies-on-it) | Low | 2026-11-11 23:04 UTC | msmtp 1.8.28 in the image, 1.8.34 upstream; nothing since changes the four behaviours; the engine mail tests pass |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
 | [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 22:05 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
@@ -1080,9 +1080,11 @@ for a reason; remove one once there is nothing left to watch.
 ## WordPress's default From address
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-14 16:28 UTC. `wp_mail()` on trunk still sends as `wordpress@` and the
-  host of `network_home_url()`, with a leading `www.` taken off. Its last change (2026-10-07) was to
-  doc types. 7.1.3 is the latest release.
+- **Last checked:** 2026-11-13 13:00 UTC. `wp_mail()` still sends as `wordpress@` and the host of
+  `network_home_url()`, with a leading `www.` taken off, on 7.1.4, the latest release, and on trunk.
+  pluggable.php's one change since (2026-10-17) was to a doc comment. 7.2 Beta 5 (2026-11-10, final
+  due 2026-12-08) is the same. WordPress still sets no envelope sender of its own: the default one
+  added in r61010 was reverted in r61537.
 - **What we rely on:** Mail → Setup guide lists one sending domain per site, its primary domain
   without `www.` (`MailService.sendingDomains`, with `mailDomainOf` in
   `panel/src/services/mailAuth.ts`). A site on `www.example.com` also owns `example.com` for the
@@ -1155,8 +1157,12 @@ for a reason; remove one once there is nothing left to watch.
 ## RDAP: registry endpoints and bootstrap
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-13 08:35 UTC. IANA's current bootstrap has no entries for .co, .io,
-  .me or .us. The registry endpoints identified in the RDAP investigation remain the supplement.
+- **Last checked:** 2026-11-13 13:08 UTC. IANA's bootstrap of 2026-10-28 still has no .co, .io, .me
+  or .us. All four supplement endpoints answer `google.<tld>` and `nic.<tld>` with an `expiration`
+  event, and an unregistered name with 404. RFC 8056 has no update or errata, and ICANN's response
+  profile is still Version 2.2 of 21 February 2024. IANA's RDAP JSON Values registry last changed
+  2025-06-04. ICANN's conformance tool 4.0.0 (2026-11-09) changes only which status combinations its
+  test -46900 accepts, not any status value or event.
 - **Status:** The panel uses IANA first, then the four entries in `RDAP_SUPPLEMENT` in
   `panel/src/services/domainLookups.ts`. Dates without an `expiration` event stay manual.
 - **Check:** Fetch [IANA's bootstrap](https://data.iana.org/rdap/dns.json), check those four TLDs,
@@ -1169,8 +1175,13 @@ for a reason; remove one once there is nothing left to watch.
 ## Reminders: PHP and OS support dates
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-13 08:35 UTC. The shipped PHP 7.0 through 8.5, Ubuntu LTS 18.04
-  through 26.04, and Debian 10 through 13 dates match the upstream support tables.
+- **Last checked:** 2026-11-13 13:02 UTC. PHP 7.0 through 8.5, Ubuntu LTS 18.04 through 26.04 and
+  Debian 10 through 13 still match php.net, ubuntu.com and debian.org, and no support was extended.
+  PHP 8.6 is not out: RC7 came on 2026-11-12, GA is planned for 2026-11-19, and no php.net table
+  lists it yet. php.net dates a branch from its GA, four years on, moved to 31 December, so
+  2030-12-31 is expected. Add it to `PHP_EOL` from php.net's table once it is there, no later than
+  the change that offers 8.6 to sites. Ubuntu 26.10 came out on 2026-10-15, with standard support to
+  July 2027. It is an interim release, which the LTS-only map leaves out.
 - **Status:** `PHP_EOL` and `OS_EOL` in `panel/src/services/reminderSources.ts` are the shipped
   security-support dates. Ubuntu standard maintenance ends in a published month, so the reminder
   uses its first day and says so. Debian includes LTS. Paid extensions are excluded.
@@ -1186,8 +1197,13 @@ for a reason; remove one once there is nothing left to watch.
 ## Reminders: Cloudflare token lifetime
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-13 08:35 UTC. Both verification endpoints return `status` and optional
-  `expires_on`. Account tokens need their account endpoint. Zone Read provides the account ID.
+- **Last checked:** 2026-11-13 13:15 UTC. Cloudflare's OpenAPI schema of 2026-11-12 differs from
+  2026-10-13's only in annotations. `/user/tokens/verify` and `/accounts/{account_id}/tokens/verify`
+  take an API token, list no permission, and return `id` and `status` (`active`, `disabled`,
+  `expired`), with `expires_on` and `not_before` optional. List Zones takes Zone Read and names each
+  zone's `account`. Neither verify endpoint is documented to take Wrangler's `cfoat_` OAuth tokens
+  (formats page of 2026-10-23), so the reminder would most likely say "Token check failed" for one
+  and claim no date. Not tried: that needs a real token.
 - **Status:** `ReminderSources` uses user verification for user tokens and account verification
   for account tokens, including legacy tokens discovered through visible zones. A working token
   whose verification is refused retains its last known date, without claiming it is expired.
