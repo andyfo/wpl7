@@ -2,11 +2,11 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { MAX_SITE_CRON_LINES, type SiteCronLineInput } from '../../../../shared/schemas';
-import { cronError } from '../../../../shared/cron';
 import type { SiteCronLineDto } from '../../../../shared/types';
 import { api } from '../../api/client';
 import { useMeta } from '../../api/hooks';
 import { timeAgo, timeUntil } from '../../lib/format';
+import { cronRunProblem } from '../../lib/schedules';
 import { CronField } from '../CronField';
 import { Button, Card, ErrorNote, Field, Modal, Spinner, Toggle, inputClass } from '../ui';
 
@@ -36,9 +36,10 @@ function took(ms: number): string {
 export function CronCard({ slug }: { slug: string }) {
   const qc = useQueryClient();
   const meta = useMeta();
+  const fetchLines = () => api<{ lines: SiteCronLineDto[] }>(`/api/sites/${slug}/cron`);
   const query = useQuery({
     queryKey: ['site-cron', slug],
-    queryFn: () => api<{ lines: SiteCronLineDto[] }>(`/api/sites/${slug}/cron`),
+    queryFn: fetchLines,
     // A run's end shows within a quarter minute; quicker while one is going.
     refetchInterval: (q) => (q.state.data?.lines.some((l) => l.running) ? 3000 : 15_000),
   });
@@ -50,26 +51,40 @@ export function CronCard({ slug }: { slug: string }) {
   if (query.isError && !query.data) return <ErrorNote error={query.error} />;
   const lines = query.data?.lines ?? [];
 
-  const put = (next: SiteCronLineInput[]): Promise<boolean> => {
+  /**
+   * A write sends every line, and the API deletes a saved line the body leaves out. So the body is
+   * built from the lines as they are now, read just before, not as this tab last saw them: a line
+   * added in another tab since stays. `build` answers a sentence when the change no longer fits.
+   */
+  const put = async (build: (current: SiteCronLineDto[]) => SiteCronLineInput[] | string): Promise<boolean> => {
     setSaving(true);
     setError(null);
-    return api<{ lines: SiteCronLineDto[] }>(`/api/sites/${slug}/cron`, { method: 'PUT', body: { lines: next } })
-      .then((res) => {
-        qc.setQueryData(['site-cron', slug], res);
-        return true;
-      })
-      .catch((err: unknown) => {
-        setError(err);
-        return false;
-      })
-      .finally(() => setSaving(false));
+    try {
+      const { lines: current } = await qc.fetchQuery({ queryKey: ['site-cron', slug], queryFn: fetchLines, staleTime: 0 });
+      const next = build(current);
+      if (typeof next === 'string') throw new Error(next);
+      const res = await api<{ lines: SiteCronLineDto[] }>(`/api/sites/${slug}/cron`, { method: 'PUT', body: { lines: next } });
+      qc.setQueryData(['site-cron', slug], res);
+      return true;
+    } catch (err) {
+      setError(err);
+      return false;
+    } finally {
+      setSaving(false);
+    }
   };
+  const gone = 'This line was deleted meanwhile.';
   const saveDraft = (d: Draft) => {
-    const others = lines.filter((l) => l.id !== d.id).map(inputOf);
     const edited = { ...(d.id !== undefined ? { id: d.id } : {}), expr: d.expr, command: d.command, enabled: d.enabled, timeoutMin: d.timeoutMin };
-    const next = d.id === undefined ? [...others, edited] : lines.map((l) => (l.id === d.id ? edited : inputOf(l)));
-    void put(next).then((ok) => ok && setDraft(null));
+    void put((current) => {
+      if (d.id === undefined) return [...current.map(inputOf), edited];
+      if (!current.some((l) => l.id === d.id)) return gone;
+      return current.map((l) => (l.id === d.id ? edited : inputOf(l)));
+    }).then((ok) => ok && setDraft(null));
   };
+  const switchLine = (id: number, enabled: boolean) =>
+    void put((current) => (current.some((l) => l.id === id) ? current.map((l) => (l.id === id ? { ...inputOf(l), enabled } : inputOf(l))) : gone));
+  const deleteLine = (id: number) => void put((current) => current.filter((l) => l.id !== id).map(inputOf));
   const runNow = (id: number) => {
     setStarting(id);
     setError(null);
@@ -89,14 +104,17 @@ export function CronCard({ slug }: { slug: string }) {
     <Card
       title="Cron"
       action={
-        <span className="flex items-center gap-2">
-          {full && <span className="text-xs text-neutral-500">{MAX_SITE_CRON_LINES} lines at most.</span>}
-          <span title={full ? `${MAX_SITE_CRON_LINES} lines at most.` : undefined}>
-            <Button small disabled={full} onClick={() => openDialog({ expr: '*/5 * * * *', command: '', enabled: true, timeoutMin: 5 })}>
-              Add line
-            </Button>
+        // Not before the lines are read: the card has nothing to add a line to yet.
+        query.data && (
+          <span className="flex items-center gap-2">
+            {full && <span className="text-xs text-neutral-500">{MAX_SITE_CRON_LINES} lines at most.</span>}
+            <span title={full ? `${MAX_SITE_CRON_LINES} lines at most.` : undefined}>
+              <Button small disabled={full} onClick={() => openDialog({ expr: '*/5 * * * *', command: '', enabled: true, timeoutMin: 5 })}>
+                Add line
+              </Button>
+            </span>
           </span>
-        </span>
+        )
       }
     >
       {!query.data ? (
@@ -122,7 +140,7 @@ export function CronCard({ slug }: { slug: string }) {
                     checked={line.enabled}
                     disabled={saving}
                     label={line.enabled ? 'On' : 'Off'}
-                    onChange={(enabled) => void put(lines.map((l) => (l.id === line.id ? { ...inputOf(l), enabled } : inputOf(l))))}
+                    onChange={(enabled) => switchLine(line.id, enabled)}
                   />
                   <span title={line.running ? 'It is running.' : undefined}>
                     <Button small variant="secondary" disabled={line.running} busy={starting === line.id} onClick={() => runNow(line.id)}>
@@ -132,7 +150,7 @@ export function CronCard({ slug }: { slug: string }) {
                   <Button small variant="ghost" onClick={() => openDialog({ ...inputOf(line), enabled: line.enabled })}>
                     Edit
                   </Button>
-                  <Button small variant="ghost" disabled={saving} onClick={() => void put(lines.filter((l) => l.id !== line.id).map(inputOf))}>
+                  <Button small variant="ghost" disabled={saving} onClick={() => deleteLine(line.id)}>
                     Delete
                   </Button>
                 </div>
@@ -197,7 +215,8 @@ function CronLineDialog({
   onClose: () => void;
 }) {
   const [d, setD] = useState(draft);
-  const problem = cronError(d.expr) ?? (d.command.trim() === '' ? 'Enter a command.' : null);
+  // What the panel refuses on save too: a schedule croner can't run, or that no date matches.
+  const problem = cronRunProblem(d.expr, timezone) ?? (d.command.trim() === '' ? 'Enter a command.' : null);
   return (
     <Modal title={draft.id === undefined ? 'Add cron line' : 'Edit cron line'} onClose={onClose} dismissible={false}>
       <div className="space-y-4 text-sm">

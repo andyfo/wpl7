@@ -228,7 +228,8 @@ const sameTarget = (a: ScheduleTarget | null, b: ScheduleTarget | null): boolean
 /** Why a site would be left out of a run of this action, or null. Mirrors ineligible() in src/jobs/actions.ts. */
 function skipReason(action: ScheduleAction, site: SiteSummary): string | null {
   if (site.status === 'provisioning' || site.status === 'deleting') return site.status;
-  if (site.app === 'php' && (SCHEDULE_ACTION_INFO[action] as { wordpress?: boolean }).wordpress) return 'PHP site: no WordPress';
+  // Read in the checklist and in "<slug> is <reason>: a run skips it…".
+  if (site.app === 'php' && (SCHEDULE_ACTION_INFO[action] as { wordpress?: boolean }).wordpress) return 'a PHP site, with no WordPress';
   if (site.kind === 'external') {
     const info: { external: boolean; externalRefusal?: string } = SCHEDULE_ACTION_INFO[action];
     if (!info.external) return `external: ${info.externalRefusal ?? 'cannot take this'}`;
@@ -784,7 +785,7 @@ export function ScheduleEditor({
               onChange={(e) => set('command', e.target.value)}
             />
             <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              Runs as www-data inside the site's container, in the WordPress folder. Output goes to the job log; keep secrets out
+              Runs as www-data inside the site's container, in the site's folder. Output goes to the job log; keep secrets out
               of it.
             </p>
           </Section>

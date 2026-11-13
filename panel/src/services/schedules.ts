@@ -30,23 +30,32 @@ export function nextCronRun(expr: string, after: Date = new Date()): number | nu
 }
 
 /**
- * Why a custom schedule may not use this expression, or null. Stricter than the backup cron:
- * only what the five-box editor can show (no seconds field, no `L`), croner must accept it,
- * and no two runs may come closer than MIN_SCHEDULE_GAP_MS - every run is a job with a log,
- * and holds its site against everything else while it runs.
+ * Why an expression can't be run on a schedule, or null: only what the five-box editor can show
+ * (no seconds field, no `L`), croner must accept it, and some date must match it. A PHP site's
+ * cron lines ask this; custom schedules ask more (customCronProblem).
  */
-export function customCronProblem(expr: string, now: Date = new Date()): string | null {
+export function cronRunProblem(expr: string, now: Date = new Date()): string | null {
   const shape = cronError(expr);
   if (shape) return shape;
-  let runs: Date[];
   try {
-    // A thousand runs span at least three days of even an every-five-minutes pattern, which is
-    // where any gap a five-field expression can produce shows up (day boundaries included).
-    runs = pattern(expr).nextRuns(1000, now);
+    if (pattern(expr).nextRun(now) === null) return 'This schedule never runs';
   } catch (err) {
     return (err instanceof Error ? err.message : String(err)).replace(/^CronPattern:\s*/, '');
   }
-  if (runs.length === 0) return 'This schedule never runs';
+  return null;
+}
+
+/**
+ * Why a custom schedule may not use this expression, or null. Stricter than the backup cron:
+ * cronRunProblem, and no two runs may come closer than MIN_SCHEDULE_GAP_MS - every run is a job
+ * with a log, and holds its site against everything else while it runs.
+ */
+export function customCronProblem(expr: string, now: Date = new Date()): string | null {
+  const problem = cronRunProblem(expr, now);
+  if (problem) return problem;
+  // A thousand runs span at least three days of even an every-five-minutes pattern, which is
+  // where any gap a five-field expression can produce shows up (day boundaries included).
+  const runs = pattern(expr).nextRuns(1000, now);
   for (let i = 1; i < runs.length; i++) {
     if (runs[i]!.getTime() - runs[i - 1]!.getTime() < MIN_SCHEDULE_GAP_MS) {
       return `Runs may be at most every ${MIN_SCHEDULE_GAP_MS / MIN} minutes`;

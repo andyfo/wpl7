@@ -173,7 +173,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         summary: "Set a PHP site's cron lines: up to 10 commands run in its folder on a schedule, outside the job queue",
         input:
           '{lines: [{id?, expr: "*/5 * * * *", command, enabled?, timeoutMin?: 1-60, default 5}]} - every line as it is to be: one with an id keeps its last run, one left out is deleted; five fields on the panel\'s clock, every minute allowed',
-        returns: '{lines: SiteCronLineDto[]}',
+        returns: "{lines: SiteCronLineDto[]}; 400 for a schedule that would never run: one croner refuses, or that no date matches",
         danger: true,
         level: 'manage',
       },

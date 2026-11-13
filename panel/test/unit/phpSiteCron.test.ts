@@ -85,6 +85,35 @@ describe("a PHP site's cron lines", () => {
     expect(wp.statusCode).toBe(409);
   });
 
+  it('are refused with a schedule croner cannot run, or that no date ever matches: saved, it would never run', async () => {
+    const w = await makeWorld();
+    const site = addPhpSite(w, 'plain');
+    const { app, headers } = await authed(w);
+    for (const [expr, problem] of [
+      ['*/90 * * * *', /^lines\.0\.expr: (?!This schedule never runs)/],
+      ['0 */30 * * *', /^lines\.0\.expr: (?!This schedule never runs)/],
+      ['0 0 31 2 *', /^lines\.0\.expr: This schedule never runs$/],
+    ] as const) {
+      const res = await app.inject({ method: 'PUT', url: '/api/sites/plain/cron', headers, payload: { lines: [{ expr, command: 'true' }] } });
+      expect([expr, res.statusCode]).toEqual([expr, 400]);
+      expect(res.json().error.message).toMatch(problem);
+    }
+    expect(w.core.siteCron.rows(site.id)).toEqual([]);
+  });
+
+  it('mark a line running only once its start is written: a write that fails leaves it free for the next tick', async () => {
+    const w = await makeWorld();
+    const site = addPhpSite(w, 'plain');
+    const id = dueLine(w, site, 'true');
+    w.db.$client.exec("CREATE TRIGGER wpl7t_full BEFORE UPDATE OF last_started_at ON site_cron BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END;");
+    expect(() => w.core.siteCron.tick()).toThrow(/disk is full/);
+    w.db.$client.exec('DROP TRIGGER wpl7t_full');
+    expect(w.core.siteCron.list(site)[0]).toMatchObject({ running: false, last: null });
+    expect(w.core.siteCron.tick()).toEqual({ started: 1, waiting: 0 });
+    await w.core.siteCron.idle();
+    expect(lineRow(w, id).lastExit).toBe(0);
+  });
+
   it('run as www-data in the site folder, outside the job queue, with the command as an argument of its own', async () => {
     const w = await makeWorld();
     const site = addPhpSite(w, 'plain');

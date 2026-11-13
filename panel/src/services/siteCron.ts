@@ -5,10 +5,10 @@ import { describeCron } from '../../shared/cron.js';
 import type { SiteCronLineInput } from '../../shared/schemas.js';
 import type { SiteCronLineDto } from '../../shared/types.js';
 import { siteCron, sites, type SiteCronRow, type SiteRow } from '../db/schema.js';
-import { AppError, conflict, notFound } from '../lib/errors.js';
+import { AppError, badRequest, conflict, notFound } from '../lib/errors.js';
 import { hostedSites, isPhpSite } from '../lib/siteKind.js';
 import type { CoreServices } from './index.js';
-import { nextCronRun } from './schedules.js';
+import { cronRunProblem, nextCronRun } from './schedules.js';
 import { asSiteUser } from './wp.js';
 
 /**
@@ -106,11 +106,16 @@ export class SiteCronService {
   /**
    * The site's lines as they are to be. A line with an id is that line, changed, and keeps its last
    * run; one without is new; a saved line left out is deleted. Its next run is worked out again for
-   * a line whose schedule or switch changed.
+   * a line whose schedule or switch changed. A schedule croner can't run, or that no date ever
+   * matches, is refused: saved, it would be on and never run.
    */
   save(site: SiteRow, lines: SiteCronLineInput[]): SiteCronLineDto[] {
     assertPhp(site);
     const now = Date.now();
+    lines.forEach((line, i) => {
+      const problem = cronRunProblem(line.expr, new Date(now));
+      if (problem) throw badRequest(`lines.${i}.expr: ${problem}`);
+    });
     const current = new Map(this.rows(site.id).map((row) => [row.id, row]));
     for (const line of lines) {
       if (line.id !== undefined && !current.has(line.id)) throw notFound(`Cron line #${line.id} is not one of this site's`);
@@ -228,7 +233,8 @@ export class SiteCronService {
   }
 
   private start(site: SiteRow, row: SiteCronRow, now: number, opts: { advance: boolean }): void {
-    this.running.set(row.id, { siteId: site.id, serverId: site.serverId, startedAt: now });
+    // The start is written first: a write that fails (a full disk) leaves nothing marked running,
+    // and the next tick tries again.
     this.s.db
       .update(siteCron)
       .set({
@@ -242,6 +248,7 @@ export class SiteCronService {
       })
       .where(eq(siteCron.id, row.id))
       .run();
+    this.running.set(row.id, { siteId: site.id, serverId: site.serverId, startedAt: now });
     const run = this.execute(site, row, now).finally(() => {
       this.running.delete(row.id);
       this.inFlight.delete(run);
