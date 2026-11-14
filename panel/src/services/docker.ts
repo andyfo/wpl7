@@ -311,6 +311,8 @@ export interface ContainerLogsOpts {
   sinceSec?: number;
   /** Cap on the number of lines read back, newest first. */
   tail?: number;
+  /** Each line starts with when it was logged, RFC 3339 with nanoseconds, and a space. */
+  timestamps?: boolean;
 }
 
 /**
@@ -818,6 +820,7 @@ export class DockerService implements DockerPort {
         follow: false,
         ...(opts.sinceSec !== undefined ? { since: opts.sinceSec } : {}),
         ...(opts.tail !== undefined ? { tail: opts.tail } : {}),
+        ...(opts.timestamps ? { timestamps: true } : {}),
       })) as unknown as Buffer | string;
       const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw), 'utf8');
       const { stdout, stderr } = demuxBuffer(buf);

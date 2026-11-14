@@ -1879,6 +1879,7 @@ export const settingsUpdateBody = z.object({
   alertsVulnerabilities: z.boolean().optional(),
   alertsBackups: z.boolean().optional(),
   alertsConnector: z.boolean().optional(),
+  alertsDeployFailed: z.boolean().optional(),
   domainLookups: z.boolean().optional(),
   /** What every site's container gets, unless the site has its own (siteLimitsBody). */
   siteCpuLimit: cpuLimitSchema.optional(),

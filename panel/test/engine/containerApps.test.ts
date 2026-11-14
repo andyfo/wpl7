@@ -51,6 +51,7 @@ import {
   type DynamicConfig,
 } from '../../src/services/securityConfig.js';
 import { siteNetworkName } from '../../src/services/siteNetwork.js';
+import { appLogLines } from '../../src/services/appSpec.js';
 import { askApp, healthGate } from '../../src/services/appProbe.js';
 import { MOUNT_UNPACK_LOCKDOWN, mountEntryProblem, mountListScript, mountUnpackScript, zipListNames } from '../../src/jobs/handlers/apps.js';
 import { buildSiteContainerSpec } from '../../src/services/siteSpec.js';
@@ -847,6 +848,17 @@ describe.skipIf(!ENABLED)('container apps against the real Traefik and Docker', 
       // It ran locked down: Docker removed it, and it left nothing behind.
       const left = await dockerCli('ps', '-aq', '--filter', `label=wpl7.probe=${GATE}`);
       expect(left.stdout.toString('utf8').trim()).toBe('');
+    });
+
+    it('the log with Docker’s timestamps, as the app’s Logs tab reads it', async () => {
+      const raw = await dockerService.containerLogs(container(GATE), { tail: 20, timestamps: true });
+      const lines = appLogLines(raw);
+      expect(lines.length).toBeGreaterThan(0);
+      expect(lines.every((l) => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$/.test(l.ts))).toBe(true);
+      expect(lines.some((l) => l.text.includes('listening'))).toBe(true);
+      fact('8. a log line with timestamps', raw.split('\n')[0]);
+      // From the last line on: nothing new.
+      expect(appLogLines(raw, lines.at(-1)!.ts)).toEqual([]);
     });
 
     it('a stopped container is a quick failure, not a hang', async () => {

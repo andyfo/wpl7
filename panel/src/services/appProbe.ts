@@ -71,6 +71,19 @@ export async function askApp(
   }
 }
 
+/**
+ * Whether a container app's image can run a command: `sh`, and `timeout`, which every exec is
+ * wrapped in (services/docker.ts). Asked before a shell job is queued, as the user it would run as.
+ */
+export async function hasShell(docker: Pick<ServerHandle['docker'], 'exec'>, container: string, runAs: string): Promise<boolean> {
+  try {
+    const res = await docker.exec(container, ['sh', '-c', 'command -v timeout >/dev/null'], { timeoutMs: 15_000, ...(runAs ? { user: runAs } : {}) });
+    return res.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
 export interface GateOpts {
   /** Ask the deploy check path once after the health path answered: a deploy's, never a restart's. */
   deployCheck: boolean;

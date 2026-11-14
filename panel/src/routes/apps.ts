@@ -26,7 +26,7 @@ import { AppError, badRequest, conflict, tooManyRequests } from '../lib/errors.j
 import { jobToDto, viewerOf } from '../lib/dto.js';
 import { requireAccess } from '../plugins/auth.js';
 import { DEPLOY_TOKEN_HEADER, MAX_IMAGE_UPLOAD_BYTES } from '../services/apps.js';
-import { appPaths } from '../services/appSpec.js';
+import { appLogLines, appPaths } from '../services/appSpec.js';
 import type { AppDeps } from './deps.js';
 import { holdSigningDomainsOf } from './sites.js';
 
@@ -48,6 +48,13 @@ const mountUploadQuery = z
   .object({
     offset: z.preprocess(emptyAsUnset, z.coerce.number().int().min(0)),
     size: z.preprocess(emptyAsUnset, z.coerce.number().int().min(1).max(MAX_MOUNT_UPLOAD_BYTES)),
+  })
+  .strict();
+const appLogsQuery = z
+  .object({
+    tail: z.preprocess(emptyAsUnset, z.coerce.number().int().min(1).max(5000)).default(500),
+    /** The last line's time, as a line gives it: only newer ones come back. */
+    since: z.preprocess(emptyAsUnset, z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/, 'a time as a log line gives it')).optional(),
   })
   .strict();
 const mountParams = z.object({ slug: siteSlugParam, name: z.string().regex(APP_MOUNT_NAME_RE, '1-32 of a-z, 0-9 and -') });
@@ -95,6 +102,19 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
   r.post('/api/sites/:slug/app/image', { schema: { params: slugParams, body: appImageBody } }, async (req, reply) => {
     const job = await deps.apps.deployUpload(req.params.slug, req.body.uploadId, req.body.backupFirst);
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
+  });
+
+  // Its container's log: what the app prints, which can hold anything it knows, hence Manage.
+  r.get('/api/sites/:slug/app/logs', { schema: { params: slugParams, querystring: appLogsQuery } }, async (req) => {
+    const { site } = deps.apps.bySlug(req.params.slug);
+    const { tail, since } = req.query;
+    const sinceSec = since ? Math.floor(Date.parse(since) / 1000) : undefined;
+    const raw = await deps.servers.handleFor(site.serverId).docker.containerLogs(site.containerName, {
+      tail,
+      timestamps: true,
+      ...(sinceSec !== undefined && Number.isFinite(sinceSec) ? { sinceSec } : {}),
+    });
+    return { lines: appLogLines(raw, since) };
   });
 
   r.get('/api/sites/:slug/app/deploys', { schema: { params: slugParams } }, async (req) => ({

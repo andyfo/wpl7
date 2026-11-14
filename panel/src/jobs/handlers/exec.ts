@@ -9,7 +9,7 @@ import { redactorFor } from '../../services/offsite.js';
 import { asSiteUser } from '../../services/wp.js';
 import { wpErrorOf, type WpRestResponse } from '../../services/wpRest.js';
 import { ContainerBackend, backendFor, type SiteBackend } from '../../services/siteBackend.js';
-import { isExternal } from '../../lib/siteKind.js';
+import { isContainerApp, isExternal, type SiteApps } from '../../lib/siteKind.js';
 import type { JobContext } from '../context.js';
 import { maskCliArgs, maskRestRoute, maskShell, sizeText, stdinNote } from '../summaries.js';
 import { loadSite } from './shared.js';
@@ -64,8 +64,8 @@ const MAX_LINE = 2000;
  * and possibly leaving it running - is a decision; a scheduled `wp cache flush` should not
  * be the thing that makes it.
  */
-async function runningSite(ctx: JobContext<{ siteId: number }>, s: CoreServices): Promise<{ site: SiteRow; server: ServerHandle }> {
-  const site = loadSite(s.db, ctx.payload.siteId, { app: 'siteImage' });
+async function runningSite(ctx: JobContext<{ siteId: number }>, s: CoreServices, apps: SiteApps = 'siteImage'): Promise<{ site: SiteRow; server: ServerHandle }> {
+  const site = loadSite(s.db, ctx.payload.siteId, { app: apps });
   const server = s.servers.handleFor(site.serverId);
   const state = await server.docker.containerState(site.containerName);
   if (state !== 'running') {
@@ -163,13 +163,17 @@ async function commandBackend(ctx: JobContext<{ siteId: number }>, s: CoreServic
 }
 
 export async function siteShell(ctx: JobContext<z.infer<typeof siteShellPayload>>, s: CoreServices): Promise<void> {
-  const { site, server } = await runningSite(ctx, s);
+  const { site, server } = await runningSite(ctx, s, 'any');
   ctx.checkCanceled();
   ctx.info(`$ ${maskShell(ctx.payload.command)}`);
   const log = outputLog(ctx);
-  // As www-data, like wp-cli and Web FTP (services/wp.ts asSiteUser).
+  const timeoutMs = ctx.payload.timeoutMin * 60_000;
+  // As www-data, like wp-cli and Web FTP (services/wp.ts asSiteUser); a container app's as the user
+  // it runs as, in its own working directory.
+  const runAs = isContainerApp(site) ? s.apps.settingsOf(site.id).runAs : '';
+  const as = isContainerApp(site) ? { env: ['HOME=/tmp'], timeoutMs, ...(runAs ? { user: runAs } : {}) } : asSiteUser(timeoutMs);
   const res = await server.docker.exec(site.containerName, ['sh', '-c', ctx.payload.command], {
-    ...asSiteUser(ctx.payload.timeoutMin * 60_000),
+    ...as,
     onOutput: log.onOutput,
     outputCap: OUTPUT_CAP,
   });

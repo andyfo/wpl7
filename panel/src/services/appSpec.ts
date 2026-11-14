@@ -303,3 +303,40 @@ export function appRows(db: Db, siteId: number): { settings: AppSettingsRow; mou
   if (!settings) return null;
   return { settings, mounts: db.select().from(appMounts).where(eq(appMounts.siteId, siteId)).all() };
 }
+
+// ---------------------------------------------------------------------------
+// Its log
+
+export interface AppLogLine {
+  /** When Docker took it: RFC 3339 with nanoseconds; '' for a line that came without one. */
+  ts: string;
+  text: string;
+}
+
+/** `2026-11-14T20:00:00.5Z` -> [seconds, nanoseconds], comparable whatever the digits Docker kept. */
+function stamp(ts: string): [number, number] {
+  const m = /^(.*?)(?:\.(\d{1,9}))?Z$/.exec(ts);
+  if (!m) return [0, 0];
+  return [Math.floor(Date.parse(`${m[1]}Z`) / 1000), Number((m[2] ?? '').padEnd(9, '0'))];
+}
+
+const later = (a: string, b: string): number => {
+  const [as, an] = stamp(a);
+  const [bs, bn] = stamp(b);
+  return as - bs || an - bn;
+};
+
+/**
+ * A container's log as `docker logs --timestamps` gives it, stdout then stderr: one list, in the
+ * order the lines were logged, newer than `since` only (Docker's own `since` is whole seconds).
+ */
+export function appLogLines(raw: string, since?: string): AppLogLine[] {
+  const lines: AppLogLine[] = [];
+  for (const line of raw.split('\n')) {
+    if (line === '') continue;
+    const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z) (.*)$/.exec(line);
+    lines.push(m ? { ts: m[1]!, text: m[2]! } : { ts: '', text: line });
+  }
+  const sorted = lines.map((l, i) => ({ ...l, i })).sort((a, b) => (a.ts && b.ts ? later(a.ts, b.ts) : 0) || a.i - b.i);
+  return sorted.filter((l) => !since || !l.ts || later(l.ts, since) > 0).map(({ ts, text }) => ({ ts, text }));
+}

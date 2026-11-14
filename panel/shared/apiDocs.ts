@@ -406,6 +406,15 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       },
       {
         method: 'GET',
+        path: '/api/sites/:slug/app/logs',
+        summary: "The app container's log, oldest first; poll with since for what is new",
+        input: '?tail=500 (at most 5000)&since=<the last line\'s ts>',
+        returns: '{lines: [{ts, text}]}',
+        level: 'manage',
+        levelReason: 'A log holds whatever the app prints, secrets included',
+      },
+      {
+        method: 'GET',
         path: '/api/sites/:slug/app/deploys',
         summary: "The app's deploys, newest first",
         returns: '{items: AppDeployDto[]}',
@@ -725,7 +734,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
     title: 'WordPress on one site',
     changes: 'manage',
     intro:
-      'The snapshot (`/wp/status`) is a database read and answers instantly, even for a stopped site. Anything that changes the install is a job. A site hosted elsewhere takes the same calls through WPL7 Connect: WP-CLI runs only the commands its plugins registered, and a REST request runs as `auth.username` with no application password. A PHP site answers 409 to all of these but /shell, which runs in any site\'s folder; a container app answers 409 to all of them.',
+      'The snapshot (`/wp/status`) is a database read and answers instantly, even for a stopped site. Anything that changes the install is a job. A site hosted elsewhere takes the same calls through WPL7 Connect: WP-CLI runs only the commands its plugins registered, and a REST request runs as `auth.username` with no application password. A PHP site answers 409 to all of these but /shell, which runs in any site\'s folder; a container app answers 409 to all of them but /shell, which runs as the app\'s own user when its image has sh and timeout.',
     endpoints: [
       {
         method: 'GET',
@@ -926,9 +935,9 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       {
         method: 'POST',
         path: '/api/sites/:slug/shell',
-        summary: "Queue a shell command in the site's container, run as www-data in the site's folder",
+        summary: "Queue a shell command in the site's container, as www-data in its folder (a container app: as its own user)",
         input: '{command: "ls -la", timeoutMin?: 1-60}',
-        returns: '202 {job}; output in the job log',
+        returns: "202 {job}; output in the job log; 409 for a container app whose image has no sh or timeout",
         job: true,
         danger: true,
         level: 'manage',

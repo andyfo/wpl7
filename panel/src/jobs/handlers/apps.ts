@@ -552,6 +552,11 @@ async function deploy(ctx: JobContext<z.infer<typeof appDeployPayload>>, s: Core
       .set({ result: 'failed', tookMs: Date.now() - startedAt, error: errMsg(err).slice(0, 2000), logTail })
       .where(eq(appDeploys.id, deployId))
       .run();
+    const row = s.db.select().from(appDeploys).where(eq(appDeploys.id, deployId)).get()!;
+    const oldBack = (await server.docker.containerState(site.containerName).catch(() => 'missing')) !== 'missing';
+    await s.alerts
+      .deployFailed(site, { image: row.digest ? `${repositoryOfReference(row.reference)}@${row.digest}` : row.imageId || 'the uploaded image', error: errMsg(err), oldBack })
+      .catch((alertErr: unknown) => ctx.warn(`The Deploy failed email was not sent: ${errMsg(alertErr)}`));
     throw err;
   } finally {
     if (held) await s.appRoutes.release(site);

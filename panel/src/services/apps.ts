@@ -754,14 +754,34 @@ export class AppsService {
       }
       const set: Partial<typeof appSettings.$inferInsert> = { checkedAt: now, checkError: null };
       if (digest !== settings.digest) {
-        if (settings.updateMode === 'auto') enqueue('auto');
-        else if (settings.pendingDigest !== digest) set.pendingDigest = digest;
+        if (settings.updateMode === 'ask') {
+          if (settings.pendingDigest !== digest) {
+            set.pendingDigest = digest;
+            await this.s.alerts.appUpdateWaiting(site, settings.reference, digest).catch(() => undefined);
+          }
+        } else if (!this.failedBefore(site.id, digest)) {
+          enqueue('auto');
+        }
       } else if (settings.pendingDigest) {
         set.pendingDigest = '';
       }
       this.db.update(appSettings).set(set).where(eq(appSettings.siteId, site.id)).run();
     }
     return { checked, queued };
+  }
+
+  /**
+   * Whether this image's deploy has failed, and not gone in since: an automatic deploy tries it once,
+   * not at every check. A new push, Deploy now or Update try again.
+   */
+  private failedBefore(siteId: number, digest: string): boolean {
+    const last = this.db
+      .select({ result: appDeploys.result })
+      .from(appDeploys)
+      .where(and(eq(appDeploys.siteId, siteId), eq(appDeploys.digest, digest)))
+      .orderBy(desc(appDeploys.startedAt), desc(appDeploys.id))
+      .get();
+    return last?.result === 'failed';
   }
 
   // ------------------------------------------------------------------ recovery

@@ -46,6 +46,8 @@ const EXCEPTIONS: Record<string, string> = {
   'GET /api/backups/:id/download': 'manage',
   // A PHP site's cron lines: commands, and what their last runs printed.
   'GET /api/sites/:slug/cron': 'manage',
+  // What a container app prints.
+  'GET /api/sites/:slug/app/logs': 'manage',
   // What a database holds: its rows, one row whole, a dump of it.
   'GET /api/sites/:slug/databases/:db/tables/:table/rows': 'manage',
   'GET /api/sites/:slug/databases/:db/tables/:table/row': 'manage',
