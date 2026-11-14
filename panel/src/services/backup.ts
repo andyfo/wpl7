@@ -15,7 +15,7 @@ import {
   type SiteRow,
 } from '../db/schema.js';
 import type { Config } from '../config.js';
-import type { BackupType } from '../../shared/schemas.js';
+import type { BackupType, SiteApp } from '../../shared/schemas.js';
 import { backupRootProblem } from '../../shared/backupRoot.js';
 import { conflict } from '../lib/errors.js';
 import { safeJoin } from '../lib/slug.js';
@@ -96,7 +96,8 @@ export const tsStamp = (d: Date) =>
 
 
 /** What a backup's site ran: one from before PHP sites names nothing, and is a WordPress site's. */
-export const backupApp = (manifest: { app?: unknown } | null): 'wordpress' | 'php' => (manifest?.app === 'php' ? 'php' : 'wordpress');
+export const backupApp = (manifest: { app?: unknown } | null): SiteApp =>
+  manifest?.app === 'php' ? 'php' : manifest?.app === 'container' ? 'container' : 'wordpress';
 
 /**
  * Why a backup can't go into a site, when it is of the other app; null when it can. With no
@@ -106,8 +107,9 @@ export const backupApp = (manifest: { app?: unknown } | null): 'wordpress' | 'ph
 export function otherAppRefusal(site: Pick<SiteRow, 'slug' | 'app'>, manifest: { app?: unknown } | null): string | null {
   const app = backupApp(manifest);
   if (app === site.app) return null;
-  if (manifest === null) return `The backup's manifest.json can't be read, so it can't be told whose backup it is: it isn't restored into the PHP site "${site.slug}". Nothing was changed.`;
-  const name = (a: string) => (a === 'php' ? 'a PHP site' : 'a WordPress site');
+  const name = (a: string) => (a === 'php' ? 'a PHP site' : a === 'container' ? 'a container app' : 'a WordPress site');
+  const the = site.app === 'php' ? 'the PHP site' : site.app === 'container' ? 'the container app' : 'the WordPress site';
+  if (manifest === null) return `The backup's manifest.json can't be read, so it can't be told whose backup it is: it isn't restored into ${the} "${site.slug}". Nothing was changed.`;
   return `This is a backup of ${name(app)}, and "${site.slug}" is ${name(site.app)}: it can't be restored into it. Nothing was changed.`;
 }
 

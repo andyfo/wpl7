@@ -95,18 +95,18 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   // A PHP site's cron lines (services/siteCron.ts). They run commands, so they are Manage's, as the shell is.
   r.get('/api/sites/:slug/cron', { schema: { params: slugParams } }, async (req) => ({
-    lines: deps.siteCron.list(deps.sites.bySlug(req.params.slug)),
+    lines: deps.siteCron.list(deps.sites.bySlug(req.params.slug, { app: 'siteImage' })),
   }));
 
   r.put('/api/sites/:slug/cron', { schema: { params: slugParams, body: siteCronBody } }, async (req) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     const lines = deps.siteCron.save(site, req.body.lines);
     audit(req, 'cron', site.slug, 'save', { lines: lines.length });
     return { lines };
   });
 
   r.post('/api/sites/:slug/cron/:id/run', { schema: { params: cronLineParams } }, async (req) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     const line = deps.siteCron.runNow(site, req.params.id);
     audit(req, 'cron', site.slug, 'run now', { line: line.id });
     return { line };
@@ -124,7 +124,7 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
   );
 
   r.put('/api/sites/:slug/php', { schema: { params: slugParams, body: phpUpdateBody } }, async (req, reply) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     await deps.sites.assertPhpImageOn(site, site.serverId, req.body.phpVersion);
     const job = deps.sites.changePhp(req.params.slug, req.body.phpVersion);
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
@@ -223,7 +223,7 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   /** What the page cache and Redis hold needs a running container on stack 2 to be there at all. */
   const liveCacheOf = async (slug: string) => {
-    const site = deps.sites.bySlug(slug);
+    const site = deps.sites.bySlug(slug, { app: 'siteImage' });
     const server = deps.servers.handleFor(site.serverId);
     if ((await siteContainerStack(server.docker, site.containerName)) !== 2) throw conflict('This site still runs the old PHP setup, which has no page cache.');
     if ((await server.docker.containerState(site.containerName)) !== 'running') throw conflict('The site is not running.');
@@ -232,7 +232,7 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   r.post('/api/sites/:slug/cache/clear', { schema: { params: slugParams } }, async (req) => {
     // Whatever state it is in: a PHP site has nothing here to clear, and its Redis is its own.
-    const php = deps.sites.bySlug(req.params.slug);
+    const php = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     if (isPhpSite(php)) throw conflict(phpNoPageCache(php.slug));
     const { site, server } = await liveCacheOf(req.params.slug);
     return { cleared: await clearSiteCaches(server, site) };

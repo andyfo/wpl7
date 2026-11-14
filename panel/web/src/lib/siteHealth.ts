@@ -1,5 +1,5 @@
 // @docs help/troubleshooting, sites/overview
-import type { SiteStatus } from '../../../shared/schemas';
+import type { SiteApp, SiteStatus } from '../../../shared/schemas';
 import { timeAgo } from './format';
 
 /**
@@ -34,8 +34,8 @@ export interface SiteHealthInput {
   containerState?: 'running' | 'created' | 'exited' | 'missing' | 'unknown' | null;
   /** A site hosted elsewhere: whether its WPL7 Connect answered the panel's last request. */
   external?: { reachable: boolean | null } | null;
-  /** What it runs: a PHP site has no WordPress to blame. */
-  app?: 'wordpress' | 'php';
+  /** What it runs: a PHP site has no WordPress to blame, and a container app neither. */
+  app?: SiteApp;
 }
 
 export interface SiteHealth {

@@ -549,8 +549,9 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
   );
 
   r.post('/api/sites/:slug/shell', { schema: { params: slugParams, body: siteShellBody } }, async (req, reply) => {
-    // Any site's: a command in its folder, which a PHP site has as much as a WordPress one.
-    const { site } = await requireRunningSite(req.params.slug, 'any');
+    // A command in the site's folder, which a PHP site has as much as a WordPress one; a container
+    // app has none of the site image's folders or its user.
+    const { site } = await requireRunningSite(req.params.slug, 'siteImage');
     const job = deps.worker.enqueue(
       'site.shell',
       { siteId: site.id, command: req.body.command, timeoutMin: req.body.timeoutMin },

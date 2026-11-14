@@ -6,7 +6,7 @@ import type { SiteCronLineInput } from '../../shared/schemas.js';
 import type { SiteCronLineDto } from '../../shared/types.js';
 import { siteCron, sites, type SiteCronRow, type SiteRow } from '../db/schema.js';
 import { AppError, badRequest, conflict, notFound } from '../lib/errors.js';
-import { hostedSites, isPhpSite } from '../lib/siteKind.js';
+import { hostedSites, isContainerApp, isPhpSite } from '../lib/siteKind.js';
 import type { CoreServices } from './index.js';
 import { cronRunProblem, nextCronRun } from './schedules.js';
 import { asSiteUser } from './wp.js';
@@ -301,5 +301,6 @@ export class SiteCronService {
 }
 
 function assertPhp(site: SiteRow): void {
+  if (isContainerApp(site)) throw conflict(`"${site.slug}" is a container app: cron lines are for PHP sites.`);
   if (!isPhpSite(site)) throw conflict(`"${site.slug}" is a WordPress site: cron lines are for PHP sites. WordPress's own cron runs by itself.`);
 }

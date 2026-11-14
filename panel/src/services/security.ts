@@ -23,6 +23,7 @@ import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { securityNeverBlock, siteSecurity, sites, type ServerRow, type SiteRow, type SiteSecurityRow } from '../db/schema.js';
 import type { Config } from '../config.js';
+import { isContainerApp, siteImageOnly, siteImageSites } from '../lib/siteKind.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
 import { ServerUnreachableError } from '../servers/sshConnection.js';
 import {
@@ -216,7 +217,9 @@ export class SecurityService {
   /** The files a server should have: name -> content, or null to keep what is there. */
   private plan(row: ServerRow): Map<string, { siteId: number; content: string | null; problem: string | null }> {
     const pinned = this.pins.get(row.id) ?? new Map<number, number>();
-    const rows = this.db.select().from(sites).all();
+    // A container app gets no protection file: these rules are a site image's, and its routers would
+    // take every path of the app's hosts, switched-off routes included (services/appRoutes.ts).
+    const rows = this.db.select().from(sites).where(siteImageSites()).all();
     const here = rows.filter((s) => (s.serverId === row.id && s.status === 'running') || pinned.has(s.id));
     const out = new Map<string, { siteId: number; content: string | null; problem: string | null }>();
     if (here.length === 0) return out;
@@ -431,7 +434,8 @@ export class SecurityService {
     return this.db
       .select()
       .from(sites)
-      .where(and(eq(sites.serverId, serverId), eq(sites.status, 'running')))
+      // A container app has no Apache and no wp-config.php to put the protection into.
+      .where(and(eq(sites.serverId, serverId), eq(sites.status, 'running'), siteImageSites()))
       .all()
       .map((site) => {
         const { container } = effectivePolicy(fleetPolicy, this.siteInput(site.id), site.app);
@@ -445,6 +449,8 @@ export class SecurityService {
    * them, so there is nothing to reload.
    */
   async prepareHardening(handle: ServerHandle, site: Pick<SiteRow, 'id' | 'slug' | 'app' | 'webRoot'>): Promise<void> {
+    // The second line behind ensureSiteMountSources: an app has no Apache and no wp-config.php.
+    if (isContainerApp(site)) throw siteImageOnly(site.slug);
     const p = sitePaths(this.config, site.slug);
     // The web root as it is now: a job holds the row it began with, and a web root saved since must
     // not be put back by this start.

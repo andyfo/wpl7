@@ -16,7 +16,7 @@ import { shellQuote } from '../../servers/sshExec.js';
 import { readPanelPrivateKey, readPanelPublicKey } from '../../servers/keys.js';
 import { hostExec } from '../../lib/exec.js';
 import { PANEL_VERSION } from '../../lib/version.js';
-import { hostedSites } from '../../lib/siteKind.js';
+import { hostedSites, isContainerApp } from '../../lib/siteKind.js';
 
 export const serverSyncPluginsPayload = z.object({
   serverId: z.number().int(),
@@ -125,6 +125,8 @@ export async function serverApplySiteLimits(
         ctx.info(`${site.slug}: a CPU cap only comes off with a new container - recreating it (job #${job.id}).`);
         recreating.push(site.slug);
       }
+      // A container app has no PHP workers, Redis or caches of the site image's.
+      if (isContainerApp(site)) continue;
       // PHP's workers and Redis follow the memory limit, and the caches follow Settings.
       // Read again: this job can have taken minutes to get here, and a rule saved since must stay.
       const applied = await s.worker.inRuntimeTurn(site.id, () => applySiteCaches(handle, s, loadSite(s.db, site.id), ctx));

@@ -41,7 +41,7 @@ import type { JobStatus, SiteApp } from '../../shared/schemas.js';
 import { canPutBack, canReinstall, manualQuarantineProblem } from './scanPolicy.js';
 import type { ZipFlag } from './pluginZipChecks.js';
 import type { CoreServices } from './index.js';
-import { hostedSites } from '../lib/siteKind.js';
+import { hostedSites, siteImageSites } from '../lib/siteKind.js';
 
 type Deps = Pick<CoreServices, 'db' | 'security' | 'securityEvents' | 'blocklist' | 'malwareScan' | 'pluginZipChecks' | 'servers' | 'settings'>;
 
@@ -219,10 +219,11 @@ export function securityOverview(s: Deps, now = Date.now()): SecurityOverviewDto
     .where(and(eq(jobs.type, 'site.malwareScan'), inArray(jobs.status, ['queued', 'running'])))
     .all()
     .map((j) => json<{ siteId?: number }>(j.payload, {}).siteId);
+  // A container app has neither a protection file nor scans (services/security.ts plan).
   const rows: SecuritySiteRowDto[] = s.db
     .select()
     .from(sites)
-    .where(hostedSites())
+    .where(and(hostedSites(), siteImageSites()))
     .orderBy(sites.slug)
     .all()
     .map((site) => {
@@ -278,7 +279,7 @@ export function fleetScans(s: Deps): { items: ({ slug: string; title: string; se
     items: s.db
       .select()
       .from(sites)
-      .where(hostedSites())
+      .where(and(hostedSites(), siteImageSites()))
       .orderBy(sites.slug)
       .all()
       .map((site) => ({ slug: site.slug, title: site.title, serverName: serverName.get(site.serverId) ?? null, ...siteScanDto(s, site) })),

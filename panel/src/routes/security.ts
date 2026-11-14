@@ -15,7 +15,7 @@ import {
   siteSlugParam,
 } from '../../shared/schemas.js';
 import { isWordPressOnlySetting, overrideKeys, withRuleIds } from '../../shared/security.js';
-import { isPhpSite } from '../lib/siteKind.js';
+import { isPhpSite, siteImageSites } from '../lib/siteKind.js';
 import { siteScanFindings, sites } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { actorName, audit } from '../lib/audit.js';
@@ -58,11 +58,12 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
   /** Scan now, for some sites or every site that is scanned. One per site at a time. */
   r.post('/api/security/scans', { schema: { body: scansRequestBody } }, async (req) => {
     const wanted = req.body.slugs
-      ? req.body.slugs.map((slug) => deps.sites.bySlug(slug))
+      ? req.body.slugs.map((slug) => deps.sites.bySlug(slug, { app: 'siteImage' }))
       : deps.db
           .select()
           .from(sites)
-          .where(inArray(sites.status, ['running', 'stopped']))
+          // A scan reads the site image's files: a container app is never scanned.
+          .where(and(inArray(sites.status, ['running', 'stopped']), siteImageSites()))
           .all()
           .filter((site) => deps.malwareScan.settingsFor(site.id).enabled);
     const queued: string[] = [];
@@ -77,10 +78,10 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
 
   // ------------------------------------------------------------------ one site's protection
 
-  r.get('/api/sites/:slug/security', { schema: { params: slugParams } }, async (req) => siteSecurityDto(deps, deps.sites.bySlug(req.params.slug)));
+  r.get('/api/sites/:slug/security', { schema: { params: slugParams } }, async (req) => siteSecurityDto(deps, deps.sites.bySlug(req.params.slug, { app: 'siteImage' })));
 
   r.put('/api/sites/:slug/security', { schema: { params: slugParams, body: siteSecurityUpdateBody } }, async (req) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     const { level, overrides, customRules } = req.body;
     // A PHP site has none of WordPress's parts, so a change to one would do nothing it could see.
     const wordpressOnly = isPhpSite(site) && overrides ? overrideKeys(overrides).filter(isWordPressOnlySetting) : [];
@@ -118,19 +119,19 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
   // ------------------------------------------------------------------ one site's scans
 
   r.get('/api/sites/:slug/security/scan', { schema: { params: slugParams } }, async (req) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     return { scan: siteScanDto(deps, site), history: scanHistory(deps, site.id) };
   });
 
   r.post('/api/sites/:slug/security/scan', { schema: { params: slugParams } }, async (req, reply) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     if (site.status === 'provisioning' || site.status === 'deleting') throw badRequest(`"${site.slug}" is being ${site.status === 'provisioning' ? 'created' : 'deleted'}`);
     const { job } = deps.malwareScan.request(deps.worker, site, 'manual');
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });
 
   r.put('/api/sites/:slug/security/scan/settings', { schema: { params: slugParams, body: scanSettingsBody } }, async (req) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     const { enabled, onFinding } = req.body;
     deps.security.updateSite(
       site,
@@ -145,7 +146,7 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
   });
 
   r.get('/api/sites/:slug/security/findings', { schema: { params: slugParams, querystring: findingsQuery } }, async (req) =>
-    siteFindings(deps, deps.sites.bySlug(req.params.slug), req.query.status),
+    siteFindings(deps, deps.sites.bySlug(req.params.slug, { app: 'siteImage' }), req.query.status),
   );
 
   const findingOf = (siteId: number, id: number) => {
@@ -166,7 +167,7 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
   } as const;
   for (const [action, t] of Object.entries(transitions)) {
     r.post(`/api/sites/:slug/security/findings/:id/${action}`, { schema: { params: idParams } }, async (req) => {
-      const site = deps.sites.bySlug(req.params.slug);
+      const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
       const row = findingOf(site.id, req.params.id);
       if (!(t.from as readonly string[]).includes(row.status)) throw badRequest(t.what);
       deps.db
@@ -217,7 +218,7 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
   });
 
   r.post('/api/sites/:slug/security/findings/:id/quarantine', { schema: { params: idParams } }, async (req) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     const row = findingOf(site.id, req.params.id);
     const problem = manualQuarantineProblem({ ...row, kind: row.kind as never }, site.app);
     if (problem) throw badRequest(problem);
@@ -240,11 +241,11 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
   // ------------------------------------------------------------------ one site's quarantine
 
   r.get('/api/sites/:slug/security/quarantine', { schema: { params: slugParams } }, async (req) => ({
-    items: deps.quarantine.list(deps.sites.bySlug(req.params.slug).id).map(quarantineDto),
+    items: deps.quarantine.list(deps.sites.bySlug(req.params.slug, { app: 'siteImage' }).id).map(quarantineDto),
   }));
 
   r.post('/api/sites/:slug/security/quarantine/:id/restore', { schema: { params: idParams } }, async (req) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     const restored = await QuarantineService.held(deps.worker, site, () => deps.quarantine.restore(site, req.params.id, actorName(req) ?? 'unknown'));
     await clearAfterChange(deps, site);
     deps.malwareScan.refreshCounts(site.id);
@@ -253,7 +254,7 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
   });
 
   r.delete('/api/sites/:slug/security/quarantine/:id', { schema: { params: idParams } }, async (req) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     const deleted = await deps.quarantine.remove(site, req.params.id, actorName(req) ?? 'unknown');
     deps.malwareScan.refreshCounts(site.id);
     audit(req, 'security', site.slug, 'delete from quarantine', { path: deleted.path });

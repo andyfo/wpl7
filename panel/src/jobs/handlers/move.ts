@@ -7,7 +7,7 @@ import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
 import { assertPhpImage, sitePaths, siteImage } from '../../services/siteSpec.js';
-import { PHP_NO_MAINTENANCE, hasDatabase, isPhpSite } from '../../lib/siteKind.js';
+import { APP_MOVES_STOPPED, PHP_NO_MAINTENANCE, hasDatabase, isContainerApp, isPhpSite } from '../../lib/siteKind.js';
 import { removeSiteNetwork } from '../../services/siteNetwork.js';
 import { loadSite, removeSiteContainers, siteDomains, siteUrl, startSiteContainer, updateSiteRow, writeSiteJson } from './shared.js';
 import { ensureSiteImage, wildcardCovers } from './sites.js';
@@ -55,7 +55,8 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
   const source = s.servers.handleFor(p.sourceServerId);
   const target = s.servers.handleFor(p.targetServerId);
   // Maintenance mode is WordPress's: a PHP site freezes by stopping, or not at all.
-  if (p.quiesce === 'maintenance' && isPhpSite(site)) throw new Error(PHP_NO_MAINTENANCE(site.slug));
+  if (p.quiesce === 'maintenance' && site.app !== 'wordpress') throw new Error(isPhpSite(site) ? PHP_NO_MAINTENANCE(site.slug) : APP_MOVES_STOPPED(site.slug));
+  if (p.quiesce === 'none' && isContainerApp(site)) throw new Error(APP_MOVES_STOPPED(site.slug));
   // Its drop-in would stay behind with no Redis to talk to, and no wp-cache.php to say what to do then.
   if (site.objectCache === 1 && (await target.docker.imageStack(siteImage(site.phpVersion))) === 1) {
     throw new Error(`"${target.name}" has no object cache yet, because it still has the old site image. Update that server first, or switch this site's object cache off.`);
@@ -137,7 +138,8 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     }
     if (!disk) ctx.warn('Could not determine free disk space on the target; continuing.');
 
-    await ensureSiteImage(ctx, target, s.config, site.phpVersion);
+    // A container app's own image goes to the target in its own step (services/appImages.ts).
+    if (!isContainerApp(site)) await ensureSiteImage(ctx, target, s.config, site.phpVersion);
     // Before anything is copied: the target's image may be from before PHP sites.
     if (isPhpSite(site)) await assertPhpImage(target, siteImage(site.phpVersion));
     await target.files.mkdirp(s.config.paths.plugins);
@@ -260,7 +262,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
       },
       {
         routing: true,
-        requireWpConfig: !isPhpSite(site),
+        requireWpConfig: site.app === 'wordpress',
         protection,
         // Quarantined files travel with the site: they are restorable, and evidence. Not in the
         // snapshot - a backup restores a site's files, and must never put these back among them.

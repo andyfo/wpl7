@@ -73,7 +73,7 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   /** The site, unless it is being created or deleted: then there are no files to work on. */
   const siteOf = (slug: string): SiteRow => {
-    const site = deps.sites.bySlug(slug);
+    const site = deps.sites.bySlug(slug, { app: 'siteImage' });
     if (site.status === 'provisioning' || site.status === 'deleting') {
       throw conflict(`Site "${site.slug}" is ${site.status}; its files are not available`);
     }

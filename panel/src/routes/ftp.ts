@@ -31,7 +31,7 @@ export function registerFtpRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   /** Logins can be looked at any time, and changed while the site has files to serve. */
   const siteForChange = (slug: string): SiteRow => {
-    const site = deps.sites.bySlug(slug);
+    const site = deps.sites.bySlug(slug, { app: 'siteImage' });
     if (site.status === 'provisioning' || site.status === 'deleting') {
       throw conflict(`Site "${site.slug}" is ${site.status}; its FTP logins cannot be changed now`);
     }
@@ -45,7 +45,7 @@ export function registerFtpRoutes(app: FastifyInstance, deps: AppDeps): void {
   };
 
   r.get('/api/sites/:slug/ftp', { schema: { params: slugParams } }, async (req) =>
-    deps.ftp.siteView(deps.sites.bySlug(req.params.slug)),
+    deps.ftp.siteView(deps.sites.bySlug(req.params.slug, { app: 'siteImage' })),
   );
 
   r.post(

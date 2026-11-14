@@ -165,11 +165,36 @@ export const siteKinds = ['hosted', 'external'] as const;
 export type SiteKind = (typeof siteKinds)[number];
 
 /**
- * What a hosted site runs: WordPress, or the site's own PHP and files, with no WordPress in it. An
- * external site is always WordPress.
+ * What a hosted site runs: WordPress, or the site's own PHP and files, with no WordPress in it, both
+ * on the site image; or a container app, one container from an image of its own. An external site
+ * is always WordPress.
  */
-export const siteApps = ['wordpress', 'php'] as const;
+export const siteApps = ['wordpress', 'php', 'container'] as const;
 export type SiteApp = (typeof siteApps)[number];
+
+/** Where a container app's image comes from: a registry the panel pulls from, or an archive uploaded to it. */
+export const appImageSources = ['registry', 'upload'] as const;
+export type AppImageSource = (typeof appImageSources)[number];
+
+/** What part of a request's path a route takes: any (the host alone), a start, or one path exactly. */
+export const appRouteMatches = ['none', 'prefix', 'exact'] as const;
+export type AppRouteMatch = (typeof appRouteMatches)[number];
+
+/** Which scheme a route answers on. */
+export const appRouteSchemes = ['https', 'http', 'both'] as const;
+export type AppRouteScheme = (typeof appRouteSchemes)[number];
+
+/** What the panel does with a new image under the watched tag: deploys it, asks first, or nothing. */
+export const appUpdateModes = ['auto', 'ask', 'pinned'] as const;
+export type AppUpdateMode = (typeof appUpdateModes)[number];
+
+/** How a deploy ended; `running` while it runs. */
+export const appDeployResults = ['running', 'ok', 'failed'] as const;
+export type AppDeployResult = (typeof appDeployResults)[number];
+
+/** What started a deploy. */
+export const appDeployOrigins = ['create', 'auto', 'hook', 'user', 'rollback', 'upload'] as const;
+export type AppDeployOrigin = (typeof appDeployOrigins)[number];
 
 export const jobStatuses = ['queued', 'running', 'succeeded', 'failed', 'canceled'] as const;
 export type JobStatus = (typeof jobStatuses)[number];
@@ -415,7 +440,7 @@ export const siteCreateBody = z.object({
   domains: z.array(domainSchema).min(1).max(10).optional(),
   phpVersion: phpVersionSchema.optional(),
   /** What the site runs: WordPress, or the site's own PHP and files with no WordPress in it. */
-  app: z.enum(siteApps).default('wordpress'),
+  app: z.enum(['wordpress', 'php']).default('wordpress'),
   locale: localeSchema.optional(),
   /** WordPress only, and required there. */
   adminUser: z.string().regex(/^[a-zA-Z0-9._@ -]{1,60}$/).optional(),

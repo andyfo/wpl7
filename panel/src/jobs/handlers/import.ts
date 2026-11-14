@@ -150,7 +150,7 @@ export async function siteImport(ctx: JobContext<z.infer<typeof siteImportPayloa
     throw new Error(`Import #${row.id} is ${row.status}; there is nothing to pull`);
   }
   if (!row.siteId || row.serverId === null || !row.stagingPath) throw new Error(`Import #${row.id} was never started`);
-  const site = loadSite(s.db, row.siteId);
+  const site = loadSite(s.db, row.siteId, { app: 'wordpress' });
   const server = s.servers.handleFor(row.serverId);
   const staging = row.stagingPath;
   const wordpressDir = path.join(staging, 'wordpress');
@@ -880,7 +880,7 @@ export async function siteImportFinish(ctx: JobContext<z.infer<typeof siteImport
   if (!report || !choices || !cursor || cursor.phase !== 'done' || !row.stagingPath || !row.siteId) {
     throw new Error(`Import #${row.id} has not finished pulling`);
   }
-  let site: SiteRow = loadSite(s.db, row.siteId);
+  let site: SiteRow = loadSite(s.db, row.siteId, { app: 'wordpress' });
   const server = s.servers.handleFor(site.serverId);
   const paths = sitePaths(s.config, site.slug);
   const domains = siteDomains(site);

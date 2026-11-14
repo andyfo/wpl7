@@ -21,10 +21,12 @@ const STEP_LABELS: Record<StepId, string> = {
   review: 'Review',
 };
 
-/** Each type's steps. The first and the last are the same for both, so the type can change on the first. */
+/** Each type's steps. The first and the last are the same for every type, so the type can change on the first. */
 const STEPS: Record<SiteApp, StepId[]> = {
   wordpress: ['name', 'wordpress', 'plugins', 'review'],
   php: ['name', 'php', 'review'],
+  // Not offered yet (APP_OPTIONS): its steps come with the wizard's Container type.
+  container: ['name', 'review'],
 };
 
 const APP_OPTIONS = [

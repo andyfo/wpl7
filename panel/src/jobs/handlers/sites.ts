@@ -52,7 +52,7 @@ import {
   writeSiteJson,
 } from './shared.js';
 import { requireRunning } from './wp.js';
-import { hasDatabase, isExternal, isPhpSite } from '../../lib/siteKind.js';
+import { hasDatabase, isContainerApp, isExternal, isPhpSite } from '../../lib/siteKind.js';
 import { PLACEHOLDER_FILE, renderPlaceholderPage } from '../../services/phpSite.js';
 import { writeMailFrom } from '../../services/siteCaches.js';
 import { parseSiteCacheRules } from '../../../shared/cacheRules.js';
@@ -475,7 +475,7 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   // What the site's plugins want done before it goes: release their activations (Breakdance
   // counts sites, ACF PRO counts production URLs). Best effort - a vendor that cannot be
   // reached must not keep a site from being deleted. A PHP site has no plugins.
-  if (!isPhpSite(site)) await releaseLicenses(ctx, s, server, site);
+  if (site.app === 'wordpress') await releaseLicenses(ctx, s, server, site);
 
   // Teardown is absence-tolerant and safe to repeat, but any of these can still fail
   // (server unreachable mid-delete). Leaving the row on 'deleting' would then wedge the
@@ -705,6 +705,8 @@ export async function replaceContainer(
   run: boolean,
   opts: { check?: () => Promise<string | null> } = {},
 ): Promise<ReplacedContainer> {
+  // A container app's container is replaced from its own image (jobs/handlers/apps.ts): never this way.
+  if (isContainerApp(row)) throw new Error(`"${row.slug}" is a container app: this works only for sites on the site image.`);
   const { docker } = server;
   const name = next.site.containerName;
   await takeBackAside(ctx, server, s, row, name, run);
@@ -850,7 +852,7 @@ export const GEOLOCATE_OFF_REASON = "WooCommerce's Geolocate setting changes pri
 async function keepGeolocateStoreOff(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, row: SiteRow): Promise<void> {
   const current = loadSite(s.db, row.id);
   // A PHP site has no page cache, and no WooCommerce of the panel's to ask.
-  if (current.pageCache !== null || isPhpSite(current)) return;
+  if (current.pageCache !== null || current.app !== 'wordpress') return;
   try {
     const skip = ['--skip-plugins', '--skip-themes'];
     const active = await server.wp.run(row.containerName, ['plugin', 'is-active', 'woocommerce', ...skip], 30_000);
@@ -1007,7 +1009,7 @@ export const siteChangePhpPayload = z.object({
 });
 
 export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhpPayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
+  const site = loadSite(s.db, ctx.payload.siteId, { app: 'siteImage' });
   const server = s.servers.handleFor(site.serverId);
   const oldVersion = site.phpVersion;
   const newVersion = ctx.payload.phpVersion;
@@ -1181,7 +1183,7 @@ export async function siteUpdateDomains(
   ctx: JobContext<z.infer<typeof siteUpdateDomainsPayload>>,
   s: CoreServices,
 ): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
+  const site = loadSite(s.db, ctx.payload.siteId, { app: 'siteImage' });
   const server = s.servers.handleFor(site.serverId);
   const oldDomains = siteDomains(site);
   const oldPrimary = oldDomains[0]!;

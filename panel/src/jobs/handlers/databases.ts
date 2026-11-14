@@ -148,7 +148,8 @@ export async function databasePassword(ctx: JobContext<z.infer<typeof databasePa
   const site = loadSite(s.db, ctx.payload.siteId);
   const server = s.servers.handleFor(site.serverId);
   if (!hasDatabase(site)) throw new Error(`"${site.slug}" has no database.`);
-  if (isPhpSite(site)) return phpDatabasePassword(ctx, s, server, site);
+  // A container app takes its password from its environment, at its next container (services/apps.ts).
+  if (site.app !== 'wordpress') return phpDatabasePassword(ctx, s, server, site);
   const wpConfig = path.join(sitePaths(s.config, site.slug).wordpress, 'wp-config.php');
   const text = await server.files.readUntrusted(wpConfig, 512 * 1024);
   if (text === null && (await server.files.stat(wpConfig))) {
@@ -356,7 +357,7 @@ export async function databaseImport(ctx: JobContext<z.infer<typeof databaseImpo
         'Export it without CREATE DATABASE and USE statements, then import it again.',
     );
   }
-  if (ownDb && p.empty && hasOptions !== '1' && !isPhpSite(site)) {
+  if (ownDb && p.empty && hasOptions !== '1' && site.app === 'wordpress') {
     throw new Error(
       `The dump has no ${site.tablePrefix}options table. With every table deleted first, WordPress would find no installation. ` +
         'Import a dump of the whole database, or keep the tables.',
@@ -411,7 +412,7 @@ export async function databaseImport(ctx: JobContext<z.infer<typeof databaseImpo
     }
     // Failed or not: a failed import may have emptied the database as surely as a wrong dump. A PHP
     // site has no installer to hand to whoever asks, so it starts again whatever the dump held.
-    if (stopped && isPhpSite(site)) await startAgain(ctx, s, site);
+    if (stopped && site.app !== 'wordpress') await startAgain(ctx, s, site);
     else if (stopped) await restartIfInstalled(ctx, s, site, target, { failed: failure !== null, backedUp: p.backupFirst });
     if (failure !== null) throw failure;
   } finally {

@@ -12,7 +12,22 @@ import type { CoreServices } from './index.js';
 import type { JobWorker } from '../jobs/worker.js';
 import { siteScheme } from './labels.js';
 import { assertDomainsFree } from './domainGuard.js';
-import { PHP_NO_MAINTENANCE, assertApp, assertKind, hasDatabase, hostedSites, isExternal, isPhpSite, phpNoPageCache, type SiteApps, type SiteKinds } from '../lib/siteKind.js';
+import {
+  APP_HOSTS_FROM_ROUTES,
+  APP_MOVES_STOPPED,
+  PHP_NO_MAINTENANCE,
+  assertApp,
+  assertKind,
+  hasDatabase,
+  hostedSites,
+  isExternal,
+  isContainerApp,
+  isPhpSite,
+  phpNoPageCache,
+  siteImageSites,
+  type SiteApps,
+  type SiteKinds,
+} from '../lib/siteKind.js';
 import type { DockerPort } from './docker.js';
 import { SITE_ROOT_IN_CONTAINER } from './siteHardening.js';
 import { asSiteUser } from './wp.js';
@@ -262,7 +277,7 @@ export class SitesService {
   }
 
   changePhp(slug: string, phpVersion: string): JobRow {
-    const site = this.bySlug(slug);
+    const site = this.bySlug(slug, { app: 'siteImage' });
     const offered = this.s.settings.get('phpVersions') ?? [];
     if (!offered.includes(phpVersion)) {
       throw badRequest(`PHP ${phpVersion} is not offered (available: ${offered.join(', ')})`);
@@ -289,7 +304,8 @@ export class SitesService {
 
   /** Reconcile every site, newest last so a fleet-wide pass is predictable in the job list. */
   reconcileAll(): JobRow[] {
-    const rows = this.s.db.select().from(sites).where(hostedSites()).orderBy(asc(sites.id)).all();
+    // A container app is put right by a deploy of what it runs, not by the site image's policy.
+    const rows = this.s.db.select().from(sites).where(and(hostedSites(), siteImageSites())).orderBy(asc(sites.id)).all();
     const jobs: JobRow[] = [];
     for (const site of rows) {
       if (site.status === 'provisioning' || site.status === 'deleting') continue;
@@ -366,9 +382,11 @@ export class SitesService {
     }
     const isLive = site.isLive === 1;
     // Maintenance mode is WordPress's. A live PHP site is stopped while it is copied: a short
-    // outage, and nothing written meanwhile is lost.
-    if (body.quiesce === 'maintenance' && isPhpSite(site)) throw conflict(PHP_NO_MAINTENANCE(site.slug));
-    const quiesce = body.quiesce ?? (isLive ? (isPhpSite(site) ? 'stop' : 'maintenance') : 'none');
+    // outage, and nothing written meanwhile is lost. A container app is always stopped: kept
+    // serving, its copy would start on the target beside it, and a worker in it would run twice.
+    if (body.quiesce === 'maintenance' && site.app !== 'wordpress') throw conflict(isPhpSite(site) ? PHP_NO_MAINTENANCE(site.slug) : APP_MOVES_STOPPED(site.slug));
+    if (body.quiesce === 'none' && isContainerApp(site)) throw conflict(APP_MOVES_STOPPED(site.slug));
+    const quiesce = body.quiesce ?? (isContainerApp(site) ? 'stop' : isLive ? (isPhpSite(site) ? 'stop' : 'maintenance') : 'none');
     // The old copy is never torn down inside the move itself - see siteMovePayload.decommission.
     const decommission = 'deferred';
     return this.worker.enqueue(
@@ -514,6 +532,8 @@ export class SitesService {
     opts: { manageDns?: boolean; allowSearchEngines?: boolean } = {},
   ): JobRow {
     const site = this.bySlug(slug);
+    // An app's hosts are its routes': they change with them, and nothing is recreated for it.
+    if (isContainerApp(site)) throw conflict(APP_HOSTS_FROM_ROUTES(site.slug));
     const unique = [...new Set(domains)];
     this.assertDomainsFree(unique, site.id, site.devHostname);
     return this.worker.enqueue(
@@ -684,11 +704,11 @@ export class SitesService {
     const problem = body.off ? cacheOffProblem(body.off) : null;
     if (problem) throw badRequest(problem, [{ path: 'off', message: problem }]);
     // One save at a time, each reading the row the one before it left.
-    return this.worker.inRuntimeTurn(this.bySlug(slug).id, () => this.saveCache(slug, body));
+    return this.worker.inRuntimeTurn(this.bySlug(slug, { app: 'siteImage' }).id, () => this.saveCache(slug, body));
   }
 
   private async saveCache(slug: string, body: SiteCacheBody): Promise<{ job: JobRow | null }> {
-    const site = this.bySlug(slug);
+    const site = this.bySlug(slug, { app: 'siteImage' });
     if (site.status === 'provisioning' || site.status === 'deleting') {
       throw conflict(`Site is ${site.status}; wait for it to finish`);
     }
@@ -737,7 +757,7 @@ export class SitesService {
    * answer is what Apache said. A stopped site gets it at its next start.
    */
   async setWebRoot(slug: string, webRoot: string): Promise<void> {
-    const site = this.bySlug(slug);
+    const site = this.bySlug(slug, { app: 'siteImage' });
     if (!isPhpSite(site)) throw conflict(`"${site.slug}" is a WordPress site: a web root is for PHP sites.`);
     if (site.status === 'provisioning' || site.status === 'deleting') throw conflict(`Site is ${site.status}; wait for it to finish`);
     if (webRoot === site.webRoot) return;
@@ -757,7 +777,7 @@ export class SitesService {
    * log's to tell.
    */
   async testMail(slug: string, to: string): Promise<{ accepted: boolean; detail: string }> {
-    const site = this.bySlug(slug);
+    const site = this.bySlug(slug, { app: 'siteImage' });
     const server = this.s.servers.handleFor(site.serverId);
     const state = await server.docker.containerState(site.containerName);
     if (state !== 'running') throw conflict(`Site container is ${state}; start the site first`);

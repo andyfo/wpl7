@@ -117,7 +117,7 @@ export const mailDomainOf = (host: string): string => host.toLowerCase().replace
  * is the address WordPress uses itself, a PHP site's `noreply@` its domain.
  */
 export const defaultMailFrom = (app: SiteApp, primaryDomain: string): string =>
-  `${app === 'php' ? 'noreply' : 'wordpress'}@${mailDomainOf(primaryDomain)}`;
+  `${app === 'wordpress' ? 'wordpress' : 'noreply'}@${mailDomainOf(primaryDomain)}`;
 
 /**
  * `smtpd_sender_login_maps`: which login owns which sender domain. The `@domain` form

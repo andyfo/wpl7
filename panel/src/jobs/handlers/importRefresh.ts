@@ -156,7 +156,7 @@ export async function siteImportRefresh(ctx: JobContext<z.infer<typeof siteImpor
   const report = s.imports.reportOf(row);
   const choices = row.choices ? (JSON.parse(row.choices) as ImportRunBody) : null;
   if (!report || !choices) throw new Error(`Import #${row.id} has no record of the old site`);
-  let site = loadSite(s.db, row.siteId);
+  let site = loadSite(s.db, row.siteId, { app: 'wordpress' });
   const server = s.servers.handleFor(site.serverId);
   const paths = sitePaths(s.config, site.slug);
   const url = siteUrl(s.config, siteDomains(site)[0]!);

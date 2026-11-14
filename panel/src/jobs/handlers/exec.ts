@@ -65,7 +65,7 @@ const MAX_LINE = 2000;
  * be the thing that makes it.
  */
 async function runningSite(ctx: JobContext<{ siteId: number }>, s: CoreServices): Promise<{ site: SiteRow; server: ServerHandle }> {
-  const site = loadSite(s.db, ctx.payload.siteId);
+  const site = loadSite(s.db, ctx.payload.siteId, { app: 'siteImage' });
   const server = s.servers.handleFor(site.serverId);
   const state = await server.docker.containerState(site.containerName);
   if (state !== 'running') {

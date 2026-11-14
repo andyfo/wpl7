@@ -592,7 +592,8 @@ export function effectivePolicy(fleet: FleetSecurity, site: SiteSecurityInput, a
     if (levelFrom === 'fleet') applyOverrides(policy, sources, fleet.overrides, 'fleet');
     applyOverrides(policy, sources, site.overrides, 'site');
   }
-  if (app === 'php') withoutWordPress(policy, sources);
+  // Nor does a container app, which gets no protection file at all (services/security.ts plan).
+  if (app === 'php' || app === 'container') withoutWordPress(policy, sources);
   // A limit on XML-RPC means nothing unless XML-RPC is limited; a denied one has no limit.
   if (policy.xmlrpc !== 'limit') policy.limits.xmlrpc = null;
   return { level, levelFrom, ...policy, customRules: site.customRules, sources };

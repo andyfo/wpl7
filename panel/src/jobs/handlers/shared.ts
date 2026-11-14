@@ -17,13 +17,14 @@ import type { ServerHandle } from '../../servers/registry.js';
 import { httpProbe, httpProbeAttempts, type ProbeAttempt, type ProbeOpts } from '../../lib/httpProbe.js';
 import type { RecipeHook } from '../../../shared/recipes.js';
 import type { HookVars, RecipeOutcome } from '../../services/licenses.js';
-import { hasDatabase, isExternal, isPhpSite, type SiteApps, type SiteKinds } from '../../lib/siteKind.js';
+import { hasDatabase, isContainerApp, isExternal, isPhpSite, type SiteApps, type SiteKinds } from '../../lib/siteKind.js';
 
 /**
  * The site a job works on. An external site is refused unless the job is one that works for both
  * kinds and says so: a job written for hosted sites must never reach Docker with one. A PHP site
- * is refused by a job for WordPress only, which says so with `{ app: 'wordpress' }`: the second
- * line behind the routes' own refusal.
+ * or a container app is refused by a job for WordPress only, which says so with
+ * `{ app: 'wordpress' }`, and a container app by a job for the site image (`{ app: 'siteImage' }`):
+ * the second line behind the routes' own refusal.
  */
 export function loadSite(db: Db, siteId: number, opts: { kinds?: SiteKinds; app?: SiteApps } = {}): SiteRow {
   const site = db.select().from(sites).where(eq(sites.id, siteId)).get();
@@ -31,8 +32,14 @@ export function loadSite(db: Db, siteId: number, opts: { kinds?: SiteKinds; app?
   if ((opts.kinds ?? 'hosted') === 'hosted' && isExternal(site)) {
     throw new Error(`"${site.slug}" is an external site: this job works only for sites the panel hosts.`);
   }
-  if (opts.app === 'wordpress' && isPhpSite(site)) {
-    throw new Error(`"${site.slug}" is a PHP site: this job works only for WordPress sites.`);
+  if (opts.app === 'wordpress' && site.app !== 'wordpress') {
+    throw new Error(`"${site.slug}" is ${site.app === 'php' ? 'a PHP site' : 'a container app'}: this job works only for WordPress sites.`);
+  }
+  if (opts.app === 'siteImage' && isContainerApp(site)) {
+    throw new Error(`"${site.slug}" is a container app: this job works only for sites on the site image.`);
+  }
+  if (opts.app === 'container' && !isContainerApp(site)) {
+    throw new Error(`"${site.slug}" is not a container app.`);
   }
   return site;
 }
@@ -227,6 +234,8 @@ export async function ensureSiteMountSources(
   site: Pick<SiteRow, 'id' | 'slug' | 'mailPassword' | 'app' | 'webRoot'>,
   ctx?: Pick<JobContext<unknown>, 'warn'>,
 ): Promise<void> {
+  // A container app binds none of these: no PHP, no Apache, no relay file, no runtime files.
+  if (isContainerApp(site)) return;
   const p = sitePaths(s.config, site.slug);
   await server.files.mkdirp(p.configDir);
 
@@ -379,8 +388,9 @@ export async function rewriteWordPressUrls(
   /** `skipExtensions`: the rewrite itself runs with the site's plugins and theme left out (WpService). */
   opts: { inside?: (container: string) => Promise<void>; skipExtensions?: boolean } = {},
 ): Promise<void> {
-  // A PHP site has no WordPress to rewrite; its callers skip it, and nothing is started for it.
-  if (isPhpSite(site)) return;
+  // A PHP site and a container app have no WordPress to rewrite; their callers skip them, and
+  // nothing is started for them.
+  if (site.app !== 'wordpress') return;
   // wp-cli runs via `docker exec`, so the container has to be up. Skipping the rewrite
   // for a stopped site left it flagged live while WordPress still redirected every
   // request to the old dev URL - visible only once someone started it again.
@@ -431,8 +441,8 @@ export async function runLicenseHook(
   vars: HookVars,
   opts: { only?: string } = {},
 ): Promise<RecipeOutcome[]> {
-  // Recipes are for WordPress plugins: a PHP site has none to activate. Its callers skip it too.
-  if (isPhpSite(site)) return [];
+  // Recipes are for WordPress plugins: a PHP site or a container app has none. Their callers skip them too.
+  if (site.app !== 'wordpress') return [];
   try {
     return await s.licenses.runHook(server, site, hook, vars, { info: (m) => ctx.info(m), warn: (m, w) => ctx.warn(m, w) }, opts);
   } catch (err) {

@@ -13,7 +13,7 @@ import { JobContext } from './context.js';
 import { SECRET_PAYLOAD_KEYS, SITE_INTERRUPTING_JOBS, getRegistry, jobDeadline } from './registry.js';
 import { clearAfterChange, wpCliOnlyReads } from '../services/siteCaches.js';
 import { migrateArrivedFiles } from '../services/siteMigration.js';
-import { isExternal, isPhpSite } from '../lib/siteKind.js';
+import { isContainerApp, isExternal, isPhpSite } from '../lib/siteKind.js';
 import { summarizeJob } from './summaries.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -635,7 +635,8 @@ export class JobWorker {
     const siteId = job.siteId ?? (typeof payload.siteId === 'number' ? payload.siteId : null);
     if (siteId === null) return;
     const site = this.db.select().from(sites).where(eq(sites.id, siteId)).get();
-    if (!site) return;
+    // A container app has no page cache, no object cache, and no PHP settings in files to move.
+    if (!site || isContainerApp(site)) return;
     // So does a zip unpacked into a PHP site: an old site's files often bring php_value lines.
     const arrived = PACKAGE_JOBS.has(job.type as JobType) || (job.type === 'files.extract' && isPhpSite(site));
     if (arrived && !isExternal(site)) {

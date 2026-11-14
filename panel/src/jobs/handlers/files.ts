@@ -19,7 +19,7 @@ export const filesExtractPayload = z.object({
 });
 
 export async function filesExtract(ctx: JobContext<z.infer<typeof filesExtractPayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
+  const site = loadSite(s.db, ctx.payload.siteId, { app: 'siteImage' });
   const server = s.servers.handleFor(site.serverId);
   const { path, to, overwrite } = ctx.payload;
   const restoreState = await requireRunning(ctx, server, s, site);
@@ -44,7 +44,7 @@ export const filesCompressPayload = z.object({
 });
 
 export async function filesCompress(ctx: JobContext<z.infer<typeof filesCompressPayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
+  const site = loadSite(s.db, ctx.payload.siteId, { app: 'siteImage' });
   const server = s.servers.handleFor(site.serverId);
   const { paths, to, overwrite } = ctx.payload;
   const restoreState = await requireRunning(ctx, server, s, site);
