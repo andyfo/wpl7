@@ -1,4 +1,5 @@
 // @docs backups/delete, get-started/first-site, integrations/cloudflare, integrations/dns, panel/updating, sites/create, sites/domains, sites/php, sites/settings
+import path from 'node:path';
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { siteConnections, backups, moveCleanups, sites, type SiteRow } from '../../db/schema.js';
@@ -126,7 +127,7 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
     await server.files.mkdirp(p.wordpress);
     if (php) await preparePhpSiteFolder(ctx, server, site, p.wordpress);
     await ensureSiteMountSources(server, s, site, ctx);
-    await writeSiteJson(server, s.config, site);
+    await writeSiteJson(server, s, site);
 
     // The container is only ever a member of its own network plus the shared egress one, so
     // the network has to exist before it is created. Traefik, the relay and MariaDB are
@@ -180,7 +181,7 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
 
     updateSiteRow(s.db, site.id, { status: 'running' });
     releaseProtection?.();
-    await writeSiteJson(server, s.config, loadSite(s.db, site.id));
+    await writeSiteJson(server, s, loadSite(s.db, site.id));
     const result: Record<string, unknown> = { url, slug: site.slug };
     if (!php && ctx.payload.passwordGenerated) result.adminPassword = ctx.payload.adminPassword;
     ctx.setResult(result);
@@ -459,9 +460,10 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   let finalBackupId: number | null = null;
   // Not there means nothing to back up. A check that failed means nothing at all: taken for
   // "not there", it would delete the site without the backup that was asked for.
+  // A container app keeps its files in data/ (services/appSpec.ts), a site in wordpress/.
   const hasFiles =
     ctx.payload.finalBackup &&
-    (await server.files.exists(p.wordpress).catch((err: unknown) => {
+    (await server.files.exists(isContainerApp(site) ? path.join(p.root, 'data') : p.wordpress).catch((err: unknown) => {
       updateSiteRow(s.db, site.id, { status: 'error' });
       throw new Error(`Could not check the site's files for its final backup - site NOT deleted: ${errMsg(err)}`);
     }));
@@ -1066,7 +1068,7 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
     throw err;
   }
   updateSiteRow(s.db, site.id, { phpVersion: newVersion });
-  await writeSiteJson(server, s.config, loadSite(s.db, site.id));
+  await writeSiteJson(server, s, loadSite(s.db, site.id));
   ctx.info(`Site now runs PHP ${newVersion}.`);
   ctx.setResult({ phpVersion: newVersion });
 }
@@ -1169,7 +1171,7 @@ export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcile
     // success while leaving the site down is how a 404 goes unexplained.
     ctx.warn('The site was stopped before reconciling, so it has been left stopped. Use Start to bring it up.');
   }
-  await writeSiteJson(server, s.config, loadSite(s.db, site.id));
+  await writeSiteJson(server, s, loadSite(s.db, site.id));
   await s.security.kick(server.id);
   ctx.info(changed.length > 0 ? `Reconciled: ${changed.join('; ')}.` : 'Reconciled (already current).');
   ctx.setResult({ slug: site.slug, changed });
@@ -1318,7 +1320,7 @@ export async function siteUpdateDomains(
   // they were given is the old one. Read for each message: a site that went live sends as its new
   // domain from here on.
   await writeMailFrom(server, s.config, loadSite(s.db, site.id));
-  await writeSiteJson(server, s.config, loadSite(s.db, site.id));
+  await writeSiteJson(server, s, loadSite(s.db, site.id));
   // Row is authoritative again: re-sync so domains dropped from the site stop being owned by it.
   await syncRelayAuth(ctx, s);
   // Its rules name its hosts, so they follow the new list.

@@ -179,6 +179,8 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
         return str(p.sourceHost) ? `From ${str(p.sourceHost)}` : null;
       case 'site.shell':
         return str(p.command) ? maskShell(str(p.command)!) : null;
+      case 'app.mountUpload':
+        return str(p.mount) ? `Into ${str(p.mount)}` : null;
       case 'app.deploy': {
         const why =
           p.origin === 'rollback'

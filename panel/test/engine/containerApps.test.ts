@@ -27,7 +27,7 @@
  * WPL7_ENGINE_FACTS=<file> appends what the tests measured (timings, Docker's own words) to a file,
  * one JSON line each.
  */
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -52,9 +52,10 @@ import {
 } from '../../src/services/securityConfig.js';
 import { siteNetworkName } from '../../src/services/siteNetwork.js';
 import { askApp, healthGate } from '../../src/services/appProbe.js';
+import { MOUNT_UNPACK_LOCKDOWN, mountEntryProblem, mountListScript, mountUnpackScript, zipListNames } from '../../src/jobs/handlers/apps.js';
 import { buildSiteContainerSpec } from '../../src/services/siteSpec.js';
 import { interpolate, traefikFlags, traefikImage, traefikList } from '../composeFile.js';
-import { makeTestConfig } from '../helpers.js';
+import { makeTestConfig, zipOf } from '../helpers.js';
 import { route as simRoute } from '../traefikSim.js';
 
 const ENABLED = process.env.WPL7_ENGINE_TESTS === '1';
@@ -872,6 +873,77 @@ describe.skipIf(!ENABLED)('container apps against the real Traefik and Docker', 
         times.helper.push(Date.now() - t0);
       }
       fact('8. five checks, ms', times);
+    });
+  });
+
+  describe('11. a mount filled from an archive, by busybox in Traefik’s image', () => {
+    const dir = path.join(root, 'unpack');
+    /** As the job runs it (jobs/handlers/apps.ts): the archive read-only, a fresh folder, as the app's user, locked down. */
+    const unpack = (archive: string, out: string, script: string) =>
+      dockerService.runEphemeral({
+        image: TRAEFIK_IMAGE,
+        entrypoint: ['sh', '-c'],
+        cmd: [script],
+        user: '10001:10001',
+        binds: [`${archive}:/in/archive:ro`, `${out}:/out`],
+        labels: { [ENGINE_LABEL]: String(PID) },
+        timeoutMs: 60_000,
+        lockdown: MOUNT_UNPACK_LOCKDOWN,
+      });
+    const fresh = (name: string) => {
+      const out = path.join(dir, name);
+      fs.mkdirSync(out, { recursive: true });
+      // The panel makes it as the app's user; here anyone may write it.
+      fs.chmodSync(out, 0o777);
+      return out;
+    };
+
+    beforeAll(() => {
+      const src = path.join(dir, 'src');
+      fs.mkdirSync(path.join(src, 'css'), { recursive: true });
+      fs.writeFileSync(path.join(src, 'logo.txt'), 'logo');
+      fs.writeFileSync(path.join(src, 'css', 'site.css'), 'body{}');
+      execFileSync('tar', ['-C', src, '-czf', path.join(dir, 'good.tar.gz'), '.'], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
+      fs.symlinkSync('/etc/passwd', path.join(src, 'link'));
+      execFileSync('tar', ['-C', src, '-czf', path.join(dir, 'link.tar.gz'), '.'], { env: { ...process.env, COPYFILE_DISABLE: '1' } });
+      fs.writeFileSync(path.join(dir, 'good.zip'), zipOf({ 'logo.txt': 'logo', 'css/site.css': 'body{}' }));
+    });
+
+    it('lists a .tar.gz’s names and unpacks it, folders 0700 and files 0600', async () => {
+      const archive = path.join(dir, 'good.tar.gz');
+      const listed = await unpack(archive, fresh('l1'), mountListScript('tar.gz'));
+      expect(listed.exitCode, listed.stderr).toBe(0);
+      expect(listed.stdout.split('\n').filter(Boolean).sort()).toEqual(['./', './css/', './css/site.css', './logo.txt']);
+      expect(listed.stdout.split('\n').filter(Boolean).map(mountEntryProblem)).toEqual([null, null, null, null]);
+      const out = fresh('t1');
+      const done = await unpack(archive, out, mountUnpackScript('tar.gz'));
+      expect(done.exitCode, done.stderr).toBe(0);
+      expect(fs.readFileSync(path.join(out, 'css', 'site.css'), 'utf8')).toBe('body{}');
+      // Docker Desktop's file sharing shows every mode as it likes; a Linux daemon, as they are.
+      if (process.platform === 'linux') {
+        expect((fs.statSync(path.join(out, 'logo.txt')).mode & 0o777).toString(8)).toBe('600');
+        expect((fs.statSync(path.join(out, 'css')).mode & 0o777).toString(8)).toBe('700');
+        expect(fs.statSync(path.join(out, 'logo.txt')).uid).toBe(10001);
+      }
+    });
+
+    it('lists a .zip’s names as unzip -l prints them, and unpacks it', async () => {
+      const archive = path.join(dir, 'good.zip');
+      const listed = await unpack(archive, fresh('l2'), mountListScript('zip'));
+      expect(listed.exitCode, listed.stderr).toBe(0);
+      fact('11. unzip -l, as busybox prints it', listed.stdout);
+      expect(zipListNames(listed.stdout).sort()).toEqual(['css/site.css', 'logo.txt']);
+      const out = fresh('z1');
+      const done = await unpack(archive, out, mountUnpackScript('zip'));
+      expect(done.exitCode, done.stderr).toBe(0);
+      expect(fs.readFileSync(path.join(out, 'logo.txt'), 'utf8')).toBe('logo');
+    });
+
+    it('refuses an archive with a link in it, after unpacking it where it reaches nothing', async () => {
+      const out = fresh('k1');
+      const done = await unpack(path.join(dir, 'link.tar.gz'), out, mountUnpackScript('tar.gz'));
+      expect(done.exitCode).toBe(3);
+      expect(done.stderr).toContain('links or special files: link');
     });
   });
 });

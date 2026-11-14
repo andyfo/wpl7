@@ -150,8 +150,14 @@ export function probeSiteAttempt(
 /** How a site's probe is to read its answer: a PHP site's own 4xx is an answer (lib/httpProbe.ts). */
 export const probeOptsFor = (site: Pick<SiteRow, 'app'>): ProbeOpts => (isPhpSite(site) ? { siteOwn4xx: true } : {});
 
-export async function writeSiteJson(server: ServerHandle, config: Config, site: SiteRow): Promise<void> {
+/**
+ * The site's own description of itself, beside its files. A container app's carries its settings
+ * too, without a secret: no registry token, no environment value (services/apps.ts).
+ */
+export async function writeSiteJson(server: ServerHandle, s: Pick<CoreServices, 'config' | 'db'>, site: SiteRow): Promise<void> {
+  const config = s.config;
   const p = sitePaths(config, site.slug);
+  const app = isContainerApp(site) ? appRows(s.db, site.id) : null;
   const manifest = {
     slug: site.slug,
     title: site.title,
@@ -168,6 +174,18 @@ export async function writeSiteJson(server: ServerHandle, config: Config, site: 
     tablePrefix: site.tablePrefix,
     containerName: site.containerName,
     serverId: site.serverId,
+    ...(app
+      ? {
+          container: {
+            source: app.settings.source,
+            reference: app.settings.reference,
+            digest: app.settings.digest,
+            imageId: app.settings.imageId,
+            port: app.settings.port,
+            mounts: app.mounts.map((m) => ({ name: m.name, path: m.containerPath, writable: m.writable === 1, inBackups: m.inBackups === 1 })),
+          },
+        }
+      : {}),
     updatedAt: new Date().toISOString(),
   };
   await server.files.mkdirp(p.root);

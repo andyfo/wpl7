@@ -86,7 +86,7 @@ export async function createOwnDatabase(ctx: JobContext<unknown>, s: CoreService
     s.databases.kick(site.serverId);
   }
   const made = loadSite(s.db, site.id);
-  await writeSiteJson(server, s.config, made);
+  await writeSiteJson(server, s, made);
   return made;
 }
 

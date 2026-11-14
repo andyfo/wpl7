@@ -10,11 +10,12 @@
  * again, and the routes are released: a broken build never serves a request.
  */
 // @docs sites/container
+import path from 'node:path';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { appDeployOrigins, type AppDeployOrigin } from '../../../shared/schemas.js';
 import { UPLOAD_ID_RE } from '../../../shared/siteFilePath.js';
-import { appDeploys, appEnv, appSettings, backups, jobs as jobsTable, type AppMountRow, type AppSettingsRow, type SiteRow } from '../../db/schema.js';
+import { appDeploys, appEnv, appMounts, appRoutes, appSettings, backups, jobs as jobsTable, type AppMountRow, type AppSettingsRow, type SiteRow } from '../../db/schema.js';
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
@@ -33,6 +34,7 @@ import {
   exposedPort,
   imageUserIds,
   loadUploaded,
+  newUploadId,
   pullPinned,
   registryAuthFor,
   repositoryOfReference,
@@ -42,6 +44,8 @@ import {
   type ResolvedImage,
 } from '../../services/appImages.js';
 import { healthGate } from '../../services/appProbe.js';
+import { TRAEFIK_CONTAINER } from '../../services/stack.js';
+import { importPathProblem } from '../../lib/archivePath.js';
 import { ensureSiteNetwork, removeSiteNetwork } from '../../services/siteNetwork.js';
 import { asideContainerName, siteRuntimeFrom } from '../../services/siteSpec.js';
 import { safeJoin } from '../../lib/slug.js';
@@ -51,6 +55,7 @@ import {
   dnsPreflight,
   loadSite,
   removeSiteContainers,
+  restartSiteContainer,
   siteDomains,
   siteShouldRun,
   siteUrl,
@@ -301,7 +306,7 @@ export async function createApp(ctx: JobContext<{ siteId: number; uploadId?: str
       await server.files.rm(safeJoin(s.config.paths.sites, site.slug));
     });
     await server.files.mkdirp(p.root);
-    await writeSiteJson(server, s.config, site);
+    await writeSiteJson(server, s, site);
 
     ctx.info('Creating the site network…');
     ctx.pushCompensation('remove site network', () => removeSiteNetwork(server.docker, site.slug));
@@ -370,7 +375,7 @@ export async function createApp(ctx: JobContext<{ siteId: number; uploadId?: str
         jobId: ctx.jobId,
       })
       .run();
-    await writeSiteJson(server, s.config, loadSite(s.db, site.id));
+    await writeSiteJson(server, s, loadSite(s.db, site.id));
     if (uploadId) await removeUpload(s, uploadId);
     if (s.config.tlsMode === 'letsencrypt') ctx.info('HTTPS certificates are issued on the first request; allow up to a minute after DNS is in place.');
     ctx.setResult({ url, slug: site.slug });
@@ -538,7 +543,7 @@ async function deploy(ctx: JobContext<z.infer<typeof appDeployPayload>>, s: Core
     }
     if (gapMs !== null) ctx.info(`The app answered 503 for ${(gapMs / 1000).toFixed(1)} s while its container was replaced.`);
     await cleanAppImages(ctx, s, server, site, settings);
-    await writeSiteJson(server, s.config, loadSite(s.db, site.id));
+    await writeSiteJson(server, s, loadSite(s.db, site.id));
     ctx.setResult({ slug: site.slug, deployId, digest: image.digest, imageId: image.imageId, gapMs });
     ctx.info(`Deployed ${image.digest ? image.digest.slice(0, 19) : image.imageId.slice(0, 19)}…`);
   } catch (err) {
@@ -593,7 +598,7 @@ export async function reconcileApp(ctx: JobContext<unknown>, s: CoreServices, si
     if (run) await s.appRoutes.release(site);
   }
   if (!run) ctx.warn('The app was stopped before this, so it has been left stopped. Use Start to bring it up.');
-  await writeSiteJson(server, s.config, loadSite(s.db, site.id));
+  await writeSiteJson(server, s, loadSite(s.db, site.id));
   await s.appRoutes.kick(server.id);
   ctx.info('Recreated.');
   ctx.setResult({ slug: site.slug, changed: ['container'] });
@@ -605,4 +610,286 @@ export async function removeAppImages(ctx: JobContext<unknown>, s: CoreServices,
   if (!settings) return;
   ctx.info("Removing the app's images…");
   await cleanAppImages(ctx, s, server, site, settings, { all: true }).catch((err: unknown) => ctx.warn(`Could not remove the app's images: ${errMsg(err)}`));
+}
+
+// ---------------------------------------------------------------------------
+// Restores and moves
+
+/** An image a container is made from, as a restore or a move puts it on a server. */
+export interface PlacedImage {
+  ref: string;
+  digest: string;
+  imageId: string;
+}
+
+/** What a backup's manifest says of an app's image (services/backup.ts createOn). */
+interface BackupContainer {
+  source?: string;
+  reference?: string;
+  digest?: string;
+  imageId?: string;
+}
+
+/**
+ * The image a backup was taken with, on the app's server: kept there, or pulled again by its digest.
+ * An uploaded image that is gone is refused, before the restore has touched anything.
+ */
+export async function backupImage(ctx: JobContext<unknown>, s: CoreServices, server: ServerHandle, site: SiteRow, manifest: unknown): Promise<PlacedImage> {
+  const rows = appRows(s.db, site.id);
+  if (!rows) throw new Error(`"${site.slug}" has no settings: delete it and create it again.`);
+  const c = (manifest as { container?: BackupContainer } | null)?.container;
+  if (!c) {
+    const ref = currentImageRef(rows.settings);
+    if (!ref) throw new Error('The backup names no image, and the app runs none yet. Nothing was changed.');
+    ctx.warn('The backup names no image: the app keeps the one it runs.');
+    return { ref, digest: rows.settings.digest, imageId: rows.settings.imageId };
+  }
+  if (c.source === 'registry' && c.reference && c.digest) {
+    const ref = `${repositoryOfReference(c.reference)}@${c.digest}`;
+    if (await server.docker.imageExists(ref)) {
+      ctx.info(`The backup's image, ${c.digest.slice(0, 19)}…, is on the server.`);
+      return { ref, digest: c.digest, imageId: c.imageId ?? '' };
+    }
+    ctx.info(`The backup's image, ${c.digest.slice(0, 19)}…, is no longer on the server: pulling it by its digest…`);
+    const pulled = await pullPinned(server, c.reference, c.digest, registryAuthFor(rows.settings), (line) => ctx.info(line));
+    return { ref: pulled.ref, digest: pulled.digest, imageId: pulled.imageId };
+  }
+  if (c.imageId && (await server.docker.imageExists(c.imageId))) return { ref: c.imageId, digest: '', imageId: c.imageId };
+  throw new Error('The image this backup was taken with is no longer on the server, and an uploaded image cannot be pulled again. Upload it again, then restore. Nothing was changed.');
+}
+
+/**
+ * The end of an app's restore: its container made again from the backup's image when that is not
+ * the one it runs, then started, with its routes, and asked its health path. Its settings and
+ * secrets are its own now, as they are: a restore puts back files, databases and the image.
+ */
+export async function restoreAppContainer(ctx: JobContext<unknown>, s: CoreServices, server: ServerHandle, site: SiteRow, image: PlacedImage): Promise<void> {
+  const rows = appRows(s.db, site.id)!;
+  const settings = { ...rows.settings, digest: image.digest, imageId: image.imageId || rows.settings.imageId };
+  const runs = currentImageRef(rows.settings);
+  if (image.ref !== runs || (await server.docker.containerState(site.containerName)) === 'missing') {
+    ctx.info(image.ref === runs ? 'Making the container again…' : 'The backup was taken on another image: making the container from it…');
+    const env = s.db.select().from(appEnv).where(eq(appEnv.siteId, site.id)).orderBy(appEnv.position).all();
+    await removeSiteContainers(server.docker, site.containerName);
+    await ensureAppFolders(server.files, s.config, site, settings, rows.mounts);
+    await server.docker.createSiteContainer(
+      buildAppContainerSpec(s.config, { site, settings, env, mounts: rows.mounts, runtime: siteRuntimeFrom(s.settings, site), image: image.ref }),
+    );
+    s.db.update(appSettings).set({ digest: settings.digest, imageId: settings.imageId, updatedAt: Date.now() }).where(eq(appSettings.siteId, site.id)).run();
+  }
+  ctx.info('Starting the app…');
+  await startSiteContainer(server, s, site, ctx);
+  updateSiteRow(s.db, site.id, { status: 'running' });
+  await s.appRoutes.kick(server.id);
+  const failed = await healthGate(server, site, settings, { deployCheck: false, intervalMs: gateInterval(s), log: (l) => ctx.info(l) });
+  if (failed) ctx.warn(`The app did not pass its health check after the restore (${failed}): check its logs.`);
+}
+
+/**
+ * A move's image, on the target before the app stops on the source: a registry image pulled there
+ * by its digest; an upload saved on the source and loaded on the target through the panel, under a
+ * name of the panel's and with the checks again (services/appImages.ts). The id it has there may
+ * not be the one it has on the source: image stores count ids differently.
+ */
+export async function carryAppImage(
+  ctx: JobContext<unknown>,
+  s: CoreServices,
+  source: ServerHandle,
+  target: ServerHandle,
+  site: SiteRow,
+): Promise<PlacedImage> {
+  const rows = appRows(s.db, site.id);
+  if (!rows) throw new Error(`"${site.slug}" has no settings: delete it and create it again.`);
+  const { settings } = rows;
+  if (settings.source === 'registry' && settings.digest) {
+    ctx.info(`Pulling the app's image on "${target.name}" by its digest…`);
+    const pulled = await pullPinned(target, settings.reference, settings.digest, registryAuthFor(settings), (line) => ctx.info(line));
+    ctx.pushCompensation("remove the app's image on the target", () => target.docker.removeImage(pulled.ref).catch(() => undefined));
+    return { ref: pulled.ref, digest: pulled.digest, imageId: pulled.imageId };
+  }
+  if (!settings.imageId || !(await source.docker.imageExists(settings.imageId))) {
+    throw new Error(`The image "${site.slug}" runs is not on "${source.name}" any more: deploy it again before it moves.`);
+  }
+  const { createWriteStream } = await import('node:fs');
+  const { mkdir, rm } = await import('node:fs/promises');
+  const { pipeline } = await import('node:stream/promises');
+  const id = newUploadId();
+  const file = s.apps.uploadPath(`move-${id}`);
+  await mkdir(s.apps.uploadDir(), { recursive: true, mode: 0o700 });
+  try {
+    ctx.info(`Copying the app's uploaded image from "${source.name}"…`);
+    await pipeline(await source.docker.saveImage(settings.imageId), createWriteStream(file, { mode: 0o600 }));
+    ctx.info(`Loading it on "${target.name}"…`);
+    const name = uploadImageName(site.slug, id);
+    const loaded = await loadUploaded(target, file, name, (line) => ctx.info(line));
+    ctx.pushCompensation("remove the app's image on the target", () => target.docker.removeImage(name).catch(() => undefined));
+    return { ref: loaded.ref, digest: '', imageId: loaded.imageId };
+  } finally {
+    await rm(file, { force: true });
+  }
+}
+
+/** The mounts an app keeps out of its backups: they go to a move's target by a pipe of their own, as quarantined files do. */
+export function mountsOutOfBackups(s: Pick<CoreServices, 'db'>, site: Pick<SiteRow, 'id'>): string[] {
+  return (appRows(s.db, site.id)?.mounts ?? []).filter((m) => m.inBackups === 0).map((m) => m.name);
+}
+
+/** Hand a container app's arrived files to the user it runs as (a move's target, a restore). */
+export async function chownAppFiles(ctx: Pick<JobContext<unknown>, 'warn'>, s: CoreServices, server: ServerHandle, site: SiteRow): Promise<void> {
+  const rows = appRows(s.db, site.id);
+  if (!rows) return;
+  try {
+    await chownAppFolders(server, s, site, appOwner(rows.settings));
+  } catch (err) {
+    ctx.warn(`${errMsg(err)} - file ownership may be wrong`);
+  }
+}
+
+/** The hosts a moving app answers plain http on: the forwarder takes them on web too (moveHelpers.ts proxyConfigYaml). */
+export function appHttpHostsOf(s: Pick<CoreServices, 'db'>, site: Pick<SiteRow, 'id'>): string[] {
+  const rows = s.db.select().from(appRoutes).where(eq(appRoutes.siteId, site.id)).all();
+  return [...new Set(rows.filter((r) => r.enabled === 1 && r.scheme !== 'https').map((r) => r.host))];
+}
+
+// ---------------------------------------------------------------------------
+// app.mountUpload: a mount filled from an archive
+
+export const appMountUploadPayload = z.object({
+  siteId: z.number().int(),
+  mount: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/),
+  uploadId: z.string().regex(UPLOAD_ID_RE),
+});
+
+/** At most this many entries in a mount's archive. */
+const MAX_MOUNT_ENTRIES = 200_000;
+
+/** An entry's name, as tar or unzip lists it, made comparable: `./a/` is `a`. Null for the archive's own root. */
+function entryName(raw: string): string | null {
+  let name = raw;
+  while (name.startsWith('./')) name = name.slice(2);
+  name = name.replace(/\/+$/, '');
+  return name === '' || name === '.' ? null : name;
+}
+
+/** The names `unzip -l` lists, between its two rules. */
+export function zipListNames(listing: string): string[] {
+  const lines = listing.split('\n');
+  const rules = lines.map((l, i) => (/^\s*-{4,}/.test(l) ? i : -1)).filter((i) => i >= 0);
+  if (rules.length < 2) return [];
+  return lines
+    .slice(rules[0]! + 1, rules[1]!)
+    .map((l) => /^\s*\d+\s+\S+\s+\S+\s+(.+)$/.exec(l)?.[1] ?? null)
+    .filter((n): n is string => n !== null);
+}
+
+/** Why an archive's entry may not go into a mount, as the import refuses one; null when it may. */
+export function mountEntryProblem(raw: string): string | null {
+  const name = entryName(raw);
+  if (name === null) return null;
+  const problem = importPathProblem(Buffer.from(name, 'latin1'));
+  return problem ? `${JSON.stringify(raw.slice(0, 120))} has ${problem}` : null;
+}
+
+/** What lists an archive's names, in Traefik's image (busybox). */
+export const mountListScript = (format: 'tar.gz' | 'zip') => (format === 'zip' ? 'exec unzip -l /in/archive' : 'exec tar -tzf /in/archive');
+
+/**
+ * What unpacks it into /out: then a link or a special file refuses the whole archive (exit 3), and
+ * folders become 0700, files 0600.
+ */
+export const mountUnpackScript = (format: 'tar.gz' | 'zip') =>
+  `set -e; ${format === 'zip' ? 'unzip -q -o /in/archive -d /out' : 'tar -xzf /in/archive -C /out'}; ` +
+  // A link would name a path of the app's container; a device or a FIFO has no place in a mount.
+  `if [ -n "$(find /out ! -type f ! -type d | head -n 1)" ]; then echo "links or special files: $(find /out ! -type f ! -type d | head -n 3 | sed 's|^/out/||' | tr '\\n' ' ')" >&2; exit 3; fi; ` +
+  `find /out -type d -exec chmod 700 {} +; find /out -type f -exec chmod 600 {} +`;
+
+/** The unpacker's container: no network, no capability, a read-only root, and limits of its own. */
+export const MOUNT_UNPACK_LOCKDOWN = { memoryBytes: 256 * 1024 * 1024, nanoCpus: 1_000_000_000, pidsLimit: 64, tmpfs: { '/tmp': 16 } };
+
+/** gzip or zip, by its first bytes; null for anything else. */
+async function archiveFormat(server: ServerHandle, file: string): Promise<'tar.gz' | 'zip' | null> {
+  const head = await server.files.readUntrusted(file, 4);
+  if (head === null) throw new Error('The upload is not there: send the archive first.');
+  if (head.startsWith('PK\u0003\u0004')) return 'zip';
+  if (head.charCodeAt(0) === 0x1f) return 'tar.gz';
+  return null;
+}
+
+/**
+ * Fill a mount from an uploaded `.tar.gz` or `.zip`: its names are read and refused as an
+ * import's are, then it is unpacked as the app's user in a short-lived container of Traefik's
+ * image that has no network, no capability, a read-only root and only the archive and a fresh
+ * folder mounted. A link or a special file in it refuses the whole archive. Folders become 0700,
+ * files 0600. The fresh folder then takes the mount's place, and the app restarts onto it.
+ */
+export async function appMountUpload(ctx: JobContext<z.infer<typeof appMountUploadPayload>>, s: CoreServices): Promise<void> {
+  const site = loadSite(s.db, ctx.payload.siteId, { app: 'container' });
+  const server = s.servers.handleFor(site.serverId);
+  const p = appPaths(s.config, site.slug);
+  const upload = p.mountUpload(ctx.payload.uploadId);
+  const fresh = path.join(p.mounts, `.${ctx.payload.mount}.new-${ctx.jobId}`);
+  const aside = path.join(p.mounts, `.${ctx.payload.mount}.old-${ctx.jobId}`);
+  try {
+    const rows = appRows(s.db, site.id);
+    const mount = rows?.mounts.find((m) => m.name === ctx.payload.mount);
+    if (!rows || !mount) throw new Error(`"${site.slug}" has no mount called ${ctx.payload.mount}.`);
+    const format = await archiveFormat(server, upload);
+    if (!format) throw new Error('The upload is neither a .tar.gz nor a .zip archive.');
+    const image = await server.docker.containerImage(TRAEFIK_CONTAINER);
+    if (!image) throw new Error(`Traefik is not running on "${server.name}": its image is what unpacks the archive.`);
+    const owner = appOwner(rows.settings);
+    await server.files.rm(fresh);
+    await server.files.mkdirp(fresh, { mode: 0o700, owner });
+    const run = (script: string) =>
+      server.docker.runEphemeral({
+        image,
+        entrypoint: ['sh', '-c'],
+        cmd: [script],
+        user: `${owner.uid}:${owner.gid}`,
+        binds: [`${upload}:/in/archive:ro`, `${fresh}:/out`],
+        labels: { 'wpl7.unpack': site.slug },
+        timeoutMs: 30 * 60_000,
+        outputCap: 16 * 1024 * 1024,
+        lockdown: MOUNT_UNPACK_LOCKDOWN,
+      });
+
+    ctx.info(`Reading the ${format === 'zip' ? '.zip' : '.tar.gz'} archive's names…`);
+    const listed = await run(mountListScript(format));
+    if (listed.exitCode !== 0) throw new Error(`The archive could not be read: ${(listed.stderr || listed.stdout).trim().slice(0, 300)}`);
+    if (listed.stdout.endsWith('[output truncated]')) throw new Error(`The archive has too many entries for a mount.`);
+    const names = format === 'zip' ? zipListNames(listed.stdout) : listed.stdout.split('\n').filter(Boolean);
+    if (names.length > MAX_MOUNT_ENTRIES) throw new Error(`The archive has ${names.length} entries; a mount takes at most ${MAX_MOUNT_ENTRIES}.`);
+    const refused = names.map(mountEntryProblem).find((x) => x !== null);
+    if (refused) throw new Error(`The archive is refused: ${refused}.`);
+
+    ctx.info(`Unpacking ${names.length} entr${names.length === 1 ? 'y' : 'ies'} as ${owner.uid}:${owner.gid}…`);
+    const unpacked = await run(mountUnpackScript(format));
+    if (unpacked.exitCode === 3) throw new Error(`The archive is refused: it holds ${unpacked.stderr.trim().slice(0, 300)}`);
+    if (unpacked.exitCode !== 0) throw new Error(`Unpacking failed: ${(unpacked.stderr || unpacked.stdout).trim().slice(0, 300)}`);
+
+    // The swap: the old folder aside, the new one in its place, the old one back if that fails.
+    const live = p.mountDir(mount.name);
+    const had = await server.files.exists(live);
+    if (had) await server.files.rename(live, aside);
+    try {
+      await server.files.rename(fresh, live);
+    } catch (err) {
+      if (had) await server.files.rename(aside, live).catch(() => undefined);
+      throw err;
+    }
+    s.db.update(appMounts).set({ filledAt: Date.now() }).where(eq(appMounts.id, mount.id)).run();
+    if ((await server.docker.containerState(site.containerName)) === 'running') {
+      ctx.info('Restarting the app onto its new files…');
+      await restartSiteContainer(server, s, site, ctx);
+    } else {
+      ctx.info('The app is not running: it gets the new files when it starts.');
+    }
+    if (had) await server.files.rm(aside);
+    ctx.info(`${mount.name} at ${mount.containerPath} now holds the archive's ${names.length} entr${names.length === 1 ? 'y' : 'ies'}.`);
+    ctx.setResult({ slug: site.slug, mount: mount.name, entries: names.length });
+  } finally {
+    await server.files.rm(fresh).catch(() => undefined);
+    await server.files.rm(upload).catch(() => undefined);
+    s.apps.releaseUpload(`mount:${ctx.payload.uploadId}`);
+  }
 }

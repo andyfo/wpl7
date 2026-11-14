@@ -167,6 +167,7 @@ const DESTRUCTIVE = [
   'PUT /api/dns/token',
   'PUT /api/recipes/:id/inputs/:input',
   'PUT /api/settings',
+  'PUT /api/sites/:slug/app/mounts/:name',
   'PUT /api/sites/:slug/app/registry-auth',
   'PUT /api/sites/:slug/app/routes',
   'PUT /api/sites/:slug/backup-before-updates',
@@ -242,6 +243,8 @@ const NOT_THROUGH_MCP = [
   'DELETE /api/sites/:slug/app/deploy-token',
   'PUT /api/app-uploads/:id',
   'DELETE /api/app-uploads/:id',
+  'PUT /api/sites/:slug/app/mount-uploads/:id',
+  'DELETE /api/sites/:slug/app/mount-uploads/:id',
   'POST /api/hooks/app-deploy',
   // The Cloudflare token: a credential, and checking one sends it to Cloudflare.
   'POST /api/dns/check',

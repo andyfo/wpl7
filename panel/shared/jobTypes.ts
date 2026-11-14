@@ -66,6 +66,12 @@ export const JOB_TYPE_INFO = {
       "Puts a container app's new image in place: pulls it by digest or loads the upload, checks it, holds the app's routes, replaces the container and waits for its health check. When that fails, the old container comes back.",
     category: 'sites',
   },
+  'app.mountUpload': {
+    label: 'Fill app mount',
+    description:
+      "Unpacks an uploaded .tar.gz or .zip into one of a container app's mounts, as the app's own user, in a locked-down container that sees nothing else. Then the app restarts onto it.",
+    category: 'sites',
+  },
   'site.reconcile': {
     label: 'Recreate site container',
     description:

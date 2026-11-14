@@ -106,6 +106,8 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
     // The site's own database is made below when the backup has one and the site has none: a name
     // taken on the server stops the restore here, with nothing changed.
     if (backup.hasDatabase === 1 && !hasDatabase(site)) await assertOwnDatabaseFree(server, site);
+    // A container app's image, as the backup names it: on the server, or pulled now, before anything changes.
+    const appImage = isContainerApp(site) ? await (await import('./apps.js')).backupImage(ctx, s, server, site, firstLook) : null;
 
     if (!ctx.payload.skipPreRestoreBackup) {
       ctx.info('Taking pre-restore safety backup…');
@@ -175,6 +177,13 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
     // then cost the site its container the next time one is created.
     await ensureSiteMountSources(server, s, loadSite(s.db, site.id), ctx);
     await attachSiteNetwork(ctx, server, site.slug);
+    // Its image, its routes and its health path: nothing of a PHP version, a table prefix or URLs.
+    if (appImage) {
+      await (await import('./apps.js')).restoreAppContainer(ctx, s, server, loadSite(s.db, site.id), appImage);
+      ctx.info('Restore complete.');
+      ctx.setResult({ backupId: backup.id });
+      return;
+    }
 
     // Optionally move back to the PHP version the backup was taken with.
     const manifest = await readManifest(s, backup.serverId, backup.path);

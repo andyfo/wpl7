@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { backups, moveCleanups, sites, type MoveCleanupRow } from '../../db/schema.js';
+import { appSettings, backups, moveCleanups, sites, type MoveCleanupRow } from '../../db/schema.js';
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
@@ -15,6 +15,8 @@ import { pipeBetweenServers, proxyConfigPathFor, proxyConfigYaml, rmOn } from '.
 import { extraDbFile } from '../../services/backup.js';
 import { parseNames } from '../../services/databases.js';
 import { restoreSiteOnServer, type ProtectionHold } from './restoreSite.js';
+import { appHttpHostsOf, carryAppImage, cleanAppImages, mountsOutOfBackups } from './apps.js';
+import { appRows } from '../../services/appSpec.js';
 
 export const siteMovePayload = z.object({
   siteId: z.number().int(),
@@ -138,8 +140,9 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     }
     if (!disk) ctx.warn('Could not determine free disk space on the target; continuing.');
 
-    // A container app's own image goes to the target in its own step (services/appImages.ts).
+    // A container app's own image goes to the target first, while the source still serves.
     if (!isContainerApp(site)) await ensureSiteImage(ctx, target, s.config, site.phpVersion);
+    const appImage = isContainerApp(site) ? await carryAppImage(ctx, s, source, target, site) : null;
     // Before anything is copied: the target's image may be from before PHP sites.
     if (isPhpSite(site)) await assertPhpImage(target, siteImage(site.phpVersion));
     await target.files.mkdirp(s.config.paths.plugins);
@@ -267,6 +270,18 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
         // Quarantined files travel with the site: they are restorable, and evidence. Not in the
         // snapshot - a backup restores a site's files, and must never put these back among them.
         afterFiles: async () => {
+          // A container app's mounts kept out of its backups are not in the snapshot either.
+          const unbacked = isContainerApp(site) ? mountsOutOfBackups(s, site) : [];
+          if (unbacked.length > 0) {
+            ctx.info(`Copying the mounts kept out of backups to the target (${unbacked.join(', ')})…`);
+            await pipeBetweenServers({
+              source,
+              sourceCmd: ['tar', ['-C', paths.root, '-cf', '-', ...unbacked.map((name) => `mounts/${name}`)]],
+              target,
+              targetCmd: ['tar', ['-xpf', '-', '-C', paths.root]],
+              timeoutMs: 60 * 60_000,
+            });
+          }
           if (!(await source.files.exists(paths.quarantine))) return;
           ctx.info('Copying the quarantined files to the target…');
           await pipeBetweenServers({
@@ -292,6 +307,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
             ? 'Probing the site on the target (it is started briefly for this)…'
             : 'Probing the site on the target…',
         },
+        ...(appImage ? { appImage: appImage.ref } : {}),
       },
     );
     // That was the last cancel point - beyond here the move commits.
@@ -308,6 +324,8 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     let cleanupId = 0;
     s.db.transaction(() => {
       updateSiteRow(s.db, site.id, { serverId: p.targetServerId });
+      // An uploaded image has the id the target gave it; a registry one is the same digest there.
+      if (appImage) s.db.update(appSettings).set({ imageId: appImage.imageId, updatedAt: Date.now() }).where(eq(appSettings.siteId, site.id)).run();
       // serverId is the only field that moves; status must survive (a stopped site that
       // came back stopped above would otherwise be listed as running for ever).
       cleanupId = s.db
@@ -337,11 +355,16 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     committed = true;
     ctx.info(`Cutover committed - "${site.slug}" now lives on "${target.name}".`);
     site = loadSite(s.db, site.id);
-    await writeSiteJson(target, s.config, site);
+    await writeSiteJson(target, s, site);
     // The row points at the target now: the pin is redundant there, and the source's file goes.
     protection.release?.();
     protection.release = null;
     await s.security.kick(p.sourceServerId);
+    // An app's routes go with it: written on the target by its row now, taken off the source.
+    if (isContainerApp(site)) {
+      await s.appRoutes.kick(p.targetServerId);
+      await s.appRoutes.kick(p.sourceServerId);
+    }
 
     const dns = { updated: [] as string[], manual: [] as { host: string; ip: string }[] };
     // The source and the target are different servers, so the wildcard covers the site on one of
@@ -421,6 +444,8 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
           acmeResolver: s.config.acmeResolver,
           devDomain: source.row.devDomain,
           dnsProvider: s.dns.wildcardProvider(source.row.dnsProvider),
+          // A container app's plain http routes are forwarded on port 80 too.
+          httpHosts: isContainerApp(site) ? appHttpHostsOf(s, site) : [],
         }),
       );
     } catch (err) {
@@ -477,6 +502,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     if (protection.release) {
       protection.release();
       await s.security.kick(p.targetServerId);
+      if (isContainerApp(site)) await s.appRoutes.kick(p.targetServerId);
     }
   }
 }
@@ -565,6 +591,12 @@ export async function finalizeCleanup(ctx: JobContext<unknown>, s: CoreServices,
       continue;
     }
     await source.dbAdmin.dropDb(name);
+  }
+  // A container app's images there, now that it runs on the other server.
+  if (owner && isContainerApp(owner)) {
+    const rows = appRows(s.db, owner.id);
+    if (rows) await cleanAppImages(ctx, s, source, owner, rows.settings, { all: true }).catch((err: unknown) => ctx.warn(`Could not remove the app's images there: ${errMsg(err)}`));
+    void s.appRoutes.kick(cleanup.sourceServerId);
   }
   await rmOn(source, s.config.paths.sites, cleanup.siteSlug);
   // The network outlives the container it was made for; left behind, every stack redeploy

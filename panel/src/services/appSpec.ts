@@ -40,6 +40,8 @@ export function appPaths(config: Pick<Config, 'paths'>, slug: string) {
     mounts: path.join(root, 'mounts'),
     dataDir: (dir: string) => path.join(root, 'data', dir),
     mountDir: (name: string) => path.join(root, 'mounts', name),
+    /** Where a mount's archive lands, chunk by chunk (routes/apps.ts), outside every backup. */
+    mountUpload: (uploadId: string) => path.join(root, 'mount-uploads', uploadId),
     siteJson: path.join(root, 'site.json'),
   };
 }

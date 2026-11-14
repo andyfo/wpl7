@@ -287,7 +287,7 @@ export async function siteImportRefresh(ctx: JobContext<z.infer<typeof siteImpor
     s.imports.listings.carry(row.id, [...carried, ...unlisted]);
     s.imports.listings.promote(row.id);
     site = loadSite(s.db, site.id);
-    await writeSiteJson(server, s.config, site).catch(() => undefined);
+    await writeSiteJson(server, s, site).catch(() => undefined);
     try {
       await s.backup.create(site, 'import', {
         note: `refreshed from ${ctx.payload.sourceHost}`,

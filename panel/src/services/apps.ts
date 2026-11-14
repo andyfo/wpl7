@@ -48,7 +48,7 @@ import { containerApps, containerAppOnly, hostedSites, isContainerApp } from '..
 import type { CoreServices } from './index.js';
 import { assertDomainsFree } from './domainGuard.js';
 import { appDomains, hostOwners, hostRefusal, plainHttpRefusal } from './appRoutes.js';
-import { containerPathProblem, dataDirFor, envProblem, parseDataPaths, parseExtraHosts, appOwner, type DataPath } from './appSpec.js';
+import { appOwner, appPaths, containerPathProblem, dataDirFor, envProblem, parseDataPaths, parseExtraHosts, type DataPath } from './appSpec.js';
 import { registryAuthFor, resolveDigest } from './appImages.js';
 import { queueReconcile, type HardeningSweep } from './siteHardening.js';
 import { containerOfAside } from './siteSpec.js';
@@ -598,6 +598,26 @@ export class AppsService {
       { siteId: site.id, origin: 'upload', uploadId, backupFirst: this.backupFirstFor(site, 'upload', backupFirst) },
       { id: site.id, slug, serverId: site.serverId },
     );
+  }
+
+  // ------------------------------------------------------------------ mounts
+
+  /** Fill one of the app's mounts from an archive uploaded to its server (jobs/handlers/apps.ts appMountUpload). */
+  async fillMount(slug: string, name: string, uploadId: string): Promise<JobRow> {
+    const { site } = this.bySlug(slug);
+    this.changeable(site);
+    const mount = this.db.select().from(appMounts).where(and(eq(appMounts.siteId, site.id), eq(appMounts.name, name))).get();
+    if (!mount) throw notFound(`"${slug}" has no mount called ${name}.`);
+    const file = appPaths(this.s.config, slug).mountUpload(uploadId);
+    const stat = await this.s.servers.handleFor(site.serverId).files.stat(file).catch(() => null);
+    if (!stat || stat.sizeBytes === 0) throw conflict('No such upload: send the archive first.');
+    this.claimUpload(`mount:${uploadId}`);
+    try {
+      return this.s.worker.enqueue('app.mountUpload', { siteId: site.id, mount: name, uploadId }, { id: site.id, slug, serverId: site.serverId });
+    } catch (err) {
+      this.releaseUpload(`mount:${uploadId}`);
+      throw err;
+    }
   }
 
   // ------------------------------------------------------------------ the deploy hook

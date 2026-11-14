@@ -1,6 +1,10 @@
 // @docs sites/move
 import path from 'node:path';
-import type { SiteRow } from '../../db/schema.js';
+import { eq } from 'drizzle-orm';
+import { appEnv, type SiteRow } from '../../db/schema.js';
+import { healthGate } from '../../services/appProbe.js';
+import { appRows, buildAppContainerSpec } from '../../services/appSpec.js';
+import { chownAppFiles } from './apps.js';
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
@@ -8,7 +12,7 @@ import { migrateArrivedFiles } from '../../services/siteMigration.js';
 import { siteContainerSpec, sitePaths, siteRuntimeFrom } from '../../services/siteSpec.js';
 import { ensureSiteNetwork, removeSiteNetwork } from '../../services/siteNetwork.js';
 import { ensureSiteMountSources, probeOptsFor, probeSite, startSiteContainer, syncRelayAuth } from './shared.js';
-import { hasDatabase } from '../../lib/siteKind.js';
+import { hasDatabase, isContainerApp } from '../../lib/siteKind.js';
 import { rmOn } from './moveHelpers.js';
 
 /**
@@ -64,14 +68,18 @@ export async function restoreSiteOnServer(
     routing: boolean;
     requireWpConfig: boolean;
     protection: ProtectionHold;
-    /** Runs once the files are in place and owned by the site, before the database. */
+    /** Runs once the files are in place, before they are handed to the site's user and before the database. */
     afterFiles?: () => Promise<void>;
     /** Runs once the container has started, before the probe. */
     afterStart?: () => Promise<void>;
     /** The probe that gates the caller's next step, and the line logged before it; null = none. */
     probe: { host: string; timeoutMs: number; message: string } | null;
+    /** A container app's: the image its container is made from on the target. */
+    appImage?: string;
   },
 ): Promise<void> {
+  const app = isContainerApp(site);
+  if (app && !opts.appImage) throw new Error(`"${site.slug}" is a container app: its image has to be on "${target.name}" first.`);
   const paths = sitePaths(s.config, site.slug);
 
   ctx.info('Restoring files on the target…');
@@ -103,8 +111,10 @@ export async function restoreSiteOnServer(
   // existed does not - and a bind mount with no source on the target costs the site its
   // container there (see ensureSiteMountSources).
   await ensureSiteMountSources(target, s, site, ctx);
-  await s.backup.chownWordpress(target, site.slug, (l, m) => ctx.log(l, m));
   await opts.afterFiles?.();
+  // An app's folders are its user's, whoever that is; a site's are www-data's.
+  if (app) await chownAppFiles(ctx, s, target, site);
+  else await s.backup.chownWordpress(target, site.slug, (l, m) => ctx.log(l, m));
 
   // Compensations from here on are armed before the step they undo, and each tolerates the
   // resource not existing: a step can fail half-way (the database created, its user not) and
@@ -143,16 +153,31 @@ export async function restoreSiteOnServer(
   await syncRelayAuth(ctx, s, site.slug);
 
   ctx.info('Starting the site on the target…');
-  opts.protection.release = s.security.pin(target.id, site.id);
+  const releaseSecurity = s.security.pin(target.id, site.id);
+  // A container app's routes, on the target from its start there: the source forwards to them once it has moved.
+  const releaseRoutes = app ? s.appRoutes.pin(target.id, site.id) : () => undefined;
+  opts.protection.release = () => {
+    releaseSecurity();
+    releaseRoutes();
+  };
   await s.security.kick(target.id);
   ctx.pushCompensation('remove container on target', async () => {
     await target.docker.removeContainer(site.containerName);
   });
-  await target.docker.createSiteContainer(
-    await siteContainerSpec(s, target, site, domains, siteRuntimeFrom(s.settings, site), { routing: opts.routing }),
-  );
-  await migrateArrivedFiles(ctx, target, s, site, { inForce: source.kind === 'archive' && source.ranOnFpm });
+  if (app) {
+    const rows = appRows(s.db, site.id)!;
+    const env = s.db.select().from(appEnv).where(eq(appEnv.siteId, site.id)).orderBy(appEnv.position).all();
+    await target.docker.createSiteContainer(
+      buildAppContainerSpec(s.config, { site, settings: rows.settings, env, mounts: rows.mounts, runtime: siteRuntimeFrom(s.settings, site), image: opts.appImage! }),
+    );
+  } else {
+    await target.docker.createSiteContainer(
+      await siteContainerSpec(s, target, site, domains, siteRuntimeFrom(s.settings, site), { routing: opts.routing }),
+    );
+    await migrateArrivedFiles(ctx, target, s, site, { inForce: source.kind === 'archive' && source.ranOnFpm });
+  }
   await startSiteContainer(target, s, site, ctx);
+  if (app) await s.appRoutes.kick(target.id);
   await opts.afterStart?.();
 
   if (opts.probe) {
@@ -161,6 +186,10 @@ export async function restoreSiteOnServer(
       // No live HTTP in unit tests; the container state is the gate there.
       const state = await target.docker.containerState(site.containerName);
       if (state !== 'running') throw new Error('Site container is not running on the target - rolling back');
+    } else if (app) {
+      // Its own health path, asked on its network: its routes may answer nothing at / at all.
+      const failed = await healthGate(target, site, appRows(s.db, site.id)!.settings, { deployCheck: false });
+      if (failed) throw new Error(`The app did not pass its health check on the target - rolling back (source untouched): ${failed}`);
     } else {
       const up = await probeSite(target, site.containerName, opts.probe.host, opts.probe.timeoutMs, probeOptsFor(site));
       if (!up) throw new Error('Site did not answer on the target - rolling back (source untouched)');

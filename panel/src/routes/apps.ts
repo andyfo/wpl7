@@ -8,10 +8,12 @@ import fsp from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import fs from 'node:fs';
+import path from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { z } from 'zod';
 import {
+  APP_MOUNT_NAME_RE,
   appDeployBody,
   appImageBody,
   appPatchBody,
@@ -24,6 +26,7 @@ import { AppError, badRequest, conflict, tooManyRequests } from '../lib/errors.j
 import { jobToDto, viewerOf } from '../lib/dto.js';
 import { requireAccess } from '../plugins/auth.js';
 import { DEPLOY_TOKEN_HEADER, MAX_IMAGE_UPLOAD_BYTES } from '../services/apps.js';
+import { appPaths } from '../services/appSpec.js';
 import type { AppDeps } from './deps.js';
 import { holdSigningDomainsOf } from './sites.js';
 
@@ -39,6 +42,16 @@ const uploadQuery = z
 
 /** One chunk of an upload, as the database upload takes them. */
 const CHUNK_BYTES = 8 * 1024 * 1024;
+/** A mount's archive: at most this big. */
+const MAX_MOUNT_UPLOAD_BYTES = 4 * 1024 ** 3;
+const mountUploadQuery = z
+  .object({
+    offset: z.preprocess(emptyAsUnset, z.coerce.number().int().min(0)),
+    size: z.preprocess(emptyAsUnset, z.coerce.number().int().min(1).max(MAX_MOUNT_UPLOAD_BYTES)),
+  })
+  .strict();
+const mountParams = z.object({ slug: siteSlugParam, name: z.string().regex(APP_MOUNT_NAME_RE, '1-32 of a-z, 0-9 and -') });
+const appMountFillBody = z.object({ uploadId: z.string().regex(UPLOAD_ID_RE, 'an upload id is 16-64 characters of A-Z, a-z, 0-9, _ and -') }).strict();
 
 export async function registerAppRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   // Its own scope: the raw-body parser is for the upload chunks alone (as in routes/databases.ts).
@@ -142,6 +155,58 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
     return reply.status(204).send();
   });
 
+  // ---------------------------------------------------------------- mounts
+
+  // A mount's archive goes to the app's own server, chunk by chunk, as a database dump does.
+  r.put(
+    '/api/sites/:slug/app/mount-uploads/:id',
+    { schema: { params: slugParams.extend(uploadParams.shape), querystring: mountUploadQuery }, config: { rateLimit: { max: 1200, timeWindow: 60_000 } } },
+    async (req) => {
+      const { site } = deps.apps.bySlug(req.params.slug);
+      const { offset, size } = req.query;
+      deps.apps.assertUploadFree(`mount:${req.params.id}`);
+      const server = deps.servers.handleFor(site.serverId);
+      const file = appPaths(deps.config, site.slug).mountUpload(req.params.id);
+      const length = chunkLength(req);
+      if (offset + length > size) throw badRequest('The chunk goes past the size given');
+      if (inflightBytes + length > 64 * 1024 * 1024) throw tooManyRequests('The panel is receiving too much at once; retry in a moment');
+      inflightBytes += length;
+      try {
+        const body = await readChunk(req, length);
+        if (offset === 0) {
+          const dir = path.dirname(file);
+          await server.files.mkdirp(dir, { mode: 0o700 });
+          const disk = await server.files.statvfs(dir).catch(() => null);
+          // The archive, what it unpacks to, and the mount's old files until the swap.
+          if (disk && disk.freeBytes < size * 3) {
+            throw new AppError('conflict', 507, `Not enough free disk on the app's server: ${Math.round(disk.freeBytes / 1e6)} MB free, about ${Math.round((size * 3) / 1e6)} MB needed`);
+          }
+          await server.files.writeFile(file, body, { mode: 0o600 });
+        } else {
+          const have = (await server.files.stat(file))?.sizeBytes ?? 0;
+          if (have !== offset) throw conflict(`The upload has ${have} bytes; send the chunk from there`, { received: have });
+          await server.files.appendFile(file, body);
+        }
+        const received = offset + length;
+        return { received, complete: received === size };
+      } finally {
+        inflightBytes -= length;
+      }
+    },
+  );
+
+  r.delete('/api/sites/:slug/app/mount-uploads/:id', { schema: { params: slugParams.extend(uploadParams.shape) } }, async (req, reply) => {
+    const { site } = deps.apps.bySlug(req.params.slug);
+    deps.apps.assertUploadFree(`mount:${req.params.id}`);
+    await deps.servers.handleFor(site.serverId).files.rm(appPaths(deps.config, site.slug).mountUpload(req.params.id));
+    return reply.status(204).send();
+  });
+
+  r.put('/api/sites/:slug/app/mounts/:name', { schema: { params: mountParams, body: appMountFillBody } }, async (req, reply) => {
+    const job = await deps.apps.fillMount(req.params.slug, req.params.name, req.body.uploadId);
+    return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
+  });
+
   // ---------------------------------------------------------------- the hook
 
   r.post(
@@ -176,6 +241,19 @@ function chunkLength(req: FastifyRequest): number {
   if (length > CHUNK_BYTES) throw new AppError('validation_error', 413, `Too large: at most ${CHUNK_BYTES} bytes per chunk`);
   if (!(req.body instanceof Readable)) throw new AppError('validation_error', 415, 'Send the chunk as application/octet-stream');
   return length;
+}
+
+/** The chunk, whole, refusing a body that is not as long as it said. */
+async function readChunk(req: FastifyRequest, length: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let got = 0;
+  for await (const chunk of req.body as Readable) {
+    got += (chunk as Buffer).length;
+    if (got > length) throw badRequest('The body is longer than its Content-Length');
+    chunks.push(chunk as Buffer);
+  }
+  if (got !== length) throw badRequest('The body is shorter than its Content-Length');
+  return Buffer.concat(chunks, length);
 }
 
 /** Stream the chunk to the file, refusing a body that is not as long as it said. A short or long one leaves the file as it was. */

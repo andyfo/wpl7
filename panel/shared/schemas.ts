@@ -263,6 +263,8 @@ export const jobTypes = [
   'wp.reinstall',
   // A container app's new image, behind its health check (jobs/handlers/apps.ts).
   'app.deploy',
+  // One of a container app's mounts, filled from an uploaded archive.
+  'app.mountUpload',
 ] as const;
 export type JobType = (typeof jobTypes)[number];
 

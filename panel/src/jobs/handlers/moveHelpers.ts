@@ -87,14 +87,25 @@ export function proxyConfigYaml(opts: {
   /** Source server's dev domain / DNS provider: pure dev-domain host lists reuse its wildcard cert. */
   devDomain?: string;
   dnsProvider?: string;
+  /** A container app's hosts with a plain http route: forwarded on web too, to the target's port 80. */
+  httpHosts?: string[];
 }): string {
   const name = `move-${opts.slug}`;
   const rule = opts.hosts.map((h) => `Host(\`${h}\`)`).join(' || ');
   const https = opts.tlsMode !== 'none';
+  const httpHosts = https ? (opts.httpHosts ?? []) : [];
   const lines = [
     `# Written by the panel while "${opts.slug}" moves servers; removed by the move finalize step.`,
     `http:`,
     `  routers:`,
+    ...(httpHosts.length > 0
+      ? [
+          `    ${name}-http:`,
+          `      rule: ${JSON.stringify(httpHosts.map((h) => `Host(\`${h}\`)`).join(' || '))}`,
+          `      entryPoints: [web]`,
+          `      service: ${name}-http`,
+        ]
+      : []),
     `    ${name}:`,
     `      rule: ${JSON.stringify(rule)}`,
     `      entryPoints: [${https ? 'websecure' : 'web'}]`,
@@ -121,6 +132,9 @@ export function proxyConfigYaml(opts: {
   }
   lines.push(
     `  services:`,
+    ...(httpHosts.length > 0
+      ? [`    ${name}-http:`, `      loadBalancer:`, `        servers:`, `          - url: "http://${opts.targetIp}:80"`, `        passHostHeader: true`]
+      : []),
     `    ${name}:`,
     `      loadBalancer:`,
     `        servers:`,
