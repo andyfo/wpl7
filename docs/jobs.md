@@ -87,6 +87,8 @@ rolled back.
 | Recipe catalog | hourly | new recipes stop arriving ("Fetch now" still works) | background |
 | Mail log | every minute | *cannot be paused*: it enforces the outbound mail limits | background |
 | Site network repair | every minute | *cannot be paused*: a redeployed stack could leave sites unreachable. Also rebuilds, once, a site container made before its protection moved inside it, and a dev site still on a wildcard certificate its server can no longer renew | background |
+| Container app updates (`app-updates`) | every minute, each app at its own `check_minutes` (default 15) | no container app is deployed by itself or by its hook; Deploy now still works. It also deploys an app whose hook was called while it was busy, and clears image uploads nobody deployed within a day | queues jobs |
+| Container app routes (`app-routes`) | every minute, and right after each change | *cannot be paused*: it puts an app's routes file back on a server that lost it, and takes a stopped app's away | background |
 | Site protection | every minute, and right after each change | *cannot be paused*: it puts a site's rules back on a server that lost them, and takes them off a site switched to Off | background |
 | Blocked addresses | every minute, and right after each change | *cannot be paused*: it ends blocks on time, runs the attack detection and loads the list on every server | background |
 | Wildcard certificate token | every minute, and right after each change | *cannot be paused*: it gives each server's Traefik the Cloudflare token in Settings → DNS, and restarts Traefik where a token it may hold was replaced or removed (docs/dns.md) | background |

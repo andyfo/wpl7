@@ -1,4 +1,4 @@
-// @docs backups/overview, get-started/first-site, sites/domains, sites/move, sites/overview, sites/php, sites/settings, sites/visitors, sites/wordpress
+// @docs backups/overview, get-started/first-site, sites/container, sites/domains, sites/move, sites/overview, sites/php, sites/settings, sites/visitors, sites/wordpress
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -58,6 +58,8 @@ import { PhpLabel } from '../components/php/PhpLabel';
 import { RunCommandCard } from '../components/php/RunCommandCard';
 import { WebRootCard, webRootMissingText } from '../components/php/WebRootCard';
 import { SiteSecurityTab } from '../components/security/SiteSecurityTab';
+import { AppDeploysTab, AppImageCard, AppLabel, AppLogsTab } from '../components/app/AppParts';
+import { AppImageSettings, DeployHookCard, EnvCard, HealthCard, MountsCard, RoutesCard, RunsCard } from '../components/app/AppSettings';
 import { BlockDialog } from '../components/security/BlockDialog';
 import {
   SiteCreatedNote,
@@ -87,11 +89,23 @@ const EXTERNAL_TABS = SITE_TABS.filter((t) => ['overview', 'backups', 'wordpress
 /** A PHP site has everything but WordPress. */
 const PHP_TABS = SITE_TABS.filter((t) => t.id !== 'wordpress');
 
+/** A container app: its deploys and its log, and none of the site image's tabs. */
+const CONTAINER_TABS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'visitors', label: 'Visitors' },
+  { id: 'deploys', label: 'Deploys' },
+  { id: 'logs', label: 'Logs' },
+  { id: 'database', label: 'Database' },
+  { id: 'backups', label: 'Backups' },
+  { id: 'settings', label: 'Settings' },
+];
+
 export function SiteDetail() {
   const { slug = '' } = useParams();
   const site = useSite(slug);
   const creation = useSiteCreation(slug, site.data);
-  const tabs = site.data?.kind === 'external' ? EXTERNAL_TABS : site.data?.app === 'php' ? PHP_TABS : SITE_TABS;
+  const tabs =
+    site.data?.kind === 'external' ? EXTERNAL_TABS : site.data?.app === 'php' ? PHP_TABS : site.data?.app === 'container' ? CONTAINER_TABS : SITE_TABS;
   const [tab, setTab] = useTabParam(tabs);
 
   // A create that failed removes the site it was making, unless its clean-up failed too. The site
@@ -155,6 +169,8 @@ export function SiteDetail() {
       {tab === 'files' && <FilesTab key={slug} slug={slug} />}
       {tab === 'ftp' && <FtpTab key={slug} slug={slug} />}
       {tab === 'database' && <DatabaseTab key={slug} slug={slug} />}
+      {tab === 'deploys' && <AppDeploysTab key={slug} slug={slug} />}
+      {tab === 'logs' && <AppLogsTab key={slug} slug={slug} />}
       {tab === 'settings' && (external ? <ExternalSettings slug={slug} /> : <SettingsTab slug={slug} />)}
     </div>
   );
@@ -172,6 +188,7 @@ function SiteHeading({ title, site }: { title: string; site?: SiteDetailDto }) {
           {site && <SiteHealthBadge health={siteHealth(site)} />}
           {site && <StatusBadge status={site.kind === 'external' ? 'external' : site.isLive ? 'live' : 'dev'} />}
           {site?.app === 'php' && <PhpLabel />}
+          {site?.app === 'container' && <AppLabel />}
         </div>
         {site && (
           <a
@@ -196,17 +213,18 @@ function SiteFacts({ site: s, creating = false }: { site: SiteDetailDto; creatin
   const meta = useMeta();
   const multiServer = meta.data?.multiServer ?? false;
   const php = s.app === 'php';
+  const app = s.app === 'container';
   const database = s.hasDatabase ? s.dbName : 'None';
   return (
     <Card title="Facts">
       <dl className="space-y-2 text-sm">
-        <FactRow label="Domains" value={s.domains.join(', ')} />
+        <FactRow label={app ? 'Hosts' : 'Domains'} value={s.domains.join(', ')} />
         {s.devHostname && <FactRow label="Dev hostname" value={s.devHostname} />}
         {multiServer && <FactRow label="Server" value={s.serverName} />}
-        <FactRow label="PHP" value={sitePhp(s)} />
+        {!app && <FactRow label="PHP" value={sitePhp(s)} />}
         {php ? (
           <FactRow label="Web root" value={s.webRoot || "The site's folder"} />
-        ) : (
+        ) : app ? null : (
           <FactRow label="Language" value={localeName(meta.data?.locales, s.locale)} />
         )}
         {!creating && <FactRow label="Container" value={s.containerState} />}
@@ -222,8 +240,8 @@ function SiteFacts({ site: s, creating = false }: { site: SiteDetailDto; creatin
             </dd>
           </div>
         )}
-        {!php && s.tablePrefix !== 'wp_' && <FactRow label="Table prefix" value={s.tablePrefix} />}
-        {!php && <FactRow label="WP admin" value={`${s.adminUser ?? '–'} <${s.adminEmail ?? '–'}>`} />}
+        {s.app === 'wordpress' && s.tablePrefix !== 'wp_' && <FactRow label="Table prefix" value={s.tablePrefix} />}
+        {s.app === 'wordpress' && <FactRow label="WP admin" value={`${s.adminUser ?? '–'} <${s.adminEmail ?? '–'}>`} />}
         {!creating && <FactRow label="Disk" value={formatBytes(s.diskBytes)} />}
         <FactRow label="Created" value={formatDate(s.createdAt)} />
       </dl>
@@ -369,9 +387,10 @@ function OverviewTab({ slug }: { slug: string }) {
           <Button small variant="secondary" {...containerAction('reconcile')}>
             Recreate container
           </Button>
-          {s.app !== 'php' && <ClearCacheButton site={s} />}
-          {s.app !== 'php' && <WpAdminLoginButton slug={slug} running={s.containerState === 'running'} />}
-          {!s.isLive && (
+          {s.app === 'wordpress' && <ClearCacheButton site={s} />}
+          {s.app === 'wordpress' && <WpAdminLoginButton slug={slug} running={s.containerState === 'running'} />}
+          {/* A container app's hosts are its routes': it goes live by having one of its own. */}
+          {!s.isLive && s.app !== 'container' && (
             <Button small onClick={() => setGoLiveOpen(true)}>
               Go live →
             </Button>
@@ -388,6 +407,8 @@ function OverviewTab({ slug }: { slug: string }) {
           </div>
         )}
       </Card>
+
+      {s.container && <AppImageCard site={s} />}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <SiteFacts site={s} />
@@ -1253,6 +1274,70 @@ function SettingsTab({ slug }: { slug: string }) {
   // A PHP site's own cards come in its order: PHP version, Web root, Cron, Container limits, Redis,
   // Domains, Run a command, Danger zone.
   const php = s.app === 'php';
+  const dangerZone = (
+    <>
+      <Card title="Danger zone">
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-neutral-600">
+            Deleting removes the container{s.hasDatabase ? ', database' : ''} and files{finalBackup ? ' (after a final backup)' : ''}
+            {deleteBackups ? (finalBackup ? ', and every other backup' : ', and every backup') : ''}.
+          </div>
+          <Button variant="danger" busy={run.busy('delete')} onClick={() => setDeleteOpen(true)}>
+            Delete site
+          </Button>
+        </div>
+      </Card>
+
+      {deleteOpen && (
+        <ConfirmDialog
+          title={`Delete ${s.slug}`}
+          message={
+            <>
+              This permanently deletes the site <b>{s.title}</b> — container{s.hasDatabase ? ', database' : ''} and files.
+            </>
+          }
+          confirmWord={s.slug}
+          confirmLabel="Delete site"
+          onConfirm={() =>
+            run.mutate({
+              path: `/api/sites/${slug}?finalBackup=${finalBackup}&deleteBackups=${deleteBackups}`,
+              method: 'DELETE',
+              action: 'delete',
+            })
+          }
+          onClose={() => setDeleteOpen(false)}
+        >
+          <div className="space-y-3">
+            <Toggle checked={finalBackup} onChange={setFinalBackup} label="Take a final backup first (kept until you delete it)" />
+            <DeleteBackupsToggle
+              slug={slug}
+              checked={deleteBackups}
+              onChange={setDeleteBackups}
+              finalBackup={finalBackup}
+            />
+          </div>
+        </ConfirmDialog>
+      )}
+    </>
+  );
+
+  // A container app's own cards: its image, routes, environment, mounts and how it runs.
+  if (s.container) {
+    return (
+      <div className="space-y-4">
+        <AppImageSettings site={s} />
+        <DeployHookCard site={s} />
+        <RoutesCard site={s} />
+        <EnvCard site={s} />
+        <MountsCard site={s} />
+        <HealthCard site={s} />
+        <RunsCard site={s} />
+        <SiteLimitsCard site={s} />
+        <RunCommandCard slug={slug} running={s.containerState === 'running'} placeholder="ls -la /data" hint="Runs in the app's container as its user. The output is in the job console." />
+        {dangerZone}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -1318,48 +1403,7 @@ function SettingsTab({ slug }: { slug: string }) {
       {php ? <RunCommandCard slug={slug} running={s.containerState === 'running'} /> : <SiteCachingCard site={s} />}
       {!php && <SiteLimitsCard site={s} />}
 
-      <Card title="Danger zone">
-        <div className="flex items-center justify-between">
-          <div className="text-sm text-neutral-600">
-            Deleting removes the container{s.hasDatabase ? ', database' : ''} and files{finalBackup ? ' (after a final backup)' : ''}
-            {deleteBackups ? (finalBackup ? ', and every other backup' : ', and every backup') : ''}.
-          </div>
-          <Button variant="danger" busy={run.busy('delete')} onClick={() => setDeleteOpen(true)}>
-            Delete site
-          </Button>
-        </div>
-      </Card>
-
-      {deleteOpen && (
-        <ConfirmDialog
-          title={`Delete ${s.slug}`}
-          message={
-            <>
-              This permanently deletes the site <b>{s.title}</b> — container{s.hasDatabase ? ', database' : ''} and files.
-            </>
-          }
-          confirmWord={s.slug}
-          confirmLabel="Delete site"
-          onConfirm={() =>
-            run.mutate({
-              path: `/api/sites/${slug}?finalBackup=${finalBackup}&deleteBackups=${deleteBackups}`,
-              method: 'DELETE',
-              action: 'delete',
-            })
-          }
-          onClose={() => setDeleteOpen(false)}
-        >
-          <div className="space-y-3">
-            <Toggle checked={finalBackup} onChange={setFinalBackup} label="Take a final backup first (kept until you delete it)" />
-            <DeleteBackupsToggle
-              slug={slug}
-              checked={deleteBackups}
-              onChange={setDeleteBackups}
-              finalBackup={finalBackup}
-            />
-          </div>
-        </ConfirmDialog>
-      )}
+      {dangerZone}
     </div>
   );
 }

@@ -224,6 +224,36 @@ inside the running container; `null` while it is not running) say what it is.
 | `PUT /sites/:slug/offsite-enabled` | `{enabled}` | `SiteDetail` (sync) — stop (or resume) copying this site's backups to the offsite destinations. Copies already made are kept |
 | `GET /sites/:slug/traffic` | `?days=1..365` (default 30) | `SiteTrafficDto` — visitor statistics; see below |
 
+### Container apps (see docs/architecture.md → Container apps)
+
+`POST /sites` with `app: "container"` takes `{title, slug?, serverId?, image: {reference, registryUser?,
+registryToken?} | {uploadId}, port?, env?: [{name, value?, secret?}], routes?: [{id?, host, match?:
+"none"|"prefix"|"exact", path?, scheme?: "https"|"http"|"both", enabled?}], mounts?: [{name, path,
+writable?, inBackups?}], dataPaths?: [path], extraHosts?: [{host, address}], database?, hardening?,
+health?, updates?}`; no `domains`, `domainMode: "custom"` or `phpVersion`, and none of WordPress's or
+PHP's fields (a `400` naming each). Its hosts are its routes': `domains` holds the ones no other site
+has, and its dev hostname. A route on another site's host needs Full (`403` below it), a path, and
+that site on the same server. A route with plain http is a `409` while the server's Traefik lacks the
+redirect priority flag. Every `/wp/*`, `/godmode/*`, PHP, web root, cron, cache, files, FTP, scan and
+domain endpoint answers an app with `409` ("is a container app"); `/shell` runs as its own user when
+its image has `sh` and `timeout`.
+
+| Method & path | Body / query | Returns |
+|---|---|---|
+| `GET /sites/:slug/app` | – | `AppDto` — secrets as `{secret: true, set}`, never a value |
+| `PATCH /sites/:slug/app` | `{reference?, port?, env?, mounts?, dataPaths?, extraHosts?, hardening?, health?, updates?}` — a secret without a value keeps its value | `{app, job}` — `202` with `site.reconcile` when the container changes; `job: null` otherwise |
+| `PUT /sites/:slug/app/routes` | `{routes}` | `AppDto` — the routes file is rewritten; nothing restarts |
+| `PUT /sites/:slug/app/registry-auth` | `{username, token}` (both `""` removes it) | `AppDto` |
+| `POST /sites/:slug/app/deploy` | `{deployId?, backupFirst?}` | `202 {job}` — `app.deploy`; with `deployId`, a roll back |
+| `POST /sites/:slug/app/image` | `{uploadId, backupFirst?}` | `202 {job}` — deploys an uploaded archive |
+| `GET /sites/:slug/app/deploys` | – | `{items: AppDeployDto[]}` |
+| `GET /sites/:slug/app/logs` | `?tail=500&since=<ts>` | `{lines: [{ts, text}]}` — Manage |
+| `POST`/`DELETE /sites/:slug/app/deploy-token` | – | `{token, header, url}` once / `204` — Full, not over MCP |
+| `PUT`/`DELETE /app-uploads/:id` | `?offset=&size=`, raw bytes | chunks of an image archive, to the panel's disk (8 MiB each, 8 GB a file) |
+| `PUT`/`DELETE /sites/:slug/app/mount-uploads/:id` | `?offset=&size=`, raw bytes | chunks of a mount's archive, to the app's server (4 GiB a file) |
+| `PUT /sites/:slug/app/mounts/:name` | `{uploadId}` | `202 {job}` — `app.mountUpload` |
+| `POST /hooks/app-deploy` | header `X-WPL7-Deploy-Token`, no body | `202 {app, outcome: "queued"\|"waiting"\|"noted", jobId}`; `401` for an unknown token. 30 a minute per address |
+
 ### Site imports
 Bringing an existing WordPress site in (docs/site-lifecycle.md → Import). The last two are the migration
 plugin's own calls; its import's token goes in `X-WPL7-Import-Token`, never in `Authorization`.

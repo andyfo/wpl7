@@ -149,7 +149,8 @@ export function siteHealth(input: SiteHealthInput): SiteHealth {
   const lead = containerState === 'running' ? 'The container is running' : 'The panel has this site started';
   // A 404 is the router's answer, not the site's, so restarting the container changes
   // nothing - the labels have to be rebuilt. Anything else came from inside the site.
-  return httpStatus === 404
+  // A container app's 404 is its own: it was asked on its network, not through a router.
+  return httpStatus === 404 && input.app !== 'container'
     ? {
         label: 'Offline',
         tone: 'bad',
@@ -187,6 +188,8 @@ function servingNote(up: boolean | null, containerState: SiteHealthInput['contai
  * the old red dot, from a site that was never started.
  */
 function probeReason(httpStatus: number | null, app: SiteHealthInput['app']): string {
+  // A container app is asked its own health path, on its own network.
+  if (app === 'container') return httpStatus === null ? 'its health path got no answer' : `its health path answered ${httpStatus}`;
   if (httpStatus === null) return 'nothing answered on its HTTP port';
   if (httpStatus === 404) {
     return app === 'php'

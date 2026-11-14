@@ -271,6 +271,54 @@ files, FTP, backups, scans, protection and uptime check. The user's view is
   `wordpressSites()` in every loop over WordPress sites. `test/unit/siteKindAudit.test.ts` holds every
   query on `sites` to a reviewed verdict for the app too (`SITE_APP_REVIEW`).
 
+### Container apps
+
+`sites.app = 'container'`: a hosted site that runs one container from an image of its own, with its
+settings in `app_settings`, `app_env`, `app_routes`, `app_mounts` and `app_deploys`. The user's view
+is `docs/site/src/content/docs/sites/container.mdx`.
+
+- **Guards** (`lib/siteKind.ts`): `siteImageSites()` leaves apps out of every query about the site
+  image, `assertSiteImage`/`{ app: 'siteImage' }` refuses them (409 "is a container app"), and
+  `assertWordPress` refuses anything not WordPress. `test/unit/siteKindAudit.test.ts` has a third map,
+  `SITE_IMAGE_REVIEW`.
+- **The container** (`services/appSpec.ts buildAppContainerSpec`, never `siteContainerSpec`): the
+  image pinned (`repo@sha256:…`) or an upload's id; labels `wpl7.role=app` and `traefik.enable=false`
+  and nothing else of Traefik's; env from `app_env` with `{{db.*}}`, `{{mail.*}}`, `{{site.domain}}`
+  filled at each create; binds `data/<dir>` and `mounts/<name>` only, owned by the image's uid
+  (`imageUserIds`, read from its `/etc/passwd` in a container never started); `CapDrop ALL` or
+  `SITE_CAP_DROP`, a read-only root with a tmpfs `/tmp` when asked, `StopTimeout` = its grace.
+- **Images** (`services/appImages.ts`, `services/imageArchive.ts`): the registry's distribution
+  answer gives the digest without a pull; a list without the server's platform is refused before it,
+  a single image after it. `traefik.*`/`wpl7.*` labels are refused. An uploaded archive is read entry
+  by entry and loaded with every name rewritten to `wpl7-app-<slug>:u<id>` (`manifest.json`,
+  `index.json`, `repositories`), one image only.
+- **Routes** (`services/appRoutes.ts`): a file per app, `traefik/dynamic/app-<slug>.yml`, routers
+  `wpl7app_r<id>_<slug>` (websecure) and `wpl7app_r<id>-http_<slug>` (web) at `PRIORITY.app`
+  (950,000) plus the path's specificity, one service by container name. Written only when its digest
+  changes (any change in the folder restarts the server's rate limiters). A deploy holds it: the
+  service has no server, so Traefik answers 503. Plain http needs
+  `--entrypoints.web.http.redirections.entrypoint.priority=1` on the running Traefik
+  (`plainHttpRefusal`), and the block list gets a `-web` twin for those hosts
+  (`firewallRender.ts webHosts`). A host no site holds is the app's own and goes into `domains`; a
+  host another site on the server holds lends a path only (`hostRefusal`), never goes into
+  `domains`, and keeps that site from being deleted, moved or losing it (`appsRoutingOn`).
+- **Deploys** (`jobs/handlers/apps.ts`): `app.deploy` resolves the digest, pulls or loads, checks,
+  holds the routes, sets the old container aside with its grace (`setAside`), starts the new one and
+  keeps it once `healthGate` passes; otherwise the old one is put back and the new one's last 50
+  lines are kept. Three images per app stay. `app-updates` asks the registry each app's
+  `check_minutes` and deploys (Automatic), notes and emails (Ask first), or does nothing (Pinned).
+  The hook (`POST /api/hooks/app-deploy`, `X-WPL7-Deploy-Token`, sha256 only) answers a waiting
+  deploy, or notes a call while the app is busy.
+- **The way in** (`services/appProbe.ts`): a locked-down container of the running Traefik's image on
+  the app's network alone, busybox `wget -S`, the first status line deciding. The health gate and
+  the uptime check use it, so they work with every route off.
+- **Backups, restore, move**: the archive holds `data/`, the mounts with `in_backups` on and
+  `site.json` (settings without secrets); the manifest names the image. A restore puts that image
+  back (kept, or pulled by digest). A move pulls it on the target (an upload is saved and loaded
+  through the panel), carries the other mounts by a second pipe and forwards plain http routes on
+  `web` too. `app.mountUpload` unpacks a mount's archive with busybox in Traefik's image, as the
+  app's uid, with no network.
+
 ### Site files: always from inside the container
 
 Whatever opens individual files in a site's folder — the Files tab (docs/web-ftp.md), its API, the

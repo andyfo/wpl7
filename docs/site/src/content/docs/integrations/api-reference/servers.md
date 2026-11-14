@@ -2,7 +2,7 @@
 title: Servers
 description: Register machines you provisioned, or hand the panel a blank VPS and let it do it.
 sidebar:
-  order: 2.14
+  order: 2.15
 sources:
   - panel/shared/apiDocs.ts
 ---

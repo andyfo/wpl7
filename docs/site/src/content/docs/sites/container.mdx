@@ -1,0 +1,153 @@
+---
+title: Container apps
+description: Run one container from your own image, with routes, a database, secrets, mounts and deploys behind a health check.
+sidebar:
+  order: 5.5
+since: 0.3.3
+sources:
+  - panel/src/services/apps.ts
+  - panel/src/services/appSpec.ts
+  - panel/src/services/appProbe.ts
+  - panel/src/services/appImages.ts
+  - panel/src/services/appRoutes.ts
+  - panel/src/services/imageArchive.ts
+  - panel/src/jobs/handlers/apps.ts
+  - panel/src/routes/apps.ts
+  - panel/shared/apps.ts
+  - panel/web/src/components/app/*.tsx
+  - panel/web/src/api/apps.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A container app runs one container from an image you build elsewhere. The panel pulls it by its
+digest, routes hosts and paths to it, gives it a database and mail when it asks, and replaces it
+behind a health check when a new image comes.
+
+<Screenshot name="site-app" alt="A container app's Overview tab: the image it runs, how it is updated, and its routes" />
+
+## Create a container app
+
+1. Open **Sites** and choose **New site**.
+2. Under **Type**, choose **Container**. Fill in the title and the [slug](/docs/reference/glossary/#slug),
+   then choose **Continue**.
+3. On **Image**, enter the **Image reference**, such as `ghcr.io/example/app:stable`. For a private
+   image, fill in **Registry user** and **Registry token**. Or choose **Upload an archive** and pick a
+   `docker save` archive.
+4. On **Settings**, the **Port** is the one the image exposes unless you enter one. The **Health path**
+   is what a deploy waits for. Switch on **Database** if the app needs one, and add its
+   **Environment** and **Mounts**.
+5. On **Routes**, say where the app answers. It starts with its dev hostname.
+6. Check the **Review** step and choose **Create site**.
+
+<Screenshot name="site-new-container" alt="The New site wizard for a container app, on its Image step" />
+
+## Route hosts and paths to it
+
+Each route has a host, a path match, a scheme and an **On** switch. **Any path** takes the whole
+host. **Starts with** and **Exactly** take a path. A longer path wins over a shorter one.
+
+- A host no other site has becomes the app's own. It gets its certificate and is listed among the
+  app's hosts. Point its DNS at the app's server.
+- On the host of another site on the same server, a route takes a path, such as
+  `northwindbakery.example/api/orders`. That path answers from the app, the rest from the site.
+  Claiming a path of another site needs Full access.
+- **HTTP** and **Both** answer plain HTTP on port 80 without the redirect to HTTPS, as a payment
+  provider's webhook may need. The block list applies on port 80 too.
+
+**Save routes** puts them in force at once. Nothing restarts.
+
+<Screenshot name="site-app-routes" alt="A container app's routes: a host of its own, and three paths of a WordPress site's domain" />
+
+## Set its environment
+
+**Environment** on the **Settings** tab holds its variables. A **Secret** is never shown again.
+**Replace** sets a new value. Saving recreates the container behind the health check.
+
+The panel fills these placeholders at every start:
+
+| Placeholder | Value |
+|---|---|
+| `{{db.host}}`, `{{db.port}}`, `{{db.name}}`, `{{db.user}}`, `{{db.password}}` | The app's database |
+| `{{mail.host}}`, `{{mail.port}}`, `{{mail.user}}`, `{{mail.password}}` | The mail relay, with the app's own login |
+| `{{site.domain}}` | The app's first host |
+
+## Give it files
+
+A mount is a folder of files you give the app, such as a key or a certificate. Choose **Upload**
+beside it and pick a `.tar.gz` or `.zip`. A job unpacks it in place of what the mount held, as the
+app's user, and restarts the app. With **In backups** off, a mount stays out of every backup and
+still moves with the app.
+
+**Data folders** under **How it runs** are kept across deploys and are in backups. Each `VOLUME` of
+the image is one.
+
+## Deploy a new image
+
+- **Deploy now** on the Overview deploys what the reference names now.
+- **New images under the tag** decides what a new image does: **Automatic** deploys it, **Ask first**
+  sends an email and offers **Update**, **Pinned** checks nothing.
+- The **Deploy hook** lets your CI start a deploy after a push. Choose **Make token**. The token is
+  shown once. Send it in a header:
+
+```bash
+curl -fsS -X POST -H "X-WPL7-Deploy-Token: <token>" https://panel.example.com/api/hooks/app-deploy
+```
+
+The **Deploys** tab lists every deploy. A failed one shows why, with the new container's last log
+lines. **Roll back** deploys an earlier image again.
+
+<Screenshot name="site-app-deploys" alt="A container app's Deploys tab: five deploys, the failed one opened on its last log lines" />
+
+## Read its log
+
+The **Logs** tab shows the container's newest 1,000 lines. With **Follow** on, it reads them again
+every 2 seconds.
+
+## What happens
+
+A deploy asks the registry which image the reference names and pulls it by its digest. It checks
+that the image is for the server's platform and carries no Traefik or panel labels. It holds the
+app's routes, so Traefik answers 503, and stops the old container with its **Stop grace**. It
+starts the new one and asks the health path every 2 seconds until it answers 2xx. The new container
+is kept only then. Otherwise the old one comes back, and an email says why.
+
+The container runs as the image's user, with no published port and no new privileges. The panel
+asks it on its own network, so the health check and the uptime check work with every route off.
+
+## Limits
+
+| Limit | Value |
+|---|---|
+| Routes, variables | 100 each |
+| A variable's value | 32 KB |
+| Mounts, data folders | 20 each |
+| Health check wait | 5 to 600 seconds, 60 by default |
+| **Stop grace** | 0 to 300 seconds, 20 by default |
+| Registry check | Every 5 to 1,440 minutes, 15 by default |
+| An uploaded image | 8 GB |
+| A mount's archive | 4 GB |
+| Images kept per app | 3, for **Roll back** |
+
+- One container per app, and no builds on the server.
+- A deploy answers 503 while the container is replaced, usually a few seconds.
+- Files the image has under a `VOLUME` are not copied into its data folder. The app starts with it
+  empty.
+- An archive with a link, a special file, an absolute path or `..` is refused.
+- An uploaded image cannot be rolled back to once it is gone from the server.
+- A Docker Hub image is checked against Docker Hub's pull limits. Give it a login, or use another
+  registry.
+- **Run a command** needs `sh` and `timeout` in the image.
+- An app has no request limits or custom rules, only the block list and attack detection.
+- An app is stopped while it moves. An app with a path of another site's domain does not move.
+- Plain HTTP needs the Traefik of this release on the server. Update the server first.
+- The uptime check starts a short-lived container every minute for each app.
+
+## Related
+
+- [Create a site](/docs/sites/create/)
+- [A site's database](/docs/sites/database/)
+- [Moving a site](/docs/sites/move/)
+- [Site protection](/docs/security/site-protection/)
+- [Jobs](/docs/automations/jobs/)
+- [The API](/docs/integrations/api/)

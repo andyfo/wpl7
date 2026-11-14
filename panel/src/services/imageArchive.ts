@@ -19,6 +19,7 @@
  * Pass 1 reads only the headers and the three small files; pass 2 streams a new archive in which
  * every other entry is the original's bytes, unchanged.
  */
+// @docs sites/container
 import fs from 'node:fs';
 import { Readable } from 'node:stream';
 

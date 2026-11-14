@@ -184,3 +184,36 @@ describe('a container app’s emails', () => {
     expect(sent).toEqual([]);
   });
 });
+
+describe('a container app’s database password', () => {
+  const withDb = { database: true, env: [{ name: 'DATABASE_URL', value: 'mysql://{{db.user}}:{{db.password}}@{{db.host}}/{{db.name}}' }] };
+
+  it('goes into a new container, behind the health check', async () => {
+    const w = await world();
+    const site = await createShop(w, withDb);
+    const { app, headers } = await authed(w);
+    const res = await app.inject({ method: 'POST', url: '/api/sites/shop/database-password', headers });
+    expect(res.statusCode).toBe(202);
+    const done = await finish(w, res.json().job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    const now = w.db.select().from(sites).where(eq(sites.id, site.id)).get()!;
+    expect(now.dbPassword).not.toBe(site.dbPassword);
+    expect(w.dbAdmin.calls.filter((c) => c.method === 'setUserPassword').map((c) => c.args)).toEqual([['wp_shop', now.dbPassword]]);
+    const spec = w.docker.calls.filter((c) => c.method === 'createSiteContainer').at(-1)!.args[0] as { env: Record<string, string> };
+    expect(spec.env.DATABASE_URL).toContain(`:${now.dbPassword}@`);
+  });
+
+  it('comes back as it was when the new container fails its check', async () => {
+    const w = await world();
+    const site = await createShop(w, withDb);
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    w.docker.appHttp = () => 500;
+    const job = w.worker.enqueue('database.password', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 });
+    const done = await finish(w, job.id);
+    expect(done.status).toBe('failed');
+    expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()!.dbPassword).toBe(site.dbPassword);
+    const sets = w.dbAdmin.calls.filter((c) => c.method === 'setUserPassword').map((c) => c.args[1]);
+    expect(sets.at(-1)).toBe(site.dbPassword);
+    expect(w.docker.containers.get('wp-shop')).toBe('running');
+  });
+});

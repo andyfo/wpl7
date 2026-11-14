@@ -70,6 +70,8 @@ every week. Each lookup happens on your server, so no address leaves it.
 - A crawler that presents itself as a browser counts as a visitor.
 - Only requests that reach Traefik count. Pages a CDN serves from its cache never arrive.
 - The first read of a server's log goes back six hours at most. Nothing older is filled in.
+- A request for a path a [container app](/docs/sites/container/) takes of another site's domain
+  counts for the app, not for that site.
 
 ## Related
 

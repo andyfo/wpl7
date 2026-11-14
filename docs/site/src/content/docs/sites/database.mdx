@@ -105,6 +105,10 @@ cannot be read. If the site stops answering with the new password, the old one i
 On a PHP site, nothing restarts, and the site's own config keeps the old password. **Show** reveals
 the new one. Put it in the config, or the site loses its database.
 
+A [container app](/docs/sites/container/) whose environment names `{{db.password}}` gets a new
+container with the new password, behind its health check. If that fails, the old password is put
+back. An app that reads its password from its own config is like a PHP site.
+
 ## What the browser can reach
 
 Every query runs as the site's own database user. MariaDB keeps it to that site's databases, so it

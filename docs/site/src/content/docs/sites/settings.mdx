@@ -29,7 +29,8 @@ A site's **Settings** tab switches its PHP version, changes its domains, sets it
 and rebuilding its container are on the **Overview** tab.
 
 A [PHP site](/docs/sites/php/)'s tab also has **Web root**, **Cron** and **Run a command**, and of the
-caches only **Redis**.
+caches only **Redis**. A [container app](/docs/sites/container/)'s tab has cards of its own: its
+image, routes, environment, mounts, health check and how it runs.
 
 <Screenshot name="site-settings" alt="A site's Settings tab: PHP version, domains and the danger zone" />
 
@@ -186,7 +187,8 @@ deleted, nothing of the site is left: no files, no database and no backup.
 - A site gets at most the CPU cores its server has. A higher CPU limit gives it all of them.
 - Switching PHP replaces the container, so the site does not answer for a few seconds.
 - If a recreated container starts but does not answer, **Recreate container** leaves it in
-  place. The job log warns about it.
+  place. The job log warns about it. A container app's goes back to the old one instead, as a
+  deploy does.
 - A vendor that cannot be reached keeps its license activation. The job warns, and the site is
   deleted anyway.
 

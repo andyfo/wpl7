@@ -13,6 +13,7 @@
  *   (item 3). The container's own `traefik.enable=false` voids the first kind anyway.
  * - Defaults from the image: its user (who owns `data/` and `mounts/`), its port, its VOLUME paths.
  */
+// @docs sites/container
 import { randomBytes } from 'node:crypto';
 import type { ImageConfig, RegistryAuth, ServerPlatform } from './docker.js';
 import type { ServerHandle } from '../servers/registry.js';

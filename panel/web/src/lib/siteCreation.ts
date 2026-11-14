@@ -1,6 +1,7 @@
 // @docs sites/create
 import type { JobDto, WporgPluginDto } from '../../../shared/types';
 import type { SiteApp } from '../../../shared/schemas';
+import type { EnvEdit, MountEdit, RouteEdit } from './appForm';
 
 /**
  * A new site goes from the New site form straight to its own page, which shows its `site.create`
@@ -53,9 +54,31 @@ export interface NewSiteDraft {
   /** The catalog plugins ticked or unticked by hand; the others follow the catalog's defaults. */
   catalogTicks: [number, boolean][];
   extraPlugins: WporgPluginDto[];
-  /** A PHP site's. */
+  /** A PHP site's; a container app's too. */
   database: boolean;
   webRoot: string;
+  /** A container app's. */
+  container?: NewAppDraft;
+}
+
+/** New site's Container steps, as they were left (components/app/NewAppSteps.tsx). */
+export interface NewAppDraft {
+  source: 'registry' | 'upload';
+  reference: string;
+  registryUser: string;
+  registryToken: string;
+  /** The uploaded archive: its upload id, and the file's name for the review. */
+  upload: { id: string; name: string } | null;
+  /** '' = the port the image exposes. */
+  port: string;
+  env: EnvEdit[];
+  database: boolean;
+  mounts: MountEdit[];
+  dropAllCaps: boolean;
+  readOnlyRoot: boolean;
+  /** null = the one route it starts with, on its dev hostname. */
+  routes: RouteEdit[] | null;
+  healthPath: string;
 }
 
 /**

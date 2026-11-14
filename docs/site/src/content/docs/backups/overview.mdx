@@ -38,6 +38,10 @@ UTC. It holds four files, and a `databases` folder when the site has
 | `sha256sums` | Checksums of the archive and every dump, checked before every restore |
 | `databases/<name>.sql.gz` | Each database added to the site, dumped the same way |
 
+A [container app](/docs/sites/container/)'s `files.tar.gz` holds its data folders, the mounts kept in
+backups and `site.json` instead, and its `manifest.json` names the image it ran. No secret of the
+app's is in either.
+
 A [PHP site](/docs/sites/php/) without a database has no `db.sql.gz`. An added database that is not
 on the server, because someone dropped it, is left out of the backup with a warning in its log. The
 panel archives the files while the site keeps running. These files are enough to rebuild the site

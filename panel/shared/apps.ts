@@ -2,6 +2,7 @@
  * Container apps' names and numbers, shared by the panel and its pages (services/appRoutes.ts,
  * services/apps.ts).
  */
+// @docs sites/container
 import type { AppRouteMatch, AppRouteScheme } from './schemas.js';
 
 /**

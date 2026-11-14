@@ -91,7 +91,9 @@ letters, digits and dashes.
 
 Site containers carry the labels `wpl7.managed=true`, `wpl7.site=<slug>`, `wpl7.role=wordpress`
 and `wpl7.php=<version>`. One on the current setup also has `wpl7.stack=2`, and one without it runs
-Apache with mod_php. A PHP site's container also has `wpl7.app=php`. To list one site's containers:
+Apache with mod_php. A PHP site's container also has `wpl7.app=php`. A
+[container app](/docs/sites/container/)'s has `wpl7.role=app` and `traefik.enable=false`, and its
+routers in its routes file are `wpl7app_r<route id>_<slug>`. To list one site's containers:
 
 ```bash
 docker ps -a --filter label=wpl7.site=northwind-bakery
@@ -109,6 +111,8 @@ at the same path, so every path the panel hands to Docker is valid on the host.
 | `/srv/sites/<slug>/quarantine/` | Files a malware scan moved out of the site. Mounted into no site |
 | `/srv/sites/<slug>/site.json` | A description of the site, for recovery by hand |
 | `/srv/sites/<slug>/db-uploads/` | A dump uploaded for an import, until the import is done. Mounted into no site |
+| `/srv/sites/<slug>/data/`, `mounts/` | A container app's data folders and mounts, owned by the user it runs as. `mount-uploads/` holds an archive until it is unpacked |
+| `/srv/panel/app-uploads/` | Image archives uploaded for container apps, on the panel's server, until a deploy loads them |
 | `/srv/backups/<slug>/<timestamp>/` | Backups, unless the server's backup location was moved |
 | `/srv/backups/panel/<timestamp>/` | Nightly copies of the panel's database, on the panel's server |
 | `/srv/external/<slug>/wordpress/` | The copy of a [site hosted elsewhere](/docs/sites/external/) that its next backup builds on, on the server that keeps its backups |
@@ -116,7 +120,7 @@ at the same path, so every path the panel hands to Docker is valid on the host.
 | `/srv/mysql/` | MariaDB's data |
 | `/srv/mail/` | The relay's sender maps and logins, and the DKIM keys and settings |
 | `/srv/traefik/acme*.json` | Certificates and ACME accounts, mode 600 |
-| `/srv/traefik/dynamic/` | Rules Traefik reads from files: `sec-<slug>.yml` for site protection, `wpl7-blocked.yml`, and `move-<slug>.yml` while a moved site waits for DNS |
+| `/srv/traefik/dynamic/` | Rules Traefik reads from files: `sec-<slug>.yml` for site protection, `app-<slug>.yml` for a container app's routes, `wpl7-blocked.yml`, and `move-<slug>.yml` while a moved site waits for DNS |
 | `/srv/wpl7-ftp/` | The FTP gateway's and file servers' settings |
 | `/srv/wpl7-firewall/` | The block list for the firewall and its status. Root only |
 | `/srv/wpl7-scan/<scan-id>/` | A running malware scan's input |

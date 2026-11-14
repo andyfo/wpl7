@@ -80,6 +80,13 @@ files, scanner tools, the request and asset limits, the headers and its own rule
 as assets wherever they are in the site. A site's own setting for one of
 WordPress's parts is refused.
 
+## On a container app
+
+<Since v="0.3.3" /> A [container app](/docs/sites/container/) has no level and no rules of its own.
+The fleet's [block list](/docs/reference/glossary/#block-list) and attack detection apply to it, on
+port 80 too for a host it answers plain HTTP on. Its routes come before the protection of a site
+whose domain it takes a path of.
+
 ## Trust a proxy
 
 Behind Cloudflare or a load balancer, every visitor seems to come from the proxy. For a trusted
@@ -107,6 +114,7 @@ exactly one of them.
 - The settings inside the container stop a stolen admin login, not code already running in the site.
 - A stored page never reaches PHP or `.htaccess`. Site protection comes before the
   [page cache](/docs/sites/caching/) and still applies, but a security plugin's firewall does not run.
+- A container app gets no request limits and no custom rules.
 
 ## Related
 

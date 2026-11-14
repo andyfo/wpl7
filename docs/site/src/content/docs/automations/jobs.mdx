@@ -48,6 +48,10 @@ jobs:
 A [PHP site](/docs/sites/php/#run-commands-on-a-schedule)'s cron lines are not jobs. They run beside
 the jobs and their lanes, and each line keeps only its last run.
 
+A [container app](/docs/sites/container/)'s deploy hook queues one deploy at a time. A call while one
+waits is that deploy, which takes the newest image when it starts. A call while the app is busy with
+another job is deployed once the app is free.
+
 ## Find a job
 
 Open **Automations → All jobs**. Each row shows the job, its site, a summary, its status, who

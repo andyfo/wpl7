@@ -194,6 +194,10 @@ describe.skipIf(!ENABLED)('container apps: images and containers on the real Doc
   afterAll(async () => {
     await dockerCli('rm', '-f', '-v', ...containers);
     for (const image of images) await dockerCli('rmi', '-f', image);
+    // A Linux daemon keeps the owners containers gave files (uid 10001's 0700 folders): give them back first.
+    if (process.platform === 'linux' && fs.existsSync(root)) {
+      await dockerCli('run', '--rm', '-v', `${root}:/x`, 'busybox:1.37', 'chown', '-R', `${process.getuid!()}:${process.getgid!()}`, '/x');
+    }
     fs.rmSync(root, { recursive: true, force: true });
   });
 

@@ -449,6 +449,10 @@ describe.skipIf(!ENABLED)('container apps against the real Traefik and Docker', 
     await dockerCli('rm', '-f', '-v', ...containers);
     await dockerCli('network', 'rm', ...networks, ACME_NET);
     await dockerCli('rmi', '-f', APP_IMAGE, ...extraImages);
+    // A Linux daemon keeps the owners containers gave files (uid 10001's 0700 folders): give them back first.
+    if (process.platform === 'linux' && fs.existsSync(root)) {
+      await dockerCli('run', '--rm', '-v', `${root}:/x`, 'busybox:1.37', 'chown', '-R', `${process.getuid!()}:${process.getgid!()}`, '/x');
+    }
     fs.rmSync(root, { recursive: true, force: true });
   });
 

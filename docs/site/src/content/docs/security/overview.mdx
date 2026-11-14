@@ -70,6 +70,11 @@ A site container:
   a file server that has only that site's folder.
 - is stopped from sending mail at all once it crosses the abuse threshold, and you get an email.
 
+A [container app](/docs/sites/container/)'s container has the same network, limits and mail rules.
+It runs as its image's user, publishes no port and carries no Traefik labels, so its image cannot
+claim a domain. Its image may set no Traefik or panel labels, and must be for the server's platform.
+Every capability can be dropped, and its root made read-only.
+
 ## What is not contained
 
 What a site still shares with its neighbors: the kernel, the MariaDB instance, with its own database

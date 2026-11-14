@@ -242,6 +242,19 @@ site's **Overview** tab shows the last error.
 
 See [Sites hosted elsewhere](/docs/sites/external/).
 
+### A container app's deploy failed
+
+<Since v="0.3.3" /> The app goes on with the image it ran before. Its **Deploys** tab says why, and
+shows the new container's last log lines.
+
+- The health path did not answer 2xx in time. Check the **Port** and the **Health path** on the
+  **Settings** tab, and the app's own log for what it is waiting on.
+- The image is for another platform. Build it for the server's, such as `linux/amd64`.
+- The registry refused the pull. Check the **Registry user** and **Registry token**.
+- An automatic deploy does not try a failed image again. Push a new one, or choose **Deploy now**.
+
+See [Container apps](/docs/sites/container/).
+
 ## Certificates
 
 ### The site shows a certificate warning

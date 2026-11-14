@@ -40,6 +40,12 @@ for a reason; remove one once there is nothing left to watch.
 | [Docker: the build cache and image names, as the nightly clean-up reads them](#docker-the-build-cache-and-image-names-as-the-nightly-clean-up-reads-them) | Medium | 2026-10-27 17:47 UTC | Docker 29.9.2: both prune parameters trim, `all` would remove shared layers first |
 | [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
 | [Docker: a signal counts as stopping a container by hand](#docker-a-signal-counts-as-stopping-a-container-by-hand) | Medium | 2026-11-01 06:30 UTC | Docker 28.1.1: after `docker kill --signal USR1`, a container with `unless-stopped` that exits stays down |
+| [Traefik: a router on web beside the HTTPS redirect](#traefik-a-router-on-web-beside-the-https-redirect) | High | 2026-11-14 20:51 UTC | Traefik 3.7.19: with the redirect at priority 1, an app's http router answers, everything else still redirects, the ACME router stays above |
+| [Docker: an image's labels on its container](#docker-an-images-labels-on-its-container) | High | 2026-11-14 20:51 UTC | Docker 28.1.1, Traefik 3.7.19: labels are inherited; `traefik.enable=false` on the container wins; the default router answers on 80 and 443 |
+| [Docker: the names in an image archive](#docker-the-names-in-an-image-archive) | Medium | 2026-11-14 20:51 UTC | Docker 28.1.1 and 27.5.1: the classic store reads `manifest.json`, containerd's `index.json`; renamed in both, only the panel's name lands |
+| [Docker: the registry's distribution answer and pulls with a login](#docker-the-registrys-distribution-answer-and-pulls-with-a-login) | Medium | 2026-11-14 20:51 UTC | Docker 28.1.1 and 27.5.1: a digest without a pull, with the login; platforms for a list only on containerd's store |
+| [Docker: unprivileged ports from 0](#docker-unprivileged-ports-from-0) | Low | 2026-11-14 20:51 UTC | Docker 28.1.1 sets `ip_unprivileged_port_start=0` in a container's namespace |
+| [Traefik's image: busybox wget, tar and unzip](#traefiks-image-busybox-wget-tar-and-unzip) | Medium | 2026-11-14 20:51 UTC | traefik:v3.7 (3.7.19): all three answer as the way in and the mount unpacker use them |
 | [Docker: a container whose image a build deleted](#docker-a-container-whose-image-a-build-deleted) | Low | 2026-11-03 09:08 UTC | Docker 29.9.2: a build deletes the image on the containerd store, and keeps it on overlay2; the container still stops, renames and starts |
 | [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-11-08 17:26 UTC | `latest` is v5.2.1; hostname logic as relied on; rspamd idle without keys |
 | [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-11-03 08:38 UTC | Both answer as expected for WordPress 7.1.4 and Akismet 5.7.2; no scan failed to fetch them |
@@ -552,6 +558,119 @@ for a reason; remove one once there is nothing left to watch.
   lifts the cap. Then `updateContainerLimits` can send it, `limitsChange` loses `recreate`, and
   the "restarts each site once" sentences go from Settings, the site's Container limits card and
   `docs/site/src/content/docs/sites/settings.mdx`.
+
+## Traefik: a router on web beside the HTTPS redirect
+
+- **Priority:** High
+- **Last checked:** 2026-11-14 20:51 UTC. On Traefik 3.7.19, with `deploy/docker-compose.yml`'s own
+  flags plus `--entrypoints.web.http.redirections.entrypoint.priority=1`, a container app's router on
+  `web` answers plain http, and every other request on port 80 still redirects: a WordPress and a PHP
+  site under the panel's labels and protection files, and a host nobody has. The ACME challenge router
+  (`acme-http@internal`, MaxInt) stays above every app route, and Pebble issued certificates over
+  HTTP-01 for the app's host and the sites'. Without the flag, the redirect beats every router on `web`.
+- **The problem:** a container app may answer plain http (a payment provider's webhook, an old client).
+  Traefik's entry point redirect is a router of its own; its default priority is the highest there is,
+  so a router on `web` never answers. Set to 1, any router there wins over it.
+- **What we do about it:** the flag in `deploy/docker-compose.yml`. Only app http routers and the block
+  list's `-web` twin are on `web` (`panel/src/services/appRoutes.ts`, `firewallRender.ts`).
+  `plainHttpRefusal` refuses an http route on a server whose running Traefik lacks the flag.
+  `test/engine/containerApps.test.ts` item 1 and `composeFlags.test.ts` pin it.
+- **Check:** the Traefik release notes since the last check for entry point redirections, router
+  priorities and the ACME HTTP challenge. To measure: `WPL7_ENGINE_TESTS=1 npx vitest run
+  test/engine/containerApps.test.ts -t "1. plain http"` in `panel/`, with the compose file's Traefik.
+- **When it changes:** if the option goes or changes meaning, plain http routes stop answering, or the
+  redirect stops for everyone: move the redirect to a router of the panel's own at priority 1 instead.
+  If the ACME router can lose to a router on `web`, give app routes a rule that leaves
+  `/.well-known/acme-challenge/` out.
+
+## Docker: an image's labels on its container
+
+- **Priority:** High
+- **Last checked:** 2026-11-14 20:51 UTC. On Docker 28.1.1 with Traefik 3.7.19, an image's `traefik.*`
+  and `wpl7.*` labels land on a container made without labels: Traefik routed another site's domain to
+  it at once, and `listManaged(['wpl7.role=wordpress'])` counted it as that site's. `traefik.enable=false`
+  on the container wins over the image's. A container with `traefik.enable=true` and only a service label
+  gets a default router, `Host(<container name>)` with no TLS, on ports 80 and 443.
+- **The problem:** a container app's image is the user's, built elsewhere. Its labels would claim
+  domains in Traefik and pass for a site's container in the panel's sweeps.
+- **What we do about it:** an image with a `traefik.*` or `wpl7.*` label is refused after its pull or
+  load (`labelRefusal` in `panel/src/services/appImages.ts`). The app's container carries
+  `traefik.enable=false` and no other Traefik label (`appLabels` in `appSpec.ts`); its routes are a
+  file. `test/engine/containerApps.test.ts` items 3 and 7.
+- **Check:** the Docker Engine and Traefik release notes since the last check for label inheritance,
+  `exposedByDefault` and the Docker provider's default rule. To measure: items 3 and 7 of the engine
+  test above.
+- **When it changes:** if Traefik stops honouring `traefik.enable=false` over an image's label, the
+  container needs `--providers.docker.exposedbydefault=false` on the stack, with every site's router
+  opted in. If Docker stops passing labels on, nothing has to change.
+
+## Docker: the names in an image archive
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-14 20:51 UTC. `docker save` writes `manifest.json` (`RepoTags`), `index.json`
+  (`io.containerd.image.name`) and, on the classic store, `repositories`. A load of an archive that
+  carries a name the server has gives the name away. When the places disagree, the classic store goes
+  by `manifest.json` and containerd's by `index.json`. Renamed in all three places, only the new name
+  lands. The classic store refuses an archive whose entries carry extended attributes. Measured on
+  Docker 28.1.1 (containerd) and 27.5.1 (both stores).
+- **The problem:** an uploaded archive could plant a name the server uses: a site image, or a name it
+  takes later.
+- **What we do about it:** `panel/src/services/imageArchive.ts` reads every entry, refuses more than one
+  image, and rewrites every name to `wpl7-app-<slug>:u<id>` in all three files before the load, as a
+  plain tar. `test/engine/containerImages.test.ts` item 9 and the e2e on both stores.
+- **Check:** the Docker Engine release notes for `docker load`, the image stores and the OCI layout. To
+  measure: item 9 of the image engine test, and `test/e2e/ssh-transport.sh` with both stores.
+- **When it changes:** a new place a load reads a name from has to be rewritten too, in
+  `renamedArchive`.
+
+## Docker: the registry's distribution answer and pulls with a login
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-14 20:51 UTC. With a login (`registry:2`, bcrypt), the Engine API's
+  distribution endpoint gives a tag's digest without a pull, locally and over the SSH agent, on both
+  stores. A pull by digest leaves a local tag where it was. Before a pull, the answer lists a list's
+  platforms (with `unknown/unknown` attestation entries); for a single image it gives the platform on
+  the classic store and nothing on containerd's. A list without the server's platform fails the pull.
+  Docker 28.1.1 and 27.5.1.
+- **The problem:** app-updates asks the registry every interval instead of pulling, and the platform
+  check rests on what the answer says.
+- **What we do about it:** `resolveDigest` and `pullPinned` in `panel/src/services/appImages.ts`. A single
+  image's platform is checked after the pull. `test/engine/containerImages.test.ts` items 4 and 6.
+- **Check:** the Engine API changelog for `/distribution/{name}/json` and image pulls with
+  `X-Registry-Auth`. To measure: items 4 and 6 of the image engine test.
+- **When it changes:** if the answer stops giving a digest, app-updates has to pull to compare. If it
+  gives a single image's platform on every store, the check can move before the pull.
+
+## Docker: unprivileged ports from 0
+
+- **Priority:** Low
+- **Last checked:** 2026-11-14 20:51 UTC. Docker 28.1.1 sets `net.ipv4.ip_unprivileged_port_start=0` in
+  a container's network namespace: an app running as uid 10001 with every capability dropped listened on
+  port 80. Set to 1024, it can't.
+- **The problem:** a container app's image may listen on a port below 1024 as a user that is not root.
+- **What we do about it:** nothing: there is no switch for it (`test/engine/containerImages.test.ts`
+  item 5 measures it).
+- **Check:** the Docker Engine release notes for the default sysctls of a container's network
+  namespace. To measure: item 5 of the image engine test.
+- **When it changes:** set `Sysctls: { 'net.ipv4.ip_unprivileged_port_start': '0' }` in
+  `createSiteContainer` for an app.
+
+## Traefik's image: busybox wget, tar and unzip
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-14 20:51 UTC. In `traefik:v3.7` (3.7.19), busybox `wget -S` prints each
+  answer's status line, a stopped app fails in about 200 ms ("bad address"), and `tar -xzf`, `tar -tzf`,
+  `unzip -l` and `unzip -q -o` work as a uid with no capability, no network and a read-only root.
+- **The problem:** the way in to a container app (its health check and uptime check) and the mount
+  unpacker run in a short-lived container of the image the server's Traefik runs, because every server
+  has it.
+- **What we do about it:** `askApp` in `panel/src/services/appProbe.ts`, and `mountListScript` and
+  `mountUnpackScript` in `panel/src/jobs/handlers/apps.ts`. `test/engine/containerApps.test.ts` items 8
+  and 11.
+- **Check:** the Traefik image's Dockerfile and its base image since the last check. To measure: items
+  8 and 11 of the engine test.
+- **When it changes:** if the image loses busybox or one of its applets, use the MariaDB client image,
+  which every server has too, or a small image of the panel's own.
 
 ## Docker: a container whose image a build deleted
 

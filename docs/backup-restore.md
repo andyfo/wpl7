@@ -18,6 +18,11 @@ what is there, and the row says `has_database = 0` (`BackupDto.hasDatabase`), so
 offers no database part and `?part=database` is a `409`. A PHP site's `wpVersion` is `null`, even
 when someone installed a WordPress into it.
 
+A container app's `files.tar.gz` holds `data/`, `mounts/<name>` for each mount with `in_backups` on,
+and `site.json` (its settings without a secret value). Its manifest has `app: "container"`, a
+`wpVersion` of `null` and `container: {source, reference, digest, imageId, port, mounts}`, never the
+registry token or an environment value.
+
 The **backup root** defaults to `${SRV_ROOT}/backups` and is set per server — see
 [Choosing where backups are stored](#choosing-where-backups-are-stored).
 
@@ -94,6 +99,13 @@ sites names none and is a WordPress site's. The database follows the table:
 | has a database | has one | as above |
 | has a database | has none | the database and its user are made first (refused before anything changes when the server has a database or user of that name), then filled; the user's new password is for the site's own config |
 | has none | has one | the database is left as it is, and the log says so |
+
+A container app's restore finds the backup's image before anything changes: on the server, else
+pulled by its digest (`backupImage` in `jobs/handlers/apps.ts`); an upload that is gone refuses the
+restore. `data/` and the archived mounts are swapped in, the old ones kept in one
+`app.pre-restore-<ts>` folder, and handed to the app's uid. A mount not in the backup stays. The
+container is made from the backup's image when that is not the one it runs, then started, its routes
+written and its health path asked; the app keeps its current settings and secrets.
 
 If step 1 fails (checksum mismatch, no disk for the safety copy) the site is untouched and keeps
 running — only failures from step 2 onwards mark it `error`. A failure after the file swap leaves the

@@ -49,6 +49,7 @@ interface PanelSettings {
   alertsVulnerabilities: boolean;
   alertsBackups: boolean;
   alertsConnector: boolean;
+  alertsDeployFailed: boolean;
   domainLookups: boolean;
   siteCpuLimit: number;
   siteMemoryLimitMb: number;
@@ -150,6 +151,7 @@ const SETTING_TAB: Record<keyof PanelSettings, TabId> = {
   alertsVulnerabilities: 'monitoring',
   alertsBackups: 'monitoring',
   alertsConnector: 'monitoring',
+  alertsDeployFailed: 'monitoring',
   domainLookups: 'monitoring',
   monitorUptimeIntervalSec: 'monitoring',
   monitorStatsIntervalSec: 'monitoring',
@@ -779,6 +781,7 @@ function MonitoringTab({ s, set }: TabProps) {
               onChange={(v) => set('alertsConnector', v)}
               label="External sites: WPL7 Connect not answering, certificate expiring"
             />
+            <Toggle checked={s.alertsDeployFailed} onChange={(v) => set('alertsDeployFailed', v)} label="Container apps: a deploy that failed" />
           </div>
           <p className="text-xs text-neutral-500">Suspended mail, malware findings, failed offsite copies, a server low on disk and new releases are always sent.</p>
         </div>

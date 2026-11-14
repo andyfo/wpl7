@@ -21,7 +21,7 @@ import { conflict } from '../lib/errors.js';
 import { safeJoin } from '../lib/slug.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
 import { sitePaths } from './siteSpec.js';
-import { hasDatabase, isContainerApp, isPhpSite } from '../lib/siteKind.js';
+import { hasDatabase, isContainerApp } from '../lib/siteKind.js';
 import { appOwner, appPaths, appRows } from './appSpec.js';
 
 export type LogFn = (level: 'info' | 'warn' | 'error', message: string) => void;

@@ -98,6 +98,10 @@ The files hold the site's `wp-config.php`, with the database settings it had at 
 backup. On a host where they changed since, keep the current `wp-config.php`. WPL7 Connect's
 settings are in the database, so the site stays connected after a restore.
 
+A [container app](/docs/sites/container/)'s restore puts back its files, its databases and the image
+the backup was taken with. An image that left the server is pulled again by its digest. The app keeps
+its settings and secrets as they are now. A mount kept out of backups stays as it is.
+
 ## Limits
 
 - A restore replaces everything that changed since the backup: posts, orders, comments and uploads.
@@ -106,7 +110,9 @@ settings are in the database, so the site stays connected after a restore.
 - A backup restores only onto the site of the same name, on the server that holds the backup.
   From another server, fetch it back from an offsite copy, or move the site back first.
 - A PHP site's backup restores only into a PHP site, and a WordPress site's only into a WordPress
-  site.
+  site. A container app's restores only into a container app.
+- A container app's backup of an uploaded image no longer on the server does not restore. Upload
+  the image again first.
 - A deleted site's backup has no **Restore**. Create a site with the same name first.
 - A site hosted elsewhere is restored by hand, as above.
 - The panel's own database is restored by hand, never from the panel.

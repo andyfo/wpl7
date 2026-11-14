@@ -75,7 +75,8 @@ export function formatUptime(seconds: number | null | undefined): string {
 
 /** The PHP a site runs, such as 8.4.27; its branch, such as 8.4, until the release has been read. */
 export function sitePhp(site: { phpVersion: string; phpRelease: string | null }): string {
-  return site.phpRelease ?? site.phpVersion;
+  // A container app runs no PHP of the panel's.
+  return site.phpRelease ?? (site.phpVersion || '–');
 }
 
 /**
