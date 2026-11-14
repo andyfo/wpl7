@@ -28,7 +28,13 @@ import type {
   ServiceOutcome,
   ServiceState,
   SiteContainerSpec,
+  RegistryAuth,
+  DistributionInfo,
+  ImageConfig,
+  ServerPlatform,
 } from '../src/services/docker.js';
+import { fileFromTar } from '../src/services/imageArchive.js';
+import { TarWriter } from '../src/lib/tarWriter.js';
 import { SPEC_LABEL, fitCpus, serviceSpecHash } from '../src/services/docker.js';
 import { APACHE_RELOAD_COMMAND } from '../src/services/security.js';
 import { CLEAR_PAGE_CACHE, FLUSH_REDIS } from '../src/services/siteCaches.js';
@@ -684,9 +690,100 @@ export class FakeDocker implements DockerPort {
     this.record('buildImage', [tag, contextDir, buildArgs]);
     this.images.add(tag);
   }
-  async pullImage(tag: string): Promise<void> {
-    this.record('pullImage', [tag]);
+  async pullImage(tag: string, _onProgress?: (line: string) => void, opts: { auth?: RegistryAuth; platform?: string } = {}): Promise<void> {
+    this.record('pullImage', [tag, ...(opts.auth || opts.platform ? [{ ...(opts.auth ? { auth: opts.auth.username } : {}), ...(opts.platform ? { platform: opts.platform } : {}) }] : [])]);
+    const entry = this.registryEntry(tag);
+    if (entry) {
+      this.registryLogin(entry, opts.auth, tag);
+      if (!entry.platforms?.length || entry.platforms.some((p) => `${p.os}/${p.architecture}` === `${this.platform.os}/${this.platform.arch}`) || opts.platform) {
+        // A pull by digest names the image by its digest only; one by tag gives the tag the new image.
+        const id = entry.imageId ?? entry.digest;
+        this.imageIds.set(tag, id);
+        this.images.add(tag);
+        return;
+      }
+      throw Object.assign(new Error(`no matching manifest for ${this.platform.os}/${this.platform.arch} in the manifest list entries`), { statusCode: 404 });
+    }
     this.images.add(tag);
+  }
+  /**
+   * A registry, for container apps: reference (`ghcr.io/example/app:stable`, or `repo@sha256:…`)
+   * -> what it names now. An entry with a login answers only to it. `platforms` is what a list
+   * holds; empty or absent for a single image, as containerd's store answers. `imageId` is the id a
+   * pull gives the image here (the digest when absent).
+   */
+  registry = new Map<string, { digest: string; mediaType?: string; platforms?: { os: string; architecture: string }[]; login?: { username: string; password: string }; imageId?: string }>();
+  /** Put an image into the registry under a tag, and under its digest too. */
+  publish(reference: string, digest: string, entry: { platforms?: { os: string; architecture: string }[]; login?: { username: string; password: string }; imageId?: string; config?: Partial<ImageConfig> } = {}): void {
+    const repo = reference.slice(0, reference.lastIndexOf(':') > reference.lastIndexOf('/') ? reference.lastIndexOf(':') : reference.length);
+    const value = { digest, ...entry };
+    this.registry.set(reference, value);
+    this.registry.set(`${repo}@${digest}`, value);
+    if (entry.config) this.imageConfigs.set(entry.imageId ?? digest, entry.config);
+  }
+  private registryEntry(ref: string) {
+    return this.registry.get(ref) ?? null;
+  }
+  private registryLogin(entry: { login?: { username: string; password: string } }, auth: RegistryAuth | undefined, ref: string): void {
+    if (entry.login && (auth?.username !== entry.login.username || auth?.password !== entry.login.password)) {
+      throw Object.assign(new Error(`(HTTP code 500) server error - failed to resolve reference "${ref}": pull access denied, repository does not exist or may require authorization: authorization failed: no basic auth credentials`), { statusCode: 500 });
+    }
+  }
+  async distribution(ref: string, auth?: RegistryAuth): Promise<DistributionInfo> {
+    this.record('distribution', [ref, ...(auth ? [auth.username] : [])]);
+    const entry = this.registryEntry(ref);
+    if (!entry) throw Object.assign(new Error(`(HTTP code 500) server error - ${ref}: manifest unknown`), { statusCode: 500 });
+    this.registryLogin(entry, auth, ref);
+    return { digest: entry.digest, mediaType: entry.mediaType ?? 'application/vnd.oci.image.manifest.v1+json', platforms: entry.platforms ?? [] };
+  }
+  /** What each loaded archive's image gets for an id, in order; `sha256:loaded<n>` once they run out. */
+  loadIds: string[] = [];
+  private loads = 0;
+  async loadImage(archive: Readable): Promise<{ loaded: string[] }> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of archive) chunks.push(chunk as Buffer);
+    const tar = Buffer.concat(chunks);
+    this.record('loadImage', [tar.length]);
+    // As a daemon does: the archive's names go to its image, whatever had them.
+    const manifest = fileFromTar(tar, 'manifest.json');
+    const tags = manifest && 'data' in manifest ? ((JSON.parse(manifest.data.toString('utf8')) as { RepoTags?: string[] }[])[0]?.RepoTags ?? []) : [];
+    const id = this.loadIds.shift() ?? `sha256:loaded${++this.loads}`;
+    for (const tag of tags) {
+      this.imageIds.set(tag, id);
+      this.images.add(tag);
+    }
+    if (tags.length === 0) this.untaggedImages.push({ id, tags: [], digests: [], created: 0 });
+    return { loaded: tags.length > 0 ? tags : [id] };
+  }
+  async saveImage(ref: string): Promise<Readable> {
+    this.record('saveImage', [ref]);
+    if (!this.knownImage(ref)) throw Object.assign(new Error(`No such image: ${ref}`), { statusCode: 404 });
+    const tar = new TarWriter();
+    void (async () => {
+      await tar.addFile({ name: 'manifest.json', mode: 0o644, mtime: 0 }, Buffer.from(JSON.stringify([{ Config: 'blobs/sha256/c', RepoTags: ref.startsWith('sha256:') ? null : [ref], Layers: [] }])));
+      await tar.finish();
+    })();
+    return tar;
+  }
+  /** Image configs, by tag or id: what imageConfig answers. One not here is the server's platform, root, no port, no volume. */
+  imageConfigs = new Map<string, Partial<ImageConfig>>();
+  /** Files in images, by tag or id, then path: what readImageFile answers. */
+  imageFiles = new Map<string, Map<string, string>>();
+  platform: ServerPlatform = { os: 'linux', arch: 'amd64' };
+  async imageConfig(ref: string): Promise<ImageConfig | null> {
+    if (!this.knownImage(ref)) return null;
+    const id = ref.startsWith('sha256:') ? ref : ((await this.imageId(ref)) ?? ref);
+    const own = this.imageConfigs.get(ref) ?? this.imageConfigs.get(id) ?? {};
+    return { id, os: this.platform.os, architecture: this.platform.arch, user: '', exposedPorts: [], volumes: [], labels: {}, workingDir: '', ...own };
+  }
+  async readImageFile(ref: string, file: string): Promise<Buffer | null> {
+    this.record('readImageFile', [ref, file]);
+    const id = ref.startsWith('sha256:') ? ref : await this.imageId(ref);
+    const content = this.imageFiles.get(ref)?.get(file) ?? (id ? this.imageFiles.get(id)?.get(file) : undefined);
+    return content === undefined ? null : Buffer.from(content, 'utf8');
+  }
+  async serverPlatform(): Promise<ServerPlatform> {
+    return this.platform;
   }
   async tagImage(source: string, target: string): Promise<void> {
     this.record('tagImage', [source, target]);
@@ -2054,3 +2151,4 @@ export function addPhpSite(
   if ((opts.status ?? 'running') === 'running') docker.containers.set(site.containerName, 'running');
   return site;
 }
+

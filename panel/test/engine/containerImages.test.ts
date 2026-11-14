@@ -10,8 +10,10 @@
  *
  * Stand-ins:
  * - the app is the small test app (test/fixtures/container-app), which says what it sees;
- * - the archive check (which names an archive carries) and the rename inside one are written here,
- *   in the form the plan proposes: nothing in the panel reads an archive yet;
+ * - the archives that are not a `docker save` of their own (one with no name, one whose two places
+ *   disagree) are made here with tar; the check and the rename are the panel's own
+ *   (services/imageArchive.ts), and so are the platform check and the user lookup
+ *   (services/appImages.ts);
  * - chown on a folder of the host runs as root in a throwaway container: the panel is root on its
  *   server, and a test runner isn't.
  *
@@ -33,7 +35,9 @@ import { fileURLToPath } from 'node:url';
 import Docker from 'dockerode';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DockerService } from '../../src/services/docker.js';
-import { ARCH, archiveNames, disagreeingArchive, imageStore, namesOf, platformRefusal, renameArchive, unpackArchive, userIds } from '../containerAppChecks.js';
+import { imageUserIds, platformRefusal } from '../../src/services/appImages.js';
+import { inspectArchive, renamedArchive } from '../../src/services/imageArchive.js';
+import { ARCH, disagreeingArchive, imageStore, namesOf, renameArchive, unpackArchive } from '../containerAppChecks.js';
 
 const ENABLED = process.env.WPL7_ENGINE_TESTS === '1';
 /** Docker Desktop lets anyone read and write a shared folder; a Linux daemon checks the owner. */
@@ -135,6 +139,7 @@ const tagsOf = async (id: string) => (await inspectImage(id).catch(() => null))?
 const serverNames = async () => namesOf(await docker.listImages());
 
 /** A load through the Engine API, as the panel's would go: the archive streamed to POST /images/load. */
+/** A load of an archive this test made itself. */
 async function load(archive: string): Promise<{ messages: string[]; error: string | null }> {
   return follow((await docker.loadImage(fs.createReadStream(archive))) as unknown as NodeJS.ReadableStream);
 }
@@ -313,15 +318,10 @@ describe.skipIf(!ENABLED)('container apps: images and containers on the real Doc
         const state = (await probe.inspect()).State;
         expect(state.Status).toBe('created');
         expect(state.StartedAt).toBe('0001-01-01T00:00:00Z');
-        const read = async (file: string) => {
-          const archive = path.join(root, `probe-${path.basename(file)}.tar`);
-          const stream = (await probe.getArchive({ path: file })) as unknown as NodeJS.ReadableStream;
-          await new Promise<void>((resolve, reject) => stream.pipe(fs.createWriteStream(archive)).on('finish', resolve).on('error', reject));
-          return must(run('tar', ['-xOf', archive]), `reading ${file}`);
-        };
-        const ids = userIds(await read('/etc/passwd'), (await inspectImage(APP_IMAGE)).Config.User);
+        // The panel's own lookup does the same: a container of its own, created and never started.
+        const ids = await imageUserIds({ docker: dockerService }, APP_IMAGE, (await inspectImage(APP_IMAGE)).Config.User);
         expect(ids).toEqual({ uid: 10001, gid: 10001 });
-        ({ uid, gid } = ids!);
+        ({ uid, gid } = ids);
         // Created, the container already has an anonymous volume for the image's VOLUME.
         const mounts = (await probe.inspect()).Mounts;
         fact('5. a created container’s mounts', mounts.map((m) => ({ type: m.Type, destination: m.Destination })));
@@ -401,13 +401,14 @@ describe.skipIf(!ENABLED)('container apps: images and containers on the real Doc
       const info = await docker.info();
       expect(['aarch64', 'x86_64']).toContain(info.Architecture);
       const app = await inspectImage(APP_IMAGE);
-      expect(platformRefusal(app, server)).toBeNull();
+      expect(platformRefusal((await dockerService.imageConfig(APP_IMAGE))!, server)).toBeNull();
+      expect(await dockerService.serverPlatform()).toEqual(server);
       fact('6. platform fields', { server: { OSType: info.OSType, Architecture: info.Architecture }, built: { Os: app.Os, Architecture: app.Architecture, Variant: (app as { Variant?: string }).Variant } });
     });
 
     it('a multi-platform image pulled for the server reads as the server’s', async () => {
       const image = await inspectImage(BUSYBOX);
-      expect(platformRefusal(image, server)).toBeNull();
+      expect(platformRefusal((await dockerService.imageConfig(BUSYBOX))!, server)).toBeNull();
       fact('6. a multi-platform image, as inspect has it', { Id: image.Id, Os: image.Os, Architecture: image.Architecture, Variant: (image as { Variant?: string }).Variant, RepoDigests: image.RepoDigests });
     });
 
@@ -418,7 +419,9 @@ describe.skipIf(!ENABLED)('container apps: images and containers on the real Doc
       if (plain.error) expect((await pull(ref, { platform: `linux/${other()}` })).error).toBeNull();
       const image = await inspectImage(ref);
       expect(ARCH[image.Architecture]).toBe(other());
-      expect(platformRefusal(image, server)).toBe(`The image is for linux/${other()}, and this server is linux/${server.arch}.`);
+      expect(platformRefusal((await dockerService.imageConfig(ref))!, server)).toBe(
+        `The image is for linux/${other()}, and this server is linux/${server.arch}. Build it for linux/${server.arch}.`,
+      );
       images.push(ref);
     });
 
@@ -490,7 +493,8 @@ print(urllib.request.urlopen(req).status)
       const u = await unpackArchive(archive);
       fact('9. an archive’s files', u.files);
       fact('9. the names in it', { manifest: u.manifest?.map((m) => m.RepoTags), index: u.index?.manifests.map((m) => m.annotations), repositories: u.repositories });
-      expect(archiveNames(u)).toEqual({ images: 1, names: [VICTIM] });
+      const info = await inspectArchive(archive);
+      expect({ images: info.images, names: info.names, problem: info.problem }).toEqual({ images: 1, names: [VICTIM], problem: null });
     });
 
     it('docker load gives the name to the archive’s image, without a refusal', async () => {
@@ -503,22 +507,22 @@ print(urllib.request.urlopen(req).status)
     });
 
     it('the check finds the clash before the load, and an archive of two images is refused', async () => {
-      const { names } = archiveNames(await unpackArchive(archive));
+      const { names } = await inspectArchive(archive);
       const taken = await serverNames();
       expect(names.filter((n) => taken.has(n))).toEqual([VICTIM]);
       const two = path.join(root, 'two.tar');
       await must(dockerCli('save', '-o', two, VICTIM, UPLOAD), 'saving two');
-      expect(archiveNames(await unpackArchive(two)).images).toBe(2);
+      const both = await inspectArchive(two);
+      expect(both.images).toBe(2);
+      expect(both.problem).toBe('The archive holds 2 images; upload one at a time.');
     });
 
     it('renamed inside the archive, only the panel’s own name lands', async () => {
       const own = `wpl7-app-engine${PID}:upload-1`;
-      const renamed = path.join(root, 'renamed.tar');
-      await renameArchive(await unpackArchive(archive), own, renamed);
-      expect(archiveNames(await unpackArchive(renamed)).names).toEqual([own]);
-      const loaded = await load(renamed);
-      expect(loaded.error).toBeNull();
-      fact('9. what a load of the renamed archive says', loaded.messages);
+      // The panel's own rename, streamed into the panel's own load.
+      const { loaded } = await dockerService.loadImage(renamedArchive(archive, await inspectArchive(archive), own));
+      expect(loaded).toEqual([own]);
+      fact('9. what a load of the renamed archive says', loaded);
       images.push(own);
       expect(await imageIdOf(VICTIM)).toBe(victimId);
       expect(await imageIdOf(own)).toBe(uploadId);

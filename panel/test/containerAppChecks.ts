@@ -1,8 +1,8 @@
 /**
- * The image checks the container-apps plan proposes, written for the tests that settle them:
- * test/engine/containerImages.test.ts runs them against this machine's Docker, and
- * test/e2e/sshTransport.ts against a worker over SSH, on both of Docker's image stores. Nothing in
- * the panel does any of this yet.
+ * What test/engine/containerImages.test.ts and test/e2e/sshTransport.ts need beside the panel's own
+ * image code (services/appImages.ts, services/imageArchive.ts): which image store a daemon runs,
+ * and archives made with tar that no `docker save` writes (one with no name, one whose two places
+ * disagree), to see what a load makes of them.
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -10,17 +10,6 @@ import path from 'node:path';
 
 /** Docker's name for the host's architecture (`docker info`), in the one images use. */
 export const ARCH: Record<string, string> = { x86_64: 'amd64', amd64: 'amd64', aarch64: 'arm64', arm64: 'arm64' };
-
-/**
- * An image may run on a server only if its OS and architecture are the server's. The variant
- * (arm64's v8) is left out: Docker says it of some images and not of others.
- */
-export function platformRefusal(image: { Os?: string; Architecture?: string }, server: { os: string; arch: string }): string | null {
-  const os = image.Os ?? '';
-  const arch = ARCH[image.Architecture ?? ''] ?? image.Architecture ?? '';
-  if (os === server.os && arch === server.arch) return null;
-  return `The image is for ${os}/${arch}, and this server is ${server.os}/${server.arch}.`;
-}
 
 /** Which of Docker's image stores `docker info` describes. */
 export function imageStore(info: { DriverStatus?: unknown }): 'containerd' | 'classic' {
@@ -75,18 +64,6 @@ const pack = (dir: string, to: string) =>
 /** A name as the daemon lists it: `docker.io/library/x:1` and `x:1` are one name. */
 export const normalName = (name: string) => name.replace(/^docker\.io\/library\//, '').replace(/^docker\.io\//, '');
 
-/** How many images an archive holds, and every name it carries, from each place a load reads one. */
-export function archiveNames(u: Unpacked): { images: number; names: string[] } {
-  const names = new Set<string>();
-  for (const m of u.manifest ?? []) for (const t of m.RepoTags ?? []) names.add(normalName(t));
-  for (const m of u.index?.manifests ?? []) {
-    const name = m.annotations?.['io.containerd.image.name'];
-    if (name) names.add(normalName(name));
-  }
-  for (const [repo, tags] of Object.entries(u.repositories ?? {})) for (const tag of Object.keys(tags)) names.add(normalName(`${repo}:${tag}`));
-  return { images: Math.max(u.manifest?.length ?? 0, u.index?.manifests.length ?? 0), names: [...names] };
-}
-
 /** Every name a daemon has, from its image list. */
 export const namesOf = (images: { RepoTags?: string[] | null }[]): Set<string> =>
   new Set(images.flatMap((i) => i.RepoTags ?? []).filter((t) => !t.startsWith('<none>')).map(normalName));
@@ -129,13 +106,4 @@ export async function disagreeingArchive(u: Unpacked, manifestName: string, inde
   }
   if (u.repositories) fs.rmSync(path.join(u.dir, 'repositories'));
   await pack(u.dir, to);
-}
-
-/** The uid and gid of a user named in an image's /etc/passwd, or of a numeric `USER`. */
-export function userIds(passwd: string, user: string): { uid: number; gid: number } | null {
-  const [name = '', group] = user.split(':');
-  const row = /^\d+$/.test(name) ? null : passwd.split('\n').map((l) => l.split(':')).find((f) => f[0] === name);
-  const uid = /^\d+$/.test(name) ? Number(name) : row ? Number(row[2]) : NaN;
-  const gid = group !== undefined && /^\d+$/.test(group) ? Number(group) : row ? Number(row[3]) : uid;
-  return Number.isInteger(uid) && Number.isInteger(gid) ? { uid, gid } : null;
 }

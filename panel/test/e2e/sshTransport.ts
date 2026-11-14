@@ -8,7 +8,6 @@
  * (containerApps below) take the rest from the script: the image store the worker was started
  * with, a 400 MB archive and its contents' sha256, busybox's digest per architecture.
  */
-import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -22,17 +21,9 @@ import { rootKeyInstallScript, sshShellConnect } from '../../src/servers/termina
 import { ExecFiles } from '../../src/lib/files.js';
 import { DockerService } from '../../src/services/docker.js';
 import { siteNetworkName } from '../../src/services/siteNetwork.js';
-import {
-  ARCH,
-  archiveNames,
-  disagreeingArchive,
-  imageStore,
-  namesOf,
-  platformRefusal,
-  renameArchive,
-  unpackArchive,
-  userIds,
-} from '../containerAppChecks.js';
+import { imageUserIds, platformRefusal } from '../../src/services/appImages.js';
+import { inspectArchive, renamedArchive } from '../../src/services/imageArchive.js';
+import { ARCH, disagreeingArchive, imageStore, namesOf, unpackArchive } from '../containerAppChecks.js';
 
 const HOST = process.env.E2E_SSH_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.E2E_SSH_PORT ?? 39222);
@@ -297,7 +288,6 @@ async function pullVia(raw: Docker, ref: string, opts: { authconfig?: object; pl
 const streamToFile = (stream: NodeJS.ReadableStream, file: string) =>
   new Promise<void>((resolve, reject) => stream.pipe(fs.createWriteStream(file)).on('finish', resolve).on('error', reject));
 
-const tarOut = (archive: string) => spawnSync('tar', ['-xOf', archive], { encoding: 'utf8' }).stdout;
 
 async function containerApps(raw: Docker, docker: DockerService, files: ExecFiles): Promise<void> {
   const work = fs.mkdtempSync(path.join(process.env.E2E_WORK ?? '/tmp', 'apps-'));
@@ -358,16 +348,14 @@ async function containerApps(raw: Docker, docker: DockerService, files: ExecFile
   // --- 5. The app's uid, from its image's /etc/passwd, through a container created and never started.
   const fixture = fileURLToPath(new URL('../fixtures/container-app', import.meta.url));
   await docker.buildImage('wpl7-e2e-app:1', fixture, {}, () => undefined);
-  const probe = await raw.createContainer({ Image: 'wpl7-e2e-app:1' });
-  await streamToFile((await probe.getArchive({ path: '/etc/passwd' })) as unknown as NodeJS.ReadableStream, path.join(work, 'passwd.tar'));
-  const user = (await raw.getImage('wpl7-e2e-app:1').inspect()).Config.User;
-  const ids = userIds(tarOut(path.join(work, 'passwd.tar')), user);
-  ok('container apps: the uid of USER app, from a container never started, over ssh', ids?.uid === 10001 && ids.gid === 10001, JSON.stringify({ user, ids }));
-  await probe.remove({ v: true });
+  const user = (await docker.imageConfig('wpl7-e2e-app:1'))!.user;
+  const ids = await imageUserIds({ docker }, 'wpl7-e2e-app:1', user);
+  ok('container apps: the uid of USER app, from a container never started, over ssh', ids.uid === 10001 && ids.gid === 10001, JSON.stringify({ user, ids }));
+  ok('container apps: ...and that container is gone again', (await raw.listContainers({ all: true, filters: { label: ['wpl7.role=probe'] } })).length === 0);
 
   // --- 6. The platform fields on this store.
   const native = await raw.getImage('busybox:1.37').inspect();
-  ok('container apps: a multi-platform image pulled here reads as the worker’s platform', platformRefusal(native, server) === null, `${native.Os}/${native.Architecture}`);
+  ok('container apps: a multi-platform image pulled here reads as the worker’s platform', platformRefusal((await docker.imageConfig('busybox:1.37'))!, await docker.serverPlatform()) === null, `${native.Os}/${native.Architecture}`);
   fact('6. a multi-platform image, as inspect has it', { Id: native.Id, Os: native.Os, Architecture: native.Architecture, Variant: (native as { Variant?: string }).Variant, RepoDigests: native.RepoDigests });
   const other = server.arch === 'amd64' ? 'arm64' : 'amd64';
   const otherDigest = other === 'amd64' ? process.env.E2E_DIGEST_AMD64 : process.env.E2E_DIGEST_ARM64;
@@ -376,8 +364,12 @@ async function containerApps(raw: Docker, docker: DockerService, files: ExecFile
     const plain = await pullVia(raw, ref);
     fact('6. a pull of the other platform’s manifest, no platform asked', plain.error ?? 'pulled');
     if (plain.error) await pullVia(raw, ref, { platform: `linux/${other}` });
-    const image = await raw.getImage(ref).inspect();
-    ok('container apps: the other platform’s image is refused, naming both', platformRefusal(image, server) === `The image is for linux/${other}, and this server is linux/${server.arch}.`, `${image.Os}/${image.Architecture}`);
+    const image = (await docker.imageConfig(ref))!;
+    ok(
+      'container apps: the other platform’s image is refused, naming both',
+      platformRefusal(image, server) === `The image is for linux/${other}, and this server is linux/${server.arch}. Build it for linux/${server.arch}.`,
+      `${image.os}/${image.architecture}`,
+    );
   }
 
   // --- 8. The health gate's way in: with every route off, from inside Traefik on the site's
@@ -422,17 +414,21 @@ async function containerApps(raw: Docker, docker: DockerService, files: ExecFile
   fact('9. an archive’s files', u.files);
   fact('9. the names in it', { manifest: u.manifest?.map((m) => m.RepoTags), index: u.index?.manifests.map((m) => m.annotations), repositories: u.repositories });
   const taken = namesOf(await raw.listImages());
-  ok('container apps: the check sees the clash before the load, over ssh', archiveNames(u).names.filter((n) => taken.has(n)).join() === VICTIM, JSON.stringify(archiveNames(u)));
+  const archiveInfo = await inspectArchive(named);
+  ok('container apps: the check sees the clash before the load, over ssh', archiveInfo.names.filter((n) => taken.has(n)).join() === VICTIM, JSON.stringify(archiveInfo.names));
   const took = await follow(raw, (await raw.loadImage(fs.createReadStream(named))) as unknown as NodeJS.ReadableStream);
   ok('container apps: docker load over ssh gives the name away', took.error === null && (await imageId(VICTIM)) === uploadId, JSON.stringify(took));
   fact('9. what a load says when it takes a name', took.messages);
   fact('9. the image that lost its name', { id: victimId, tags: (await raw.getImage(victimId).inspect().catch(() => null))?.RepoTags ?? null });
   await raw.getImage(victimId).tag({ repo: 'wpl7-e2e-victim', tag: '1' });
-  const renamed = path.join(work, 'renamed.tar');
-  await renameArchive(await unpackArchive(named), 'wpl7-app-e2e:upload-1', renamed);
-  const loadedRenamed = await follow(raw, (await raw.loadImage(fs.createReadStream(renamed))) as unknown as NodeJS.ReadableStream);
-  ok('container apps: renamed in the archive, only the panel’s name lands', loadedRenamed.error === null && (await imageId(VICTIM)) === victimId && (await imageId('wpl7-app-e2e:upload-1')) === uploadId, JSON.stringify(loadedRenamed));
-  fact('9. what a load of the renamed archive says', loadedRenamed.messages);
+  // The panel's own rename, streamed into the panel's own load, over SSH.
+  const loadedRenamed = await docker.loadImage(renamedArchive(named, archiveInfo, 'wpl7-app-e2e:upload-1'));
+  ok(
+    'container apps: renamed in the archive, only the panel’s name lands',
+    loadedRenamed.loaded.join() === 'wpl7-app-e2e:upload-1' && (await imageId(VICTIM)) === victimId && (await imageId('wpl7-app-e2e:upload-1')) === uploadId,
+    JSON.stringify(loadedRenamed),
+  );
+  fact('9. what a load of the renamed archive says', loadedRenamed.loaded);
   const mixed = path.join(work, 'mixed.tar');
   await disagreeingArchive(await unpackArchive(named), 'wpl7-e2e-manifest:1', 'wpl7-e2e-index:1', mixed);
   const loadedMixed = await follow(raw, (await raw.loadImage(fs.createReadStream(mixed))) as unknown as NodeJS.ReadableStream);
