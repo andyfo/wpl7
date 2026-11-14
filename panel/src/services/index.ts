@@ -39,6 +39,7 @@ import type { ReminderService } from './reminders.js';
 import type { AlertService } from './alerts.js';
 import type { DatabasesService } from './databases.js';
 import type { SiteCronService } from './siteCron.js';
+import type { AppRoutesService } from './appRoutes.js';
 
 export interface Logger {
   info(msg: string): void;
@@ -128,5 +129,7 @@ export interface CoreServices {
   reminders: ReminderService;
   /** PHP sites' cron lines, and the runs the `site-cron` task starts. */
   siteCron: SiteCronService;
+  /** Container apps' routes, as a file per app in each server's rules folder. */
+  appRoutes: AppRoutesService;
   log: Logger;
 }

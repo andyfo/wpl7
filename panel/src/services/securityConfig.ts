@@ -42,8 +42,12 @@ export interface TraefikRouter {
   entryPoints: string[];
   service: string;
   middlewares?: string[];
-  /** `{}`: TLS with whatever certificate the store has for the host - the label router's. */
-  tls?: Record<string, never>;
+  /**
+   * `{}`: TLS with whatever certificate the store has for the host - the label router's. A
+   * container app's router names its own resolver (services/appRoutes.ts): no label asks for its
+   * hosts' certificates.
+   */
+  tls?: { certResolver?: string; domains?: { main: string; sans?: string[] }[] };
 }
 
 export type TraefikMiddleware =
@@ -66,7 +70,7 @@ export interface TraefikService {
 export interface DynamicConfig {
   http: {
     routers: Record<string, TraefikRouter>;
-    middlewares: Record<string, TraefikMiddleware>;
+    middlewares?: Record<string, TraefikMiddleware>;
     services?: Record<string, TraefikService>;
   };
 }
@@ -77,6 +81,11 @@ export interface DynamicConfig {
 export const PRIORITY = {
   /** Blocked addresses behind a proxy (wpl7-blocked.yml, services/firewallRender.ts). */
   blocked: 1_000_000,
+  /**
+   * A container app's routes, and more for a longer path (shared/apps.ts appRoutePriority): above
+   * every router here, so a path an app takes on another site's domain is the app's.
+   */
+  app: 950_000,
   allow: 900_000,
   block: 800_000,
   deny: 700_000,
@@ -487,6 +496,10 @@ const KNOWN_KEYS = new Set([
   'loadBalancer',
   'servers',
   'url',
+  'certResolver',
+  'domains',
+  'main',
+  'sans',
 ]);
 
 /** A name under `routers:`/`middlewares:`/`services:`, which is not a known key but ours. */
@@ -526,6 +539,9 @@ function emit(value: Record<string, unknown>, indent: string, path: string, name
       }
     } else if (v !== null && typeof v === 'object') {
       if (Object.keys(v).length === 0) {
+        // Traefik refuses a whole file with an empty section ("middlewares cannot be a standalone
+        // element", seen by test/engine/containerApps.test.ts), and one bad file stops the folder.
+        if (childNames) continue;
         out.push(`${indent}${key}: {}`);
         continue;
       }

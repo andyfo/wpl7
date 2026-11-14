@@ -34,6 +34,7 @@ import type {
   ServerPlatform,
 } from '../src/services/docker.js';
 import { fileFromTar } from '../src/services/imageArchive.js';
+import { AppRoutesService, appHttpHosts } from '../src/services/appRoutes.js';
 import { TarWriter } from '../src/lib/tarWriter.js';
 import { SPEC_LABEL, fitCpus, serviceSpecHash } from '../src/services/docker.js';
 import { APACHE_RELOAD_COMMAND } from '../src/services/security.js';
@@ -42,7 +43,7 @@ import { packetLimitFor, type DbAdminPort, type DbInventoryRow } from '../src/se
 import { FakeDbBrowser } from './dbBrowserFake.js';
 import { hostExec, type ExecPort, type ExecResult } from '../src/lib/exec.js';
 import { LocalFiles, type FilesPort } from '../src/lib/files.js';
-import { servers as serversTable, sites, type SiteRow } from '../src/db/schema.js';
+import { appRoutes, appSettings, servers as serversTable, sites, type SiteRow } from '../src/db/schema.js';
 import type { CoreServices } from '../src/services/index.js';
 import { ServerRegistry, type HandlePorts } from '../src/servers/registry.js';
 import { BackupService } from '../src/services/backup.js';
@@ -1807,7 +1808,11 @@ export async function makeWorld(
     }
     return host;
   };
-  const firewall = new FirewallSyncService(config, servers, settings, blocklist, proxyRanges, (id) => firewallHost(id).port(), log, { debounceMs: 0 });
+  const firewall = new FirewallSyncService(config, servers, settings, blocklist, proxyRanges, (id) => firewallHost(id).port(), log, {
+    debounceMs: 0,
+    webHosts: (serverId) => appHttpHosts(db, serverId),
+  });
+  const appRoutes = new AppRoutesService(db, config, servers, dns, log, { debounceMs: 0 });
   blocklist.onChange = () => void firewall.kickAll();
   const securityEvents = new SecurityEventsService(db, settings, geoip, blocklist);
   const detector = new AttackDetector(settings, blocklist, proxyRanges, log, { reverse: async () => [], lookup: async () => [] });
@@ -1870,6 +1875,7 @@ export async function makeWorld(
     quarantine,
     imports: importsService,
     connections,
+    appRoutes,
     log,
   } as unknown as CoreServices;
   core.wpInventory = new WpInventoryService(core, vulnerabilities);
@@ -2152,3 +2158,57 @@ export function addPhpSite(
   return site;
 }
 
+/**
+ * A container app's row and settings, as site.create leaves them (services/apps.ts): its own hosts
+ * and its dev hostname in `domains`, no PHP, a database only with `database`, its routes in order.
+ * Its container is running unless the status says otherwise.
+ */
+export function addContainerApp(
+  w: TestWorld,
+  slug: string,
+  opts: {
+    serverId?: number;
+    status?: string;
+    database?: boolean;
+    domains?: string[];
+    routes?: { host: string; match?: 'none' | 'prefix' | 'exact'; path?: string; scheme?: 'https' | 'http' | 'both'; enabled?: boolean }[];
+    settings?: Partial<typeof appSettings.$inferInsert>;
+  } = {},
+): SiteRow {
+  const now = Date.now();
+  const db = opts.database ? `wp_${slug.replace(/-/g, '_')}` : '';
+  const devHostname = `${slug}.dev.example.test`;
+  const site = w.db
+    .insert(sites)
+    .values({
+      slug,
+      serverId: opts.serverId ?? 1,
+      title: slug,
+      domains: JSON.stringify(opts.domains ?? [`${slug}.example.test`, devHostname]),
+      devHostname,
+      phpVersion: '',
+      app: 'container',
+      status: opts.status ?? 'running',
+      dbName: db,
+      dbUser: db,
+      dbPassword: opts.database ? 'db-secret' : '',
+      containerName: `wp-${slug}`,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning()
+    .get();
+  w.db
+    .insert(appSettings)
+    .values({ siteId: site.id, source: 'registry', reference: `ghcr.io/example/${slug}:stable`, port: 8000, createdAt: now, updatedAt: now, ...opts.settings })
+    .run();
+  (opts.routes ?? [{ host: `${slug}.example.test` }]).forEach((r, i) => {
+    w.db
+      .insert(appRoutes)
+      .values({ siteId: site.id, position: i, host: r.host, match: r.match ?? 'none', path: r.path ?? '', scheme: r.scheme ?? 'https', enabled: r.enabled === false ? 0 : 1, createdAt: now, updatedAt: now })
+      .run();
+  });
+  const docker = opts.serverId && opts.serverId !== 1 ? w.remote(opts.serverId).docker : w.docker;
+  if ((opts.status ?? 'running') === 'running') docker.containers.set(site.containerName, 'running');
+  return site;
+}

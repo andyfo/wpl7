@@ -154,6 +154,13 @@ export interface BlockedFileInput {
   /** The panel's own host, never refused here. */
   panelHost: string | null;
   tlsMode: 'letsencrypt' | 'staging' | 'none';
+  /**
+   * The hosts a container app answers plain http on, on this server (services/appRoutes.ts). With
+   * TLS on, every router here is on websecure, and port 80 only ever redirected: an app's http
+   * route would answer a blocked visitor there. Each router gets a twin on web for these hosts
+   * alone, so no other site's answer on port 80 changes.
+   */
+  webHosts?: readonly string[];
 }
 
 export interface BlockedFile {
@@ -206,6 +213,15 @@ export function buildBlockedFile(input: BlockedFileInput): BlockedFile {
       rule: `${notPanel}(${directBlocks.map((b) => `ClientIP(\`${guard(b.cidr.text, 'address')}\`)`).join(' || ')})`,
     };
     direct = directBlocks.length;
+  }
+
+  const webHosts = [...new Set(input.webHosts ?? [])].sort();
+  if (https && webHosts.length > 0) {
+    const hosts = webHosts.map((h) => `Host(\`${guard(h, 'host')}\`)`).join(' || ');
+    for (const [name, router] of Object.entries(routers)) {
+      const { tls: _tls, ...plain } = router;
+      routers[`${name}-web`] = { ...plain, entryPoints: ['web'], rule: `(${hosts}) && ${router.rule}` };
+    }
   }
 
   if (Object.keys(routers).length === 0) return { config: null, proxied: 0, direct: 0, skipped };

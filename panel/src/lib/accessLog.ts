@@ -10,6 +10,7 @@
  * Everything here is pure: `TrafficService` owns the I/O, the hashing and the database.
  */
 // @docs sites/visitors
+import { parseAppRouterName } from '../../shared/apps.js';
 import { PROXY_HEADERS, parseSecurityName, type ProxyHeader } from '../../shared/security.js';
 import { resolveClient, type ProxyHeaders, type TrustedProxy } from './clientIp.js';
 
@@ -61,7 +62,8 @@ export function siteSlugFromRouter(name: string | undefined): string | null {
   if (!name) return null;
   const base = name.split('@')[0] ?? '';
   if (base.startsWith('wp-') && base.length > 3) return base.slice(3);
-  return parseSecurityName(base)?.slug ?? null;
+  // A container app's routers name it the same way (shared/apps.ts).
+  return parseSecurityName(base)?.slug ?? parseAppRouterName(base)?.slug ?? null;
 }
 
 /** `203.0.113.7:51234`, `[2001:db8::1]:51234` -> the address. */

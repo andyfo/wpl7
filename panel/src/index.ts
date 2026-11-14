@@ -51,6 +51,7 @@ import { SecurityService } from './services/security.js';
 import { BlocklistService } from './services/blocklist.js';
 import { SecurityEventsService } from './services/securityEvents.js';
 import { FirewallSyncService } from './services/firewallSync.js';
+import { AppRoutesService, appHttpHosts } from './services/appRoutes.js';
 import { AttackDetector } from './services/attackDetector.js';
 import { IntegrityManifests } from './services/integrityManifests.js';
 import { MalwareScanService } from './services/malwareScan.js';
@@ -187,7 +188,10 @@ async function main(): Promise<void> {
 
   const hostShell = new HostShell(db, config, servers, log);
   const system = new SystemUpdateService(db, config, settings, updates, hostShell, log);
-  const firewall = new FirewallSyncService(config, servers, settings, blocklist, proxyRanges, (id) => hostPortFor(id, { servers, hostShell }), log);
+  const firewall = new FirewallSyncService(config, servers, settings, blocklist, proxyRanges, (id) => hostPortFor(id, { servers, hostShell }), log, {
+    webHosts: (serverId) => appHttpHosts(db, serverId),
+  });
+  const appRoutes = new AppRoutesService(db, config, servers, dns, log);
   // A block made, lifted or ended reaches every server; a burst of them as one load each.
   blocklist.onChange = () => void firewall.kickAll();
   // The inventory needs the rest of the bundle to scan a site, and the bundle needs it to
@@ -227,6 +231,7 @@ async function main(): Promise<void> {
     connections,
     updates,
     system,
+    appRoutes,
     log,
   } as CoreServices;
   core.wpInventory = new WpInventoryService(core, vulnerabilities);

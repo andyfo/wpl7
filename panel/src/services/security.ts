@@ -598,12 +598,13 @@ export class SecurityService {
    * exist" is a container being recreated, and not a rule's fault.
    */
   noteTraefikLog(chunk: string, now = Date.now()): void {
-    if (!chunk.includes('wpl7sec_')) return;
+    if (!chunk.includes('wpl7sec_') && !chunk.includes('wpl7app_')) return;
     for (const line of chunk.split('\n')) {
-      if (!line.includes('wpl7sec_') || line.trimStart().startsWith('{"ClientAddr"')) continue;
+      if ((!line.includes('wpl7sec_') && !line.includes('wpl7app_')) || line.trimStart().startsWith('{"ClientAddr"')) continue;
       if (!/\b(ERR|ERROR|error)\b|"level":"error"/.test(line)) continue;
       if (/does not exist|not found|no such/i.test(line)) continue;
-      const match = /wpl7sec_([a-z0-9-]+)_([a-z0-9][a-z0-9-]{1,30}[a-z0-9])/.exec(line);
+      // The protection's routers, and a container app's (shared/apps.ts): both carry the slug.
+      const match = /wpl7(?:sec|app)_([a-z0-9-]+)_([a-z0-9][a-z0-9-]{1,30}[a-z0-9])/.exec(line);
       if (!match) continue;
       const slug = match[2]!;
       const list = (this.rejected.get(slug) ?? []).filter((r) => r.router !== match[0]);

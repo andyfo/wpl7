@@ -21,6 +21,12 @@ describe('Traefik flags in the compose files', () => {
     expect(base.length).toBeGreaterThan(15);
   });
 
+  it('lets a container app answer plain http: the redirect yields to any router on web', () => {
+    // The panel reads this off a server's running Traefik before it takes an http route there
+    // (services/appRoutes.ts plainHttpRefusal).
+    expect(base).toContain('--entrypoints.web.http.redirections.entrypoint.priority=1');
+  });
+
   it('keeps every base flag in the dev overlay except the TLS ones', () => {
     const overlay = traefikFlags('docker-compose.dev.yml');
     const missing = base.filter((flag) => !overlay.includes(flag) && !DEV_ONLY_HTTP.some((re) => re.test(flag)));

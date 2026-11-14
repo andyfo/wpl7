@@ -145,6 +145,14 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   'services/siteCron.ts': { tick: hosted('hostedSites()'), runningOn: both('by its cron lines, which only a PHP site has, and PHP sites are hosted') },
   'services/wpInventory.ts': { fleetInventory: both('Bulk management shows both kinds') },
   'updates/hooks.ts': { run: hosted('hostedSites()') },
+  'services/appRoutes.ts': {
+    hostOwners: both("a host belongs to one site, hosted or elsewhere: a route may not take an external site's"),
+    appsRoutingOn: both('the apps that route on a site, by their routes: only a hosted app has any'),
+    appHttpHosts: both('container apps only (containerApps()), which are always hosted'),
+    state: both("one container app's status"),
+    plan: both('container apps only (containerApps()), which are always hosted'),
+    tick: both('which servers have a container app'),
+  },
 };
 
 /**
@@ -276,6 +284,14 @@ const SITE_APP_REVIEW: Record<string, Record<string, AppVerdict>> = {
   },
   'services/wpInventory.ts': { fleetInventory: wordpress('wordpressSites()') },
   'updates/hooks.ts': { run: ANY_SITE },
+  'services/appRoutes.ts': {
+    hostOwners: apps('a host belongs to one site, of any app'),
+    appsRoutingOn: apps('container apps only, by their routes'),
+    appHttpHosts: apps('container apps only (containerApps())'),
+    state: apps("one container app's status"),
+    plan: apps('container apps only (containerApps())'),
+    tick: apps('container apps only (containerApps())'),
+  },
 };
 
 /**
@@ -482,6 +498,14 @@ const SITE_IMAGE_REVIEW: Record<string, Record<string, ImageVerdict>> = {
   },
   'updates/hooks.ts': {
     run: siteImage('siteImageSites()'),
+  },
+  'services/appRoutes.ts': {
+    hostOwners: images("a host belongs to one site, of any app: a route may borrow any hosted site's"),
+    appsRoutingOn: images('the container apps that route on a site'),
+    appHttpHosts: images("container apps' own http routes"),
+    state: images("one container app's status"),
+    plan: images("the routes files are container apps' own"),
+    tick: images('the servers that have a container app'),
   },
 };
 
