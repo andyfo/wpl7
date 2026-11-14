@@ -24,7 +24,7 @@ import {
 import type { BackupIdsDto, BackupListDto } from '../../shared/types.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { backupToDto, jobToDto, viewerOf } from '../lib/dto.js';
-import { BACKUP_DELETE_LANE } from '../services/backup.js';
+import { BACKUP_DELETE_LANE, otherAppRefusal } from '../services/backup.js';
 import { offsiteLane } from '../services/offsite.js';
 import { requireAccess } from '../plugins/auth.js';
 import type { AppDeps } from './deps.js';
@@ -172,7 +172,12 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
       const site = deps.sites.bySlug(backup.siteSlug, { kinds: 'any' }); // 404s when the site is gone
       if (isExternal(site)) throw conflict(EXTERNAL_RESTORE);
       if (backup.status !== 'complete') throw conflict('Only complete backups can be restored');
-      if ((await deps.backup.readManifest(backup))?.kind === 'external') throw conflict(EXTERNAL_RESTORE);
+      const manifest = await deps.backup.readManifest(backup);
+      if (manifest?.kind === 'external') throw conflict(EXTERNAL_RESTORE);
+      // A manifest that can't be read here (an offsite-only backup has none on the server) is the
+      // job's to judge, once the files are back.
+      const otherApp = manifest ? otherAppRefusal(site, manifest) : null;
+      if (otherApp) throw conflict(otherApp);
       deps.backup.assertNotBeingDeleted(backup);
       if (backup.filesPresent === 0) {
         throw conflict(
@@ -250,6 +255,7 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
       // One half of a site's backup, as a file a person restores by hand: the files for FTP, the
       // database for phpMyAdmin, which takes a .sql.gz.
       if (backup.type === 'panel') throw badRequest('A panel snapshot has no files or database part');
+      if (part === 'database' && backup.hasDatabase === 0) throw conflict('This backup has no database: its site had none.');
       const file = part === 'files' ? 'files.tar.gz' : 'db.sql.gz';
       const ts = backup.path.split('/').pop() ?? backup.id.toString();
       const out = new PassThrough();

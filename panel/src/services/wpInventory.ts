@@ -23,7 +23,7 @@ import type {
 } from '../../shared/types.js';
 import type { SiteKind, SiteStatus } from '../../shared/schemas.js';
 import { compareVersions } from '../lib/wpVersions.js';
-import { CONNECT_PLUGIN } from '../lib/siteKind.js';
+import { CONNECT_PLUGIN, wordpressSites } from '../lib/siteKind.js';
 import type { ServerHandle } from '../servers/registry.js';
 import type { CoreServices } from './index.js';
 import { refKey, worseSeverity, type VulnerabilityFeedService, type VulnRef } from './vulnerabilities.js';
@@ -585,7 +585,8 @@ export class WpInventoryService {
    * vulnerable install" and nothing more.
    */
   fleetInventory(query: WpInventoryQuery): Omit<WpInventoryDto, 'scanJob'> {
-    const siteRows = this.db.select().from(sites).orderBy(asc(sites.title)).all();
+    // WordPress sites: a PHP site has no components to list or update.
+    const siteRows = this.db.select().from(sites).where(wordpressSites()).orderBy(asc(sites.title)).all();
     const serverNames = new Map(this.s.servers.listRows().map((r) => [r.id, r.name]));
     const considered = siteRows.filter((site) => {
       if (site.status === 'deleting' || site.status === 'provisioning') return false;

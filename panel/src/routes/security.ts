@@ -14,7 +14,8 @@ import {
   siteSecurityUpdateBody,
   siteSlugParam,
 } from '../../shared/schemas.js';
-import { withRuleIds } from '../../shared/security.js';
+import { isWordPressOnlySetting, overrideKeys, withRuleIds } from '../../shared/security.js';
+import { isPhpSite } from '../lib/siteKind.js';
 import { siteScanFindings, sites } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { actorName, audit } from '../lib/audit.js';
@@ -81,6 +82,14 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
   r.put('/api/sites/:slug/security', { schema: { params: slugParams, body: siteSecurityUpdateBody } }, async (req) => {
     const site = deps.sites.bySlug(req.params.slug);
     const { level, overrides, customRules } = req.body;
+    // A PHP site has none of WordPress's parts, so a change to one would do nothing it could see.
+    const wordpressOnly = isPhpSite(site) && overrides ? overrideKeys(overrides).filter(isWordPressOnlySetting) : [];
+    if (wordpressOnly.length > 0) {
+      throw badRequest(
+        `"${site.slug}" is a PHP site, which has none of these: ${wordpressOnly.join(', ')}`,
+        wordpressOnly.map((key) => ({ path: `overrides.${key}`, message: 'WordPress sites only' })),
+      );
+    }
     deps.security.updateSite(
       site,
       {
@@ -136,7 +145,7 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
   });
 
   r.get('/api/sites/:slug/security/findings', { schema: { params: slugParams, querystring: findingsQuery } }, async (req) =>
-    siteFindings(deps, deps.sites.bySlug(req.params.slug).id, req.query.status),
+    siteFindings(deps, deps.sites.bySlug(req.params.slug), req.query.status),
   );
 
   const findingOf = (siteId: number, id: number) => {
@@ -167,7 +176,7 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
         .run();
       deps.malwareScan.refreshCounts(site.id);
       audit(req, 'security', site.slug, `${action} finding`, { path: row.path, kind: row.kind });
-      return findingDto(findingOf(site.id, row.id));
+      return findingDto(findingOf(site.id, row.id), site.app);
     });
   }
 
@@ -176,9 +185,10 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
    * every write to a site's files - and a scan follows to see that it is so.
    */
   r.post('/api/sites/:slug/security/findings/:id/put-back', { schema: { params: idParams } }, async (req, reply) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    // The files the panel writes into a site are WordPress's: a PHP site has none.
+    const site = deps.sites.bySlug(req.params.slug, { app: 'wordpress' });
     const row = findingOf(site.id, req.params.id);
-    if (!canPutBack({ ...row, kind: row.kind as never })) throw badRequest('Put back is for a changed WPL7 file');
+    if (!canPutBack({ ...row, kind: row.kind as never }, site.app)) throw badRequest('Put back is for a changed WPL7 file');
     const server = deps.servers.handleFor(site.serverId);
     const state = await server.docker.containerState(site.containerName);
     if (state !== 'running') throw conflict(`Site container is ${state}; start the site first`);
@@ -196,9 +206,9 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
   });
 
   r.post('/api/sites/:slug/security/findings/:id/reinstall', { schema: { params: idParams } }, async (req, reply) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'wordpress' });
     const row = findingOf(site.id, req.params.id);
-    if (!canReinstall({ ...row, kind: row.kind as never })) {
+    if (!canReinstall({ ...row, kind: row.kind as never }, site.app)) {
       throw badRequest('Reinstall original is for a changed or missing file of WordPress or of a wordpress.org plugin');
     }
     const job = deps.worker.enqueue('wp.reinstall', { siteId: site.id, package: row.package }, { id: site.id, slug: site.slug, serverId: site.serverId });
@@ -209,7 +219,7 @@ export function registerSecurityRoutes(app: FastifyInstance, deps: AppDeps): voi
   r.post('/api/sites/:slug/security/findings/:id/quarantine', { schema: { params: idParams } }, async (req) => {
     const site = deps.sites.bySlug(req.params.slug);
     const row = findingOf(site.id, req.params.id);
-    const problem = manualQuarantineProblem({ ...row, kind: row.kind as never });
+    const problem = manualQuarantineProblem({ ...row, kind: row.kind as never }, site.app);
     if (problem) throw badRequest(problem);
     // Every finding about that file goes with it.
     const sameFile = deps.db

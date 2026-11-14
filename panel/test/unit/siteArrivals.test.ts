@@ -497,7 +497,7 @@ describe.skipIf(!HAS_PHP)('a site with no container left', () => {
 });
 
 describe('config/runtime in archives', () => {
-  const ALL_FILES = ['nginx-site.conf', 'php-fpm-pool.conf', 'php.ini', 'wp-cache.php'];
+  const ALL_FILES = ['mail-from', 'nginx-site.conf', 'php-fpm-pool.conf', 'php.ini', 'wp-cache.php'];
   const STALE = '# stale';
   const tarList = (file: string) => spawnSync('tar', ['-tzf', file], { encoding: 'utf8' }).stdout.split('\n');
 

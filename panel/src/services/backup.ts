@@ -21,6 +21,7 @@ import { conflict } from '../lib/errors.js';
 import { safeJoin } from '../lib/slug.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
 import { sitePaths } from './siteSpec.js';
+import { hasDatabase, isPhpSite } from '../lib/siteKind.js';
 
 export type LogFn = (level: 'info' | 'warn' | 'error', message: string) => void;
 const noopLog: LogFn = () => undefined;
@@ -92,6 +93,23 @@ export const tsStamp = (d: Date) =>
     .replace(/[-:]/g, '')
     .replace('T', '-')
     .slice(0, 15); // YYYYMMDD-HHMMSS (UTC)
+
+
+/** What a backup's site ran: one from before PHP sites names nothing, and is a WordPress site's. */
+export const backupApp = (manifest: { app?: unknown } | null): 'wordpress' | 'php' => (manifest?.app === 'php' ? 'php' : 'wordpress');
+
+/**
+ * Why a backup can't go into a site, when it is of the other app; null when it can. With no
+ * manifest to read (null), a WordPress site takes it, as before PHP sites, and a PHP site does not:
+ * the backup may be an old WordPress site's of the same name.
+ */
+export function otherAppRefusal(site: Pick<SiteRow, 'slug' | 'app'>, manifest: { app?: unknown } | null): string | null {
+  const app = backupApp(manifest);
+  if (app === site.app) return null;
+  if (manifest === null) return `The backup's manifest.json can't be read, so it can't be told whose backup it is: it isn't restored into the PHP site "${site.slug}". Nothing was changed.`;
+  const name = (a: string) => (a === 'php' ? 'a PHP site' : 'a WordPress site');
+  return `This is a backup of ${name(app)}, and "${site.slug}" is ${name(site.app)}: it can't be restored into it. Nothing was changed.`;
+}
 
 /** The site's WordPress version, from the first lines of its own - untrusted - version.php. */
 export async function readWpVersion(h: ServerHandle, wordpressDir: string): Promise<string | null> {
@@ -197,6 +215,8 @@ export class BackupService {
   ): Promise<BackupRow> {
     const log = opts.log ?? noopLog;
     const { dir, root } = await this.claimBackupDir(h, site.slug);
+    // A PHP site may have no database of its own: then there is no dump, and nothing to restore.
+    const withDatabase = hasDatabase(site);
 
     await this.assertFreeSpace(h, site);
 
@@ -213,14 +233,19 @@ export class BackupService {
         note: opts.note ?? null,
         jobId: opts.jobId ?? null,
         phpVersion: site.phpVersion,
+        hasDatabase: withDatabase ? 1 : 0,
         createdAt: Date.now(),
       })
       .returning()
       .get();
 
     try {
-      log('info', `Dumping database ${site.dbName}…`);
-      await h.dbAdmin.dumpTo(site.dbName, path.join(dir, 'db.sql.gz'));
+      if (withDatabase) {
+        log('info', `Dumping database ${site.dbName}…`);
+        await h.dbAdmin.dumpTo(site.dbName, path.join(dir, 'db.sql.gz'));
+      } else {
+        log('info', 'The site has no database of its own: this backup holds its files.');
+      }
       // The site's other databases ride along, each a dump of its own beside the site's. One that
       // is not on the server (the site's user may drop its own) is left out, with a warning:
       // failing every backup of the site over it would be worse.
@@ -259,7 +284,8 @@ export class BackupService {
       );
       if (tar.exitCode !== 0) throw new Error(`tar failed (exit ${tar.exitCode}): ${tar.stderr.slice(0, 500)}`);
 
-      const wpVersion = await readWpVersion(h, p.wordpress);
+      // A PHP site's folder may hold a WordPress of its own, which is not the site's.
+      const wpVersion = isPhpSite(site) ? null : await readWpVersion(h, p.wordpress);
       // Only a note for a restore: not knowing it is no reason to fail the backup.
       const container = await h.docker.containerStack(site.containerName).catch(() => null);
       const manifest = {
@@ -272,6 +298,11 @@ export class BackupService {
         devHostname: site.devHostname,
         phpVersion: site.phpVersion,
         wpVersion,
+        /** What the site ran: a backup from before PHP sites names none, and is a WordPress site's. */
+        app: site.app,
+        webRoot: site.webRoot,
+        /** Whether db.sql.gz is here: a PHP site may have no database. */
+        database: withDatabase,
         locale: site.locale,
         dbName: site.dbName,
         dbUser: site.dbUser,
@@ -290,7 +321,7 @@ export class BackupService {
 
       log('info', 'Writing checksums…');
       const sums: string[] = [];
-      for (const f of ['db.sql.gz', 'files.tar.gz', ...extras.map(extraDbFile)]) {
+      for (const f of [...(withDatabase ? ['db.sql.gz'] : []), 'files.tar.gz', ...extras.map(extraDbFile)]) {
         sums.push(`${await h.files.sha256(path.join(dir, f))}  ${f}`);
       }
       await h.files.writeFile(path.join(dir, 'sha256sums'), sums.join('\n') + '\n');
@@ -347,7 +378,7 @@ export class BackupService {
   /** A backup's manifest.json, or null when it cannot be read. */
   async readManifest(
     backup: BackupRow,
-  ): Promise<{ kind?: string; tablePrefix?: string; phpVersion?: string; databases?: string[] } | null> {
+  ): Promise<{ kind?: string; app?: string; tablePrefix?: string; phpVersion?: string; databases?: string[] } | null> {
     try {
       return JSON.parse(await this.handleForBackup(backup).files.readFile(path.join(backup.path, 'manifest.json'))) as {
         kind?: string;

@@ -1,6 +1,7 @@
 // @docs help/faq
 import { sql } from 'drizzle-orm';
 import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
+import type { SiteApp } from '../../shared/schemas.js';
 
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
@@ -140,6 +141,21 @@ export const sites = sqliteTable(
      * Docker.
      */
     kind: text('kind').notNull().default('hosted'),
+    /**
+     * What a hosted site runs: 'wordpress' or 'php' (shared/schemas.ts siteApps). A PHP site has
+     * the same container with no WordPress in it: nothing is put into its folder but a placeholder
+     * page, and its database is optional. One without a database has '' in `db_name`, `db_user` and
+     * `db_password`, as an external row does (lib/siteKind.ts hasDatabase). An external site is
+     * 'wordpress'. SitesService.bySlug and the jobs' loadSite take either unless the caller asks for
+     * WordPress, and every WordPress path asks.
+     */
+    app: text('app').$type<SiteApp>().notNull().default('wordpress'),
+    /**
+     * The folder visitors reach, inside the site's own, such as `public`; '' = the site's folder.
+     * PHP sites only. Apache's DocumentRoot, written into the site's own Apache file
+     * (services/siteHardening.ts).
+     */
+    webRoot: text('web_root').notNull().default(''),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
@@ -177,6 +193,8 @@ export const backups = sqliteTable(
     sizeBytes: integer('size_bytes'),
     wpVersion: text('wp_version'),
     phpVersion: text('php_version'),
+    /** 0 = no dump of the site's own database: the site had none (a PHP site's is optional). */
+    hasDatabase: integer('has_database').notNull().default(1),
     note: text('note'),
     jobId: integer('job_id'),
     createdAt: integer('created_at').notNull(),
@@ -1830,3 +1848,47 @@ export const serverDatabaseScans = sqliteTable('server_database_scans', {
 export type SiteDatabaseRow = typeof siteDatabases.$inferSelect;
 export type ServerDatabaseRow = typeof serverDatabases.$inferSelect;
 export type ServerDatabaseScanRow = typeof serverDatabaseScans.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Cron lines of PHP sites (docs/site/src/content/docs/sites/php.mdx)
+
+/**
+ * A PHP site's own cron lines: a command run in its container on a schedule, by the built-in
+ * `site-cron` task (services/siteCron.ts). Outside the job queue, because a job holds its site and
+ * a line may run every minute. Only the last run is kept, here: no job row, no log.
+ */
+export const siteCron = sqliteTable(
+  'site_cron',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    siteId: integer('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    /** Five fields, on the panel's clock (shared/cron.ts). */
+    expr: text('expr').notNull(),
+    /** Run with `sh -c` as www-data in the site's folder. */
+    command: text('command').notNull(),
+    enabled: integer('enabled').notNull().default(1),
+    /** A run still going after this many minutes is ended. */
+    timeoutMin: integer('timeout_min').notNull().default(5),
+    /** When it is next due; NULL while it is off. A due line waits while its site can't run it. */
+    nextRunAt: integer('next_run_at'),
+    lastStartedAt: integer('last_started_at'),
+    /**
+     * The stop-after time the last run started with. Its deadline is that run's own: Docker's
+     * `timeout` keeps it whatever the line is changed to meanwhile.
+     */
+    lastTimeoutMin: integer('last_timeout_min'),
+    /** How long the last run took; NULL while it runs, or when its end was not seen. */
+    lastMs: integer('last_ms'),
+    lastExit: integer('last_exit'),
+    /** The end of what the last run printed, stdout and stderr together. */
+    lastOutput: text('last_output'),
+    /** Why the last run did not start or did not finish, in the panel's words. */
+    lastError: text('last_error'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => [index('site_cron_site_idx').on(t.siteId)],
+);
+export type SiteCronRow = typeof siteCron.$inferSelect;

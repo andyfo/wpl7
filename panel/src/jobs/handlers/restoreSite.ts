@@ -7,7 +7,8 @@ import type { JobContext } from '../context.js';
 import { migrateArrivedFiles } from '../../services/siteMigration.js';
 import { siteContainerSpec, sitePaths, siteRuntimeFrom } from '../../services/siteSpec.js';
 import { ensureSiteNetwork, removeSiteNetwork } from '../../services/siteNetwork.js';
-import { ensureSiteMountSources, probeSite, startSiteContainer, syncRelayAuth } from './shared.js';
+import { ensureSiteMountSources, probeOptsFor, probeSite, startSiteContainer, syncRelayAuth } from './shared.js';
+import { hasDatabase } from '../../lib/siteKind.js';
 import { rmOn } from './moveHelpers.js';
 
 /**
@@ -23,7 +24,8 @@ export type StagedSiteSource =
   | {
       kind: 'archive';
       filesTarGz: string;
-      dbSqlGz: string;
+      /** Null for a site with no database of its own (a PHP site's is optional). */
+      dbSqlGz: string | null;
       /** The site's other databases (site_databases), each with its dump in the archive. */
       extraDbs?: { name: string; sqlGz: string }[];
       /** It ran on PHP-FPM where it comes from, so its .user.ini files are what it ran with. */
@@ -48,7 +50,8 @@ export interface ProtectionHold {
  *
  * `routing: false` creates the container without a router, for a site that must not answer
  * before the caller has finished with it. `requireWpConfig` refuses a tree without
- * wp-config.php - a backup always has one; an import's never does (the image writes it at start).
+ * wp-config.php - a WordPress site's backup always has one; an import's never does (the image
+ * writes it at start), and a PHP site has none.
  */
 export async function restoreSiteOnServer(
   ctx: JobContext<unknown>,
@@ -105,15 +108,18 @@ export async function restoreSiteOnServer(
 
   // Compensations from here on are armed before the step they undo, and each tolerates the
   // resource not existing: a step can fail half-way (the database created, its user not) and
-  // must not leave what it did make behind (see site.create).
-  ctx.info(`Creating database ${site.dbName} on the target…`);
-  ctx.pushCompensation('drop database on target', async () => {
-    await target.dbAdmin.dropSiteDb(site.dbName, site.dbUser);
-  });
-  await target.dbAdmin.createSiteDb(site.dbName, site.dbUser, site.dbPassword);
-  ctx.info('Importing the database…');
-  if (source.kind === 'archive') await target.dbAdmin.importFrom(source.dbSqlGz, site.dbName);
-  else await target.dbAdmin.importFromAs(source.dbSqlGz, site.dbName, site.dbUser, site.dbPassword);
+  // must not leave what it did make behind (see site.create). A PHP site may have no database.
+  if (hasDatabase(site)) {
+    ctx.info(`Creating database ${site.dbName} on the target…`);
+    ctx.pushCompensation('drop database on target', async () => {
+      await target.dbAdmin.dropSiteDb(site.dbName, site.dbUser);
+    });
+    await target.dbAdmin.createSiteDb(site.dbName, site.dbUser, site.dbPassword);
+    ctx.info('Importing the database…');
+    if (!source.dbSqlGz) throw new Error(`The site has a database, ${site.dbName}, and the copy holds no dump of it`);
+    if (source.kind === 'archive') await target.dbAdmin.importFrom(source.dbSqlGz, site.dbName);
+    else await target.dbAdmin.importFromAs(source.dbSqlGz, site.dbName, site.dbUser, site.dbPassword);
+  }
   for (const extra of source.kind === 'archive' ? (source.extraDbs ?? []) : []) {
     ctx.info(`Creating and importing database ${extra.name} on the target…`);
     // Armed after the create, unlike the rest: createExtraDb undoes its own half-way failure, and
@@ -156,7 +162,7 @@ export async function restoreSiteOnServer(
       const state = await target.docker.containerState(site.containerName);
       if (state !== 'running') throw new Error('Site container is not running on the target - rolling back');
     } else {
-      const up = await probeSite(target, site.containerName, opts.probe.host, opts.probe.timeoutMs);
+      const up = await probeSite(target, site.containerName, opts.probe.host, opts.probe.timeoutMs, probeOptsFor(site));
       if (!up) throw new Error('Site did not answer on the target - rolling back (source untouched)');
     }
   }

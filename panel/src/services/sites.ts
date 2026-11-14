@@ -12,9 +12,12 @@ import type { CoreServices } from './index.js';
 import type { JobWorker } from '../jobs/worker.js';
 import { siteScheme } from './labels.js';
 import { assertDomainsFree } from './domainGuard.js';
-import { assertKind, hostedSites, isExternal, type SiteKinds } from '../lib/siteKind.js';
+import { PHP_NO_MAINTENANCE, assertApp, assertKind, hasDatabase, hostedSites, isExternal, isPhpSite, phpNoPageCache, type SiteApps, type SiteKinds } from '../lib/siteKind.js';
+import type { DockerPort } from './docker.js';
+import { SITE_ROOT_IN_CONTAINER } from './siteHardening.js';
+import { asSiteUser } from './wp.js';
 import { RuntimeRefusedError, applySiteCaches, effectivePageCache, siteContainerStack } from './siteCaches.js';
-import { defaultSiteLimits, limitsChange, siteRuntimeFrom, type OwnSiteLimits } from './siteSpec.js';
+import { assertPhpImage, defaultSiteLimits, limitsChange, siteImage, siteRuntimeFrom, type OwnSiteLimits } from './siteSpec.js';
 
 /** The server a new site goes on: the one asked for, else the default in Settings - and it has to be up. */
 export function resolveTargetServer(s: Pick<CoreServices, 'settings' | 'servers'>, requestedId?: number): ServerRow {
@@ -29,6 +32,22 @@ export function resolveTargetServer(s: Pick<CoreServices, 'settings' | 'servers'
     throw conflict(`Server "${server.name}" is ${server.status}; pick another server`);
   }
   return server;
+}
+
+/**
+ * Whether a PHP site's web root is missing, asked inside its container as www-data, as the Files tab
+ * asks. Apache answers every request with a 404 while it is (services/siteHardening.ts). Null when
+ * the question got no answer: `test -d` says 1 for a missing folder, and anything else but 0 (an
+ * exec refused, a command that could not start) is no answer.
+ */
+async function webRootMissingIn(docker: Pick<DockerPort, 'exec'>, site: Pick<SiteRow, 'containerName' | 'webRoot'>): Promise<boolean | null> {
+  try {
+    const res = await docker.exec(site.containerName, ['test', '-d', `${SITE_ROOT_IN_CONTAINER}/${site.webRoot}`], { user: '33:33', timeoutMs: 10_000 });
+    return res.exitCode === 0 ? false : res.exitCode === 1 ? true : null;
+  } catch {
+    // A container that is restarting reads as running, and refuses an exec.
+    return null;
+  }
 }
 
 /** A backup reads the files and the database, and a save here reloads nothing it depends on. */
@@ -48,26 +67,53 @@ export class SitesService {
    * The site by its slug. An external site (hosted elsewhere, through WPL7 Connect) is refused
    * with a 409 unless the caller asks for either kind: only the routes that work for both pass
    * `{ kinds: 'any' }`, so a new route that forgets is safe rather than handed an empty container.
+   * A PHP site is refused with a 409 where the caller asks for `{ app: 'wordpress' }`.
    */
-  bySlug(slug: string, opts: { kinds?: SiteKinds } = {}): SiteRow {
+  bySlug(slug: string, opts: { kinds?: SiteKinds; app?: SiteApps } = {}): SiteRow {
     const site = this.db.select().from(sites).where(eq(sites.slug, slug)).get();
     if (!site) throw notFound(`Site "${slug}" not found`);
-    return assertKind(site, opts.kinds);
+    return assertApp(assertKind(site, opts.kinds), opts.app);
   }
 
   private assertDomainsFree(domains: string[], excludeSiteId?: number, allowDevHostname?: string | null): void {
     assertDomainsFree(this.s, domains, { excludeSiteId, allowDevHostname });
   }
 
+  /**
+   * The early half of the image check for a new PHP site (services/siteSpec.ts siteContainerSpec):
+   * a server whose site image is from before PHP sites refuses one before anything is made. An
+   * image the server doesn't have yet is fine: the create job builds or pulls it at the panel's own
+   * version, which can run one.
+   */
+  async assertCanCreate(body: SiteCreateBody): Promise<void> {
+    if (body.app !== 'php') return;
+    const server = resolveTargetServer(this.s, body.serverId);
+    const phpVersion = body.phpVersion ?? this.s.settings.get('defaultPhpVersion');
+    await assertPhpImage(this.s.servers.handleFor(server.id), siteImage(phpVersion), { missingIsFine: true });
+  }
+
+  /**
+   * The early image check for a PHP site that is to get a container on `serverId` from the image of
+   * `phpVersion`: a move's target, a PHP version change. Refused, before anything is queued, where
+   * that image is from before PHP sites; one the server doesn't have yet is fine.
+   */
+  async assertPhpImageOn(site: SiteRow, serverId: number, phpVersion = site.phpVersion): Promise<void> {
+    if (!isPhpSite(site) || !this.s.servers.rowById(serverId)) return;
+    await assertPhpImage(this.s.servers.handleFor(serverId), siteImage(phpVersion), { missingIsFine: true });
+  }
+
   create(body: SiteCreateBody): { site: SiteRow; job: JobRow } {
+    // Left out by callers inside the panel that predate PHP sites.
+    const php = (body.app ?? 'wordpress') === 'php';
     const offered = this.s.settings.get('phpVersions') ?? [];
     const phpVersion = body.phpVersion ?? this.s.settings.get('defaultPhpVersion');
     if (!offered.includes(phpVersion)) {
       throw badRequest(`PHP ${phpVersion} is not offered (available: ${offered.join(', ')})`);
     }
     const locale = body.locale ?? this.s.settings.get('defaultLocale') ?? 'en_US';
-    const adminEmail = body.adminEmail ?? (this.s.settings.get('defaultAdminEmail') || null);
-    if (!adminEmail) throw badRequest('No default admin email is set in Settings; provide "adminEmail"');
+    // WordPress's administrator: a PHP site has none.
+    const adminEmail = php ? null : (body.adminEmail ?? (this.s.settings.get('defaultAdminEmail') || null));
+    if (!php && !adminEmail) throw badRequest('No default admin email is set in Settings; provide "adminEmail"');
     const server = resolveTargetServer(this.s, body.serverId);
 
     const slug = body.slug ?? slugify(body.domainMode === 'custom' ? body.domains![0]! : body.title);
@@ -93,16 +139,18 @@ export class SitesService {
     const passwordGenerated = !body.adminPassword;
 
     // Resolve plugin selection to concrete slugs/zips now, so the job is self-contained. No
-    // catalog choice at all is the catalog's defaults, in the order the wizard lists them.
-    const catalogIds =
-      body.plugins?.catalogIds ??
-      this.db
-        .select({ id: plugins.id })
-        .from(plugins)
-        .where(eq(plugins.isDefault, 1))
-        .orderBy(asc(plugins.id))
-        .all()
-        .map((p) => p.id);
+    // catalog choice at all is the catalog's defaults, in the order the wizard lists them. A PHP
+    // site gets none.
+    const catalogIds = php
+      ? []
+      : (body.plugins?.catalogIds ??
+        this.db
+          .select({ id: plugins.id })
+          .from(plugins)
+          .where(eq(plugins.isDefault, 1))
+          .orderBy(asc(plugins.id))
+          .all()
+          .map((p) => p.id));
     const pluginSlugs: string[] = [];
     const pluginZipPaths: string[] = [];
     for (const id of catalogIds) {
@@ -115,6 +163,9 @@ export class SitesService {
       if (!pluginSlugs.includes(extra)) pluginSlugs.push(extra);
     }
 
+    // A WordPress site always has its own database; a PHP site only when asked. Without one the
+    // three columns are '' (lib/siteKind.ts hasDatabase), and it can be made later.
+    const withDatabase = !php || body.database === true;
     const now = Date.now();
     try {
       return this.db.transaction(() => {
@@ -129,15 +180,17 @@ export class SitesService {
             isLive: body.domainMode === 'custom' ? 1 : 0,
             keepDevAlias: 1,
             phpVersion,
-            locale,
+            app: php ? 'php' : 'wordpress',
+            webRoot: php ? (body.webRoot ?? '') : '',
+            ...(php ? {} : { locale }),
             status: 'provisioning',
-            dbName: dbIdentifier(slug),
-            dbUser: dbIdentifier(slug),
-            dbPassword: generateSecret(24),
+            dbName: withDatabase ? dbIdentifier(slug) : '',
+            dbUser: withDatabase ? dbIdentifier(slug) : '',
+            dbPassword: withDatabase ? generateSecret(24) : '',
             // The site's own relay credential; the relay uses it to tell whose mail this is,
             // and refuses senders belonging to another site (services/mailAuth.ts).
             mailPassword: generateSecret(24),
-            wpAdminUser: body.adminUser,
+            wpAdminUser: php ? null : body.adminUser,
             wpAdminEmail: adminEmail,
             containerName: containerName(slug),
             createdAt: now,
@@ -147,14 +200,16 @@ export class SitesService {
           .get();
         const job = this.worker.enqueue(
           'site.create',
-          {
-            siteId: site.id,
-            adminPassword,
-            passwordGenerated,
-            pluginSlugs,
-            pluginZipPaths,
-            discourageSearchEngines: body.discourageSearchEngines,
-          },
+          php
+            ? { siteId: site.id }
+            : {
+                siteId: site.id,
+                adminPassword,
+                passwordGenerated,
+                pluginSlugs,
+                pluginZipPaths,
+                discourageSearchEngines: body.discourageSearchEngines ?? true,
+              },
           { id: site.id, slug, serverId: server.id },
         );
         return { site, job };
@@ -310,7 +365,10 @@ export class SitesService {
       throw conflict('A previous move is still awaiting cleanup; finalize it first (site page banner)');
     }
     const isLive = site.isLive === 1;
-    const quiesce = body.quiesce ?? (isLive ? 'maintenance' : 'none');
+    // Maintenance mode is WordPress's. A live PHP site is stopped while it is copied: a short
+    // outage, and nothing written meanwhile is lost.
+    if (body.quiesce === 'maintenance' && isPhpSite(site)) throw conflict(PHP_NO_MAINTENANCE(site.slug));
+    const quiesce = body.quiesce ?? (isLive ? (isPhpSite(site) ? 'stop' : 'maintenance') : 'none');
     // The old copy is never torn down inside the move itself - see siteMovePayload.decommission.
     const decommission = 'deferred';
     return this.worker.enqueue(
@@ -507,6 +565,8 @@ export class SitesService {
       recentTraffic: traffic,
       wp,
       kind: site.kind as SiteSummary['kind'],
+      app: site.app,
+      hasDatabase: hasDatabase(site),
       external: this.s.connections.externalSummary(site),
       backupKeepDays: site.backupKeepDays,
       backupBeforeUpdates: isBackupBeforeUpdates(site.backupBeforeUpdates) ? site.backupBeforeUpdates : null,
@@ -528,10 +588,12 @@ export class SitesService {
     if (isExternal(site)) return this.externalDetail(site, summary);
     let containerState: SiteDetail['containerState'];
     let stack: SiteDetail['stack'] = null;
+    let webRootMissing: SiteDetail['webRootMissing'] = site.webRoot === '' ? false : null;
     try {
       const { docker } = this.s.servers.handleFor(site.serverId);
       containerState = await docker.containerState(site.containerName);
       stack = await siteContainerStack(docker, site.containerName);
+      if (site.webRoot !== '' && containerState === 'running') webRootMissing = await webRootMissingIn(docker, site);
     } catch (err) {
       // The registry still answers when the hosting server cannot be reached: the metadata,
       // backups and recovery actions are exactly what an operator needs at that moment.
@@ -552,6 +614,8 @@ export class SitesService {
       adminUser: site.wpAdminUser,
       adminEmail: site.wpAdminEmail,
       dbName: site.dbName,
+      webRoot: site.webRoot,
+      webRootMissing,
       tablePrefix: site.tablePrefix,
       containerState,
       url: `${siteScheme(this.s.config.tlsMode)}://${summary.primaryDomain}`,
@@ -634,7 +698,9 @@ export class SitesService {
     }
 
     const { object, page, keepSeconds, off, own } = body;
-    if (page !== undefined || keepSeconds !== undefined || off !== undefined || own !== undefined) {
+    const pageCache = page !== undefined || keepSeconds !== undefined || off !== undefined || own !== undefined;
+    if (pageCache && isPhpSite(site)) throw conflict(phpNoPageCache(site.slug));
+    if (pageCache) {
       const rules = parseSiteCacheRules(site.cacheRules);
       const changes = {
         pageCache: page === undefined ? site.pageCache : page === 'default' ? null : page,
@@ -664,6 +730,62 @@ export class SitesService {
     return { job: this.worker.enqueue('site.objectCache', { siteId: site.id, on: object }, { id: site.id, slug, serverId: site.serverId }) };
   }
 
+  /**
+   * A PHP site's web root (sites.web_root). In force at once on a running site: the protection's
+   * sync writes it into the site's own Apache file, checks it and reloads Apache, as for a change of
+   * protection (services/siteHardening.ts). A file Apache refuses puts the old value back, and the
+   * answer is what Apache said. A stopped site gets it at its next start.
+   */
+  async setWebRoot(slug: string, webRoot: string): Promise<void> {
+    const site = this.bySlug(slug);
+    if (!isPhpSite(site)) throw conflict(`"${site.slug}" is a WordPress site: a web root is for PHP sites.`);
+    if (site.status === 'provisioning' || site.status === 'deleting') throw conflict(`Site is ${site.status}; wait for it to finish`);
+    if (webRoot === site.webRoot) return;
+    this.db.update(sites).set({ webRoot, updatedAt: Date.now() }).where(eq(sites.id, site.id)).run();
+    await this.s.security.kick(site.serverId);
+    const refusal = this.s.security.apacheRefusal(site.id);
+    if (refusal === null) return;
+    this.db.update(sites).set({ webRoot: site.webRoot, updatedAt: Date.now() }).where(eq(sites.id, site.id)).run();
+    await this.s.security.kick(site.serverId);
+    throw conflict(`Apache refused it, so the web root is as it was: ${refusal}`);
+  }
+
+  /**
+   * One test message from the site, as its own code would send it: wp_mail() on a WordPress site,
+   * PHP's mail() with no From header on a PHP site, so its default sender is what it is tested with
+   * (services/mailAuth.ts defaultMailFrom). Accepted means handed to the relay; delivery is the mail
+   * log's to tell.
+   */
+  async testMail(slug: string, to: string): Promise<{ accepted: boolean; detail: string }> {
+    const site = this.bySlug(slug);
+    const server = this.s.servers.handleFor(site.serverId);
+    const state = await server.docker.containerState(site.containerName);
+    if (state !== 'running') throw conflict(`Site container is ${state}; start the site first`);
+    if (!isPhpSite(site)) {
+      const res = await server.wp.testEmail(site.containerName, to, site.title);
+      const accepted = res.stdout.includes('true');
+      return {
+        accepted,
+        detail: accepted
+          ? `wp_mail() accepted the message for ${to} - check the inbox (and the mail log if it never arrives)`
+          : `wp_mail() returned false: ${(res.stderr || res.stdout).trim().slice(0, 500)}`,
+      };
+    }
+    // The address and the words go in the environment, never into the code.
+    const res = await server.docker.exec(
+      site.containerName,
+      ['php', '-r', "var_export(mail(getenv('WPL7_TO'), getenv('WPL7_SUBJECT'), getenv('WPL7_BODY')));"],
+      asSiteUser(60_000, [`WPL7_TO=${to}`, `WPL7_SUBJECT=Test email from ${site.title}`, 'WPL7_BODY=This is a test email sent from the WPL7 control panel. If you can read this, mail() works.']),
+    );
+    const accepted = res.exitCode === 0 && res.stdout.trim() === 'true';
+    return {
+      accepted,
+      detail: accepted
+        ? `mail() accepted the message for ${to} - check the inbox (and the mail log if it never arrives)`
+        : `mail() returned false: ${(res.stderr || res.stdout).trim().slice(0, 500)}`,
+    };
+  }
+
   /** The job holding the site, for its page to show: a new site's `site.create`, among others. */
   private activeJob(site: SiteRow): SiteDetail['activeJob'] {
     const job = this.worker.activeSiteJob(site.id);
@@ -678,6 +800,8 @@ export class SitesService {
       adminUser: site.wpAdminUser,
       adminEmail: site.wpAdminEmail,
       dbName: '',
+      webRoot: '',
+      webRootMissing: false,
       tablePrefix: site.tablePrefix,
       containerState: 'missing',
       url: summary.external?.home ?? `https://${summary.primaryDomain}`,

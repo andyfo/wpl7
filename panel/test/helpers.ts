@@ -1,4 +1,5 @@
 import { ReminderService } from '../src/services/reminders.js';
+import { SiteCronService } from '../src/services/siteCron.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -35,7 +36,7 @@ import { packetLimitFor, type DbAdminPort, type DbInventoryRow } from '../src/se
 import { FakeDbBrowser } from './dbBrowserFake.js';
 import { hostExec, type ExecPort, type ExecResult } from '../src/lib/exec.js';
 import { LocalFiles, type FilesPort } from '../src/lib/files.js';
-import { servers as serversTable } from '../src/db/schema.js';
+import { servers as serversTable, sites, type SiteRow } from '../src/db/schema.js';
 import type { CoreServices } from '../src/services/index.js';
 import { ServerRegistry, type HandlePorts } from '../src/servers/registry.js';
 import { BackupService } from '../src/services/backup.js';
@@ -106,6 +107,7 @@ import { SCRIPTS as SITE_FILE_SCRIPTS } from '../src/services/siteFilesScripts.j
 import { REMOVE_UNCHANGED_SCRIPT } from '../src/jobs/handlers/importRefresh.js';
 import { sitePaths } from '../src/services/siteSpec.js';
 import { stackFromLabels, type SiteStack } from '../src/services/siteStack.js';
+import type { SiteApp } from '../shared/schemas.js';
 
 /**
  * Every test gets a database of its own, but not a migration run of its own: the migrations run
@@ -248,6 +250,12 @@ export class FakeDocker implements DockerPort {
    * which is what every server has after this update. A test about stack 1 says so.
    */
   imageStacks = new Map<string, SiteStack>();
+  /**
+   * The sites each image can run, by image id; `appsOf` sets one by tag. An image not here runs
+   * both, as every image built since PHP sites does; one Docker doesn't have runs WordPress only.
+   * A test about an image from before PHP sites says so.
+   */
+  imageAppLists = new Map<string, SiteApp[]>();
   execQueue: RunResult[] = [];
   /** Scripted container logs, keyed by container name (mail-log ingest reads these). */
   logs = new Map<string, string>();
@@ -572,6 +580,7 @@ export class FakeDocker implements DockerPort {
     opts?: ExecOpts,
   ): Promise<{ exitCode: number; stderr: string }> {
     this.record('execToStream', [name, cmd, opts]);
+    opts?.onStarted?.();
     const scripted = this.streamQueue.shift();
     if (scripted) {
       if (scripted.stdout.length > 0) stdout.write(scripted.stdout);
@@ -657,6 +666,16 @@ export class FakeDocker implements DockerPort {
     if (ref.startsWith('sha256:')) return 2;
     const id = await this.imageId(ref);
     return id ? (this.imageStacks.get(id) ?? 2) : 1;
+  }
+  /** Say what sites the image a tag names now can run. */
+  appsOf(tag: string, apps: SiteApp[]): void {
+    this.imageAppLists.set(this.imageIds.get(tag) ?? `sha256:${tag}`, apps);
+  }
+  async imageApps(ref: string): Promise<SiteApp[]> {
+    if (this.deletedImages.has(ref)) return ['wordpress'];
+    const id = ref.startsWith('sha256:') ? (this.knownImage(ref) || this.imageAppLists.has(ref) ? ref : null) : await this.imageId(ref);
+    if (!id) return ['wordpress'];
+    return this.imageAppLists.get(id) ?? ['wordpress', 'php'];
   }
   async imageTags(repository: string): Promise<string[]> {
     return [...this.images].filter((tag) => tag.startsWith(`${repository}:`));
@@ -881,8 +900,30 @@ export class FakeDbAdmin implements DbAdminPort {
   /** The server's users and their passwords. */
   users = new Map<string, string>();
 
+  /**
+   * Which arguments name a database or a user, by method. The real one refuses an empty name
+   * (dbAdmin.ts assertDbIdentifier), and a site with no database of its own has '' for it: a test
+   * that lets one through to here fails as the real server would.
+   */
+  private static readonly NAMES: Record<string, number[]> = {
+    createSiteDb: [0, 1],
+    dropSiteDb: [0, 1],
+    recreateDb: [0],
+    dumpTo: [0],
+    importFrom: [1],
+    importFromAs: [1, 2],
+    createExtraDb: [0, 1],
+    dropDb: [0],
+    dropUser: [0],
+    setUserPassword: [0],
+    dumpToStream: [0],
+  };
+
   private record(method: string, args: unknown[]): void {
     this.calls.push({ method, args });
+    for (const i of FakeDbAdmin.NAMES[method] ?? []) {
+      if (args[i] === '') throw new Error(`Unsafe MySQL identifier: ""`);
+    }
     const fail = this.failOn.get(method);
     if (fail) throw new Error(fail);
   }
@@ -1742,6 +1783,7 @@ export async function makeWorld(
   core.alerts = new AlertService(core);
   const serverInfo = new SystemInfoService(servers, log, null, opts.resolver);
   core.reminders = new ReminderService(core, serverInfo);
+  core.siteCron = new SiteCronService(core);
   // The hourly check of each external site and every uptime probe are what the alerts hear from.
   core.connections.attachEvents({ checked: (site, conn) => core.alerts.connectorChecked(site, conn) });
   core.monitor.attachExternal(core.connections, {
@@ -1973,4 +2015,42 @@ export function mcpClient(
       return { isError: message.result.isError === true, value };
     },
   };
+}
+
+/**
+ * A PHP site's row, as site.create leaves one: no WordPress administrator, and a database of its
+ * own only with `database`, else '' in its three columns. Its container is running unless the
+ * status says otherwise.
+ */
+export function addPhpSite(
+  w: TestWorld,
+  slug: string,
+  opts: { database?: boolean; webRoot?: string; serverId?: number; status?: string; domains?: string[] } = {},
+): SiteRow {
+  const now = Date.now();
+  const db = opts.database ? `wp_${slug.replace(/-/g, '_')}` : '';
+  const site = w.db
+    .insert(sites)
+    .values({
+      slug,
+      serverId: opts.serverId ?? 1,
+      title: slug,
+      domains: JSON.stringify(opts.domains ?? [`${slug}.example.test`]),
+      phpVersion: '8.3',
+      app: 'php',
+      webRoot: opts.webRoot ?? '',
+      status: opts.status ?? 'running',
+      dbName: db,
+      dbUser: db,
+      dbPassword: opts.database ? 'db-secret' : '',
+      mailPassword: 'mail-secret',
+      containerName: `wp-${slug}`,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning()
+    .get();
+  const docker = opts.serverId && opts.serverId !== 1 ? w.remote(opts.serverId).docker : w.docker;
+  if ((opts.status ?? 'running') === 'running') docker.containers.set(site.containerName, 'running');
+  return site;
 }

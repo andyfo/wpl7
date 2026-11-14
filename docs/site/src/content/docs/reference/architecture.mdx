@@ -9,6 +9,7 @@ sources:
   - panel/src/services/siteImages.ts
   - deploy/wordpress-image/Dockerfile
   - deploy/wordpress-image/wpl7-start
+  - deploy/wordpress-image/wpl7-sendmail
   - deploy/wordpress-image/apache-site.conf
   - deploy/wordpress-image/nginx.conf
   - deploy/wordpress-image/php-fpm.conf
@@ -39,7 +40,7 @@ map: what runs, what it is called, where it keeps its files, and what can reach 
 | `wpl7-mail` | `boky/postfix` | The mail [relay](/docs/reference/glossary/#relay): takes every site's mail, queues it and delivers it |
 | `wpl7-dkim` | `instrumentisto/opendkim` | Signs outgoing mail for the relay |
 | `wpl7-panel` | `ghcr.io/andyfo/wpl7/panel` | The API, the web interface and the job queue. On the panel's server only |
-| `wp-<slug>` | `wpl7-wordpress:php<version>` | One WordPress site: nginx, Apache and PHP-FPM, with Redis when its object cache is on |
+| `wp-<slug>` | `wpl7-wordpress:php<version>` | One site, WordPress or [PHP](/docs/sites/php/): nginx, Apache and PHP-FPM, with Redis when it is on |
 | `wpl7-ftp` | `wpl7-sftpgo` | The FTP and SFTP gateway. Only on a server with FTP logins |
 | `wpl7-ftp-<slug>` | `wpl7-sftpgo` | The file server behind one site's FTP logins |
 | `wpl7-adminer` | `wpl7-adminer` | [Adminer](/docs/databases/adminer/), only while someone uses it. The panel reaches it through `docker exec`, so it listens on no network |
@@ -90,7 +91,7 @@ letters, digits and dashes.
 
 Site containers carry the labels `wpl7.managed=true`, `wpl7.site=<slug>`, `wpl7.role=wordpress`
 and `wpl7.php=<version>`. One on the current setup also has `wpl7.stack=2`, and one without it runs
-Apache with mod_php. To list one site's containers:
+Apache with mod_php. A PHP site's container also has `wpl7.app=php`. To list one site's containers:
 
 ```bash
 docker ps -a --filter label=wpl7.site=northwind-bakery
@@ -104,14 +105,14 @@ at the same path, so every path the panel hands to Docker is valid on the host.
 | Path | What it holds |
 |---|---|
 | `/srv/sites/<slug>/wordpress/` | The site's files, owned by uid 33 |
-| `/srv/sites/<slug>/config/` | The site's PHP limits in `uploads.ini`, its relay login and its protection settings. `runtime/` holds what its nginx, PHP-FPM, OPcache, Redis and `wp-cache.php` read |
+| `/srv/sites/<slug>/config/` | The site's PHP limits in `uploads.ini`, its relay login and its protection settings. `runtime/` holds what its nginx, PHP-FPM, OPcache, Redis and `wp-cache.php` read, and its default mail sender |
 | `/srv/sites/<slug>/quarantine/` | Files a malware scan moved out of the site. Mounted into no site |
 | `/srv/sites/<slug>/site.json` | A description of the site, for recovery by hand |
 | `/srv/sites/<slug>/db-uploads/` | A dump uploaded for an import, until the import is done. Mounted into no site |
 | `/srv/backups/<slug>/<timestamp>/` | Backups, unless the server's backup location was moved |
 | `/srv/backups/panel/<timestamp>/` | Nightly copies of the panel's database, on the panel's server |
 | `/srv/external/<slug>/wordpress/` | The copy of a [site hosted elsewhere](/docs/sites/external/) that its next backup builds on, on the server that keeps its backups |
-| `/srv/plugins/` | Uploaded plugin zips, mounted read-only into every site |
+| `/srv/plugins/` | Uploaded plugin zips, mounted read-only into every WordPress site |
 | `/srv/mysql/` | MariaDB's data |
 | `/srv/mail/` | The relay's sender maps and logins, and the DKIM keys and settings |
 | `/srv/traefik/acme*.json` | Certificates and ACME accounts, mode 600 |
@@ -131,6 +132,11 @@ The image `wpl7-wordpress:php<version>` is the official `wordpress:php<version>-
 nginx, Apache, Redis and phpredis, msmtp, so PHP's `mail()` reaches the relay, and WP-CLI. PHP 8.2 to
 8.5 are offered.
 
+<Since v="0.3.3" /> The image also runs [PHP sites](/docs/sites/php/), as its label `wpl7.apps` says.
+`wpl7-start` puts WordPress into a site's folder only for a container with WordPress's database
+settings, which a PHP site's never has. PHP has PDO's MySQL driver beside mysqli. `wpl7-sendmail`
+runs msmtp for `mail()` and for `/usr/sbin/sendmail`, with one sender for each message.
+
 <Since v="0.3.2" /> The image turns off PHP's upload progress tracking, which WordPress does not use.
 Its build stops when the base image's PHP is older than the last security release of its branch.
 When a server's image changes, the panel rebuilds the containers of that server's sites on it, at
@@ -142,10 +148,10 @@ restart policy brings the whole site back.
 
 | Service | Where | What it does |
 |---|---|---|
-| nginx | Port 8080, which Traefik reaches | The [page cache](/docs/sites/caching/). Stored pages are in `/var/cache/nginx/wpl7`, about 256 MB at most, and every start empties it |
+| nginx | Port 8080, which Traefik reaches | The [page cache](/docs/sites/caching/) of a WordPress site. Stored pages are in `/var/cache/nginx/wpl7`, about 256 MB at most, and every start empties it. On a PHP site it passes every request to Apache |
 | Apache, with the event MPM | `127.0.0.1:80` | `.htaccess`, static files, Brotli and gzip, and cache times: 30 days for images, fonts, audio and video, 7 days for CSS and JS |
 | PHP-FPM | `/run/wpl7/php-fpm.sock` | Runs files named `.php`, in a pool [sized from the site's limits](/docs/sites/settings/#set-resource-limits) |
-| Redis | `/run/wpl7/redis.sock` | The [object cache](/docs/sites/caching/#turn-on-the-object-cache), only while it is on |
+| Redis | `/run/wpl7/redis.sock` | The [object cache](/docs/sites/caching/#turn-on-the-object-cache), or a [PHP site](/docs/sites/php/#turn-on-redis)'s own Redis, only while it is on |
 
 The panel's REST tool asks Apache on the loopback, so it skips the cache. A visitor cannot: nginx is
 the only way in from outside.
@@ -158,7 +164,7 @@ the only way in from outside.
 | `/srv/sites/<slug>/config/security-apache.conf` | `/etc/apache2/conf-enabled/zz-wpl7-security.conf`, read-only |
 | `/srv/sites/<slug>/config/security/` | `/etc/wpl7`, read-only |
 | `/srv/sites/<slug>/config/runtime/` | `/etc/wpl7-runtime`, read-only |
-| `/srv/plugins` | `/srv/plugins`, read-only |
+| `/srv/plugins` | `/srv/plugins`, read-only, on a WordPress site |
 
 - `wp-config.php` reads the database settings from the container's `WORDPRESS_DB_*` variables.
 - `WORDPRESS_CONFIG_EXTRA` turns HTTPS on behind Traefik, sets `DISABLE_WP_CRON`, and loads the
@@ -167,6 +173,8 @@ the only way in from outside.
 - The panel writes `/etc/wpl7-runtime` before every start, and applies a change to a running
   container in place. Nothing in the site can change that folder.
 - The panel runs each running site's due cron events every five minutes instead.
+- A PHP site's container has no `WORDPRESS_*` variables. Its own cron lines run every minute at the
+  most, as uid 33 in its folder.
 - WP-CLI runs inside the site's container as uid 33, so the PHP version and mail settings
   always match the site.
 - The panel keeps two must-use plugins in the site: `wpl7-login.php` for one-click login, and

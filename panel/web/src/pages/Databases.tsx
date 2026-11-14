@@ -214,7 +214,7 @@ function UsedRow({ d, multiServer }: { d: DatabaseListItemDto; multiServer: bool
         ) : d.use.kind === 'moveCopy' ? (
           <span className="text-neutral-500">{d.use.slug}</span>
         ) : null}
-        {d.use.kind === 'site' && <span className="ml-2 text-xs text-neutral-400">WordPress</span>}
+        {d.use.kind === 'site' && <span className="ml-2 text-xs text-neutral-400">{d.use.app === 'php' ? 'Site' : 'WordPress'}</span>}
       </td>
       {multiServer && <td className="py-2 pr-3 text-neutral-600">{d.serverName}</td>}
       <td className="py-2 pr-3 text-right tabular-nums text-neutral-500">{d.size ? formatBytes(d.size.bytes) : '–'}</td>

@@ -14,6 +14,7 @@ sources:
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
+import Since from '~/components/Since.astro';
 import UiPath from '~/components/UiPath.astro';
 
 [Site protection](/docs/reference/glossary/#site-protection) refuses requests no visitor makes and
@@ -69,6 +70,15 @@ cannot write, so a `.htaccess` in uploads cannot turn it back. Apache also refus
 A `.user.ini` changes PHP's settings, not which files Apache hands to PHP. One can still load a file
 from uploads before every script, with `auto_prepend_file`. That takes code already running in the
 site, or an FTP login.
+
+## On a PHP site
+
+<Since v="0.3.3" /> A [PHP site](/docs/sites/php/) has no WordPress, so WordPress's parts are off on
+it, whatever its level says: PHP in uploads, install scripts, user enumeration, XML-RPC,
+`wp-cron.php`, the login limit and the settings inside the container. It keeps the rest: secret
+files, scanner tools, the request and asset limits, the headers and its own rules. Its assets count
+as assets wherever they are in the site. A site's own setting for one of
+WordPress's parts is refused.
 
 ## Trust a proxy
 

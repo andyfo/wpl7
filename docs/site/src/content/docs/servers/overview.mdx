@@ -53,7 +53,8 @@ record. An unreachable server that passes them is **ok** again.
 
 The uptime check asks each running site for its home page through its server's Traefik, under
 the site's own hostname. An answer below 400, a 401 or a 403 counts as up. A 404, a 5xx or no
-answer within five seconds counts as down. It skips a site while a job starts, stops, rebuilds
+answer within five seconds counts as down. On a [PHP site](/docs/sites/php/), any 4xx the site sent
+itself counts as up. It skips a site while a job starts, stops, rebuilds
 or updates it. As that job ends, the panel checks the site, and gives a container that has just
 started up to ten seconds to answer. CPU is a percentage of one core, averaged since the
 previous sample. **Load** is the Linux load average, not CPU use.

@@ -16,7 +16,8 @@ sources:
 import Screenshot from '~/components/Screenshot.astro';
 
 **Databases** lists every database on every server, with the site it belongs to, its size and its
-number of tables. Each server runs one MariaDB, and each site has a database of its own there.
+number of tables. Each server runs one MariaDB, and each site has a database of its own there. A
+[PHP site](/docs/sites/php/) has one only when it was made with one, or given one later.
 
 <Screenshot name="databases" alt="The Databases page listing every site's database, and one no site uses" />
 
@@ -30,7 +31,8 @@ Some sites need a second database, for an order history or an app beside WordPre
 3. Choose **Add database**.
 
 The new database uses the site's database login, so the site's code connects with what WordPress
-already has. It is part of the site from then on. Its backups hold it, a move takes it along, and
+already has. A PHP site needs a database of its own first, for that login. The new database is part
+of the site from then on. Its backups hold it, a move takes it along, and
 deleting the site deletes it.
 
 ## Delete a database

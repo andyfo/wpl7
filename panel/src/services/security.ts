@@ -122,6 +122,8 @@ export class SecurityService {
   private readonly hardeningProblems = new Map<number, string>();
   /** `<serverId>:<file>` -> digest of an Apache file its check refused; not tried again as it is. */
   private readonly refused = new Map<string, string>();
+  /** Site id -> what `apache2ctl -t` said of its file at the last sync that refused it. */
+  private readonly apacheRefusals = new Map<number, string>();
   private readonly debounceMs: number;
 
   constructor(
@@ -166,8 +168,10 @@ export class SecurityService {
     };
   }
 
+  /** A site's policy, for what it runs: a PHP site has none of WordPress's parts. */
   policyFor(siteId: number): EffectivePolicy {
-    return effectivePolicy(this.fleet(), this.siteInput(siteId));
+    const app = this.db.select({ app: sites.app }).from(sites).where(eq(sites.id, siteId)).get()?.app ?? 'wordpress';
+    return effectivePolicy(this.fleet(), this.siteInput(siteId), app);
   }
 
   /** Save a site's own settings; its server's rules follow within moments. */
@@ -228,11 +232,12 @@ export class SecurityService {
     };
     const fleetPolicy = this.fleet();
     for (const site of here) {
-      const policy = effectivePolicy(fleetPolicy, this.siteInput(site.id));
+      const policy = effectivePolicy(fleetPolicy, this.siteInput(site.id), site.app);
       try {
         const config = buildSiteSecurityConfig({
           ...shared,
           slug: site.slug,
+          app: site.app,
           domains: JSON.parse(site.domains) as string[],
           policy,
         });
@@ -429,8 +434,8 @@ export class SecurityService {
       .where(and(eq(sites.serverId, serverId), eq(sites.status, 'running')))
       .all()
       .map((site) => {
-        const { container } = effectivePolicy(fleetPolicy, this.siteInput(site.id));
-        return { site, container, files: hardeningFiles(container) };
+        const { container } = effectivePolicy(fleetPolicy, this.siteInput(site.id), site.app);
+        return { site, container, files: hardeningFiles(container, site) };
       });
   }
 
@@ -439,9 +444,12 @@ export class SecurityService {
    * sit in, and both files from its policy as it is now. The container about to start reads
    * them, so there is nothing to reload.
    */
-  async prepareHardening(handle: ServerHandle, site: Pick<SiteRow, 'id' | 'slug'>): Promise<void> {
+  async prepareHardening(handle: ServerHandle, site: Pick<SiteRow, 'id' | 'slug' | 'app' | 'webRoot'>): Promise<void> {
     const p = sitePaths(this.config, site.slug);
-    const files = hardeningFiles(this.policyFor(site.id).container);
+    // The web root as it is now: a job holds the row it began with, and a web root saved since must
+    // not be put back by this start.
+    const current = this.db.select({ app: sites.app, webRoot: sites.webRoot }).from(sites).where(eq(sites.id, site.id)).get() ?? site;
+    const files = hardeningFiles(this.policyFor(site.id).container, current);
     await handle.files.mkdirp(p.securityDir, { mode: 0o755 });
     await handle.files.writeFile(p.securityWpPhp, files.php, { atomic: true, mode: 0o644 });
     // In place: a single-file mount keeps the inode it was given (see siteHardening.ts).
@@ -449,6 +457,7 @@ export class SecurityService {
     this.written.set(`${handle.id}:${p.securityWpPhp}`, digest(files.php));
     this.written.set(`${handle.id}:${p.securityApacheConf}`, digest(files.apache));
     this.refused.delete(`${handle.id}:${p.securityApacheConf}`);
+    this.apacheRefusals.delete(site.id);
     this.hardeningProblems.delete(site.id);
   }
 
@@ -513,6 +522,7 @@ export class SecurityService {
       if (refusal !== null) {
         await handle.files.writeFile(p.securityApacheConf, apache.current, { mode: 0o644 });
         this.refused.set(key, digest(files.apache));
+        this.apacheRefusals.set(site.id, refusal);
         this.hardeningProblems.set(site.id, `Apache refused the new protection inside its container, so it keeps the previous one: ${refusal}`);
         this.log.warn(`Site protection inside "${site.slug}": Apache refused the new file (${refusal}); the previous one is back`);
         return changed;
@@ -521,8 +531,18 @@ export class SecurityService {
       changed = true;
     }
     this.refused.delete(key);
+    this.apacheRefusals.delete(site.id);
     this.hardeningProblems.delete(site.id);
     return changed;
+  }
+
+  /**
+   * What Apache said of the site's own file when it last refused one, in its own words; null when
+   * it took what it was given. For a change that must not stand when Apache refuses it, asked after
+   * the kick that applied it: the web root.
+   */
+  apacheRefusal(siteId: number): string | null {
+    return this.apacheRefusals.get(siteId) ?? null;
   }
 
   /**

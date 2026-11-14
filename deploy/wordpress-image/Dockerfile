@@ -9,8 +9,11 @@ ARG PHP_TAG=php8.3
 FROM wordpress:${PHP_TAG}-fpm
 
 # The panel builds a container to match the image it finds, so a server that still has an older
-# image keeps getting the containers that image needs (panel/src/services/siteStack.ts).
-LABEL wpl7.stack="2"
+# image keeps getting the containers that image needs (panel/src/services/siteStack.ts). wpl7.apps
+# says what sites the image can run: the panel makes no PHP site's container from an image without
+# it, because an older wpl7-start puts WordPress into any folder that has none
+# (panel/src/services/siteSpec.ts).
+LABEL wpl7.stack="2" wpl7.apps="wordpress php"
 
 # Refuse a base image whose PHP predates the last security release of its branch, so a stale
 # cached base fails the build instead of shipping. Raise a branch's floor with each PHP
@@ -37,6 +40,10 @@ RUN pecl install redis-6.3.0 \
   && docker-php-ext-enable redis \
   && rm -rf /tmp/pear
 
+# PDO's MySQL driver, which most PHP apps connect with. WordPress uses mysqli, the only one the
+# official image has.
+RUN docker-php-ext-install pdo_mysql
+
 # wp-cli, pinned via the stable phar channel; runs as www-data through `docker exec -u 33:33`.
 RUN curl -fsSL -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar \
   && chmod +x /usr/local/bin/wp \
@@ -45,10 +52,16 @@ RUN curl -fsSL -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/bui
 COPY msmtprc /etc/msmtprc
 RUN chmod 644 /etc/msmtprc
 
-# PHP mail() -> msmtp -> wpl7-mail (postfix). --read-envelope-from takes the envelope
-# sender from the From: header WordPress sets (wordpress@<site-domain>).
-RUN printf 'sendmail_path = "/usr/bin/msmtp -t --read-envelope-from"\n' \
-  > /usr/local/etc/php/conf.d/zz-msmtp.ini
+# PHP mail() -> wpl7-sendmail -> msmtp -> wpl7-mail (postfix). msmtp takes the envelope sender
+# from one place and refuses two, so the wrapper picks one: -f from the caller, else the From
+# header, else the site's default sender. sendmail is the wrapper too, for libraries that run it
+# themselves. -t stays out of the wrapper, so that it can be both.
+COPY wpl7-sendmail /usr/local/bin/wpl7-sendmail
+RUN chmod 755 /usr/local/bin/wpl7-sendmail \
+  && ln -sf /usr/local/bin/wpl7-sendmail /usr/sbin/sendmail \
+  && ln -sf /usr/local/bin/wpl7-sendmail /usr/lib/sendmail \
+  && printf 'sendmail_path = "/usr/local/bin/wpl7-sendmail -t"\n' \
+    > /usr/local/etc/php/conf.d/zz-msmtp.ini
 
 # PHP's settings and pool. The official image's own access log goes, for the same reason Apache has
 # none: Traefik logs every request.

@@ -69,18 +69,29 @@ export function nextRunsTooltip(
 }
 
 /**
- * Why a custom schedule may not use this cron expression, or null - the checks the panel
- * makes (src/services/schedules.ts), made while typing: five fields, a pattern croner takes,
- * and no two runs closer than MIN_SCHEDULE_GAP_MS. Fifty runs cover any gap a five-field
- * pattern can have, the day boundary included; the panel checks again on save.
+ * Why a cron expression can't run, or null - the panel's cronRunProblem (src/services/schedules.ts),
+ * made while typing: five fields, a pattern croner takes, and a date that matches it. A PHP site's
+ * cron lines ask this.
  */
-export function cronScheduleProblem(expr: string, timezone?: string): string | null {
+export function cronRunProblem(expr: string, timezone?: string): string | null {
   const shape = cronError(expr);
   if (shape) return shape;
   const pattern = cronPatternError(expr, timezone);
   if (pattern) return pattern;
+  if (nextCronRuns(expr, 1, timezone).length === 0) return 'No date ever matches this.';
+  return null;
+}
+
+/**
+ * Why a custom schedule may not use this cron expression, or null - the checks the panel
+ * makes (src/services/schedules.ts), made while typing: cronRunProblem, and no two runs closer
+ * than MIN_SCHEDULE_GAP_MS. Fifty runs cover any gap a five-field pattern can have, the day
+ * boundary included; the panel checks again on save.
+ */
+export function cronScheduleProblem(expr: string, timezone?: string): string | null {
+  const problem = cronRunProblem(expr, timezone);
+  if (problem) return problem;
   const runs = nextCronRuns(expr, 50, timezone);
-  if (runs.length === 0) return 'No date ever matches this.';
   for (let i = 1; i < runs.length; i++) {
     if (runs[i]!.getTime() - runs[i - 1]!.getTime() < MIN_SCHEDULE_GAP_MS) {
       return `Runs may be at most every ${MIN_SCHEDULE_GAP_MS / 60_000} minutes: every run is a job, with its own log.`;

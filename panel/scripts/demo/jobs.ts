@@ -9,10 +9,10 @@ import { batches, jobLogs, jobs, schedules } from '../../src/db/schema.js';
 import { summarizeJob } from '../../src/jobs/summaries.js';
 import type { TestWorld } from '../../test/helpers.js';
 import { DAY, HOUR, MINUTE, ago, DEMO_NOW } from './clock.js';
-import { SITES, rng, seedOf } from './data.js';
+import { SITES, isPhp, isPhpSlug, rng, seedOf } from './data.js';
 import { BULK_AT, BULK_UPDATED } from './backups.js';
 import { LATEST } from './plugins.js';
-import { siteIds } from './sites.js';
+import { LAST_CRON_TICK, siteIds } from './sites.js';
 
 type Origin = 'user' | 'api' | 'mcp' | 'schedule' | 'system';
 
@@ -64,7 +64,7 @@ function backupLog(slug: string, done: boolean): DemoJob['logs'] {
   const db = `wp_${slug.replace(/-/g, '_')}`;
   const lines: DemoJob['logs'] = [
     ['info', `Dumping database ${db}…`, 0],
-    ['info', 'Archiving wp-content and the site configuration…', 4200],
+    ['info', isPhpSlug(slug) ? "Archiving the site's files and configuration…" : 'Archiving wp-content and the site configuration…', 4200],
   ];
   if (done) {
     lines.push(['info', 'Writing manifest.json and checksums…', 61_000], ['info', 'Backup complete.', 63_500]);
@@ -149,7 +149,10 @@ export function seedJobs(world: TestWorld): void {
       ...(stopped ? { error: 'The site is stopped: its files were not scanned. Start it, then choose Scan now.' } : {}),
       logs: stopped
         ? [['error', 'The site is stopped: its files were not scanned. Start it, then choose Scan now.', 1_500]]
-        : [['info', 'Checking core, plugin and theme files against wordpress.org checksums…', 0], ['info', 'Looking for known malware in the rest…', 40_000], ['info', site.slug === 'pixel-press' ? 'Done: 1 finding, moved to quarantine.' : 'Done: nothing found.', 90_000]],
+        : isPhp(site)
+          ? // No WordPress, so nothing to hold to wordpress.org's checksums: every file is looked at.
+            [['info', 'Looking for known malware in every file…', 0], ['info', 'Done: nothing found.', 90_000]]
+          : [['info', 'Checking core, plugin and theme files against wordpress.org checksums…', 0], ['info', 'Looking for known malware in the rest…', 40_000], ['info', site.slug === 'pixel-press' ? 'Done: 1 finding, moved to quarantine.' : 'Done: nothing found.', 90_000]],
     });
   }
 
@@ -246,6 +249,8 @@ function seedSchedules(world: TestWorld): void {
   const lastRuns: Record<string, [at: number, ms: number]> = {
     backups: [today3am, 11 * MINUTE],
     'wp-scan': [ago(52 * MINUTE), 48_000],
+    // Its ticks that start nothing are not recorded: the last one started the PHP site's scheduler (sites.ts).
+    'site-cron': [LAST_CRON_TICK, 14],
     'malware-scan': [today3am + 70 * MINUTE, 38 * MINUTE],
     offsite: [ago(MINUTE), 900],
     housekeeping: [today3am + 45 * MINUTE, 3_200],

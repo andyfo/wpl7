@@ -65,7 +65,8 @@ export function SitesSecurity() {
   }, [overview.data, settings.data]);
 
   const preview = useMemo(
-    () => (draft ? effectivePolicy({ level: draft.level, overrides: draft.overrides }, { level: null, overrides: {}, customRules: [] }) : null),
+    // As a WordPress site gets it: a PHP site leaves WordPress's parts out of what the default gives it.
+    () => (draft ? effectivePolicy({ level: draft.level, overrides: draft.overrides }, { level: null, overrides: {}, customRules: [] }, 'wordpress') : null),
     [draft],
   );
 

@@ -45,7 +45,7 @@ A custom schedule runs one action on the sites you pick, repeatedly or once. Eac
 ## Run a WP-CLI or shell command
 
 For **WP-CLI command**, type what follows `wp`, such as `cache flush`. Both kinds of command run
-as www-data, the site's own user, in the WordPress folder of the site's container.
+as www-data, the site's own user, in the site's folder in its container.
 
 **Stop it after (minutes)** kills a command that runs too long, after 10 minutes by default and 60
 at most. A timeout or a non-zero exit code fails the job. The output goes to the job log, up to
@@ -80,6 +80,11 @@ with WPL7 Connect. A REST request goes through the plugin, as the user named in 
 needs no application password. A run missed while the panel was down is made up once, if
 the panel is back within half an interval, and an hour at most.
 
+A [PHP site](/docs/sites/php/) takes **Back up**, **Restart sites**, **Start sites**, **Stop sites** and
+**Shell command**. **All running sites** and **Server** leave it out of the other actions, and a run
+skips a PHP site picked for one. Its own cron lines run outside these schedules, as often as every
+minute.
+
 ## From the API
 
 `POST /api/schedules` creates the same schedules, and `GET /api/schedules/actions` describes
@@ -105,7 +110,7 @@ and `wp/rest` in the [API reference](/docs/integrations/api-reference/).
 - A `wp godmode` command that waits on a chat is refused.
 - Scheduled backups count toward the backup retention, so frequent runs push out older backups.
 - A shell command, a WP-CLI command that changes something and a REST request other than GET empty
-  the site's [caches](/docs/sites/caching/) each time they run.
+  a WordPress site's [caches](/docs/sites/caching/) each time they run.
 
 ## Related
 

@@ -61,6 +61,17 @@ own settings - level, changes, [own rules](#a-sites-own-rules), malware scans - 
 from **Settings**, with one Save for all of them. **Sites → Security → Settings** lists every
 site that set something for itself, with what, and opens the same settings from there.
 
+**A PHP site** (`sites.app = 'php'`) has none of WordPress's parts, whatever its level and the
+default say: `effectivePolicy(fleet, site, app)` switches off `WORDPRESS_ONLY_SETTINGS`
+(`shared/security.ts`) - the uploads, install and enumeration rules, XML-RPC and wp-cron handling,
+the login and XML-RPC limits, and the three settings inside the container. User enumeration is the
+one that would do harm: it refuses any address with `?author=<digit>`. It keeps sensitive files,
+scanners, the request and asset limits, headers and its own rules. Its assets are matched by their
+extension anywhere in the site, not only under `/wp-content/` and `/wp-includes/`: without that every
+image and stylesheet would count against the request limit. A site's own override that names one of
+WordPress's parts is refused with a `400` for a PHP site. The fleet default, shown as it is, is a
+WordPress site's.
+
 **Private addresses are never limited** (on by default, **Sites → Security → Settings**). Where Docker has
 no IPv6 networking, every IPv6 visitor reaches a site as one private address, and so does the
 panel's own uptime probe - a limit on that address would limit all of them together.
@@ -82,6 +93,12 @@ writes and mounts into the container read-only:
 
 A constant the site's own `wp-config.php` defines first wins; PHP has no way to take one back.
 These guard against a stolen login, not against code already running in the site.
+
+A PHP site's Apache file has none of these. It carries `SetEnvIf X-Forwarded-Proto "^https$"
+HTTPS=on` instead, and the site's web root as a `DocumentRoot` in a `<VirtualHost *:80>`: there a
+missing folder is a warning and a 404, where in the main server it would fail the reload and the
+next start. A web root change goes through the same check and reload; one Apache refuses is put
+back and answers `409` with Apache's words (`SecurityService.apacheRefusal`).
 
 A change is applied without a restart: the PHP file is replaced and read at the next request;
 the Apache file is checked with `apache2ctl -t` first and applied with a graceful reload, and
@@ -301,6 +318,15 @@ to whatever holds the file, not an unknown file among WordPress's own; a differe
 Suspicious-code candidates never alert and are never moved, under any setting. Nothing moves
 unless the scan recorded the file's hash, and more than 25 files in one scan move nothing at all:
 that many is a site for a person to look at.
+
+### On a PHP site
+
+A PHP site's scan is not *Incomplete* for want of WordPress: there are no published originals to
+compare it with, so AMWScan reads every file, and a WordPress someone installed into it is still
+held to wordpress.org's checksums. **On a finding** moves only what the table above moves, which is
+WordPress's, so a PHP site's findings are quarantined by hand. **Put back** and **Reinstall original**
+are not offered: whatever is named like the panel's files or WordPress's is the site's own, and
+quarantine is allowed for those findings instead (`scanPolicy.ts`, which takes the site's app).
 
 ### Quarantine
 

@@ -518,6 +518,7 @@ export function Backups() {
       {restoreFor && (
         <RestoreBackupDialog
           site={restoreFor.siteTitle ?? restoreFor.siteSlug}
+          hasDatabase={restoreFor.hasDatabase}
           onConfirm={() => {
             setActionError(null);
             run.mutate({ path: `/api/backups/${restoreFor.id}/restore`, body: {}, action: `restore:${restoreFor.id}` });

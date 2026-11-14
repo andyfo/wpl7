@@ -1,5 +1,6 @@
 // @docs sites/create
 import type { JobDto, WporgPluginDto } from '../../../shared/types';
+import type { SiteApp } from '../../../shared/schemas';
 
 /**
  * A new site goes from the New site form straight to its own page, which shows its `site.create`
@@ -36,6 +37,7 @@ export function newestJob(...ids: (number | null | undefined)[]): number | null 
 
 /** The New site form, as it was sent. */
 export interface NewSiteDraft {
+  app: SiteApp;
   title: string;
   slugEdited: string;
   serverId: number | null;
@@ -51,6 +53,9 @@ export interface NewSiteDraft {
   /** The catalog plugins ticked or unticked by hand; the others follow the catalog's defaults. */
   catalogTicks: [number, boolean][];
   extraPlugins: WporgPluginDto[];
+  /** A PHP site's. */
+  database: boolean;
+  webRoot: string;
 }
 
 /**

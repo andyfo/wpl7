@@ -37,7 +37,7 @@ import type {
   SiteScanDto,
   SiteSecurityDto,
 } from '../../shared/types.js';
-import type { JobStatus } from '../../shared/schemas.js';
+import type { JobStatus, SiteApp } from '../../shared/schemas.js';
 import { canPutBack, canReinstall, manualQuarantineProblem } from './scanPolicy.js';
 import type { ZipFlag } from './pluginZipChecks.js';
 import type { CoreServices } from './index.js';
@@ -113,6 +113,7 @@ export function siteSecurityDto(s: Deps, site: SiteRow): SiteSecurityDto {
   const input = s.security.siteInput(site.id);
   return {
     slug: site.slug,
+    app: site.app,
     level: input.level,
     overrides: input.overrides,
     customRules: input.customRules,
@@ -129,7 +130,7 @@ export function siteSecurityDto(s: Deps, site: SiteRow): SiteSecurityDto {
  * A finding as the Findings card shows it. `flags` are the catalog zips' unreviewed findings
  * (PluginZipChecks.unreviewedFlags): a finding on a file one of them flagged too points there.
  */
-export function findingDto(row: SiteScanFindingRow, flags?: Map<string, Map<string, ZipFlag>>): FindingDto {
+export function findingDto(row: SiteScanFindingRow, app: SiteApp, flags?: Map<string, Map<string, ZipFlag>>): FindingDto {
   const inPlugin = /^wp-content\/plugins\/([^/]+)\/(.+)$/.exec(row.path);
   const zipReview = inPlugin && row.engine === 'signatures' ? (flags?.get(inPlugin[1]!)?.get(inPlugin[2]!) ?? null) : null;
   return {
@@ -150,9 +151,9 @@ export function findingDto(row: SiteScanFindingRow, flags?: Map<string, Map<stri
     status: row.status as FindingStatus,
     statusAt: row.statusAt,
     statusBy: row.statusBy,
-    canReinstall: canReinstall({ ...row, kind: row.kind as FindingKind }),
-    canPutBack: canPutBack({ ...row, kind: row.kind as FindingKind }),
-    quarantineProblem: manualQuarantineProblem({ ...row, kind: row.kind as FindingKind }),
+    canReinstall: canReinstall({ ...row, kind: row.kind as FindingKind }, app),
+    canPutBack: canPutBack({ ...row, kind: row.kind as FindingKind }, app),
+    quarantineProblem: manualQuarantineProblem({ ...row, kind: row.kind as FindingKind }, app),
     zipReview,
   };
 }
@@ -162,10 +163,10 @@ const SEVERITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 };
 /** A site's findings, the most serious first; `all` includes the ignored and the resolved. */
 export function siteFindings(
   s: Pick<Deps, 'db' | 'pluginZipChecks'>,
-  siteId: number,
+  site: Pick<SiteRow, 'id' | 'app'>,
   status: FindingStatus | 'all',
 ): { items: FindingDto[]; counts: Record<FindingStatus, number> } {
-  const rows = s.db.select().from(siteScanFindings).where(eq(siteScanFindings.siteId, siteId)).all();
+  const rows = s.db.select().from(siteScanFindings).where(eq(siteScanFindings.siteId, site.id)).all();
   const counts: Record<FindingStatus, number> = { open: 0, ignored: 0, resolved: 0, quarantined: 0 };
   for (const r of rows) counts[r.status as FindingStatus] = (counts[r.status as FindingStatus] ?? 0) + 1;
   const items = rows
@@ -177,7 +178,7 @@ export function siteFindings(
         a.path.localeCompare(b.path),
     );
   const flags = items.some((r) => r.path.startsWith('wp-content/plugins/')) ? s.pluginZipChecks.unreviewedFlags() : undefined;
-  return { items: items.map((r) => findingDto(r, flags)), counts };
+  return { items: items.map((r) => findingDto(r, site.app, flags)), counts };
 }
 
 export function quarantineDto(row: SiteQuarantineRow): QuarantineItemDto {
@@ -234,7 +235,7 @@ export function securityOverview(s: Deps, now = Date.now()): SecurityOverviewDto
         title: site.title,
         status: site.status,
         serverName: serverName.get(site.serverId) ?? null,
-        level: effectivePolicy(fleet, input).level,
+        level: effectivePolicy(fleet, input, site.app).level,
         customised: input.level !== null || hasOverrides(input.overrides) || input.customRules.length > 0,
         own: {
           level: input.level,
@@ -256,7 +257,8 @@ export function securityOverview(s: Deps, now = Date.now()): SecurityOverviewDto
     });
   return {
     fleet,
-    fleetPolicy: effectivePolicy(fleet, { level: null, overrides: {}, customRules: [] }),
+    // The default as a WordPress site gets it: a PHP site leaves WordPress's parts out of its own.
+    fleetPolicy: effectivePolicy(fleet, { level: null, overrides: {}, customRules: [] }, 'wordpress'),
     sites: rows,
     servers: serverRows.map((r) => {
       const st = s.security.serverStatus(r.id);

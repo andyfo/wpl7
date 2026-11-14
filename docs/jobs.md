@@ -78,6 +78,7 @@ rolled back.
 | Container limits follow-up | every minute, after the limits in Settings changed | sites that were busy when the limits changed keep the old ones | queues jobs |
 | Nightly housekeeping | 04:00 | old backups, statistics, logs and finished jobs are no longer removed | queues jobs |
 | WordPress cron | every 5 minutes | scheduled posts, plugin tasks and WooCommerce emails stop on every site | background |
+| PHP site cron (`site-cron`) | every minute | no PHP site's cron lines run; those due meanwhile run once on resume (below) | background |
 | Uptime checks | `monitorUptimeIntervalSec` | a site going down is not noticed | background |
 | Site / server resource stats | `monitorStatsIntervalSec` | the charts get a gap | background |
 | Disk usage | a few sites every few minutes, each site about every `monitorDuIntervalMin` | disk sizes stop updating | background |
@@ -136,7 +137,9 @@ it stays in the list as *done* until deleted or given a new time.
 **What a run does with a site it cannot use.** A busy site (another job in progress), a stopped
 one (for anything but backups and *start*) or a deleted one is *skipped*, with the reason in the
 run's result; the other sites go ahead. A run that queued nothing at all is recorded as skipped.
-Stopped sites are never started by a schedule.
+Stopped sites are never started by a schedule. The WordPress actions (`wp.scan`, `wp.update`,
+`wp.cli`, `wp.rest`: `wordpress: true` in `SCHEDULE_ACTION_INFO`) leave PHP sites out of `server`
+and `all`, and skip one named in `sites` as "is a PHP site: it has no WordPress".
 
 **Missed runs.** A panel that was down when a schedule was due - an update, a reboot - catches up
 once if it is back within half the schedule's interval (at least two minutes, at most an hour; an
@@ -162,7 +165,7 @@ nights.
 ### Commands in a site
 
 `wp.cli` and `site.shell` run inside the site's container **as www-data** (the site's own user,
-never root, and the container has `no-new-privileges`), in the WordPress folder. Output goes to
+never root, and the container has `no-new-privileges`), in the site's folder. Output goes to
 the job log as it arrives, up to 1,000 lines. A non-zero exit fails the job, with the exit code in
 its result. `timeoutMin` (1-60, default 10) is enforced inside the container with `timeout`, which
 kills the command; *canceling* a running command only takes effect once it has finished, because
@@ -194,6 +197,23 @@ schedule alike: it would hold the `exec` lane, and with it every other site's co
 for as long as it waits. Run it without `async`, within the request, or wait with
 `GET /api/sites/:slug/godmode/chats/:chatId?wait=40` ([api.md](api.md#wp-godmode)). The check is
 there against the easy mistake, not a fence: a `wp eval` that runs a wait is not caught.
+
+### A PHP site's cron lines
+
+A PHP site's cron lines (`site_cron`, `services/siteCron.ts`) are commands too, but not jobs: a job
+holds its site, so a line due every minute would hold off backups and Files tab saves, which is why
+custom schedules keep five minutes apart. The `site-cron` task starts every due line of a running PHP
+site and does not wait for it, as `sh -c` as www-data in the site's folder. A line still running is
+not started again (that time is skipped); a line of a stopped site, or one a backup, restore, move,
+import or container change is working on, stays due and runs once it can. At most 2 run at once per
+server; the rest stay due. `timeoutMin` (1-60, default 5) is enforced inside the container with
+`timeout`. What is kept is the last run on the line itself: its start, time, exit code and the last
+4 KB of what it printed, stdout and stderr together. A panel restart, or a connection to the server
+lost while a line runs (`execToStream`'s `onStarted` tells it from an exec Docker refused), loses
+that run's result; the command runs on to its deadline. Until then the line counts as running, on its
+server's count of 2 too: a run with no time (`lastMs`) recorded is one whose end was not seen. Its
+deadline is the stop-after time it started with (`lastTimeoutMin`), which an edit of the line's
+doesn't move, as Docker's `timeout` doesn't.
 
 ### REST API requests
 

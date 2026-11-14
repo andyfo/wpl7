@@ -37,6 +37,7 @@ import { alterTableSql, createTableSql, describeChanges, dropTableSql, truncateT
 import { tsStamp } from '../services/backup.js';
 import type { DbTarget, DdlAttempt } from '../services/dbBrowser.js';
 import { clearAfterChange } from '../services/siteCaches.js';
+import { hasDatabase, noDatabase } from '../lib/siteKind.js';
 import type { AppDeps } from './deps.js';
 
 /**
@@ -90,6 +91,13 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (site.status === 'provisioning' || site.status === 'deleting') {
       throw conflict(`Site "${site.slug}" is ${site.status}; its databases are not available`);
     }
+    return site;
+  };
+
+  /** A usable site that has a database of its own: a PHP site may have none, and then nothing here applies. */
+  const withDatabase = (slug: string): SiteRow => {
+    const site = usableSite(slug);
+    if (!hasDatabase(site)) throw noDatabase(site.slug);
     return site;
   };
 
@@ -190,8 +198,19 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
     return { url };
   });
 
+  // The site's own database, for a PHP site made without one. As site.create makes it: wp_<slug>.
+  r.post('/api/sites/:slug/database', { schema: { params: slugParams } }, async (req, reply) => {
+    const site = usableSite(req.params.slug);
+    if (hasDatabase(site)) throw conflict(`"${site.slug}" has a database already: ${site.dbName}`);
+    const job = deps.worker.enqueue('database.create', { siteId: site.id, own: true, createdBy: actorName(req) }, site);
+    audit(req, site, 'create own', {});
+    return accepted(reply, req, job);
+  });
+
   r.post('/api/sites/:slug/databases', { schema: { params: slugParams, body: dbCreateBody } }, async (req, reply) => {
     const site = usableSite(req.params.slug);
+    // They log in as the site's own user, so there has to be one.
+    if (!hasDatabase(site)) throw conflict(`"${site.slug}" has no database of its own yet. Create it first: the others share its user.`);
     const { name } = req.body;
     deps.databases.assertNameFree(name);
     const onServer = deps.db
@@ -218,12 +237,13 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   r.post('/api/sites/:slug/database-password/reveal', { schema: { params: slugParams } }, async (req) => {
     const site = siteOf(req.params.slug);
+    if (!hasDatabase(site)) throw noDatabase(site.slug);
     audit(req, site, 'reveal-password', {});
     return { password: site.dbPassword };
   });
 
   r.post('/api/sites/:slug/database-password', { schema: { params: slugParams } }, async (req, reply) => {
-    const site = usableSite(req.params.slug);
+    const site = withDatabase(req.params.slug);
     const job = deps.worker.enqueue('database.password', { siteId: site.id }, site);
     audit(req, site, 'change-password', {});
     return accepted(reply, req, job);
@@ -268,7 +288,7 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
       config: { rateLimit: { max: 1200, timeWindow: 60_000 } },
     },
     async (req) => {
-      const site = usableSite(req.params.slug);
+      const site = withDatabase(req.params.slug);
       const { offset, size } = req.query;
       const server = deps.servers.handleFor(site.serverId);
       const file = deps.databases.uploadPath(site, req.params.id);

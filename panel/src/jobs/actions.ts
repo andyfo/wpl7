@@ -3,8 +3,10 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { jobs, sites, type JobRow, type SiteRow } from '../db/schema.js';
 import { GODMODE_WAIT_REFUSAL, waitsOnGodmode, type JobType } from '../../shared/schemas.js';
 import {
+  PHP_SITE_SKIP,
   SCHEDULE_ACTION_INFO,
   type ScheduleAction,
+  type ScheduleActionInfo,
   type ScheduleActionParams,
   type ScheduleTarget,
 } from '../../shared/scheduleActions.js';
@@ -12,7 +14,7 @@ import type { ScheduleSkip } from '../../shared/types.js';
 import { AppError, badRequest } from '../lib/errors.js';
 import type { CoreServices } from '../services/index.js';
 import { execLane } from './lanes.js';
-import { externalSites, hostedSites } from '../lib/siteKind.js';
+import { externalSites, hostedSites, isPhpSite, wordpressSites } from '../lib/siteKind.js';
 import type { JobWorker } from './worker.js';
 
 /**
@@ -125,6 +127,8 @@ function resolveSites(s: CoreServices, action: ScheduleAction, target: ScheduleT
     return { sites: found, skipped };
   }
   const conditions = [eq(sites.status, action === 'site.start' ? 'stopped' : 'running'), hostedSites()];
+  // A PHP site has no WordPress for these: left out rather than skipped, as a stopped site is.
+  if ((info as ScheduleActionInfo).wordpress) conditions.push(wordpressSites());
   if (target.kind === 'server') conditions.push(eq(sites.serverId, target.serverId));
   if (action === 'backup') conditions.push(eq(sites.backupsEnabled, 1));
   const hosted = s.db.select().from(sites).where(and(...conditions)).all();
@@ -137,9 +141,10 @@ function resolveSites(s: CoreServices, action: ScheduleAction, target: ScheduleT
 }
 
 /** Why this site cannot take this action now, or null. */
-export function ineligible(action: ScheduleAction, site: Pick<SiteRow, 'status' | 'kind'>): string | null {
+export function ineligible(action: ScheduleAction, site: Pick<SiteRow, 'status' | 'kind' | 'app'>): string | null {
   if (site.status === 'provisioning') return 'is still being created';
   if (site.status === 'deleting') return 'is being deleted';
+  if (isPhpSite(site) && (SCHEDULE_ACTION_INFO[action] as ScheduleActionInfo).wordpress) return PHP_SITE_SKIP;
   if (site.kind === 'external') {
     const info = SCHEDULE_ACTION_INFO[action] as { external: boolean; externalRefusal?: string };
     if (!info.external) return `is an external site: it ${info.externalRefusal ?? 'cannot take this'}`;

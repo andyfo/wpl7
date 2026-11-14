@@ -41,6 +41,8 @@ const EXCEPTIONS: Record<string, string> = {
   'GET /api/sites/:slug/godmode/agents': 'manage',
   'GET /api/sites/:slug/godmode/chats/:chatId': 'manage',
   'GET /api/backups/:id/download': 'manage',
+  // A PHP site's cron lines: commands, and what their last runs printed.
+  'GET /api/sites/:slug/cron': 'manage',
   // What a database holds: its rows, one row whole, a dump of it.
   'GET /api/sites/:slug/databases/:db/tables/:table/rows': 'manage',
   'GET /api/sites/:slug/databases/:db/tables/:table/row': 'manage',
@@ -122,6 +124,7 @@ const DESTRUCTIVE = [
   'POST /api/servers/:id/backups/relocate',
   'POST /api/servers/:id/update',
   'POST /api/sites/:slug/connection/disconnect',
+  'POST /api/sites/:slug/cron/:id/run',
   'POST /api/sites/:slug/database-password',
   'POST /api/sites/:slug/database-password/reveal',
   'POST /api/sites/:slug/databases/:db/adminer',
@@ -159,6 +162,7 @@ const DESTRUCTIVE = [
   'PUT /api/sites/:slug/backup-before-updates',
   'PUT /api/sites/:slug/backups-enabled',
   'PUT /api/sites/:slug/backups-keep-days',
+  'PUT /api/sites/:slug/cron',
   'PUT /api/sites/:slug/domains',
   'PUT /api/sites/:slug/files/content',
   'PUT /api/sites/:slug/files/uploads/:id',

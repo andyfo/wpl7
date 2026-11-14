@@ -6,29 +6,44 @@ import { siteDatabases, type SiteRow } from '../../db/schema.js';
 import { extraDbNameSchema, DB_LIMITS, DB_OBJECT_NAME_RE } from '../../../shared/databases.js';
 import { generateSecret } from '../../lib/crypto.js';
 import { AppError, JobCanceledError } from '../../lib/errors.js';
+import { hasDatabase, isPhpSite } from '../../lib/siteKind.js';
+import { dbIdentifier } from '../../lib/slug.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { DbTarget } from '../../services/dbBrowser.js';
 import type { CoreServices } from '../../services/index.js';
 import { sitePaths, siteRuntimeFrom } from '../../services/siteSpec.js';
 import type { JobContext } from '../context.js';
-import { loadSite, probeSite, siteDomains, siteShouldRun, startSiteContainer, updateSiteRow } from './shared.js';
+import { loadSite, probeSite, siteDomains, siteShouldRun, startSiteContainer, updateSiteRow, writeSiteJson } from './shared.js';
 import { replaceContainer } from './sites.js';
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 // ------------------------------------------------------------------ another database for a site
 
-export const databaseCreatePayload = z.object({
-  siteId: z.number().int(),
-  name: extraDbNameSchema,
-  /** Who asked: an admin's username or an API key's name, kept with the database. */
-  createdBy: z.string().nullable().default(null),
-});
+export const databaseCreatePayload = z
+  .object({
+    siteId: z.number().int(),
+    /** Another database for the site. */
+    name: extraDbNameSchema.optional(),
+    /** The site's own instead, for a PHP site that has none (createOwnDatabase). */
+    own: z.boolean().default(false),
+    /** Who asked: an admin's username or an API key's name, kept with the database. */
+    createdBy: z.string().nullable().default(null),
+  })
+  .refine((p) => p.own === (p.name === undefined), 'Either the name of another database, or own');
 
 export async function databaseCreate(ctx: JobContext<z.infer<typeof databaseCreatePayload>>, s: CoreServices): Promise<void> {
   const site = loadSite(s.db, ctx.payload.siteId);
-  const { name } = ctx.payload;
   const server = s.servers.handleFor(site.serverId);
+  if (ctx.payload.own) {
+    const made = await createOwnDatabase(ctx, s, server, site);
+    ctx.info(`Database ${made.dbName} added. Its user and password are on the Database tab.`);
+    ctx.setResult({ name: made.dbName });
+    return;
+  }
+  const name = ctx.payload.name!;
+  // The other databases log in as the site's own user, so there has to be one.
+  if (!hasDatabase(site)) throw new Error(`"${site.slug}" has no database of its own yet. Create it first: the others share its user.`);
   // Again here: the request checked it, but another job may have taken the name since.
   s.databases.assertNameFree(name);
   const row = s.databases.reserve(site.id, name, ctx.payload.createdBy);
@@ -44,6 +59,51 @@ export async function databaseCreate(ctx: JobContext<z.infer<typeof databaseCrea
   }
   ctx.info(`Database ${name} added. It uses the site's database user and password.`);
   ctx.setResult({ name });
+}
+
+/**
+ * A site's own database, made after the site: `wp_<slug>` and its user, as site.create makes them,
+ * and then the row says so. For a PHP site that was made without one, and for a restore of a
+ * backup that has one into such a site. Nothing in the container holds the login: the site's own
+ * config takes it from the Database tab.
+ *
+ * A database or a user of that name already on the server is never adopted, and never dropped:
+ * whatever it holds is not known to be this site's.
+ */
+export async function createOwnDatabase(ctx: JobContext<unknown>, s: CoreServices, server: ServerHandle, site: SiteRow): Promise<SiteRow> {
+  await assertOwnDatabaseFree(server, site);
+  const name = dbIdentifier(site.slug);
+  const password = generateSecret(24);
+  ctx.info(`Creating database ${name} and its user on "${server.name}"…`);
+  try {
+    await server.dbAdmin.createSiteDb(name, name, password);
+    updateSiteRow(s.db, site.id, { dbName: name, dbUser: name, dbPassword: password });
+  } catch (err) {
+    // Either half may be there: both were not, a moment ago.
+    await server.dbAdmin.dropSiteDb(name, name).catch((undoErr: unknown) => ctx.warn(`Could not remove what was made of ${name}: ${errMsg(undoErr)}`));
+    throw err;
+  } finally {
+    s.databases.kick(site.serverId);
+  }
+  const made = loadSite(s.db, site.id);
+  await writeSiteJson(server, s.config, made);
+  return made;
+}
+
+/**
+ * Refuses, before anything is made, a site's own database where the server already has a
+ * database or a user of its name: nothing says whose it is. Asked again by createOwnDatabase, for
+ * a caller that has not.
+ */
+export async function assertOwnDatabaseFree(server: ServerHandle, site: SiteRow): Promise<void> {
+  if (hasDatabase(site)) throw new Error(`"${site.slug}" has a database already: ${site.dbName}`);
+  const name = dbIdentifier(site.slug);
+  if ((await server.dbAdmin.inventory()).some((db) => db.name === name)) {
+    throw new Error(`"${server.name}" already has a database called ${name}. Delete it under Databases if no site needs it, then try again.`);
+  }
+  if (await server.dbAdmin.userExists(name)) {
+    throw new Error(`"${server.name}" already has a database user called ${name}, which no database of the panel's uses. Remove it from the server's MariaDB, then try again.`);
+  }
 }
 
 export const databaseDeletePayload = z.object({
@@ -87,6 +147,8 @@ const READS_PASSWORD_FROM_ENV = /getenv_docker\(\s*['"]WORDPRESS_DB_PASSWORD['"]
 export async function databasePassword(ctx: JobContext<z.infer<typeof databasePasswordPayload>>, s: CoreServices): Promise<void> {
   const site = loadSite(s.db, ctx.payload.siteId);
   const server = s.servers.handleFor(site.serverId);
+  if (!hasDatabase(site)) throw new Error(`"${site.slug}" has no database.`);
+  if (isPhpSite(site)) return phpDatabasePassword(ctx, s, server, site);
   const wpConfig = path.join(sitePaths(s.config, site.slug).wordpress, 'wp-config.php');
   const text = await server.files.readUntrusted(wpConfig, 512 * 1024);
   if (text === null && (await server.files.stat(wpConfig))) {
@@ -189,6 +251,29 @@ export async function databasePassword(ctx: JobContext<z.infer<typeof databasePa
   ctx.info(`${site.dbUser} has a new password.`);
 }
 
+/**
+ * A PHP site's: MariaDB and the panel get the new password, and that is all. Nothing in its
+ * container holds it, so there is no container to recreate, and the site's own config still has
+ * the old one until someone puts the new one there.
+ */
+async function phpDatabasePassword(ctx: JobContext<unknown>, s: CoreServices, server: ServerHandle, site: SiteRow): Promise<void> {
+  const newPassword = generateSecret(24);
+  ctx.info(`Setting a new password for ${site.dbUser}…`);
+  try {
+    await server.dbAdmin.setUserPassword(site.dbUser, newPassword);
+  } catch (err) {
+    // The answer may have been lost after MariaDB took it: make sure the old password holds.
+    await server.dbAdmin.setUserPassword(site.dbUser, site.dbPassword).catch((undoErr: unknown) => {
+      ctx.error(`Could not make sure the old password holds: ${errMsg(undoErr)}. If the site cannot reach its database, change the password again.`);
+    });
+    throw err;
+  }
+  updateSiteRow(s.db, site.id, { dbPassword: newPassword });
+  // Connections the browser kept open were made with the old password.
+  server.dbBrowser.closeIdle();
+  ctx.info(`${site.dbUser} has a new password. The site's own config still has the old one: put the new one there, or the site loses its database.`);
+}
+
 // ------------------------------------------------------------------ import
 
 export const databaseImportPayload = z.object({
@@ -271,7 +356,7 @@ export async function databaseImport(ctx: JobContext<z.infer<typeof databaseImpo
         'Export it without CREATE DATABASE and USE statements, then import it again.',
     );
   }
-  if (ownDb && p.empty && hasOptions !== '1') {
+  if (ownDb && p.empty && hasOptions !== '1' && !isPhpSite(site)) {
     throw new Error(
       `The dump has no ${site.tablePrefix}options table. With every table deleted first, WordPress would find no installation. ` +
         'Import a dump of the whole database, or keep the tables.',
@@ -324,8 +409,10 @@ export async function databaseImport(ctx: JobContext<z.infer<typeof databaseImpo
     } finally {
       s.databases.kick(site.serverId);
     }
-    // Failed or not: a failed import may have emptied the database as surely as a wrong dump.
-    if (stopped) await restartIfInstalled(ctx, s, site, target, { failed: failure !== null, backedUp: p.backupFirst });
+    // Failed or not: a failed import may have emptied the database as surely as a wrong dump. A PHP
+    // site has no installer to hand to whoever asks, so it starts again whatever the dump held.
+    if (stopped && isPhpSite(site)) await startAgain(ctx, s, site);
+    else if (stopped) await restartIfInstalled(ctx, s, site, target, { failed: failure !== null, backedUp: p.backupFirst });
     if (failure !== null) throw failure;
   } finally {
     if (ownDb) s.monitor.busySlugs.delete(site.slug);
@@ -334,6 +421,16 @@ export async function databaseImport(ctx: JobContext<z.infer<typeof databaseImpo
   await server.files.rm(file).catch(() => undefined);
   ctx.info('Import complete.');
   ctx.setResult({ database: p.database });
+}
+
+/** A PHP site after an import into its own database: started again, as it was before. */
+async function startAgain(ctx: JobContext<unknown>, s: CoreServices, site: SiteRow): Promise<void> {
+  ctx.info('Starting the site again…');
+  try {
+    await startSiteContainer(s.servers.handleFor(site.serverId), s, loadSite(s.db, site.id), ctx);
+  } catch (err) {
+    ctx.error(`Could not start the site again: ${errMsg(err)}. Start it on the site page.`);
+  }
 }
 
 /**

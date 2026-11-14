@@ -46,6 +46,7 @@ describe('built-in schedules', () => {
       'site-limits',
       'housekeeping',
       'wp-cron',
+      'site-cron',
       'uptime',
       'external-check',
       'site-stats',

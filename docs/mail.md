@@ -7,18 +7,36 @@ DNS records a customer domain needs before its mail reliably reaches an inbox.
 ## How it works
 
 ```
-wp-<slug>  ──PHP mail()──▶ msmtp ──SMTP:587──▶ wpl7-mail (postfix)
-                                                    │  milter
-                                                    ▼
-                                               wpl7-dkim (OpenDKIM)  signs
-                                                    │
-                                                    ▼
-                                    smarthost  ·or·  recipient MX
+wp-<slug>  ──PHP mail()──▶ wpl7-sendmail ──▶ msmtp ──SMTP:587──▶ wpl7-mail (postfix)
+                                                                      │  milter
+                                                                      ▼
+                                                                 wpl7-dkim (OpenDKIM)  signs
+                                                                      │
+                                                                      ▼
+                                                      smarthost  ·or·  recipient MX
 ```
 
-* The site image (`wpl7-wordpress:php8.x`) has msmtp installed as `sendmail`, so PHP's `mail()` —
-  and therefore `wp_mail()` and every plugin built on it — hands the message to the `wpl7-mail`
-  container over the site's own internal network.
+* The site image (`wpl7-wordpress:php8.x`) has msmtp behind `wpl7-sendmail`, which is PHP's
+  `sendmail_path` (`/usr/local/bin/wpl7-sendmail -t`) and what `/usr/sbin/sendmail` and
+  `/usr/lib/sendmail` point at. So PHP's `mail()` — and therefore `wp_mail()` and every plugin built
+  on it — and any library that runs sendmail itself hand the message to the `wpl7-mail` container
+  over the site's own internal network.
+* msmtp takes the envelope sender from one place, and refuses `-f` beside `--read-envelope-from`, so
+  `wpl7-sendmail` gives it exactly one: the caller's `-f` (its arguments passed on as they are), else
+  the message's `From:` header (`--read-envelope-from`, the command every site ran before), else the
+  site's **default sender** (`-f`, and msmtp adds it as the `From:` header). It keeps the message in a
+  temporary file under `/tmp` to read the headers, removed when msmtp returns. Without a default and a
+  `From:` header it fails as before, and msmtp says why.
+* The default sender is `config/runtime/mail-from` (`/etc/wpl7-runtime/mail-from`), one line the
+  wrapper reads for each message, so nothing reloads it: `wordpress@` the primary domain without
+  `www.` on a WordPress site, the address WordPress uses itself, and `noreply@` on a PHP site
+  (`defaultMailFrom` in `services/mailAuth.ts`). It is written with the other runtime files before
+  every create and start, and again after a domain change has updated the row. An image from before
+  the wrapper does not read it. `msmtprc` still holds the site's relay login and nothing else.
+* sendmail's `-bs` mode (SMTP on stdin, the default of Symfony's and Laravel's sendmail transports)
+  is not there: the wrapper hands every `-b` mode but `-bm` to msmtp untouched, which refuses it at
+  once. Read by the wrapper, `-bs` would hang, since its caller waits for a greeting and never closes
+  stdin. Such an app sets its command to `sendmail -oi -t`.
 * Each site **authenticates with its own login** (`<slug>@wpl7`), and the relay refuses any sender
   domain that belongs to a different site — see Sender authorization below.
 * `wpl7-mail` queues and retries. It publishes no ports and is unreachable from the internet, so it
@@ -66,7 +84,9 @@ The last row is deliberate: the `known` variant of the rule leaves unknown domai
 customer relaying their own off-fleet address keeps working. Nothing off-fleet can be signed here
 anyway, and the recipient's SPF/DMARC judges it.
 
-That rule holds the **envelope** sender. A signature vouches for the **`From:` header**, which a
+That rule holds the **envelope** sender, whichever of the three `wpl7-sendmail` picked it from, so
+the wrapper changes nothing about who may send as whom: a site could always open the relay's port
+with its own login and name any sender. A signature vouches for the **`From:` header**, which a
 site writes as it likes — `MAIL FROM:<wordpress@alpha.example>` with `From: ceo@beta.example`
 passes the relay. So the signer holds the header to the same owners: its signing policy
 (`/srv/mail/dkim/policy.lua`, run by OpenDKIM for every message) signs only when the login the
@@ -129,7 +149,8 @@ working":
 * **From the relay** — injects straight into postfix, skipping WordPress. Proves the relay, the
   signing and the delivery path. Use a sender at a domain that has a DKIM key to exercise signing.
 * **From a site** — runs `wp_mail()` inside the site container: the exact path a password reset or
-  a contact form takes, including PHP configuration and msmtp.
+  a contact form takes, including PHP configuration and msmtp. On a PHP site it runs PHP's `mail()`
+  with no sender, so the site's default sender is what is tested (`POST /api/sites/:slug/mail/test`).
 
 If the relay test arrives and the site test does not, the problem is in that site (a plugin
 overriding `wp_mail`, an SMTP plugin pointed elsewhere), not in mail delivery.

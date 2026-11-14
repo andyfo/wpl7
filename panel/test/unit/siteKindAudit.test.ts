@@ -119,7 +119,12 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   },
   'services/offsite.ts': { reconcileDestination: both('backups of either kind'), fetchBackup: both('backups of either kind') },
   'services/quarantine.ts': { prune: both('quarantined files, which only hosted sites have') },
-  'services/security.ts': { plan: hosted("s.status === 'running'"), hardeningPlan: hosted("'running'") },
+  'services/security.ts': {
+    plan: hosted("s.status === 'running'"),
+    hardeningPlan: hosted("'running'"),
+    prepareHardening: both('reads the row of the site it was handed, which only a job on a hosted site does'),
+    policyFor: both("reads the app of the site whose policy is asked for"),
+  },
   'services/securityEvents.ts': { fold: NAMES, recent: NAMES },
   'services/securityViews.ts': { securityOverview: hosted('hostedSites()'), fleetScans: hosted('hostedSites()') },
   'services/phpReleases.ts': { readSitePhp: hosted('isExternal(site)'), sweepPhpReleases: hosted('hostedSites()') },
@@ -137,8 +142,140 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   'services/traffic.ts': { apply: both("slugs from Traefik's log, which only hosted sites are in") },
   'services/wildcardSites.ts': { sweepWildcardSites: hosted('hostedSites()') },
   'services/wpBulk.ts': { createBatch: both('bulk runs reach both kinds') },
+  'services/siteCron.ts': { tick: hosted('hostedSites()'), runningOn: both('by its cron lines, which only a PHP site has, and PHP sites are hosted') },
   'services/wpInventory.ts': { fleetInventory: both('Bulk management shows both kinds') },
   'updates/hooks.ts': { run: hosted('hostedSites()') },
+};
+
+/**
+ * And reviewed for PHP sites (sites.app php): hosted, with no WordPress in them. A query whose rows
+ * go to WordPress - WP-CLI, wp-cron, the inventory, wordpress.org - must leave them out with
+ * `wordpressSites()` or skip them with `isPhpSite(`, in the query's own text. The rest take both
+ * apps, for a reason written next to them. A query this list does not know fails the test too.
+ */
+type AppVerdict = { apps: string } | { wordpress: 'wordpressSites()' | 'isPhpSite(' };
+
+/** The query takes PHP sites too, because... */
+const apps = (reason: string): AppVerdict => ({ apps: reason });
+/** WordPress sites only: the query's text holds `token`. */
+const wordpress = (token: 'wordpressSites()' | 'isPhpSite('): AppVerdict => ({ wordpress: token });
+
+const ANY_SITE = apps('nothing it does is WordPress');
+const APP_NAMES = apps('reads names and ids only');
+const EXTERNAL_ONLY = apps('external sites, which are always WordPress');
+const IMPORT_ROW = apps("an import's own site, which an import makes as a WordPress site");
+const RELAY = apps('a PHP site sends through the relay as its own domains too');
+const SCANNED = apps('a PHP site is scanned too: its files are checked, it has no WordPress to compare');
+const EITHER_BACKUP = apps('backups of either app');
+
+const SITE_APP_REVIEW: Record<string, Record<string, AppVerdict>> = {
+  'adminer/index.ts': { siteOf: apps("a PHP site's database is browsed like any other; the routes refuse one with none") },
+  'jobs/actions.ts': {
+    checkTarget: apps('checks that named sites exist; ineligible() skips a PHP site for a WordPress action'),
+    resolveSites: apps('serves every action: `all` and `server` add wordpressSites() for the WordPress ones'),
+  },
+  'jobs/handlers/backups.ts': { backupRestore: apps("restores either app; WordPress's steps inside ask isPhpSite") },
+  'jobs/handlers/import.ts': { siteImportQueuedCancel: IMPORT_ROW },
+  'jobs/handlers/move.ts': { finalizeCleanup: apps('who owns a source copy, by slug') },
+  'jobs/handlers/servers.ts': { serverApplySiteLimits: apps('container limits and runtime files for every hosted site') },
+  'jobs/handlers/shared.ts': {
+    loadSite: apps("the guard itself: refuses a PHP site where the job asks for { app: 'wordpress' }"),
+    ensureSiteMountSources: ANY_SITE,
+  },
+  'jobs/handlers/sites.ts': { siteCreateQueuedCancel: ANY_SITE },
+  'jobs/handlers/wp.ts': { wpScanAll: wordpress('wordpressSites()') },
+  'jobs/schedulers.ts': {
+    backupTick: apps('scheduled backups include PHP sites'),
+    siteLimitsTick: ANY_SITE,
+    wpCronTick: wordpress('wordpressSites()'),
+    wpScanIsDue: wordpress('wordpressSites()'),
+    wpScanNextDue: wordpress('wordpressSites()'),
+    dtoContext: APP_NAMES,
+  },
+  'jobs/worker.ts': {
+    clearCaches: apps('clearAfterChange leaves a PHP site alone itself'),
+    enqueue: apps('reads the kind, for the lanes'),
+    rereadDatabases: ANY_SITE,
+  },
+  'routes/backups.ts': {
+    'GET /api/backups': EITHER_BACKUP,
+    'POST /api/backups/:id/fetch': EITHER_BACKUP,
+    'GET /api/backups/ids': EITHER_BACKUP,
+  },
+  'routes/security.ts': { 'POST /api/security/scans': SCANNED },
+  'servers/registry.ts': { sitesCountFor: ANY_SITE, externalCountFor: EXTERNAL_ONLY },
+  'services/siteCaches.ts': { sweepSiteRuntime: apps('a PHP site has runtime files too: the pass-through, its pool, mail-from') },
+  'services/reminders.ts': { siteRows: apps('domain and PHP reminders are for PHP sites too') },
+  'services/alerts.ts': { vulnerabilities: apps('the WordPress inventory, which has no rows for a PHP site') },
+  'services/backup.ts': { expire: EITHER_BACKUP, daysFor: EITHER_BACKUP },
+  'services/blocklist.ts': { block: APP_NAMES, toDto: APP_NAMES },
+  'services/connections.ts': {
+    enroll: EXTERNAL_ONLY,
+    slugTaken: apps('a slug is taken by a site of either app'),
+    update: EXTERNAL_ONLY,
+    heartbeat: EXTERNAL_ONLY,
+    toSummary: APP_NAMES,
+  },
+  'services/databases.ts': {
+    assertNameFree: ANY_SITE,
+    claims: apps('a database is claimed by whether the site has one (hasDatabase), not by its app'),
+    userClaimed: ANY_SITE,
+    pruneUploads: ANY_SITE,
+  },
+  'services/dockerCleanup.ts': { needsOn: apps('a PHP site runs the same site images, which must be kept') },
+  'services/domainGuard.ts': { assertDomainsFree: apps('a domain belongs to one site, of either app') },
+  'services/externalBackup.ts': { pruneOrphans: EXTERNAL_ONLY },
+  'services/ftp.ts': { expireDue: ANY_SITE, suspendSite: ANY_SITE, serversWanting: ANY_SITE, plan: apps('a PHP site has FTP and SFTP too'), serverView: ANY_SITE },
+  'services/imports.ts': { retry: IMPORT_ROW, refresh: IMPORT_ROW, toSummary: IMPORT_ROW, siteUrlOf: IMPORT_ROW, releaseSiteRow: IMPORT_ROW },
+  'services/legacyRename.ts': { sweepLegacyRename: ANY_SITE },
+  'services/mail.ts': {
+    senderOwners: RELAY,
+    blockedLogins: RELAY,
+    syncMailAuthTo: RELAY,
+    setSiteMailSuspended: RELAY,
+    enforceVolumeLimits: RELAY,
+    sendingDomains: RELAY,
+    stats: APP_NAMES,
+  },
+  'services/malwareScan.ts': {
+    schedulePass: SCANNED,
+    scan: SCANNED,
+    overtaken: SCANNED,
+    finish: apps('"No WordPress was found" asks isPhpSite inside, not the query'),
+    followUp: SCANNED,
+  },
+  'services/monitor.ts': { activeSites: apps('a PHP site has an uptime check too'), tickUptime: ANY_SITE, recheck: ANY_SITE },
+  'services/offsite.ts': { reconcileDestination: EITHER_BACKUP, fetchBackup: EITHER_BACKUP },
+  'services/quarantine.ts': { prune: ANY_SITE },
+  'services/security.ts': {
+    plan: apps('effectivePolicy takes the app, and leaves WordPress\'s rules out for a PHP site'),
+    hardeningPlan: apps("a PHP site's Apache file has its HTTPS line and web root"),
+    prepareHardening: apps("a PHP site's Apache file has its HTTPS line and web root"),
+    policyFor: apps('reads the app the policy depends on'),
+  },
+  'services/securityEvents.ts': { fold: APP_NAMES, recent: APP_NAMES },
+  'services/securityViews.ts': { securityOverview: apps('each site with its own policy, by its app'), fleetScans: SCANNED },
+  'services/phpReleases.ts': { readSitePhp: ANY_SITE, sweepPhpReleases: ANY_SITE },
+  'services/siteHardening.ts': { sweepHardening: ANY_SITE },
+  'services/siteImages.ts': { sweepSiteImages: apps('a PHP site follows its image too, once the image can run it (isPhpSite in canRun)') },
+  'services/sites.ts': {
+    bySlug: apps("the guard itself: refuses a PHP site where the caller asks for { app: 'wordpress' }"),
+    reconcileAll: ANY_SITE,
+    applyLimits: ANY_SITE,
+    ownSiteLimits: ANY_SITE,
+    list: apps('the site list shows both apps'),
+    ownBackupKeepDays: APP_NAMES,
+    ownBackupBeforeUpdates: APP_NAMES,
+  },
+  'services/traffic.ts': { apply: apps('a PHP site has visitor statistics too') },
+  'services/wildcardSites.ts': { sweepWildcardSites: ANY_SITE },
+  'services/wpBulk.ts': { createBatch: wordpress('isPhpSite(') },
+  'services/siteCron.ts': {
+    tick: apps("PHP sites' own cron lines: the query asks for app php itself"),
+    runningOn: apps('by its cron lines, which only a PHP site has'),
+  },
+  'services/wpInventory.ts': { fleetInventory: wordpress('wordpressSites()') },
+  'updates/hooks.ts': { run: ANY_SITE },
 };
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src');
@@ -218,6 +355,22 @@ describe('queries on the sites table, and sites hosted elsewhere', () => {
         .map((scope) => `${file}#${scope}`),
     );
     expect(stale).toEqual([]);
+  });
+
+  it('knows every one of them for PHP sites too', () => {
+    const unknown = found.filter((f) => SITE_APP_REVIEW[f.file]?.[f.scope] === undefined).map((f) => `${f.file}:${f.line} (${f.scope})`);
+    expect(unknown).toEqual([]);
+    const present = new Set(found.map((f) => `${f.file}#${f.scope}`));
+    const stale = Object.entries(SITE_APP_REVIEW).flatMap(([file, scopes]) => Object.keys(scopes).map((scope) => `${file}#${scope}`)).filter((key) => !present.has(key));
+    expect(stale).toEqual([]);
+  });
+
+  it('leaves PHP sites out of every WordPress-only query', () => {
+    const missing = found
+      .map((f) => ({ f, verdict: SITE_APP_REVIEW[f.file]?.[f.scope] }))
+      .filter(({ f, verdict }) => verdict && 'wordpress' in verdict && !f.text.includes(verdict.wordpress))
+      .map(({ f, verdict }) => `${f.file}:${f.line} (${f.scope}) does not say ${(verdict as { wordpress: string }).wordpress}`);
+    expect(missing).toEqual([]);
   });
 
   it('leaves external sites out of every hosted-only query', () => {

@@ -4,6 +4,7 @@
  * almost all delivered, a few deferred, one bounce. Recipients are example.net addresses.
  */
 import { mailDkimKeys, mailMessages } from '../../src/db/schema.js';
+import { defaultMailFrom } from '../../src/services/mailAuth.js';
 import type { TestWorld } from '../../test/helpers.js';
 import { DAY, HOUR, MINUTE, ago } from './clock.js';
 import { SITES, rng, seedOf } from './data.js';
@@ -40,7 +41,8 @@ export function seedMail(world: TestWorld): void {
     for (const site of live) {
       const next = rng(seedOf(`mail:${site.slug}`));
       const perDay = Math.max(4, Math.round(site.dailyVisitors / 18));
-      const senders = SENDERS[site.slug] ?? [`wordpress@${site.domain}`];
+      // The rest send as their default sender: WordPress's own wordpress@, or a PHP site's noreply@.
+      const senders = SENDERS[site.slug] ?? [defaultMailFrom(site.app ?? 'wordpress', site.domain!)];
       for (let i = 0; i < perDay; i++) {
         const at = ago(Math.round(next() * DAY));
         const roll = next();

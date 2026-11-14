@@ -1,9 +1,10 @@
 // @docs panel/updating, reference/architecture, security/overview
 import { asc } from 'drizzle-orm';
-import { sites } from '../db/schema.js';
+import { sites, type SiteRow } from '../db/schema.js';
 import type { JobWorker } from '../jobs/worker.js';
 import type { CoreServices } from './index.js';
-import { hostedSites } from '../lib/siteKind.js';
+import { hostedSites, isPhpSite } from '../lib/siteKind.js';
+import type { SiteApp } from '../../shared/schemas.js';
 import { queueReconcile, type HardeningSweep } from './siteHardening.js';
 import { containerOfAside, siteImage } from './siteSpec.js';
 import { stackFromLabels, type SiteStack } from './siteStack.js';
@@ -39,15 +40,18 @@ export async function sweepSiteImages(
     if (server.status === 'unreachable' || server.status === 'provisioning') continue;
     const docker = s.servers.handleFor(server.id).docker;
     // One lookup per PHP version and server, not one per site.
-    const current = new Map<string, { id: string | null; stack: SiteStack }>();
+    const current = new Map<string, { id: string | null; stack: SiteStack; apps: SiteApp[] }>();
     const tagged = async (tag: string) => {
       let image = current.get(tag);
       if (!image) {
-        image = { id: await docker.imageId(tag), stack: await docker.imageStack(tag) };
+        image = { id: await docker.imageId(tag), stack: await docker.imageStack(tag), apps: await docker.imageApps(tag) };
         current.set(tag, image);
       }
       return image;
     };
+    // A PHP site waits for an image that can run it: a container from one older would be refused
+    // (siteSpec.ts siteContainerSpec), at every sweep.
+    const canRun = (site: SiteRow, image: { apps: SiteApp[] }) => !isPhpSite(site) || image.apps.includes('php');
     try {
       const containers = await docker.listManaged(['wpl7.role=wordpress']);
       const queued = new Set<number>();
@@ -62,7 +66,7 @@ export async function sweepSiteImages(
           continue;
         }
         const image = await tagged(siteImage(site.phpVersion));
-        if (!image.id || image.id === site.stackSwitchImage) continue;
+        if (!image.id || image.id === site.stackSwitchImage || !canRun(site, image)) continue;
         // On the current image, yet made for the one before it: the panel that was running while an
         // update moved the tag built it, with Apache's port, which on this image nothing can reach.
         const madeForAnother = image.id === container.imageId && image.stack === 2 && stackFromLabels(container.labels) === 1;
@@ -77,7 +81,8 @@ export async function sweepSiteImages(
         if (site.serverId !== server.id || site.status !== 'running' || queued.has(site.id)) continue;
         const container = containers.find((c) => c.name === site.containerName);
         if (container && container.state !== 'created') continue;
-        if (!(await tagged(siteImage(site.phpVersion))).id) continue;
+        const image = await tagged(siteImage(site.phpVersion));
+        if (!image.id || !canRun(site, image)) continue;
         queueReconcile(worker, site, sweep);
       }
     } catch (err) {

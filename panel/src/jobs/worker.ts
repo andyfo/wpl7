@@ -13,7 +13,7 @@ import { JobContext } from './context.js';
 import { SECRET_PAYLOAD_KEYS, SITE_INTERRUPTING_JOBS, getRegistry, jobDeadline } from './registry.js';
 import { clearAfterChange, wpCliOnlyReads } from '../services/siteCaches.js';
 import { migrateArrivedFiles } from '../services/siteMigration.js';
-import { isExternal } from '../lib/siteKind.js';
+import { isExternal, isPhpSite } from '../lib/siteKind.js';
 import { summarizeJob } from './summaries.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -636,7 +636,9 @@ export class JobWorker {
     if (siteId === null) return;
     const site = this.db.select().from(sites).where(eq(sites.id, siteId)).get();
     if (!site) return;
-    if (PACKAGE_JOBS.has(job.type as JobType) && !isExternal(site)) {
+    // So does a zip unpacked into a PHP site: an old site's files often bring php_value lines.
+    const arrived = PACKAGE_JOBS.has(job.type as JobType) || (job.type === 'files.extract' && isPhpSite(site));
+    if (arrived && !isExternal(site)) {
       await migrateArrivedFiles(ctx, this.services.servers.handleFor(site.serverId), this.services, site, { inForce: true });
     }
     await clearAfterChange(this.services, site);

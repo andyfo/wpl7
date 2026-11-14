@@ -34,8 +34,16 @@ export function DatabaseTab({ slug }: { slug: string }) {
   if (info.isError && !info.data) return <ErrorNote error={info.error} />;
   if (!info.data) return <Spinner />;
   const d = info.data;
+  const php = site.data?.app === 'php';
+  const status = site.data?.status;
+  const unavailable = status === 'provisioning' || status === 'deleting' ? `The site is ${status}` : null;
+  // A PHP site made without one: everything below needs it.
+  if (d.name === null || d.user === null) {
+    return <NoDatabaseCard slug={slug} unavailable={unavailable} />;
+  }
+  const own = { ...d, name: d.name, user: d.user };
   const asked = params.get('db');
-  const db = d.databases.some((x) => x.name === asked) ? asked! : d.name;
+  const db = d.databases.some((x) => x.name === asked) ? asked! : own.name;
   const view = params.get('view') === 'sql' ? 'sql' : 'tables';
 
   const navigate = (next: Record<string, string | undefined>) =>
@@ -52,21 +60,20 @@ export function DatabaseTab({ slug }: { slug: string }) {
     void qc.invalidateQueries({ queryKey: ['site-databases', slug] });
     void qc.invalidateQueries({ queryKey: ['databases'] });
   };
-  const status = site.data?.status;
-  const unavailable = status === 'provisioning' || status === 'deleting' ? `The site is ${status}` : null;
 
   return (
     <div className="space-y-6">
       <ErrorNote error={run.error} />
       <div className="grid gap-4 xl:grid-cols-2">
-        <ConnectionCard slug={slug} info={d} onChangePassword={() => setDialog({ kind: 'password' })} busy={run.busy('password')} />
+        <ConnectionCard slug={slug} info={own} php={php} onChangePassword={() => setDialog({ kind: 'password' })} busy={run.busy('password')} />
         <DatabasesCard
           slug={slug}
           info={d}
+          php={php}
           active={db}
           unavailable={unavailable}
           deleting={(name) => run.busy(`delete:${name}`)}
-          onBrowse={(name) => navigate({ db: name === d.name ? undefined : name, table: undefined, view: undefined, sql: undefined })}
+          onBrowse={(name) => navigate({ db: name === own.name ? undefined : name, table: undefined, view: undefined, sql: undefined })}
           onAdd={() => setDialog({ kind: 'add' })}
           onImport={(name) => setDialog({ kind: 'import', db: name })}
           onDelete={(name) => setDialog({ kind: 'delete', db: name })}
@@ -93,7 +100,7 @@ export function DatabaseTab({ slug }: { slug: string }) {
           <p className="text-sm text-neutral-500">{unavailable}; its databases open once it is done.</p>
         ) : view === 'sql' ? (
           <Suspense fallback={<Spinner />}>
-            <SqlFor slug={slug} db={db} user={d.user} initial={params.get('sql')} />
+            <SqlFor slug={slug} db={db} user={own.user} initial={params.get('sql')} sample={!php} />
           </Suspense>
         ) : (
           <TablesView
@@ -129,7 +136,11 @@ export function DatabaseTab({ slug }: { slug: string }) {
       {dialog?.kind === 'password' && (
         <ConfirmDialog
           title="Change the database password"
-          message="WordPress gets the new password and restarts: the site is offline for a few seconds."
+          message={
+            php
+              ? "The site's own config has the old password. Put the new one there, or the site loses its database."
+              : 'WordPress gets the new password and restarts: the site is offline for a few seconds.'
+          }
           confirmLabel="Change password"
           onConfirm={() => run.mutate({ path: `/api/sites/${slug}/database-password`, action: 'password' })}
           onClose={() => setDialog(null)}
@@ -140,9 +151,31 @@ export function DatabaseTab({ slug }: { slug: string }) {
 }
 
 /** The SQL view, with the table names for its completion. */
-function SqlFor({ slug, db, user, initial }: { slug: string; db: string; user: string; initial: string | null }) {
+function SqlFor({ slug, db, user, initial, sample }: { slug: string; db: string; user: string; initial: string | null; sample: boolean }) {
   const tables = useDbTables(slug, db);
-  return <SqlView key={db} slug={slug} db={db} user={user} tables={(tables.data ?? []).map((t) => t.name)} initial={initial} />;
+  return <SqlView key={db} slug={slug} db={db} user={user} tables={(tables.data ?? []).map((t) => t.name)} initial={initial} sample={sample} />;
+}
+
+/** A PHP site with no database: one card, and the way to make it. */
+function NoDatabaseCard({ slug, unavailable }: { slug: string; unavailable: string | null }) {
+  const run = useRunJob([['site-databases', slug], ['databases'], ['site', slug]]);
+  return (
+    <Card title="Database">
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+        <p className="text-neutral-600">This site has no database.</p>
+        <Button
+          onClick={() => run.mutate({ path: `/api/sites/${slug}/database`, action: 'create' })}
+          busy={run.busy('create')}
+          disabled={!!unavailable}
+          title={unavailable ?? undefined}
+        >
+          Create database
+        </Button>
+      </div>
+      {unavailable && <p className="mt-2 text-xs text-neutral-500">{unavailable}.</p>}
+      <ErrorNote error={run.error} />
+    </Card>
+  );
 }
 
 function Fact({ label, children, hint }: { label: string; children: ReactNode; hint?: ReactNode }) {
@@ -160,11 +193,13 @@ function Fact({ label, children, hint }: { label: string; children: ReactNode; h
 function ConnectionCard({
   slug,
   info,
+  php,
   onChangePassword,
   busy,
 }: {
   slug: string;
-  info: SiteDatabaseDto;
+  info: SiteDatabaseDto & { name: string; user: string };
+  php: boolean;
   onChangePassword: () => void;
   busy: boolean;
 }) {
@@ -192,9 +227,11 @@ function ConnectionCard({
             {info.host}:{info.port}
           </code>
         </Fact>
-        <Fact label="Table prefix">
-          <code>{info.tablePrefix}</code>
-        </Fact>
+        {!php && (
+          <Fact label="Table prefix">
+            <code>{info.tablePrefix}</code>
+          </Fact>
+        )}
       </dl>
     </Card>
   );
@@ -256,6 +293,7 @@ function PasswordValue({ slug, changing }: { slug: string; changing: boolean }) 
 function DatabasesCard({
   slug,
   info,
+  php,
   active,
   unavailable,
   deleting,
@@ -267,6 +305,7 @@ function DatabasesCard({
 }: {
   slug: string;
   info: SiteDatabaseDto;
+  php: boolean;
   active: string;
   unavailable: string | null;
   deleting: (name: string) => boolean;
@@ -313,7 +352,7 @@ function DatabasesCard({
                 >
                   {d.name}
                 </button>
-                {d.kind === 'site' && <span className="ml-2 text-xs text-neutral-400">WordPress</span>}
+                {d.kind === 'site' && <span className="ml-2 text-xs text-neutral-400">{php ? 'Site' : 'WordPress'}</span>}
               </td>
               <td className="whitespace-nowrap py-2 pr-3 text-right text-neutral-500">
                 <SizeText entry={d} />

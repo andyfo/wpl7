@@ -9,13 +9,15 @@ sources:
   - panel/src/services/mailAuth.ts
   - panel/src/services/mailDkim.ts
   - deploy/wordpress-image/msmtprc
+  - deploy/wordpress-image/wpl7-sendmail
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
 import Since from '~/components/Since.astro';
 
-Every site can send mail from the moment it exists. `wp_mail()` and every plugin built on it work
-without an SMTP plugin, through one mail [relay](/docs/reference/glossary/#relay) on each server.
+Every site can send mail from the moment it exists. PHP's `mail()`, `wp_mail()` and every plugin
+built on them work without an SMTP plugin, through one mail [relay](/docs/reference/glossary/#relay)
+on each server.
 
 <Screenshot name="mail-overview" alt="Mail → Overview with the checks of each server's relay and the volume each site sent" />
 
@@ -27,6 +29,15 @@ without an SMTP plugin, through one mail [relay](/docs/reference/glossary/#relay
 3. The relay checks that the site owns the sender's domain. A signer then adds a
    [DKIM](/docs/reference/glossary/#dkim) signature when the domain has a key.
 4. The relay delivers the message, or queues it and tries again later.
+
+<Since v="0.3.3" /> A message leaves with one sender address, the first of these:
+
+1. The address the script gives with `-f`, its return path.
+2. The address in the message's `From:` header.
+3. The site's default: `wordpress@` its primary domain without `www.`, or `noreply@` on a
+   [PHP site](/docs/sites/php/). It becomes the `From:` header too.
+
+Programs that run `/usr/sbin/sendmail` get the same rule.
 
 The relay publishes no port, so nothing on the internet can send through it. It also sees every
 message the sites on its server send, which is what makes the traffic view complete.
@@ -109,9 +120,10 @@ The server's card on **Mail → Overview** then shows the provider next to the s
 <Since v="0.3.0-beta.2" /> The `dkim` check turns amber while sites send from a domain that no key
 signs, its own or one above it. It names those domains, and their mail still goes out, unsigned.
 
-**Send a test message** sends one **From the relay**, skipping WordPress, or
-**From a site (wp_mail)**, the way a contact form sends. When the relay's message arrives and the
-site's does not, the problem is in that site, such as a plugin that replaces `wp_mail()`.
+**Send a test message** sends one **From the relay**, skipping the sites, or **From a site**, the way
+a contact form sends: through `wp_mail()`, or PHP's `mail()` on a PHP site. A PHP site's test names no
+sender, so its default sender is what is tested. When the relay's message arrives and the site's does
+not, the problem is in that site, such as a plugin that replaces `wp_mail()`.
 
 ## Limits
 
@@ -121,6 +133,7 @@ site's does not, the problem is in that site, such as a plugin that replaces `wp
 - Mail from a domain without a DKIM key goes out unsigned. Mail from a domain no site uses is
   accepted and never signed, and the recipient's own checks judge it.
 - The smarthost is set per server. The panel does not copy it to the servers it adds.
+- A site's sendmail has no `-bs` mode. An app that uses it needs `/usr/sbin/sendmail -oi -t` instead.
 
 ## Related
 

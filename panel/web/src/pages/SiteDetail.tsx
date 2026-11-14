@@ -1,4 +1,4 @@
-// @docs backups/overview, get-started/first-site, sites/domains, sites/move, sites/overview, sites/settings, sites/visitors, sites/wordpress
+// @docs backups/overview, get-started/first-site, sites/domains, sites/move, sites/overview, sites/php, sites/settings, sites/visitors, sites/wordpress
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -53,6 +53,10 @@ import { WordPressTab } from '../components/wp/WordPressTab';
 import { FilesTab } from '../components/files/FilesTab';
 import { FtpTab } from '../components/ftp/FtpTab';
 import { DatabaseTab } from '../components/database/DatabaseTab';
+import { CronCard } from '../components/php/CronCard';
+import { PhpLabel } from '../components/php/PhpLabel';
+import { RunCommandCard } from '../components/php/RunCommandCard';
+import { WebRootCard, webRootMissingText } from '../components/php/WebRootCard';
 import { SiteSecurityTab } from '../components/security/SiteSecurityTab';
 import { BlockDialog } from '../components/security/BlockDialog';
 import {
@@ -80,11 +84,14 @@ const SITE_TABS = [
 /** A site hosted elsewhere has no container, files or traffic log here: what WPL7 Connect reaches. */
 const EXTERNAL_TABS = SITE_TABS.filter((t) => ['overview', 'backups', 'wordpress', 'settings'].includes(t.id));
 
+/** A PHP site has everything but WordPress. */
+const PHP_TABS = SITE_TABS.filter((t) => t.id !== 'wordpress');
+
 export function SiteDetail() {
   const { slug = '' } = useParams();
   const site = useSite(slug);
   const creation = useSiteCreation(slug, site.data);
-  const tabs = site.data?.kind === 'external' ? EXTERNAL_TABS : SITE_TABS;
+  const tabs = site.data?.kind === 'external' ? EXTERNAL_TABS : site.data?.app === 'php' ? PHP_TABS : SITE_TABS;
   const [tab, setTab] = useTabParam(tabs);
 
   // A create that failed removes the site it was making, unless its clean-up failed too. The site
@@ -164,6 +171,7 @@ function SiteHeading({ title, site }: { title: string; site?: SiteDetailDto }) {
           <h1 className="page-title">{title}</h1>
           {site && <SiteHealthBadge health={siteHealth(site)} />}
           {site && <StatusBadge status={site.kind === 'external' ? 'external' : site.isLive ? 'live' : 'dev'} />}
+          {site?.app === 'php' && <PhpLabel />}
         </div>
         {site && (
           <a
@@ -187,6 +195,8 @@ function SiteHeading({ title, site }: { title: string; site?: SiteDetailDto }) {
 function SiteFacts({ site: s, creating = false }: { site: SiteDetailDto; creating?: boolean }) {
   const meta = useMeta();
   const multiServer = meta.data?.multiServer ?? false;
+  const php = s.app === 'php';
+  const database = s.hasDatabase ? s.dbName : 'None';
   return (
     <Card title="Facts">
       <dl className="space-y-2 text-sm">
@@ -194,22 +204,26 @@ function SiteFacts({ site: s, creating = false }: { site: SiteDetailDto; creatin
         {s.devHostname && <FactRow label="Dev hostname" value={s.devHostname} />}
         {multiServer && <FactRow label="Server" value={s.serverName} />}
         <FactRow label="PHP" value={sitePhp(s)} />
-        <FactRow label="Language" value={localeName(meta.data?.locales, s.locale)} />
+        {php ? (
+          <FactRow label="Web root" value={s.webRoot || "The site's folder"} />
+        ) : (
+          <FactRow label="Language" value={localeName(meta.data?.locales, s.locale)} />
+        )}
         {!creating && <FactRow label="Container" value={s.containerState} />}
         {creating ? (
-          <FactRow label="Database" value={s.dbName} />
+          <FactRow label="Database" value={database} />
         ) : (
           <div className="flex gap-3">
             <dt className="w-28 shrink-0 text-neutral-500">Database</dt>
             <dd className="break-all font-medium">
               <Link to={`/sites/${s.slug}?tab=database`} className="hover:underline">
-                {s.dbName}
+                {database}
               </Link>
             </dd>
           </div>
         )}
-        {s.tablePrefix !== 'wp_' && <FactRow label="Table prefix" value={s.tablePrefix} />}
-        <FactRow label="WP admin" value={`${s.adminUser ?? '–'} <${s.adminEmail ?? '–'}>`} />
+        {!php && s.tablePrefix !== 'wp_' && <FactRow label="Table prefix" value={s.tablePrefix} />}
+        {!php && <FactRow label="WP admin" value={`${s.adminUser ?? '–'} <${s.adminEmail ?? '–'}>`} />}
         {!creating && <FactRow label="Disk" value={formatBytes(s.diskBytes)} />}
         <FactRow label="Created" value={formatDate(s.createdAt)} />
       </dl>
@@ -326,6 +340,14 @@ function OverviewTab({ slug }: { slug: string }) {
         </div>
       )}
       {s.importSource?.connected && s.importSource.status === 'done' && <ImportedBanner slug={slug} source={s.importSource} />}
+      {s.webRootMissing && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-medium">{webRootMissingText(s.webRoot)}</p>
+          <p className="mt-1">
+            Make the folder in the Files tab or over FTP, or change the web root under <Link className="underline" to={`/sites/${slug}?tab=settings`}>Settings</Link>.
+          </p>
+        </div>
+      )}
       {s.stackSwitchError && (
         <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="font-medium">This site still runs the old PHP setup.</p>
@@ -347,8 +369,8 @@ function OverviewTab({ slug }: { slug: string }) {
           <Button small variant="secondary" {...containerAction('reconcile')}>
             Recreate container
           </Button>
-          <ClearCacheButton site={s} />
-          <WpAdminLoginButton slug={slug} running={s.containerState === 'running'} />
+          {s.app !== 'php' && <ClearCacheButton site={s} />}
+          {s.app !== 'php' && <WpAdminLoginButton slug={slug} running={s.containerState === 'running'} />}
           {!s.isLive && (
             <Button small onClick={() => setGoLiveOpen(true)}>
               Go live →
@@ -389,7 +411,7 @@ function OverviewTab({ slug }: { slug: string }) {
         </Card>
       </div>
 
-      {goLiveOpen && <GoLiveModal slug={slug} onClose={() => setGoLiveOpen(false)} />}
+      {goLiveOpen && <GoLiveModal slug={slug} php={s.app === 'php'} onClose={() => setGoLiveOpen(false)} />}
       {moveOpen && <MoveModal slug={slug} onClose={() => setMoveOpen(false)} />}
     </div>
   );
@@ -401,9 +423,13 @@ function MoveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
   const servers = useServers();
   const run = useRunJob([['site', slug], ['servers']]);
   const [targetId, setTargetId] = useState<number | null>(null);
-  const [quiesce, setQuiesce] = useState<'maintenance' | 'none'>('maintenance');
+  const [quiesce, setQuiesce] = useState<'maintenance' | 'stop' | 'none' | null>(null);
   const s = site.data;
   if (!s) return null;
+  // Maintenance mode is WordPress's: a PHP site is stopped while it is copied.
+  const php = s.app === 'php';
+  const freeze = php ? 'stop' : 'maintenance';
+  const effQuiesce = quiesce ?? freeze;
 
   const candidates = (servers.data ?? []).filter((srv) => srv.id !== s.serverId && srv.status === 'ok');
   const target = candidates.find((srv) => srv.id === targetId) ?? candidates[0] ?? null;
@@ -432,7 +458,7 @@ function MoveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
               </select>
             </Field>
             <div className="rounded-lg bg-neutral-50 p-3 text-xs text-neutral-600">
-              Files and database are copied over, the site starts on the new server, then traffic switches:
+              {s.hasDatabase ? 'Files and database are' : 'Files are'} copied over, the site starts on the new server, then traffic switches:
               {s.devHostname && (
                 <div className="mt-1">
                   • <code>{s.devHostname}</code>{' '}
@@ -464,12 +490,12 @@ function MoveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
               <div className="space-y-1.5">
                 <div className="font-medium">While copying:</div>
                 <label className="flex items-center gap-2">
-                  <input type="radio" checked={quiesce === 'maintenance'} onChange={() => setQuiesce('maintenance')} />
-                  Freeze the site (maintenance page) — nothing gets lost
+                  <input type="radio" checked={effQuiesce === freeze} onChange={() => setQuiesce(freeze)} />
+                  {php ? 'Stop the site while it moves: nothing gets lost' : 'Freeze the site (maintenance page) — nothing gets lost'}
                 </label>
                 <label className="flex items-center gap-2">
-                  <input type="radio" checked={quiesce === 'none'} onChange={() => setQuiesce('none')} />
-                  Keep serving — changes made during the copy are lost
+                  <input type="radio" checked={effQuiesce === 'none'} onChange={() => setQuiesce('none')} />
+                  {php ? 'Keep serving: changes made during the copy are lost' : 'Keep serving — changes made during the copy are lost'}
                 </label>
               </div>
             )}
@@ -484,7 +510,7 @@ function MoveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
                   run.mutate(
                     {
                       path: `/api/sites/${slug}/move`,
-                      body: { targetServerId: target.id, ...(s.isLive ? { quiesce } : {}) },
+                      body: { targetServerId: target.id, ...(s.isLive ? { quiesce: effQuiesce } : {}) },
                     },
                     { onSuccess: onClose },
                   )
@@ -578,7 +604,7 @@ function FactRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
+function GoLiveModal({ slug, php, onClose }: { slug: string; php: boolean; onClose: () => void }) {
   const meta = useMeta();
   const run = useRunJob([['site', slug]]);
   const [domainsText, setDomainsText] = useState('');
@@ -598,16 +624,20 @@ function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
           <input className={inputClass} value={domainsText} onChange={(e) => setDomainsText(e.target.value)} autoFocus />
         </Field>
         <Toggle checked={keepDevAlias} onChange={setKeepDevAlias} label="Keep the dev hostname as a 301 redirect" />
-        <Toggle
-          checked={allowSearchEngines}
-          onChange={setAllowSearchEngines}
-          label={
-            <span>
-              Allow search engines
-              <span className="block text-xs text-neutral-500">Unticks Discourage search engines in WordPress.</span>
-            </span>
-          }
-        />
+        {php ? (
+          <p className="text-xs text-neutral-500">If the site's own config names its address, change it there too.</p>
+        ) : (
+          <Toggle
+            checked={allowSearchEngines}
+            onChange={setAllowSearchEngines}
+            label={
+              <span>
+                Allow search engines
+                <span className="block text-xs text-neutral-500">Unticks Discourage search engines in WordPress.</span>
+              </span>
+            }
+          />
+        )}
         {meta.data?.dnsManaged && (
           <Toggle
             checked={manageDns}
@@ -638,7 +668,7 @@ function GoLiveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
               run.mutate(
                 {
                   path: `/api/sites/${slug}/go-live`,
-                  body: { domains, keepDevAlias, allowSearchEngines, ...(manageDns ? { manageDns: true } : {}) },
+                  body: { domains, keepDevAlias, ...(php ? {} : { allowSearchEngines }), ...(manageDns ? { manageDns: true } : {}) },
                 },
                 { onSuccess: onClose },
               )
@@ -1044,7 +1074,7 @@ function BackupsTab({ slug }: { slug: string }) {
               </span>
             </div>
           )}
-          {site.data && (
+          {site.data && site.data.app !== 'php' && (
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-neutral-100 pt-3">
               <BackupBeforeUpdatesSetting
                 slug={slug}
@@ -1109,7 +1139,7 @@ function BackupsTab({ slug }: { slug: string }) {
                 <th className="pb-2">Type</th>
                 <th className="pb-2">Status</th>
                 {offsiteConfigured && <th className="pb-2">Remote</th>}
-                <th className="pb-2">WP</th>
+                {site.data?.app !== 'php' && <th className="pb-2">WP</th>}
                 <th className="pb-2 text-right">Size</th>
                 <th className="pb-2" />
               </tr>
@@ -1150,7 +1180,7 @@ function BackupsTab({ slug }: { slug: string }) {
                       <OffsiteBadges copies={b.copies} />
                     </td>
                   )}
-                  <td className="py-2 pr-3 text-neutral-600">{b.wpVersion ?? '–'}</td>
+                  {site.data?.app !== 'php' && <td className="py-2 pr-3 text-neutral-600">{b.wpVersion ?? '–'}</td>}
                   <td className="py-2 pr-3 text-right text-neutral-500">{formatBytes(b.sizeBytes)}</td>
                   <td className="py-2 text-right">
                     <BackupActions
@@ -1171,6 +1201,7 @@ function BackupsTab({ slug }: { slug: string }) {
 
       {restoreId !== null && (
         <RestoreBackupDialog
+          hasDatabase={(backups.data ?? []).find((b) => b.id === restoreId)?.hasDatabase ?? true}
           onConfirm={() => run.mutate({ path: `/api/backups/${restoreId}/restore`, body: {}, action: `restore:${restoreId}` })}
           onClose={() => setRestoreId(null)}
         />
@@ -1219,6 +1250,9 @@ function SettingsTab({ slug }: { slug: string }) {
 
   const effPhp = phpVersion ?? s.phpVersion;
   const effDomains = domainsText ?? s.domains.filter((d) => d !== s.devHostname).join(' ');
+  // A PHP site's own cards come in its order: PHP version, Web root, Cron, Container limits, Redis,
+  // Domains, Run a command, Danger zone.
+  const php = s.app === 'php';
 
   return (
     <div className="space-y-4">
@@ -1244,7 +1278,13 @@ function SettingsTab({ slug }: { slug: string }) {
         <p className="mt-2 text-xs text-neutral-500">
           The container is recreated with the new PHP image. Rolls back if the site stops responding.
         </p>
+        {run.variables?.action === 'php' && <ErrorNote error={run.error} />}
       </Card>
+
+      {php && <WebRootCard site={s} />}
+      {php && <CronCard slug={slug} />}
+      {php && <SiteLimitsCard site={s} />}
+      {php && <SiteCachingCard site={s} />}
 
       <Card title="Domains">
         <Field label="Domains (first = primary)" hint="The dev hostname is managed automatically." width="lg">
@@ -1265,21 +1305,23 @@ function SettingsTab({ slug }: { slug: string }) {
           >
             Update domains
           </Button>
-          <span className="measure text-xs text-amber-700">
-            Changing the primary domain rewrites URLs in the database. Take a backup first.
-          </span>
+          {!php && (
+            <span className="measure text-xs text-amber-700">
+              Changing the primary domain rewrites URLs in the database. Take a backup first.
+            </span>
+          )}
         </div>
       </Card>
 
-      <ErrorNote error={run.error} />
+      {run.variables?.action !== 'php' && <ErrorNote error={run.error} />}
 
-      <SiteCachingCard site={s} />
-      <SiteLimitsCard site={s} />
+      {php ? <RunCommandCard slug={slug} running={s.containerState === 'running'} /> : <SiteCachingCard site={s} />}
+      {!php && <SiteLimitsCard site={s} />}
 
       <Card title="Danger zone">
         <div className="flex items-center justify-between">
           <div className="text-sm text-neutral-600">
-            Deleting removes the container, database and files{finalBackup ? ' (after a final backup)' : ''}
+            Deleting removes the container{s.hasDatabase ? ', database' : ''} and files{finalBackup ? ' (after a final backup)' : ''}
             {deleteBackups ? (finalBackup ? ', and every other backup' : ', and every backup') : ''}.
           </div>
           <Button variant="danger" busy={run.busy('delete')} onClick={() => setDeleteOpen(true)}>
@@ -1293,7 +1335,7 @@ function SettingsTab({ slug }: { slug: string }) {
           title={`Delete ${s.slug}`}
           message={
             <>
-              This permanently deletes the site <b>{s.title}</b> — container, database and files.
+              This permanently deletes the site <b>{s.title}</b> — container{s.hasDatabase ? ', database' : ''} and files.
             </>
           }
           confirmWord={s.slug}

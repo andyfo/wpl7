@@ -75,11 +75,16 @@ A site picks the branch, such as 8.4. Each WPL7 release builds its site images o
 releases of that day, and an update rebuilds every site on them. The Sites list shows the release
 each site runs, such as 8.4.27. See [Updating WPL7](/docs/panel/updating/#what-the-panel-does-afterwards).
 
+### Can it host sites that are not WordPress?
+
+Yes, PHP and HTML sites. A PHP site has a container like a WordPress site's, without WordPress in
+it. It can have a database, a web root, cron lines and Redis. See [PHP sites](/docs/sites/php/).
+
 ### Does WPL7 cache?
 
-Yes. Every site has a page cache in nginx, on by default, and can switch on an object cache in
-Redis. PHP keeps OPcache, pages go out with Brotli or gzip, and browsers get HTTP/3 where UDP port
-443 is open. You do not need WP Rocket for page caching. See [Caching](/docs/sites/caching/).
+Yes. Every WordPress site has a page cache in nginx, on by default, and can switch on an object
+cache in Redis. PHP keeps OPcache, pages go out with Brotli or gzip, and browsers get HTTP/3 where
+UDP port 443 is open. You do not need WP Rocket for page caching. See [Caching](/docs/sites/caching/).
 
 ### Can I bring my existing WordPress sites?
 
@@ -88,7 +93,8 @@ panel then pulls the files and the database through it. See [Import a site](/doc
 
 ### Can I move away from WPL7 later?
 
-Yes. Every site is ordinary WordPress in the official WordPress image. Its backups are plain
+Yes. Every WordPress site is ordinary WordPress in the official WordPress image, and a PHP site is
+your own files. Its backups are plain
 files: a database dump, an archive of its files and a description of the site. You can restore
 them on any host without WPL7. See [Manual recovery without the panel](/docs/reference/manual-recovery/).
 
@@ -101,8 +107,8 @@ another site's domain. See [Security in WPL7](/docs/security/overview/).
 ### What happens when the panel is down?
 
 Sites keep serving visitors, because Traefik routes to them without the panel, and the mail
-relay keeps sending. Scheduled backups, WordPress cron and monitoring wait until the panel is
-back, because the panel runs them.
+relay keeps sending. Scheduled backups, WordPress cron, PHP sites' cron lines and monitoring wait
+until the panel is back, because the panel runs them.
 
 ## Mail and DNS
 

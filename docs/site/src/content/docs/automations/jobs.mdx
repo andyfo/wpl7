@@ -45,6 +45,9 @@ jobs:
 | `backup-delete` | <Since v="0.3.0-beta.2" /> Deleting several backups at once | One |
 | `external-0`, `external-1` | <Since v="0.3.0-beta.3" /> Every job of a [site hosted elsewhere](/docs/sites/external/), which runs on no server of the panel | One in each |
 
+A [PHP site](/docs/sites/php/#run-commands-on-a-schedule)'s cron lines are not jobs. They run beside
+the jobs and their lanes, and each line keeps only its last run.
+
 ## Find a job
 
 Open **Automations → All jobs**. Each row shows the job, its site, a summary, its status, who

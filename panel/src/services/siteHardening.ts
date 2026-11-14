@@ -1,8 +1,9 @@
-// @docs security/overview, security/site-protection
+// @docs security/overview, security/site-protection, sites/php
 import { asc } from 'drizzle-orm';
 import { sites, type SiteRow } from '../db/schema.js';
 import type { JobWorker } from '../jobs/worker.js';
 import type { ContainerPolicy } from '../../shared/security.js';
+import type { SiteApp } from '../../shared/schemas.js';
 import type { CoreServices } from './index.js';
 import { hostedSites } from '../lib/siteKind.js';
 
@@ -37,6 +38,16 @@ const HEADER = [
   "Change it in the panel (the site's Security tab): an edit here is overwritten.",
 ];
 
+/** What the site's own Apache file needs to know about the site, beside its protection. */
+export interface ApacheSite {
+  app: SiteApp;
+  /** A PHP site's web root, inside its folder (sites.web_root); '' = the folder itself. */
+  webRoot: string;
+}
+
+/** Where Apache finds a site's files. */
+export const SITE_ROOT_IN_CONTAINER = '/var/www/html';
+
 /**
  * Apache's part. `php_admin_flag` is out of a .htaccess's reach, and a <LocationMatch> is
  * applied after every .htaccess, so neither half can be undone from inside the site. The
@@ -48,13 +59,32 @@ const HEADER = [
  * proxy_fcgi instead, and with no PHP engine to switch off the second half takes the handler away.
  * That alone would send the file as it is, source and any passwords in it, so it is refused as
  * well. The module test leaves a stack 1 container's Apache with nothing new to do.
+ *
+ * A PHP site's file also carries what WordPress does in its wp-config.php, HTTPS, and the site's
+ * web root: this is the one file of the site's that Apache reads and the panel rewrites in place,
+ * so a web root needs no new container.
  */
-export function renderApacheHardening(policy: Pick<ContainerPolicy, 'blockPhpInUploads'>): string {
+export function renderApacheHardening(policy: Pick<ContainerPolicy, 'blockPhpInUploads'>, site: ApacheSite): string {
   const lines = HEADER.map((l) => `# ${l}`);
   // PHP-FPM's image refuses this file itself. The older image has no such line, and after a move that
   // failed, or to a server still on it, the file can hold what a .htaccess used to keep to itself.
   lines.push('', '<Files ".user.ini">', '    Require all denied', '</Files>');
-  if (policy.blockPhpInUploads) {
+  if (site.app === 'php') {
+    // No uploads rule: that folder is WordPress's, and shared/security.ts keeps the rule off here.
+    lines.push(
+      '',
+      // Traefik takes the visitor's HTTPS, so PHP would see every request as plain HTTP, and many
+      // apps redirect to HTTPS for ever. WordPress learns it from its wp-config.php instead.
+      '# HTTPS for PHP, when the visitor came over HTTPS.',
+      'SetEnvIf X-Forwarded-Proto "^https$" HTTPS=on',
+    );
+    if (site.webRoot !== '') {
+      // In a virtual host, because Apache checks the main server's DocumentRoot as an error: a
+      // folder renamed over FTP would fail the reload, and the next start. In a virtual host it
+      // is a warning, every request answers 404, and the site is back once the folder is.
+      lines.push('', '# The web root.', '<VirtualHost *:80>', `    DocumentRoot "${SITE_ROOT_IN_CONTAINER}/${site.webRoot}"`, '</VirtualHost>');
+    }
+  } else if (policy.blockPhpInUploads) {
     lines.push(
       '',
       '# No PHP in uploads.',
@@ -101,8 +131,8 @@ export function renderWpConfigHardening(policy: Pick<ContainerPolicy, 'disallowF
   return `${lines.join('\n')}\n`;
 }
 
-export function hardeningFiles(policy: ContainerPolicy): { apache: string; php: string } {
-  return { apache: renderApacheHardening(policy), php: renderWpConfigHardening(policy) };
+export function hardeningFiles(policy: ContainerPolicy, site: ApacheSite): { apache: string; php: string } {
+  return { apache: renderApacheHardening(policy, site), php: renderWpConfigHardening(policy) };
 }
 
 export interface HardeningSweep {

@@ -1,4 +1,5 @@
 import { ReminderService } from './services/reminders.js';
+import { SiteCronService } from './services/siteCron.js';
 // @docs get-started/installation, get-started/quick-start
 import fsp from 'node:fs/promises';
 import { eq } from 'drizzle-orm';
@@ -236,6 +237,7 @@ async function main(): Promise<void> {
   core.alerts = new AlertService(core);
   const serverInfo = new SystemInfoService(servers, log, hostExec, systemResolver, config.phpReadTimeoutMs);
   core.reminders = new ReminderService(core, serverInfo);
+  core.siteCron = new SiteCronService(core);
   // The hourly check of each external site and every uptime probe are what the alerts hear from.
   core.connections.attachEvents({ checked: (site, conn) => core.alerts.connectorChecked(site, conn) });
   core.monitor.attachExternal(core.connections, {

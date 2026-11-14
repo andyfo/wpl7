@@ -38,15 +38,18 @@ export default function SqlView({
   user,
   tables,
   initial,
+  sample = true,
 }: {
   slug: string;
   db: string;
   user: string;
   tables: string[];
   initial: string | null;
+  /** Start with a query of WordPress's own table; a PHP site's tables are its app's. */
+  sample?: boolean;
 }) {
   const [history, setHistory] = useState(() => readHistory(slug));
-  const [text, setText] = useState(() => initial ?? history[0] ?? 'SELECT * FROM `wp_options` LIMIT 50;');
+  const [text, setText] = useState(() => initial ?? history[0] ?? (sample ? 'SELECT * FROM `wp_options` LIMIT 50;' : ''));
   const [result, setResult] = useState<DbQueryDto | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [running, setRunning] = useState(false);

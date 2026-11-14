@@ -7,7 +7,8 @@ import Docker from 'dockerode';
 import { collectDemuxed, demuxBuffer, demuxToStreams } from '../lib/demux.js';
 import { badGateway, timedOut } from '../lib/errors.js';
 import { phpReleaseOf } from '../lib/phpRelease.js';
-import { stackFromLabels, type SiteStack } from './siteStack.js';
+import type { SiteApp } from '../../shared/schemas.js';
+import { appsFromLabels, stackFromLabels, type SiteStack } from './siteStack.js';
 
 export interface RunResult {
   stdout: string;
@@ -169,6 +170,12 @@ export interface ExecOpts {
    * every line, those past `outputCap` included: the cap bounds what is kept, not what is seen.
    */
   onOutput?: (line: string) => void;
+  /**
+   * execToStream: called once Docker has made the exec, before it starts it. An error before this
+   * means the command never ran. One after it may leave the command running inside the container
+   * until its deadline: a lost connection doesn't stop it.
+   */
+  onStarted?: () => void;
 }
 
 export interface ExecDuplexOpts {
@@ -362,6 +369,12 @@ export interface DockerPort {
    * be made from anyway.
    */
   imageStack(ref: string): Promise<SiteStack>;
+  /**
+   * The sites an image can run, by tag or id (services/siteStack.ts): its `wpl7.apps` label. An
+   * image with no label predates PHP sites and runs WordPress only, and so does one that is not
+   * there.
+   */
+  imageApps(ref: string): Promise<SiteApp[]>;
   /** Every `repository:tag` this daemon has of a repository, such as `wpl7-wordpress`. */
   imageTags(repository: string): Promise<string[]>;
   /**
@@ -936,6 +949,7 @@ export class DockerService implements DockerPort {
       Env: opts.env,
       WorkingDir: opts.workdir,
     });
+    opts.onStarted?.();
     const startedAt = Date.now();
     const stream = await exec.start({ hijack: true, stdin: false });
     // Hanging up is how a reader that is gone gets out of the way: with the connection
@@ -1081,6 +1095,15 @@ export class DockerService implements DockerPort {
       return stackFromLabels((await this.docker.getImage(ref).inspect()).Config?.Labels);
     } catch (err) {
       if (isStatusError(err, 404)) return 1;
+      throw err;
+    }
+  }
+
+  async imageApps(ref: string): Promise<SiteApp[]> {
+    try {
+      return appsFromLabels((await this.docker.getImage(ref).inspect()).Config?.Labels);
+    } catch (err) {
+      if (isStatusError(err, 404)) return ['wordpress'];
       throw err;
     }
   }

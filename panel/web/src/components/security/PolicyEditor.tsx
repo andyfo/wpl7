@@ -5,9 +5,11 @@ import {
   DENY_RULE_INFO,
   HEADER_INFO,
   LIMIT_INFO,
+  PHP_SITE_SECURITY_INFO,
   SECURITY_LEVEL_INFO,
   denyRuleIds,
   describeLimit,
+  isWordPressOnlySetting,
   limitIds,
   type ContainerPolicy,
   type EffectivePolicy,
@@ -19,6 +21,7 @@ import {
   type WpcronMode,
   type XmlrpcMode,
 } from '../../../../shared/security';
+import type { SiteApp } from '../../../../shared/schemas';
 import { Button, Segmented, Toggle, compactInputClass } from '../ui';
 
 type Section = 'rules' | 'limits' | 'headers' | 'container';
@@ -53,7 +56,8 @@ const WPCRON_OPTIONS: { id: WpcronMode; label: string }[] = [
 /**
  * Every rule, limit, header and in-container setting of a protection level, each with where it
  * comes from - the level, the default, or this site - and a way back to that. For a site the
- * changes are its own overrides; for the fleet's "Default protection", the default's.
+ * changes are its own overrides; for the fleet's "Default protection", the default's. A PHP site
+ * sees only what it has: the default still sets WordPress's rules for WordPress sites.
  */
 export function PolicyEditor({
   policy,
@@ -61,6 +65,7 @@ export function PolicyEditor({
   scope,
   onChange,
   hits,
+  app = 'wordpress',
 }: {
   /** What is in force with the changes so far. */
   policy: EffectivePolicy;
@@ -70,7 +75,11 @@ export function PolicyEditor({
   onChange: (next: SecurityOverrides) => void;
   /** Requests blocked in the last seven days, by blocked-rule key. */
   hits?: Record<string, number>;
+  /** The site's; the fleet default is a WordPress site's. */
+  app?: SiteApp;
 }) {
+  const php = app === 'php';
+  const shown = (key: string) => !php || !isWordPressOnlySetting(key);
   if (policy.level === 'off') {
     return (
       <p className="text-sm text-neutral-500">
@@ -91,11 +100,11 @@ export function PolicyEditor({
   return (
     <div className="space-y-6">
       <Group title="Refused">
-        {denyRuleIds.map((id) => (
+        {denyRuleIds.filter((id) => shown(`rules.${id}`)).map((id) => (
           <Row
             key={id}
             label={DENY_RULE_INFO[id].label}
-            description={DENY_RULE_INFO[id].description}
+            description={php && id === 'files' ? PHP_SITE_SECURITY_INFO.files : DENY_RULE_INFO[id].description}
             note={source(`rules.${id}`)}
             hits={count(id)}
             reset={reset(`rules.${id}`, () => withEntry(overrides, 'rules', id, undefined))}
@@ -103,32 +112,36 @@ export function PolicyEditor({
             <Toggle checked={policy.rules[id]} onChange={(v) => onChange(withEntry(overrides, 'rules', id, v))} />
           </Row>
         ))}
-        <Row
-          label="XML-RPC"
-          description="xmlrpc.php: the old remote API. Jetpack still uses it; almost nothing else does, and one request can carry hundreds of password guesses."
-          note={source('xmlrpc')}
-          hits={count('xmlrpc') + count('limit-xmlrpc')}
-          reset={reset('xmlrpc', () => withTop(overrides, 'xmlrpc', undefined))}
-        >
-          <Segmented small options={XMLRPC_OPTIONS} value={policy.xmlrpc} onChange={(v) => onChange(withTop(overrides, 'xmlrpc', v))} label="XML-RPC" />
-        </Row>
-        <Row
-          label="wp-cron.php from outside"
-          description="The panel runs WordPress's scheduled tasks itself, so a visitor never has to."
-          note={source('wpcron')}
-          hits={count('wpcron')}
-          reset={reset('wpcron', () => withTop(overrides, 'wpcron', undefined))}
-        >
-          <Segmented small options={WPCRON_OPTIONS} value={policy.wpcron} onChange={(v) => onChange(withTop(overrides, 'wpcron', v))} label="wp-cron" />
-        </Row>
+        {shown('xmlrpc') && (
+          <Row
+            label="XML-RPC"
+            description="xmlrpc.php: the old remote API. Jetpack still uses it; almost nothing else does, and one request can carry hundreds of password guesses."
+            note={source('xmlrpc')}
+            hits={count('xmlrpc') + count('limit-xmlrpc')}
+            reset={reset('xmlrpc', () => withTop(overrides, 'xmlrpc', undefined))}
+          >
+            <Segmented small options={XMLRPC_OPTIONS} value={policy.xmlrpc} onChange={(v) => onChange(withTop(overrides, 'xmlrpc', v))} label="XML-RPC" />
+          </Row>
+        )}
+        {shown('wpcron') && (
+          <Row
+            label="wp-cron.php from outside"
+            description="The panel runs WordPress's scheduled tasks itself, so a visitor never has to."
+            note={source('wpcron')}
+            hits={count('wpcron')}
+            reset={reset('wpcron', () => withTop(overrides, 'wpcron', undefined))}
+          >
+            <Segmented small options={WPCRON_OPTIONS} value={policy.wpcron} onChange={(v) => onChange(withTop(overrides, 'wpcron', v))} label="wp-cron" />
+          </Row>
+        )}
       </Group>
 
       <Group title="Limits" intro="Per visitor address. Past a limit a visitor gets 429 until the rate drops - and the attack detection notices one that keeps at it.">
-        {limitIds.map((id) => (
+        {limitIds.filter((id) => shown(`limits.${id}`)).map((id) => (
           <Row
             key={id}
             label={LIMIT_INFO[id].label}
-            description={LIMIT_INFO[id].description}
+            description={php && id === 'assets' ? PHP_SITE_SECURITY_INFO.assets : LIMIT_INFO[id].description}
             note={source(`limits.${id}`)}
             hits={count(`limit-${id}`)}
             reset={reset(`limits.${id}`, () => withEntry(overrides, 'limits', id, undefined))}
@@ -156,6 +169,7 @@ export function PolicyEditor({
         ))}
       </Group>
 
+      {!php && (
       <Group title="Inside the container" intro="Set in files the site's container reads and cannot change.">
         {(Object.keys(CONTAINER_INFO) as (keyof ContainerPolicy)[]).map((id) => (
           <Row
@@ -169,6 +183,7 @@ export function PolicyEditor({
           </Row>
         ))}
       </Group>
+      )}
     </div>
   );
 }

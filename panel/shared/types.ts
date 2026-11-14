@@ -17,6 +17,7 @@ import type {
   ServerKind,
   ServerStatus,
   ConnectionStatus,
+  SiteApp,
   SiteKind,
   SiteStatus,
   WpBulkAction,
@@ -81,6 +82,10 @@ export interface SiteSummary {
    * says how the connection stands.
    */
   kind: SiteKind;
+  /** What it runs: WordPress, or the site's own PHP and files (a hosted site only; an external one is WordPress). */
+  app: SiteApp;
+  /** Whether it has a database of its own. A WordPress site always has; a PHP site when one was made. */
+  hasDatabase: boolean;
   external: ExternalSiteSummary | null;
   /**
    * After how many days this site's backups are deleted, when it says so itself: 0 = never. null =
@@ -156,7 +161,15 @@ export interface SiteDetail extends SiteSummary {
   locale: string;
   adminUser: string | null;
   adminEmail: string | null;
+  /** '' when the site has no database of its own: a PHP site's is optional. */
   dbName: string;
+  /** A PHP site's web root, the folder visitors reach inside its own; '' = the site's folder. */
+  webRoot: string;
+  /**
+   * Whether that folder is missing, so that every visitor gets a 404. Asked inside the running
+   * container, as the Files tab asks; null while it isn't running. False with no web root set.
+   */
+  webRootMissing: boolean | null;
   /** The prefix of the site's WordPress tables: `wp_`, or what an imported site came with. */
   tablePrefix: string;
   /** 'unknown' = the hosting server could not be asked (unreachable); the rest of the detail is served from the registry. */
@@ -504,6 +517,34 @@ export type ScheduleKind = 'builtin' | 'custom';
 export type ScheduleGroup = 'jobs' | 'background' | 'custom';
 export type ScheduleOutcome = 'ok' | 'failed' | 'skipped';
 
+/** One of a PHP site's cron lines, with its last run (GET /api/sites/:slug/cron). */
+export interface SiteCronLineDto {
+  id: number;
+  /** Five fields, on the panel's clock. */
+  expr: string;
+  /** The schedule in words, as the schedules page says it. */
+  schedule: string;
+  command: string;
+  enabled: boolean;
+  /** Minutes it may run before it is stopped. */
+  timeoutMin: number;
+  /** When it is next due; null while it is off. In the past while it waits for its site. */
+  nextRunAt: number | null;
+  /** It is running now. */
+  running: boolean;
+  /** The last run; null before the first. */
+  last: {
+    startedAt: number;
+    /** How long it took; null while it runs, or when the panel lost sight of it (a restart). */
+    ms: number | null;
+    exitCode: number | null;
+    /** The end of what it printed, stdout and stderr together: up to 4 KB. */
+    output: string | null;
+    /** Why it did not start or did not finish, in the panel's words. */
+    error: string | null;
+  } | null;
+}
+
 export interface ScheduleSkip {
   siteSlug: string | null;
   reason: string;
@@ -613,6 +654,8 @@ export interface BackupDto {
   sizeBytes: number | null;
   wpVersion: string | null;
   phpVersion: string | null;
+  /** False when it holds no dump of the site's own database: its site had none. */
+  hasDatabase: boolean;
   note: string | null;
   jobId: number | null;
   /** False = the files were pruned locally and this backup now exists only offsite. */
@@ -2264,6 +2307,8 @@ export interface SiteScanDto {
 
 export interface SiteSecurityDto {
   slug: string;
+  /** A PHP site has none of WordPress's rules (shared/security.ts WORDPRESS_ONLY_SETTINGS). */
+  app: SiteApp;
   /** The site's own level; null = it follows the default. */
   level: SecurityLevel | null;
   overrides: SecurityOverrides;
@@ -2395,13 +2440,16 @@ export interface SiteDatabaseEntryDto {
 }
 
 export interface SiteDatabaseDto {
-  /** The site's own database, its user (also the user of every other one) and where code reaches them. */
-  name: string;
-  user: string;
+  /**
+   * The site's own database, its user (also the user of every other one) and where code reaches
+   * them. Null for a PHP site that has no database: then it has no other ones either.
+   */
+  name: string | null;
+  user: string | null;
   host: string;
   port: number;
   tablePrefix: string;
-  /** The site's own first, then the others by name. */
+  /** The site's own first, then the others by name; none for a site with no database. */
   databases: SiteDatabaseEntryDto[];
   serverName: string;
   /** The last time the server's databases were read; null when never. */
@@ -2414,7 +2462,8 @@ export interface SiteDatabaseDto {
 
 /** Who a database on a server belongs to, worked out from the sites and the moves in progress. */
 export type DatabaseUseDto =
-  | { kind: 'site'; siteId: number; slug: string; title: string }
+  /** A site's own database. `app` names what it belongs to: WordPress, or a PHP site's own code. */
+  | { kind: 'site'; siteId: number; slug: string; title: string; app: SiteApp }
   | { kind: 'extra'; siteId: number; slug: string; title: string }
   /** The copy a moved site left on its old server, until the move's clean-up drops it. */
   | { kind: 'moveCopy'; slug: string }

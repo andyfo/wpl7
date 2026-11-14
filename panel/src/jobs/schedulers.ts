@@ -33,7 +33,7 @@ import { jobToDto } from '../lib/dto.js';
 import type { AccessLevel } from '../../shared/access.js';
 import { currentActor, runAs, type JobActor } from './actor.js';
 import { checkTarget, fireAction, publicParams, withStoredSecrets } from './actions.js';
-import { externalSites } from '../lib/siteKind.js';
+import { externalSites, wordpressSites } from '../lib/siteKind.js';
 import { INVENTORY_EVERY_MS } from '../services/databases.js';
 
 /** How long a maintenance flag is left alone before it is treated as possibly stale. */
@@ -297,6 +297,17 @@ export class Schedulers {
         pauseWarning: 'Scheduled posts, plugin tasks and WooCommerce emails stop running on every site until you resume.',
         cadence: () => ({ everyMs: 5 * MIN, text: 'Every 5 minutes' }),
         tick: () => this.wpCronTick(),
+      },
+      {
+        key: 'site-cron',
+        group: 'background',
+        name: 'PHP site cron',
+        description:
+          "Runs the cron lines of PHP sites that are due: each a command in its site's folder, as the site's user. A line waits while its site is stopped or busy, and runs once it can.",
+        pausable: true,
+        pauseWarning: "No PHP site's cron lines run until you resume. Those due meanwhile run once then.",
+        cadence: () => ({ everyMs: MIN, text: 'Every minute' }),
+        tick: () => this.siteCronTick(),
       },
       {
         key: 'uptime',
@@ -565,6 +576,8 @@ export class Schedulers {
       // once; the hour is for what changed without the panel (a plugin's tables growing).
       every('database-sizes', INVENTORY_EVERY_MS),
       every('wp-cron', 5 * MIN),
+      // PHP sites' cron lines: every minute, since a line may be due every minute.
+      every('site-cron', MIN),
       // Traffic is reconstructed from each relay's log, so the view is only ever as fresh
       // as this tick; a minute keeps the abuse counters useful without hammering the
       // Docker API of every server.
@@ -899,9 +912,18 @@ export class Schedulers {
     return { message: total > 0 ? `Re-attached ${plural(total, 'endpoint')}` : null };
   }
 
-  /** DISABLE_WP_CRON pairs with this: run due WP cron events for every running site. */
+  /** Starts the PHP sites' due cron lines and returns: the runs end on their own (services/siteCron.ts). */
+  private siteCronTick(): TaskResult {
+    const { started, waiting } = this.s.siteCron.tick();
+    // Nothing started is not a run worth recording every minute.
+    if (started === 0) return { idle: true };
+    return { message: `Started ${plural(started, 'cron line')}${waiting > 0 ? `; ${waiting} waiting` : ''}` };
+  }
+
+  /** DISABLE_WP_CRON pairs with this: run due WP cron events for every running WordPress site. */
   private async wpCronTick(): Promise<TaskResult> {
-    const running = this.s.db.select().from(sites).where(eq(sites.status, 'running')).all();
+    // A PHP site has its own cron lines (site-cron).
+    const running = this.s.db.select().from(sites).where(and(eq(sites.status, 'running'), wordpressSites())).all();
     const byServer = new Map<number, typeof running>();
     for (const site of running) {
       const list = byServer.get(site.serverId) ?? [];
@@ -961,6 +983,8 @@ export class Schedulers {
       .leftJoin(siteWpStatus, eq(siteWpStatus.siteId, sites.id))
       .where(
         and(
+          // A PHP site is never scanned: counted, it would keep a scan due for ever.
+          wordpressSites(),
           or(eq(sites.status, 'running'), and(externalSites(), eq(sites.status, 'connected'))),
           or(isNull(siteWpStatus.scannedAt), lt(siteWpStatus.scannedAt, cutoff)),
         ),
@@ -991,7 +1015,7 @@ export class Schedulers {
       .select({ at: sql<number>`min(coalesce(${siteWpStatus.scannedAt}, 0))` })
       .from(sites)
       .leftJoin(siteWpStatus, eq(siteWpStatus.siteId, sites.id))
-      .where(or(eq(sites.status, 'running'), and(externalSites(), eq(sites.status, 'connected'))))
+      .where(and(wordpressSites(), or(eq(sites.status, 'running'), and(externalSites(), eq(sites.status, 'connected')))))
       .get();
     if (oldest?.at === null || oldest?.at === undefined) return null;
     const lastPass = this.lastScanPassAt();

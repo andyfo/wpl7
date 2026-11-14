@@ -34,6 +34,8 @@ export interface SiteHealthInput {
   containerState?: 'running' | 'created' | 'exited' | 'missing' | 'unknown' | null;
   /** A site hosted elsewhere: whether its WPL7 Connect answered the panel's last request. */
   external?: { reachable: boolean | null } | null;
+  /** What it runs: a PHP site has no WordPress to blame. */
+  app?: 'wordpress' | 'php';
 }
 
 export interface SiteHealth {
@@ -151,14 +153,14 @@ export function siteHealth(input: SiteHealthInput): SiteHealth {
     ? {
         label: 'Offline',
         tone: 'bad',
-        detail: `${lead}, but ${probeReason(httpStatus)}.${checked}`,
+        detail: `${lead}, but ${probeReason(httpStatus, input.app)}.${checked}`,
         fix: RECREATE,
         action: RECREATE_ACTION,
       }
     : {
         label: 'Offline',
         tone: 'bad',
-        detail: `${lead}, but ${probeReason(httpStatus)}.${checked}`,
+        detail: `${lead}, but ${probeReason(httpStatus, input.app)}.${checked}`,
         fix: 'Restarting it is the first move; its container logs say what it is failing on.',
         action: { label: 'Restart', path: 'restart' },
       };
@@ -184,10 +186,14 @@ function servingNote(up: boolean | null, containerState: SiteHealthInput['contai
  * site with a half-recreated container looks like from outside - indistinguishable, in
  * the old red dot, from a site that was never started.
  */
-function probeReason(httpStatus: number | null): string {
+function probeReason(httpStatus: number | null, app: SiteHealthInput['app']): string {
   if (httpStatus === null) return 'nothing answered on its HTTP port';
-  if (httpStatus === 404) return 'it answered 404 - no route matches this hostname, or WordPress served a 404 for the home page';
-  if (httpStatus >= 500) return `it answered ${httpStatus} - PHP or WordPress is erroring`;
+  if (httpStatus === 404) {
+    return app === 'php'
+      ? 'it answered 404 - no route matches this hostname'
+      : 'it answered 404 - no route matches this hostname, or WordPress served a 404 for the home page';
+  }
+  if (httpStatus >= 500) return `it answered ${httpStatus} - ${app === 'php' ? "the site's PHP is erroring" : 'PHP or WordPress is erroring'}`;
   return `it answered ${httpStatus}`;
 }
 

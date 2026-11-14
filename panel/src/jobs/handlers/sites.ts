@@ -1,4 +1,4 @@
-// @docs backups/delete, get-started/first-site, integrations/cloudflare, integrations/dns, panel/updating, sites/create, sites/domains, sites/settings
+// @docs backups/delete, get-started/first-site, integrations/cloudflare, integrations/dns, panel/updating, sites/create, sites/domains, sites/php, sites/settings
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { siteConnections, backups, moveCleanups, sites, type SiteRow } from '../../db/schema.js';
@@ -9,6 +9,7 @@ import type { Config } from '../../config.js';
 import type { JobContext } from '../context.js';
 import {
   asideContainerName,
+  assertPhpImage,
   siteContainerSpec,
   siteImage,
   sitePaths,
@@ -34,6 +35,7 @@ import {
   dnsPreflight,
   ensureSiteMountSources,
   loadSite,
+  probeOptsFor,
   probeSite,
   probeSiteAttempt,
   removeSiteContainers,
@@ -50,7 +52,9 @@ import {
   writeSiteJson,
 } from './shared.js';
 import { requireRunning } from './wp.js';
-import { isExternal } from '../../lib/siteKind.js';
+import { hasDatabase, isExternal, isPhpSite } from '../../lib/siteKind.js';
+import { PLACEHOLDER_FILE, renderPlaceholderPage } from '../../services/phpSite.js';
+import { writeMailFrom } from '../../services/siteCaches.js';
 import { parseSiteCacheRules } from '../../../shared/cacheRules.js';
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -59,13 +63,28 @@ const errMsg = (err: unknown): string => (err instanceof Error ? err.message : S
 
 export const siteCreatePayload = z.object({
   siteId: z.number().int(),
-  adminPassword: z.string(),
-  passwordGenerated: z.boolean(),
-  pluginSlugs: z.array(z.string()),
-  pluginZipPaths: z.array(z.string()),
+  /** A WordPress site's, like the rest below. A PHP site's job carries the site's id alone. */
+  adminPassword: z.string().default(''),
+  passwordGenerated: z.boolean().default(false),
+  pluginSlugs: z.array(z.string()).default([]),
+  pluginZipPaths: z.array(z.string()).default([]),
   /** Default for jobs enqueued before the option existed - same answer the form gives. */
   discourageSearchEngines: z.boolean().default(true),
 });
+
+/**
+ * A new PHP site's folder: the web root in it, and the placeholder page there. Then the whole of
+ * it is handed to www-data, which the WordPress image's entrypoint does for a WordPress site, so
+ * that FTP, the Files tab and the site's PHP can all write there. Made as root, like the folder.
+ */
+async function preparePhpSiteFolder(ctx: JobContext<unknown>, server: ServerHandle, site: SiteRow, folder: string): Promise<void> {
+  const webRoot = site.webRoot === '' ? folder : safeJoin(folder, site.webRoot);
+  await server.files.mkdirp(webRoot);
+  await server.files.writeFile(safeJoin(webRoot, PLACEHOLDER_FILE), renderPlaceholderPage(site.title), { mode: 0o644 });
+  const owned = await server.exec.run('chown', ['-R', '33:33', folder], { timeoutMs: 60_000 });
+  if (owned.exitCode !== 0) throw new Error(`Could not hand the site's folder to its user: ${owned.stderr.trim().slice(0, 300)}`);
+  ctx.info(`The site starts with a placeholder page in ${site.webRoot === '' ? 'its folder' : site.webRoot}.`);
+}
 
 export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayload>>, s: CoreServices): Promise<void> {
   const site = loadSite(s.db, ctx.payload.siteId);
@@ -75,6 +94,9 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
   const url = siteUrl(s.config, primary);
   const p = sitePaths(s.config, site.slug);
   const adminUser = site.wpAdminUser ?? 'admin';
+  // A PHP site shares every step around WordPress's own: nothing but a placeholder page is put
+  // into its folder, its database is optional, and it has no administrator to hand over.
+  const php = isPhpSite(site);
   // Held from the moment the site gets a router until the row says it is running: its rules
   // file has to be there before the router is, and the row still says "provisioning" then.
   let releaseProtection: (() => void) | null = null;
@@ -97,6 +119,7 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
       await server.files.rm(safeJoin(s.config.paths.sites, site.slug));
     });
     await server.files.mkdirp(p.wordpress);
+    if (php) await preparePhpSiteFolder(ctx, server, site, p.wordpress);
     await ensureSiteMountSources(server, s, site, ctx);
     await writeSiteJson(server, s.config, site);
 
@@ -107,12 +130,18 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
     ctx.pushCompensation('remove site network', () => removeSiteNetwork(server.docker, site.slug));
     await attachSiteNetwork(ctx, server, site.slug);
 
-    ctx.info(`Creating database ${site.dbName}…`);
-    ctx.pushCompensation('drop database and user', () => server.dbAdmin.dropSiteDb(site.dbName, site.dbUser));
-    await server.dbAdmin.createSiteDb(site.dbName, site.dbUser, site.dbPassword);
-    ctx.checkCanceled();
+    // A PHP site has one only when it was asked for.
+    if (hasDatabase(site)) {
+      ctx.info(`Creating database ${site.dbName}…`);
+      ctx.pushCompensation('drop database and user', () => server.dbAdmin.dropSiteDb(site.dbName, site.dbUser));
+      await server.dbAdmin.createSiteDb(site.dbName, site.dbUser, site.dbPassword);
+      ctx.checkCanceled();
+    }
 
     await ensureSiteImage(ctx, server, s.config, site.phpVersion);
+    // An image the server already had may be from before PHP sites. siteContainerSpec refuses it
+    // too; asked here, nothing else is made first.
+    if (php) await assertPhpImage(server, siteImage(site.phpVersion));
     ctx.checkCanceled();
 
     // Before the container starts, not after: `wp core install` sends the welcome mail, and
@@ -121,115 +150,24 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
     await syncRelayAuth(ctx, s, site.slug);
     ctx.checkCanceled();
 
-    // The container starts WITHOUT a Traefik router. Until `wp core install` has created our
-    // administrator, WordPress serves its web installer to whoever reaches the hostname first,
-    // and that visitor - not the panel - would own the site: wp-cli treats an already-installed
-    // database as success, so the job would still report our (useless) credentials. Routing
-    // is switched on further down, once the expected administrator verifiably exists.
-    ctx.info('Creating and starting container (unrouted until WordPress is installed)…');
-    ctx.pushCompensation('remove container', () => server.docker.removeContainer(site.containerName));
-    await server.docker.createSiteContainer(await siteContainerSpec(s, server, site, domains, siteRuntimeFrom(s.settings, site), { routing: false }));
-    await startSiteContainer(server, s, site, ctx);
-
-    ctx.info('Waiting for WordPress files…');
-    await waitForWordPressFiles(server.files, p.wordpress, ctx);
-    ctx.checkCanceled();
-
-    ctx.info('Installing WordPress…');
-    await server.wp.coreInstall(site.containerName, {
-      url,
-      title: site.title,
-      adminUser,
-      adminPassword: ctx.payload.adminPassword,
-      adminEmail: site.wpAdminEmail ?? 'admin@example.com',
-    });
-    if (!(await server.wp.userExists(site.containerName, adminUser))) {
-      throw new Error(
-        `WordPress reported a successful install, but the administrator "${adminUser}" does not exist - refusing to publish the site`,
-      );
+    if (php) {
+      // Routed from the start: the unrouted phase below exists to keep WordPress's installer
+      // private, and a PHP site has none. Protection first (docs/security.md): the rules arrive
+      // before the router they guard.
+      ctx.info('Creating and starting the container…');
+      releaseProtection = s.security.pin(server.id, site.id);
+      await s.security.kick(server.id);
+      ctx.pushCompensation('remove container', () => server.docker.removeContainer(site.containerName));
+      await server.docker.createSiteContainer(await siteContainerSpec(s, server, site, domains, siteRuntimeFrom(s.settings, site)));
+      await startSiteContainer(server, s, site, ctx);
+    } else {
+      await installWordPress(ctx, s, server, site, { url, domains, adminUser });
+      releaseProtection = s.security.pin(server.id, site.id);
+      await publishWordPress(ctx, s, server, site, domains);
     }
-
-    // WordPress leaves a site that was installed behind an unrouted container on plain
-    // permalinks (see DEFAULT_PERMALINK_STRUCTURE), which looks like a working site right up
-    // to the moment something asks it for /wp-json/. Done before the plugins, so any that
-    // register rewrite rules of their own are activated against the final structure.
-    ctx.info('Setting pretty permalinks…');
-    try {
-      await server.wp.rewriteStructure(site.containerName);
-    } catch (err) {
-      ctx.warn(
-        `Could not set pretty permalinks (${errMsg(err)}); until they are set in Settings -> Permalinks, ` +
-          'the REST API under /wp-json/ answers with the home page.',
-      );
-    }
-
-    // A fresh install is public, and this one is about to answer on a dev hostname. Set
-    // before the plugins so an SEO plugin sees the final value when it is activated.
-    if (ctx.payload.discourageSearchEngines) {
-      ctx.info('Asking search engines not to index this site…');
-      try {
-        await server.wp.searchEngineVisibility(site.containerName, false);
-      } catch (err) {
-        ctx.warn(`Could not discourage search engines (${errMsg(err)}); set it in Settings -> Reading.`);
-      }
-    }
-
-    // Before the requested plugins, not after: a catalog that deliberately contains akismet
-    // then puts it back, at the current wp.org version.
-    ctx.info('Removing the plugins WordPress bundles (Akismet, Hello Dolly)…');
-    try {
-      const removed = await server.wp.deleteBundledPlugins(site.containerName, adminUser);
-      ctx.info(removed.length > 0 ? `Removed ${removed.join(', ')}.` : 'None of them were present.');
-    } catch (err) {
-      ctx.warn(`Could not remove the bundled plugins (${errMsg(err)}); remove them from the site's WordPress tab.`);
-    }
-
-    if (site.locale && site.locale !== 'en_US') {
-      ctx.info(`Installing language pack ${site.locale}…`);
-      try {
-        await server.wp.installLocale(site.containerName, site.locale);
-      } catch (err) {
-        ctx.warn(`Language install failed (site stays in English): ${errMsg(err)}`);
-      }
-    }
-
-    for (const slug of ctx.payload.pluginSlugs) {
-      ctx.checkCanceled();
-      ctx.info(`Installing plugin ${slug}…`);
-      try {
-        await server.wp.installPluginSlug(site.containerName, slug, true, adminUser);
-      } catch (err) {
-        ctx.warn(`Plugin "${slug}" failed to install: ${errMsg(err)}`);
-      }
-    }
-    for (const zipPath of ctx.payload.pluginZipPaths) {
-      ctx.checkCanceled();
-      ctx.info(`Installing plugin from ${zipPath}…`);
-      try {
-        await new PluginSyncService(s.db, s.config, s.servers).ensureZipOnServer(server, zipPath);
-        await server.wp.installPluginZip(site.containerName, zipPath, true, adminUser);
-      } catch (err) {
-        ctx.warn(`Plugin zip "${zipPath}" failed to install: ${errMsg(err)}`);
-      }
-    }
-
-    // Licensed plugins: hand over the keys and activate, now that every plugin is in place.
-    // The container is still unrouted but already has its way out (the activation is a call
-    // from the site to the vendor), and the URL it activates for is the dev hostname - the
-    // go-live re-runs the recipes for the customer's domain.
-    ctx.checkCanceled();
-    await runLicenseHook(ctx, s, server, site, 'afterInstall', { url });
-
-    ctx.info('Publishing the site (enabling its router)…');
-    // Protection first (docs/security.md): the rules arrive before the router they guard.
-    releaseProtection = s.security.pin(server.id, site.id);
-    await s.security.kick(server.id);
-    await server.docker.removeContainer(site.containerName);
-    await server.docker.createSiteContainer(await siteContainerSpec(s, server, site, domains, siteRuntimeFrom(s.settings, site)));
-    await startSiteContainer(server, s, site, ctx);
 
     ctx.info('Verifying site responds…');
-    const up = await probeSite(server, site.containerName, primary, s.config.probeTimeoutMs);
+    const up = await probeSite(server, site.containerName, primary, s.config.probeTimeoutMs, probeOptsFor(site));
     if (!up) ctx.warn('Site did not answer the smoke check yet - check container logs if it stays down.');
     if (s.config.tlsMode === 'letsencrypt') {
       ctx.info('HTTPS certificate is issued on first request; allow up to a minute after DNS is in place.');
@@ -239,7 +177,7 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
     releaseProtection?.();
     await writeSiteJson(server, s.config, loadSite(s.db, site.id));
     const result: Record<string, unknown> = { url, slug: site.slug };
-    if (ctx.payload.passwordGenerated) result.adminPassword = ctx.payload.adminPassword;
+    if (!php && ctx.payload.passwordGenerated) result.adminPassword = ctx.payload.adminPassword;
     ctx.setResult(result);
     ctx.info(`Site created: ${url}`);
   } catch (err) {
@@ -263,6 +201,126 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
     }
     throw err;
   }
+}
+
+/**
+ * A WordPress site's part of site.create, in a container without a router. Until `wp core install`
+ * has created our administrator, WordPress serves its web installer to whoever reaches the hostname
+ * first, and that visitor - not the panel - would own the site: wp-cli treats an already-installed
+ * database as success, so the job would still report our (useless) credentials. Routing is
+ * switched on by publishWordPress, once the expected administrator verifiably exists.
+ */
+async function installWordPress(
+  ctx: JobContext<z.infer<typeof siteCreatePayload>>,
+  s: CoreServices,
+  server: ServerHandle,
+  site: SiteRow,
+  { url, domains, adminUser }: { url: string; domains: string[]; adminUser: string },
+): Promise<void> {
+  const p = sitePaths(s.config, site.slug);
+  ctx.info('Creating and starting container (unrouted until WordPress is installed)…');
+  ctx.pushCompensation('remove container', () => server.docker.removeContainer(site.containerName));
+  await server.docker.createSiteContainer(await siteContainerSpec(s, server, site, domains, siteRuntimeFrom(s.settings, site), { routing: false }));
+  await startSiteContainer(server, s, site, ctx);
+
+  ctx.info('Waiting for WordPress files…');
+  await waitForWordPressFiles(server.files, p.wordpress, ctx);
+  ctx.checkCanceled();
+
+  ctx.info('Installing WordPress…');
+  await server.wp.coreInstall(site.containerName, {
+    url,
+    title: site.title,
+    adminUser,
+    adminPassword: ctx.payload.adminPassword,
+    adminEmail: site.wpAdminEmail ?? 'admin@example.com',
+  });
+  if (!(await server.wp.userExists(site.containerName, adminUser))) {
+    throw new Error(
+      `WordPress reported a successful install, but the administrator "${adminUser}" does not exist - refusing to publish the site`,
+    );
+  }
+
+  // WordPress leaves a site that was installed behind an unrouted container on plain
+  // permalinks (see DEFAULT_PERMALINK_STRUCTURE), which looks like a working site right up
+  // to the moment something asks it for /wp-json/. Done before the plugins, so any that
+  // register rewrite rules of their own are activated against the final structure.
+  ctx.info('Setting pretty permalinks…');
+  try {
+    await server.wp.rewriteStructure(site.containerName);
+  } catch (err) {
+    ctx.warn(
+      `Could not set pretty permalinks (${errMsg(err)}); until they are set in Settings -> Permalinks, ` +
+        'the REST API under /wp-json/ answers with the home page.',
+    );
+  }
+
+  // A fresh install is public, and this one is about to answer on a dev hostname. Set
+  // before the plugins so an SEO plugin sees the final value when it is activated.
+  if (ctx.payload.discourageSearchEngines) {
+    ctx.info('Asking search engines not to index this site…');
+    try {
+      await server.wp.searchEngineVisibility(site.containerName, false);
+    } catch (err) {
+      ctx.warn(`Could not discourage search engines (${errMsg(err)}); set it in Settings -> Reading.`);
+    }
+  }
+
+  // Before the requested plugins, not after: a catalog that deliberately contains akismet
+  // then puts it back, at the current wp.org version.
+  ctx.info('Removing the plugins WordPress bundles (Akismet, Hello Dolly)…');
+  try {
+    const removed = await server.wp.deleteBundledPlugins(site.containerName, adminUser);
+    ctx.info(removed.length > 0 ? `Removed ${removed.join(', ')}.` : 'None of them were present.');
+  } catch (err) {
+    ctx.warn(`Could not remove the bundled plugins (${errMsg(err)}); remove them from the site's WordPress tab.`);
+  }
+
+  if (site.locale && site.locale !== 'en_US') {
+    ctx.info(`Installing language pack ${site.locale}…`);
+    try {
+      await server.wp.installLocale(site.containerName, site.locale);
+    } catch (err) {
+      ctx.warn(`Language install failed (site stays in English): ${errMsg(err)}`);
+    }
+  }
+
+  for (const slug of ctx.payload.pluginSlugs) {
+    ctx.checkCanceled();
+    ctx.info(`Installing plugin ${slug}…`);
+    try {
+      await server.wp.installPluginSlug(site.containerName, slug, true, adminUser);
+    } catch (err) {
+      ctx.warn(`Plugin "${slug}" failed to install: ${errMsg(err)}`);
+    }
+  }
+  for (const zipPath of ctx.payload.pluginZipPaths) {
+    ctx.checkCanceled();
+    ctx.info(`Installing plugin from ${zipPath}…`);
+    try {
+      await new PluginSyncService(s.db, s.config, s.servers).ensureZipOnServer(server, zipPath);
+      await server.wp.installPluginZip(site.containerName, zipPath, true, adminUser);
+    } catch (err) {
+      ctx.warn(`Plugin zip "${zipPath}" failed to install: ${errMsg(err)}`);
+    }
+  }
+
+  // Licensed plugins: hand over the keys and activate, now that every plugin is in place.
+  // The container is still unrouted but already has its way out (the activation is a call
+  // from the site to the vendor), and the URL it activates for is the dev hostname - the
+  // go-live re-runs the recipes for the customer's domain.
+  ctx.checkCanceled();
+  await runLicenseHook(ctx, s, server, site, 'afterInstall', { url });
+}
+
+/** The WordPress site's container again, now with its router. Its protection is pinned by then. */
+async function publishWordPress(ctx: JobContext<unknown>, s: CoreServices, server: ServerHandle, site: SiteRow, domains: string[]): Promise<void> {
+  ctx.info('Publishing the site (enabling its router)…');
+  // Protection first (docs/security.md): the rules arrive before the router they guard.
+  await s.security.kick(server.id);
+  await server.docker.removeContainer(site.containerName);
+  await server.docker.createSiteContainer(await siteContainerSpec(s, server, site, domains, siteRuntimeFrom(s.settings, site)));
+  await startSiteContainer(server, s, site, ctx);
 }
 
 /**
@@ -416,8 +474,8 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
 
   // What the site's plugins want done before it goes: release their activations (Breakdance
   // counts sites, ACF PRO counts production URLs). Best effort - a vendor that cannot be
-  // reached must not keep a site from being deleted.
-  await releaseLicenses(ctx, s, server, site);
+  // reached must not keep a site from being deleted. A PHP site has no plugins.
+  if (!isPhpSite(site)) await releaseLicenses(ctx, s, server, site);
 
   // Teardown is absence-tolerant and safe to repeat, but any of these can still fail
   // (server unreachable mid-delete). Leaving the row on 'deleting' would then wedge the
@@ -433,8 +491,11 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
       await s.ftp.removeSite(server.id, site.slug);
     }
 
-    ctx.info(`Dropping database ${site.dbName}…`);
-    await server.dbAdmin.dropSiteDb(site.dbName, site.dbUser);
+    // A PHP site may have none of its own.
+    if (hasDatabase(site)) {
+      ctx.info(`Dropping database ${site.dbName}…`);
+      await server.dbAdmin.dropSiteDb(site.dbName, site.dbUser);
+    }
     for (const name of s.databases.extraNames(site.id)) {
       ctx.info(`Dropping database ${name}…`);
       await server.dbAdmin.dropDb(name);
@@ -788,7 +849,8 @@ export const GEOLOCATE_OFF_REASON = "WooCommerce's Geolocate setting changes pri
  */
 async function keepGeolocateStoreOff(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, row: SiteRow): Promise<void> {
   const current = loadSite(s.db, row.id);
-  if (current.pageCache !== null) return;
+  // A PHP site has no page cache, and no WooCommerce of the panel's to ask.
+  if (current.pageCache !== null || isPhpSite(current)) return;
   try {
     const skip = ['--skip-plugins', '--skip-themes'];
     const active = await server.wp.run(row.containerName, ['plugin', 'is-active', 'woocommerce', ...skip], 30_000);
@@ -964,6 +1026,8 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
   const shouldRun = await siteShouldRun(server.docker, site, state);
 
   await ensureSiteImage(ctx, server, s.config, newVersion);
+  // Before the old container is set aside: the new version's image may be from before PHP sites.
+  if (isPhpSite(site)) await assertPhpImage(server, siteImage(newVersion));
   ctx.checkCanceled();
 
   // The registry keeps the OLD version until the new container is up and answers. Writing
@@ -978,7 +1042,7 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
     answered =
       s.config.nodeEnv === 'test'
         ? (await server.docker.containerState(site.containerName)) === 'running'
-        : await probeSite(server, site.containerName, domains[0]!, s.config.probeTimeoutMs);
+        : await probeSite(server, site.containerName, domains[0]!, s.config.probeTimeoutMs, probeOptsFor(site));
     return answered ? null : `the site is not responding on PHP ${newVersion}`;
   };
   try {
@@ -1079,7 +1143,7 @@ export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcile
     const up =
       s.config.nodeEnv === 'test'
         ? (await server.docker.containerState(site.containerName)) === 'running'
-        : await probeSite(server, site.containerName, domains[0]!, s.config.probeTimeoutMs);
+        : await probeSite(server, site.containerName, domains[0]!, s.config.probeTimeoutMs, probeOptsFor(site));
     // Not fatal and not rolled back - see the note on this function. The job's own log is where
     // this has to be visible.
     if (!up) ctx.warn('Site did not answer the smoke check after reconciling; check its container logs.');
@@ -1211,7 +1275,10 @@ export async function siteUpdateDomains(
   // Running sites are always asked what URL WordPress currently uses (an earlier, partially
   // applied attempt may have left the database ahead of or behind the row); a stopped site
   // is only started for the rewrite when the primary actually changes, or to allow search engines.
-  if (wasRunning || newPrimary !== oldPrimary || allowSearch) {
+  // A PHP site has no WordPress to rewrite: its own config is its own to change.
+  if (isPhpSite(site)) {
+    if (newPrimary !== oldPrimary) ctx.info(`If the site's own config names its address, change it there to ${newUrl}.`);
+  } else if (wasRunning || newPrimary !== oldPrimary || allowSearch) {
     try {
       await rewriteWordPressUrls(ctx, s, server, site, siteUrl(s.config, oldPrimary), newUrl, wasRunning, { inside });
     } catch (err) {
@@ -1231,12 +1298,16 @@ export async function siteUpdateDomains(
     keepDevAlias: ctx.payload.keepDevAlias ? 1 : 0,
     isLive: ctx.payload.goLive ? 1 : site.isLive,
   });
+  // The containers above were made while the row still had the old domains, so the default sender
+  // they were given is the old one. Read for each message: a site that went live sends as its new
+  // domain from here on.
+  await writeMailFrom(server, s.config, loadSite(s.db, site.id));
   await writeSiteJson(server, s.config, loadSite(s.db, site.id));
   // Row is authoritative again: re-sync so domains dropped from the site stop being owned by it.
   await syncRelayAuth(ctx, s);
   // Its rules name its hosts, so they follow the new list.
   await s.security.kick(server.id);
-  const up = !wasRunning || (await probeSite(server, site.containerName, newPrimary, s.config.probeTimeoutMs));
+  const up = !wasRunning || (await probeSite(server, site.containerName, newPrimary, s.config.probeTimeoutMs, probeOptsFor(site)));
   if (!up) ctx.warn('Site did not answer the post-change smoke check.');
   ctx.info(ctx.payload.goLive ? `Site is live at ${newUrl}` : 'Domains updated.');
   ctx.setResult({ url: newUrl, domains: newList });

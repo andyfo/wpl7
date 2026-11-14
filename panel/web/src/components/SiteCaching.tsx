@@ -1,4 +1,4 @@
-// @docs sites/caching
+// @docs sites/caching, sites/php
 import { useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -14,6 +14,9 @@ import {
 import type { JobDto, SiteCacheCheck, SiteDetail } from '../../../shared/types';
 import { api } from '../api/client';
 import { useFollowJob, useJobSnapshots } from './jobConsole/context';
+
+/** Where a site's Redis listens, inside its container (services/siteStack.ts). */
+const REDIS_SOCKET = '/run/wpl7/redis.sock';
 import { Button, Card, ErrorNote, Field, Segmented, Toggle, inputClass } from './ui';
 
 const hours = (seconds: number) => (seconds >= 3600 ? `${seconds / 3600} hour${seconds === 3600 ? '' : 's'}` : `${Math.round(seconds / 60)} minutes`);
@@ -100,6 +103,29 @@ export function SiteCachingCard({ site }: { site: SiteDetail }) {
   };
   const switching = objectJob !== null && snapshots.get(objectJob)?.refreshed !== true;
   const keepChoices = [...new Set([...KEEP_CHOICES, ...(cache.keepSeconds ? [cache.keepSeconds] : [])])].sort((a, b) => a - b);
+
+  // A PHP site has no page cache: nginx stores only what WordPress marks. Redis is its app's own.
+  if (site.app === 'php') {
+    return (
+      <Card title="Redis">
+        <div className="space-y-2">
+          <Reasoned reason={cache.object ? null : cache.objectBlocked}>
+            <Toggle
+              checked={cache.object}
+              disabled={cache.object ? false : cache.objectBlocked !== null}
+              busy={saving || switching}
+              label="Redis"
+              onChange={(object) => void save({ object })}
+            />
+          </Reasoned>
+          <p className="text-xs text-neutral-500">
+            Your app reaches it at <code>{REDIS_SOCKET}</code>. Emptied when the site restarts.
+          </p>
+          {error !== null && <ErrorNote error={error} />}
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card title="Caching">

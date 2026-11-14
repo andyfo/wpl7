@@ -14,20 +14,25 @@ import type { CoreServices } from '../../services/index.js';
 import type { FilesPort } from '../../lib/files.js';
 import type { ContainerState, DockerPort } from '../../services/docker.js';
 import type { ServerHandle } from '../../servers/registry.js';
-import { httpProbe, httpProbeAttempts, type ProbeAttempt } from '../../lib/httpProbe.js';
+import { httpProbe, httpProbeAttempts, type ProbeAttempt, type ProbeOpts } from '../../lib/httpProbe.js';
 import type { RecipeHook } from '../../../shared/recipes.js';
 import type { HookVars, RecipeOutcome } from '../../services/licenses.js';
-import { isExternal, type SiteKinds } from '../../lib/siteKind.js';
+import { hasDatabase, isExternal, isPhpSite, type SiteApps, type SiteKinds } from '../../lib/siteKind.js';
 
 /**
  * The site a job works on. An external site is refused unless the job is one that works for both
- * kinds and says so: a job written for hosted sites must never reach Docker with one.
+ * kinds and says so: a job written for hosted sites must never reach Docker with one. A PHP site
+ * is refused by a job for WordPress only, which says so with `{ app: 'wordpress' }`: the second
+ * line behind the routes' own refusal.
  */
-export function loadSite(db: Db, siteId: number, opts: { kinds?: SiteKinds } = {}): SiteRow {
+export function loadSite(db: Db, siteId: number, opts: { kinds?: SiteKinds; app?: SiteApps } = {}): SiteRow {
   const site = db.select().from(sites).where(eq(sites.id, siteId)).get();
   if (!site) throw new Error(`Site #${siteId} no longer exists`);
   if ((opts.kinds ?? 'hosted') === 'hosted' && isExternal(site)) {
     throw new Error(`"${site.slug}" is an external site: this job works only for sites the panel hosts.`);
+  }
+  if (opts.app === 'wordpress' && isPhpSite(site)) {
+    throw new Error(`"${site.slug}" is a PHP site: this job works only for WordPress sites.`);
   }
   return site;
 }
@@ -117,14 +122,25 @@ export async function probeSite(
   containerName: string,
   hostHeader: string,
   timeoutMs = 30_000,
+  opts: ProbeOpts = {},
 ): Promise<boolean> {
-  return httpProbe(server.probeUrlFor(containerName), hostHeader, timeoutMs);
+  return httpProbe(server.probeUrlFor(containerName), hostHeader, timeoutMs, opts);
 }
 
 /** `probeSite`, for a caller who has to say what the site answered. `attemptTimeoutMs`: how long one try may take. */
-export function probeSiteAttempt(server: ServerHandle, containerName: string, hostHeader: string, timeoutMs = 30_000, attemptTimeoutMs?: number): Promise<ProbeAttempt> {
-  return httpProbeAttempts(server.probeUrlFor(containerName), hostHeader, timeoutMs, { attemptTimeoutMs });
+export function probeSiteAttempt(
+  server: ServerHandle,
+  containerName: string,
+  hostHeader: string,
+  timeoutMs = 30_000,
+  attemptTimeoutMs?: number,
+  opts: ProbeOpts = {},
+): Promise<ProbeAttempt> {
+  return httpProbeAttempts(server.probeUrlFor(containerName), hostHeader, timeoutMs, { attemptTimeoutMs, ...opts });
 }
+
+/** How a site's probe is to read its answer: a PHP site's own 4xx is an answer (lib/httpProbe.ts). */
+export const probeOptsFor = (site: Pick<SiteRow, 'app'>): ProbeOpts => (isPhpSite(site) ? { siteOwn4xx: true } : {});
 
 export async function writeSiteJson(server: ServerHandle, config: Config, site: SiteRow): Promise<void> {
   const p = sitePaths(config, site.slug);
@@ -134,6 +150,9 @@ export async function writeSiteJson(server: ServerHandle, config: Config, site: 
     domains: JSON.parse(site.domains),
     devHostname: site.devHostname,
     phpVersion: site.phpVersion,
+    app: site.app,
+    webRoot: site.webRoot,
+    database: hasDatabase(site),
     locale: site.locale,
     status: site.status,
     dbName: site.dbName,
@@ -205,7 +224,7 @@ export type MountServices = Pick<CoreServices, 'config' | 'security' | 'settings
 export async function ensureSiteMountSources(
   server: ServerHandle,
   s: MountServices,
-  site: Pick<SiteRow, 'id' | 'slug' | 'mailPassword'>,
+  site: Pick<SiteRow, 'id' | 'slug' | 'mailPassword' | 'app' | 'webRoot'>,
   ctx?: Pick<JobContext<unknown>, 'warn'>,
 ): Promise<void> {
   const p = sitePaths(s.config, site.slug);
@@ -275,7 +294,7 @@ export async function removeSiteContainers(docker: Pick<DockerPort, 'removeConta
 }
 
 /** A site, as much of it as the mount helpers need. */
-type StartableSite = Pick<SiteRow, 'id' | 'slug' | 'mailPassword' | 'containerName'>;
+type StartableSite = Pick<SiteRow, 'id' | 'slug' | 'mailPassword' | 'containerName' | 'app' | 'webRoot'>;
 
 /**
  * Start a site container, having first made the files it bind-mounts exist.
@@ -360,6 +379,8 @@ export async function rewriteWordPressUrls(
   /** `skipExtensions`: the rewrite itself runs with the site's plugins and theme left out (WpService). */
   opts: { inside?: (container: string) => Promise<void>; skipExtensions?: boolean } = {},
 ): Promise<void> {
+  // A PHP site has no WordPress to rewrite; its callers skip it, and nothing is started for it.
+  if (isPhpSite(site)) return;
   // wp-cli runs via `docker exec`, so the container has to be up. Skipping the rewrite
   // for a stopped site left it flagged live while WordPress still redirected every
   // request to the old dev URL - visible only once someone started it again.
@@ -410,6 +431,8 @@ export async function runLicenseHook(
   vars: HookVars,
   opts: { only?: string } = {},
 ): Promise<RecipeOutcome[]> {
+  // Recipes are for WordPress plugins: a PHP site has none to activate. Its callers skip it too.
+  if (isPhpSite(site)) return [];
   try {
     return await s.licenses.runHook(server, site, hook, vars, { info: (m) => ctx.info(m), warn: (m, w) => ctx.warn(m, w) }, opts);
   } catch (err) {
