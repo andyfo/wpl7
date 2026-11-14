@@ -51,6 +51,7 @@ import {
   type DynamicConfig,
 } from '../../src/services/securityConfig.js';
 import { siteNetworkName } from '../../src/services/siteNetwork.js';
+import { askApp, healthGate } from '../../src/services/appProbe.js';
 import { buildSiteContainerSpec } from '../../src/services/siteSpec.js';
 import { interpolate, traefikFlags, traefikImage, traefikList } from '../composeFile.js';
 import { makeTestConfig } from '../helpers.js';
@@ -827,6 +828,26 @@ describe.skipIf(!ENABLED)('container apps against the real Traefik and Docker', 
       fact('8. one check from a short-lived container, ms', took);
     });
 
+    /** The panel's own way in (services/appProbe.ts): Traefik's image, locked down, on the app's network alone. */
+    const server = () => ({
+      name: 'engine',
+      docker: Object.assign(Object.create(dockerService) as DockerService, { containerImage: async () => TRAEFIK_IMAGE }),
+    });
+    const app = { slug: GATE, containerName: container(GATE), domains: JSON.stringify(['gate.example.net']) };
+
+    it('the panel’s own way in: no capability, a read-only root, the app’s network alone, and the first status line', async () => {
+      const t0 = Date.now();
+      expect(await askApp(server(), app, { port: 80, path: '/health', host: 'gate.example.net', timeoutSec: 5 })).toEqual({ status: 200, detail: '200 OK' });
+      fact('8. the panel’s way in, one question, ms', Date.now() - t0);
+      expect((await askApp(server(), app, { port: 80, path: '/fail', host: 'gate.example.net', timeoutSec: 5 })).status).toBe(500);
+      const gate = { port: 80, healthPath: '/health', healthHost: '', healthTimeoutSec: 20, deployCheckPath: '/whatever' };
+      expect(await healthGate(server(), app, gate, { deployCheck: true })).toBeNull();
+      expect(await healthGate(server(), app, { ...gate, deployCheckPath: '/fail' }, { deployCheck: true })).toMatch(/^The deploy check \/fail answered 500/);
+      // It ran locked down: Docker removed it, and it left nothing behind.
+      const left = await dockerCli('ps', '-aq', '--filter', `label=wpl7.probe=${GATE}`);
+      expect(left.stdout.toString('utf8').trim()).toBe('');
+    });
+
     it('a stopped container is a quick failure, not a hang', async () => {
       await must(dockerCli('stop', '-t', '0', container(GATE)), 'stopped');
       const t0 = Date.now();
@@ -834,6 +855,9 @@ describe.skipIf(!ENABLED)('container apps against the real Traefik and Docker', 
       expect(down.exitCode).not.toBe(0);
       expect(Date.now() - t0).toBeLessThan(6_000);
       fact('8. a stopped app, from inside Traefik', { exitCode: down.exitCode, stderr: down.stderr.trim(), ms: Date.now() - t0 });
+      const panelWay = await askApp(server(), app, { port: 80, path: '/health', host: 'gate.example.net', timeoutSec: 5 });
+      expect(panelWay.status).toBeNull();
+      fact('8. a stopped app, the panel’s way in', panelWay.detail);
       await must(dockerCli('start', container(GATE)), 'started again');
     });
 

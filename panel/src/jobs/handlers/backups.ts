@@ -20,6 +20,7 @@ import {
   siteUrl,
   startSiteContainer,
   updateSiteRow,
+  stopGraceOf,
 } from './shared.js';
 import { sites } from '../../db/schema.js';
 import { hasDatabase, isContainerApp, isExternal, isPhpSite } from '../../lib/siteKind.js';
@@ -120,7 +121,7 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
 
     ctx.info('Stopping site…');
     touched = true;
-    await server.docker.stopContainer(site.containerName);
+    await server.docker.stopContainer(site.containerName, stopGraceOf(s.db, site));
 
     // A PHP site's database is optional, on either side. The database's owner is the row as it is
     // once that is settled: a site made without one has it from here on.

@@ -40,6 +40,7 @@ import type { AlertService } from './alerts.js';
 import type { DatabasesService } from './databases.js';
 import type { SiteCronService } from './siteCron.js';
 import type { AppRoutesService } from './appRoutes.js';
+import type { AppsService } from './apps.js';
 
 export interface Logger {
   info(msg: string): void;
@@ -131,5 +132,7 @@ export interface CoreServices {
   siteCron: SiteCronService;
   /** Container apps' routes, as a file per app in each server's rules folder. */
   appRoutes: AppRoutesService;
+  /** Container apps: their settings, routes, deploys and deploy hook. */
+  apps: AppsService;
   log: Logger;
 }

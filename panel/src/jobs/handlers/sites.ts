@@ -46,6 +46,7 @@ import {
   siteShouldRun,
   siteUrl,
   startSiteContainer,
+  stopGraceOf,
   syncRelayAuth,
   updateSiteRow,
   waitForWordPressFiles,
@@ -70,6 +71,8 @@ export const siteCreatePayload = z.object({
   pluginZipPaths: z.array(z.string()).default([]),
   /** Default for jobs enqueued before the option existed - same answer the form gives. */
   discourageSearchEngines: z.boolean().default(true),
+  /** A container app's uploaded image, when it was made from one (services/apps.ts). */
+  uploadId: z.string().optional(),
 });
 
 /**
@@ -88,6 +91,8 @@ async function preparePhpSiteFolder(ctx: JobContext<unknown>, server: ServerHand
 
 export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayload>>, s: CoreServices): Promise<void> {
   const site = loadSite(s.db, ctx.payload.siteId);
+  // Its own image, folders and checks: none of the site image's steps (handlers/apps.ts).
+  if (isContainerApp(site)) return (await import('./apps.js')).createApp(ctx, s);
   const server = s.servers.handleFor(site.serverId);
   const domains = siteDomains(site);
   const primary = domains[0]!;
@@ -417,8 +422,9 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   const server = s.servers.handleFor(site.serverId);
   updateSiteRow(s.db, site.id, { status: 'deleting' });
   // A site being deleted has no rules file: its routers would only point at a container
-  // that is about to go.
+  // that is about to go. A container app's routes file goes the same way, first.
   await s.security.kick(server.id);
+  if (isContainerApp(site)) await s.appRoutes.kick(server.id);
 
   // A recently-moved site may still have its old copy parked on the source server.
   const { pendingCleanupFor, finalizeCleanup } = await import('./move.js');
@@ -485,6 +491,7 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   try {
     ctx.info('Removing container…');
     await removeSiteContainers(server.docker, site.containerName);
+    if (isContainerApp(site)) await (await import('./apps.js')).removeAppImages(ctx, s, server, site);
     if (hadFtp) {
       // Before the files go: its FTP file server has them mounted.
       ctx.info('Removing FTP/SFTP access…');
@@ -646,15 +653,20 @@ export async function siteStart(ctx: JobContext<z.infer<typeof siteIdPayload>>, 
   await startSiteContainer(server, s, site, ctx);
   updateSiteRow(s.db, site.id, { status: 'running' });
   await s.security.kick(server.id);
+  // A container app's routes are written for a running app only.
+  if (isContainerApp(site)) await s.appRoutes.kick(server.id);
 }
 
 export async function siteStop(ctx: JobContext<z.infer<typeof siteIdPayload>>, s: CoreServices): Promise<void> {
   const site = loadSite(s.db, ctx.payload.siteId);
   const server = s.servers.handleFor(site.serverId);
-  ctx.info(`Stopping ${site.containerName}…`);
-  await server.docker.stopContainer(site.containerName);
+  const grace = stopGraceOf(s.db, site);
+  ctx.info(`Stopping ${site.containerName}${grace !== undefined ? ` (up to ${grace} s for it to finish)` : ''}…`);
+  await server.docker.stopContainer(site.containerName, grace);
   updateSiteRow(s.db, site.id, { status: 'stopped' });
   await s.security.kick(server.id);
+  // Its routes go: a path it took on another site's domain is that site's again.
+  if (isContainerApp(site)) await s.appRoutes.kick(server.id);
 }
 
 export async function siteRestart(ctx: JobContext<z.infer<typeof siteIdPayload>>, s: CoreServices): Promise<void> {
@@ -768,17 +780,17 @@ export async function replaceContainer(
 }
 
 /**
- * Give a site's container the name of its way back, then stop it at once, as removing it did. In
- * that order: a panel that stops in between leaves a site that still serves, not one that looks
- * stopped on purpose.
+ * Give a site's container the name of its way back, then stop it - at once, as removing it did, or
+ * after a container app's grace, so that a worker in it can finish. In that order: a panel that
+ * stops in between leaves a site that still serves, not one that looks stopped on purpose.
  */
-async function setAside(docker: ServerHandle['docker'], name: string): Promise<void> {
+export async function setAside(docker: ServerHandle['docker'], name: string, graceSeconds = 0): Promise<void> {
   await docker.renameContainer(name, asideContainerName(name));
-  await docker.stopContainer(asideContainerName(name), 0);
+  await docker.stopContainer(asideContainerName(name), graceSeconds);
 }
 
 /** The new container goes, if it got that far, and the old one takes its name back, not started. */
-async function putBack(docker: ServerHandle['docker'], name: string): Promise<void> {
+export async function putBack(docker: ServerHandle['docker'], name: string): Promise<void> {
   const aside = asideContainerName(name);
   // Never renamed: the name is still the old container's, and nothing else has it.
   if ((await docker.containerState(aside)) === 'missing') return;
@@ -796,7 +808,7 @@ async function putBack(docker: ServerHandle['docker'], name: string): Promise<vo
  * stack 2 would take it for a site that wasn't answering, keep a new container that doesn't answer
  * either, and delete this one.
  */
-async function takeBackAside(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, row: SiteRow, name: string, run: boolean): Promise<void> {
+export async function takeBackAside(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, row: SiteRow, name: string, run: boolean): Promise<void> {
   if ((await server.docker.containerState(asideContainerName(name))) === 'missing') return;
   ctx.warn(`${asideContainerName(name)} is the container from before a change that did not finish. It comes back first.`);
   await putBack(server.docker, name);
@@ -809,7 +821,7 @@ async function takeBackAside(ctx: JobContext<unknown>, server: ServerHandle, s: 
 }
 
 /** The old container, once the new one is in place. Never a reason to fail: the next change, or the image sweep, deals with it. */
-async function dropAside(ctx: JobContext<unknown>, docker: ServerHandle['docker'], name: string): Promise<void> {
+export async function dropAside(ctx: JobContext<unknown>, docker: ServerHandle['docker'], name: string): Promise<void> {
   try {
     await docker.removeContainer(asideContainerName(name));
   } catch (err) {
@@ -1090,6 +1102,8 @@ export const siteReconcilePayload = z.object({
  */
 export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcilePayload>>, s: CoreServices): Promise<void> {
   let site = loadSite(s.db, ctx.payload.siteId);
+  // Made from its own image, behind its health gate (handlers/apps.ts).
+  if (isContainerApp(site)) return (await import('./apps.js')).reconcileApp(ctx, s, site);
   if (ctx.payload.retrySwitch && site.stackSwitchImage !== null) {
     updateSiteRow(s.db, site.id, { stackSwitchImage: null });
     site = loadSite(s.db, site.id);

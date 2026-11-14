@@ -16,6 +16,7 @@ import {
   siteFileBase,
   utf8Bytes,
 } from './siteFilePath.js';
+import { APP_LIMITS, MAX_APP_ROUTE_PATH } from './apps.js';
 import {
   autoBlockModes,
   customRulesSchema,
@@ -260,6 +261,8 @@ export const jobTypes = [
   'plugin.zipCheck',
   // "Reinstall original": a package a scan found changed, downloaded again at its version.
   'wp.reinstall',
+  // A container app's new image, behind its health check (jobs/handlers/apps.ts).
+  'app.deploy',
 ] as const;
 export type JobType = (typeof jobTypes)[number];
 
@@ -426,6 +429,175 @@ export const sitePluginSelection = z.object({
   extraWporgSlugs: z.array(z.string().regex(/^[a-z0-9-]{1,100}$/)).max(50).default([]),
 }).strict();
 
+
+// ---------------------------------------------------------------------------
+// Container apps (services/apps.ts)
+
+/**
+ * An image reference as Docker takes one: `[registry[:port]/]path[:tag][@sha256:…]`, lowercase but
+ * for the tag. A reference with a digest never moves, so its app is never deployed anew.
+ */
+export const IMAGE_REFERENCE_RE =
+  /^(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::\d{1,5})?\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[0-9a-f]{64})?$/;
+export const imageReferenceSchema = z.string().trim().max(255).regex(IMAGE_REFERENCE_RE, 'not an image reference, such as ghcr.io/example/app:stable');
+
+/** A path a route takes, or a health check asks: from the root, nothing Traefik's rules or a URL would read twice. */
+const APP_URL_PATH_RE = /^\/[A-Za-z0-9._~\-/%@:+]*$/;
+export const appUrlPathSchema = z
+  .string()
+  .max(MAX_APP_ROUTE_PATH)
+  .regex(APP_URL_PATH_RE, 'a path from / with letters, digits and . _ ~ - / % @ : + only');
+
+export const appRouteInput = z
+  .object({
+    /** Keeps a route's id, which names its routers (and its visitors), when the list is saved again. */
+    id: z.number().int().positive().optional(),
+    host: domainSchema,
+    match: z.enum(appRouteMatches).default('none'),
+    /** '' with match "none"; a path from / otherwise. */
+    path: z.string().max(MAX_APP_ROUTE_PATH).default(''),
+    scheme: z.enum(appRouteSchemes).default('https'),
+    enabled: z.boolean().default(true),
+  })
+  .strict()
+  .superRefine((r, ctx) => {
+    if (r.match === 'none') {
+      if (r.path !== '') ctx.addIssue({ code: 'custom', message: 'a route without a path match has no path', path: ['path'] });
+    } else if (!APP_URL_PATH_RE.test(r.path)) {
+      ctx.addIssue({ code: 'custom', message: 'a path from / with letters, digits and . _ ~ - / % @ : + only', path: ['path'] });
+    }
+  });
+export type AppRouteInput = z.infer<typeof appRouteInput>;
+
+export const APP_ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+export const appEnvInput = z
+  .object({
+    name: z.string().regex(APP_ENV_NAME_RE, 'letters, digits and _, not starting with a digit'),
+    /** Left out for a secret that has a value: it keeps that value. */
+    value: z.string().max(APP_LIMITS.envValueBytes).optional(),
+    secret: z.boolean().default(false),
+  })
+  .strict();
+export type AppEnvInput = z.infer<typeof appEnvInput>;
+
+export const APP_MOUNT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+export const appMountInput = z
+  .object({
+    name: z.string().regex(APP_MOUNT_NAME_RE, '1-32 of a-z, 0-9 and -'),
+    /** Where the container sees it. */
+    path: z.string().min(2).max(200),
+    writable: z.boolean().default(false),
+    inBackups: z.boolean().default(true),
+  })
+  .strict();
+export type AppMountInput = z.infer<typeof appMountInput>;
+
+export const appExtraHostInput = z
+  .object({
+    host: z.string().max(253).regex(/^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/, 'not a hostname'),
+    address: z.union([z.ipv4(), z.ipv6()]),
+  })
+  .strict();
+
+export const appImageInput = z.union([
+  z
+    .object({
+      reference: imageReferenceSchema,
+      registryUser: z.string().max(200).optional(),
+      /** Write-only: never in an answer. */
+      registryToken: z.string().max(4096).optional(),
+    })
+    .strict(),
+  z.object({ uploadId: z.string().regex(UPLOAD_ID_RE, 'an upload id is 16-64 characters of A-Z, a-z, 0-9, _ and -') }).strict(),
+]);
+
+export const appHardeningInput = z
+  .object({
+    dropAllCaps: z.boolean(),
+    readOnlyRoot: z.boolean(),
+    /** '' = the image's own user. */
+    runAs: z.string().regex(/^(\d{1,10}:\d{1,10})?$/, 'uid:gid in numbers, or empty for the image\'s user'),
+    stopGraceSec: z.number().int().min(0).max(300),
+  })
+  .strict()
+  .partial();
+
+export const appHealthInput = z
+  .object({
+    path: appUrlPathSchema,
+    /** '' = the app's primary host. */
+    host: z.union([domainSchema, z.literal('')]),
+    /** Asked once after the health path answers, at a deploy; '' = none. */
+    deployCheckPath: z.union([appUrlPathSchema, z.literal('')]),
+    timeoutSec: z.number().int().min(5).max(600),
+  })
+  .strict()
+  .partial();
+
+export const appUpdatesInput = z
+  .object({
+    mode: z.enum(appUpdateModes),
+    checkMinutes: z.number().int().min(5).max(1440),
+  })
+  .strict()
+  .partial();
+
+/** What a container app is created with, beside a site's own fields; for no other site. */
+const APP_CREATE_SHAPE = {
+  image: appImageInput.optional(),
+  /** Left out, the one port the image exposes; refused at the deploy when it exposes none or several. */
+  port: z.number().int().min(1).max(65535).optional(),
+  env: z.array(appEnvInput).max(APP_LIMITS.env).optional(),
+  /** Left out, one route: the app's dev hostname, over https. */
+  routes: z.array(appRouteInput).max(APP_LIMITS.routes).optional(),
+  mounts: z.array(appMountInput).max(APP_LIMITS.mounts).optional(),
+  /** Writable paths kept under data/, beside the image's VOLUMEs. */
+  dataPaths: z.array(z.string().min(2).max(200)).max(APP_LIMITS.dataPaths).optional(),
+  extraHosts: z.array(appExtraHostInput).max(APP_LIMITS.extraHosts).optional(),
+  hardening: appHardeningInput.optional(),
+  health: appHealthInput.optional(),
+  updates: appUpdatesInput.optional(),
+};
+const APP_CREATE_FIELDS = Object.keys(APP_CREATE_SHAPE) as (keyof typeof APP_CREATE_SHAPE)[];
+
+/** PATCH /api/sites/:slug/app: what is left out stays as it is. */
+export const appPatchBody = z
+  .object({
+    /** A registry app's watched reference. */
+    reference: imageReferenceSchema.optional(),
+    port: z.number().int().min(1).max(65535).optional(),
+    env: z.array(appEnvInput).max(APP_LIMITS.env).optional(),
+    mounts: z.array(appMountInput).max(APP_LIMITS.mounts).optional(),
+    dataPaths: z.array(z.string().min(2).max(200)).max(APP_LIMITS.dataPaths).optional(),
+    extraHosts: z.array(appExtraHostInput).max(APP_LIMITS.extraHosts).optional(),
+    hardening: appHardeningInput.optional(),
+    health: appHealthInput.optional(),
+    updates: appUpdatesInput.optional(),
+  })
+  .strict();
+export type AppPatchBody = z.infer<typeof appPatchBody>;
+
+export const appRoutesBody = z.object({ routes: z.array(appRouteInput).min(1).max(APP_LIMITS.routes) }).strict();
+
+/** Both empty: no login. */
+export const appRegistryAuthBody = z.object({ username: z.string().max(200), token: z.string().max(4096) }).strict();
+
+export const appDeployBody = z
+  .object({
+    /** Roll back: the image of this deploy again. Left out, what the reference names now. */
+    deployId: z.number().int().positive().optional(),
+    /** Left out, the app's Back up before updates setting decides; "ask" reads as yes here. */
+    backupFirst: z.boolean().optional(),
+  })
+  .strict();
+
+export const appImageBody = z
+  .object({
+    uploadId: z.string().regex(UPLOAD_ID_RE, 'an upload id is 16-64 characters of A-Z, a-z, 0-9, _ and -'),
+    backupFirst: z.boolean().optional(),
+  })
+  .strict();
+
 /** What a new WordPress site is given, and a PHP site is not. */
 const WORDPRESS_CREATE_FIELDS = ['locale', 'adminUser', 'adminEmail', 'adminPassword', 'plugins', 'discourageSearchEngines'] as const;
 /** What a new PHP site may be given, and a WordPress site may not. */
@@ -439,8 +611,8 @@ export const siteCreateBody = z.object({
   domainMode: z.enum(['dev', 'custom']).default('dev'),
   domains: z.array(domainSchema).min(1).max(10).optional(),
   phpVersion: phpVersionSchema.optional(),
-  /** What the site runs: WordPress, or the site's own PHP and files with no WordPress in it. */
-  app: z.enum(['wordpress', 'php']).default('wordpress'),
+  /** What the site runs: WordPress, the site's own PHP and files with no WordPress in it, or a container app. */
+  app: z.enum(siteApps).default('wordpress'),
   locale: localeSchema.optional(),
   /** WordPress only, and required there. */
   adminUser: z.string().regex(/^[a-zA-Z0-9._@ -]{1,60}$/).optional(),
@@ -457,10 +629,11 @@ export const siteCreateBody = z.object({
    * so that a PHP site's body never carries it.
    */
   discourageSearchEngines: z.boolean().optional(),
-  /** PHP only: a database of the site's own, made with it. Left out, none; one can be made later. */
+  /** PHP sites and container apps: a database of the site's own, made with it. Left out, none; one can be made later. */
   database: z.boolean().optional(),
   /** PHP only: the folder visitors reach (webRootSchema). Left out, the site's folder. */
   webRoot: webRootSchema.optional(),
+  ...APP_CREATE_SHAPE,
 }).strict()
   .superRefine((v, ctx) => {
     // Each refusal names its field, so the wizard and an API client see which one.
@@ -469,6 +642,16 @@ export const siteCreateBody = z.object({
         if (v[field] !== undefined) ctx.addIssue({ code: 'custom', message: `${field} is for ${sites} only`, path: [field] });
       }
     };
+    if (v.app === 'container') {
+      refuse(WORDPRESS_CREATE_FIELDS, 'WordPress sites');
+      refuse(['webRoot', 'phpVersion'], 'sites on the site image');
+      // Its hosts are the ones its routes name (services/apps.ts).
+      if (v.domains !== undefined) ctx.addIssue({ code: 'custom', message: 'a container app takes its hosts from its routes: leave domains out', path: ['domains'] });
+      if (v.domainMode === 'custom') ctx.addIssue({ code: 'custom', message: 'a container app takes its hosts from its routes: leave domainMode out', path: ['domainMode'] });
+      if (v.image === undefined) ctx.addIssue({ code: 'custom', message: 'image is required for a container app', path: ['image'] });
+      return;
+    }
+    refuse(APP_CREATE_FIELDS, 'container apps');
     if (v.app === 'php') {
       refuse(WORDPRESS_CREATE_FIELDS, 'WordPress sites');
     } else {

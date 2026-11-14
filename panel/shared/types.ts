@@ -4,6 +4,12 @@ import type { AccessLevel } from './access.js';
 import type { WpLocale } from './locales.js';
 import type { RecipeHook } from './recipes.js';
 import type {
+  AppDeployOrigin,
+  AppDeployResult,
+  AppImageSource,
+  AppRouteMatch,
+  AppRouteScheme,
+  AppUpdateMode,
   BackupBeforeUpdates,
   BackupType,
   CopyStatus,
@@ -228,6 +234,88 @@ export interface SiteDetail extends SiteSummary {
   stackSwitchError: string | null;
   /** Its caches; null for a site hosted elsewhere. */
   cache: SiteCacheDto | null;
+  /** A container app's own part; null for every other site. */
+  container: AppDto | null;
+}
+
+/** A container app's environment variable. A secret's value is never sent: `value` is null, `set` says whether it has one. */
+export interface AppEnvDto {
+  name: string;
+  value: string | null;
+  secret: boolean;
+  set: boolean;
+}
+
+export interface AppRouteDto {
+  id: number;
+  host: string;
+  match: AppRouteMatch;
+  path: string;
+  scheme: AppRouteScheme;
+  enabled: boolean;
+  /** The site whose domain this route borrows a path of; null for one of the app's own hosts. */
+  borrowedFrom: string | null;
+}
+
+export interface AppMountDto {
+  name: string;
+  path: string;
+  writable: boolean;
+  inBackups: boolean;
+  /** When an archive was last unpacked into it; null = empty. */
+  filledAt: number | null;
+}
+
+export interface AppDeployDto {
+  id: number;
+  reference: string;
+  digest: string;
+  imageId: string;
+  startedAt: number;
+  tookMs: number | null;
+  result: AppDeployResult;
+  origin: AppDeployOrigin;
+  actor: string | null;
+  jobId: number | null;
+  /** How long the app answered nothing (Traefik's 503) during the swap. */
+  gapMs: number | null;
+  error: string | null;
+  /** The new container's last lines, kept when it failed. */
+  logTail: string | null;
+  /** Whether Roll back can run it again: its image is on the server, or can be pulled by digest. */
+  canRollBack: boolean;
+}
+
+/** A container app's settings, as GET /api/sites/:slug and GET /api/sites/:slug/app give them. Never a secret. */
+export interface AppDto {
+  source: AppImageSource;
+  /** The watched reference of a registry app; '' for an upload. */
+  reference: string;
+  /** The registry digest of what runs; '' for an upload or before the first deploy. */
+  digest: string;
+  imageId: string;
+  /** Ask first: the digest waiting for an Update. */
+  pendingDigest: string;
+  registryUser: string;
+  registryToken: { secret: true; set: boolean };
+  port: number;
+  env: AppEnvDto[];
+  routes: AppRouteDto[];
+  mounts: AppMountDto[];
+  dataPaths: { path: string; dir: string; fromImage: boolean }[];
+  extraHosts: { host: string; address: string }[];
+  hardening: { dropAllCaps: boolean; readOnlyRoot: boolean; runAs: string; stopGraceSec: number };
+  /** Who the container runs as, and owns its folders. */
+  user: { uid: number; gid: number };
+  health: { path: string; host: string; deployCheckPath: string; timeoutSec: number };
+  updates: { mode: AppUpdateMode; checkMinutes: number; checkedAt: number | null; checkError: string | null };
+  deployToken: { set: boolean; setAt: number | null };
+  /** What Traefik is told: the routes are in force, held for a deploy, or there are none (stopped). */
+  routesState: 'serving' | 'held' | 'none';
+  /** Why the routes could not be written, when they could not. */
+  routesProblem: string | null;
+  /** The newest deploys, newest first. */
+  deploys: AppDeployDto[];
 }
 
 /** What the Caching card shows and sets. The built-in groups themselves are in shared/cacheRules.ts. */

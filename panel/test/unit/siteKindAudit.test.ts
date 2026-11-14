@@ -153,6 +153,14 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     plan: both('container apps only (containerApps()), which are always hosted'),
     tick: both('which servers have a container app'),
   },
+  'services/apps.ts': {
+    bySlug: both('refused unless it is a container app (isContainerApp), which is always hosted'),
+    planRoutes: both('the routes the container apps on the server take: only a hosted app has any'),
+    hook: both('the app a deploy token is for, refused unless it is a container app'),
+    updatesTick: hosted('hostedSites()'),
+    sweep: hosted('hostedSites()'),
+    keptImagesOn: both('container apps only (containerApps()), which are always hosted'),
+  },
 };
 
 /**
@@ -291,6 +299,14 @@ const SITE_APP_REVIEW: Record<string, Record<string, AppVerdict>> = {
     state: apps("one container app's status"),
     plan: apps('container apps only (containerApps())'),
     tick: apps('container apps only (containerApps())'),
+  },
+  'services/apps.ts': {
+    bySlug: apps('container apps only (isContainerApp)'),
+    planRoutes: apps('the routes container apps take'),
+    hook: apps('container apps only (isContainerApp)'),
+    updatesTick: apps('container apps only (containerApps())'),
+    sweep: apps('container apps only (containerApps())'),
+    keptImagesOn: apps('container apps only (containerApps())'),
   },
 };
 
@@ -506,6 +522,14 @@ const SITE_IMAGE_REVIEW: Record<string, Record<string, ImageVerdict>> = {
     state: images("one container app's status"),
     plan: images("the routes files are container apps' own"),
     tick: images('the servers that have a container app'),
+  },
+  'services/apps.ts': {
+    bySlug: { siteImage: 'isContainerApp(' },
+    planRoutes: images("the routes other container apps on the server take"),
+    hook: { siteImage: 'isContainerApp(' },
+    updatesTick: images("container apps' own registries"),
+    sweep: images("container apps' own containers"),
+    keptImagesOn: images("container apps' own images"),
   },
 };
 

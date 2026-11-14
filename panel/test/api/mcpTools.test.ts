@@ -382,7 +382,7 @@ describe('wpl7_api_docs', () => {
     expect(value.schema.body.required).toEqual(expect.arrayContaining(['title']));
     // Required for a WordPress site only, which the route checks and the docs say: a PHP site has none.
     expect(value.schema.body.properties).toHaveProperty('adminUser');
-    expect(value.schema.body.properties.app).toMatchObject({ enum: ['wordpress', 'php'], default: 'wordpress' });
+    expect(value.schema.body.properties.app).toMatchObject({ enum: ['wordpress', 'php', 'container'], default: 'wordpress' });
     // Optional: a create that leaves it out gets the default admin email from Settings.
     expect(value.schema.body.properties).toHaveProperty('adminEmail');
     expect(value.schema.body.required).not.toContain('adminEmail');

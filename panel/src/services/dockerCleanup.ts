@@ -109,6 +109,9 @@ async function needsOn(s: CoreServices, handle: ServerHandle): Promise<{ needed:
     SCANNER_IMAGE,
     config.rcloneImage,
     config.mariadb.clientImage,
+    // What each container app runs and the two deploys before it, by id: a roll back's images. Their
+    // repositories are not WPL7's, so this only matters for an app that runs one of the stack's.
+    ...s.apps.keptImagesOn(handle.id),
   ];
   const repos = [
     SITE_IMAGE_REPO,

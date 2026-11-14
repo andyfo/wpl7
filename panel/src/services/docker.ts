@@ -34,6 +34,21 @@ export interface SiteContainerSpec {
   nanoCpus?: number;
   /** Process/thread ceiling. Undefined = uncapped. */
   pidsLimit?: number;
+  /*
+   * A container app's own (services/appSpec.ts). Left out, a container is made as every site's
+   * is: the image's user, a writable root, SITE_CAP_DROP, no host aliases, Docker's 10 s stop.
+   */
+  /** `uid:gid`; left out, the image's own user. */
+  user?: string;
+  readOnlyRootfs?: boolean;
+  /** Path in the container -> tmpfs options, as Docker takes them. */
+  tmpfs?: Record<string, string>;
+  /** In place of SITE_CAP_DROP: `['ALL']` for an app that needs no capability at all. */
+  capDrop?: string[];
+  /** `host:address` entries for /etc/hosts. */
+  extraHosts?: string[];
+  /** Seconds a stop waits before it kills, when the stop itself names none (`docker stop` from a shell). */
+  stopTimeout?: number;
 }
 
 /**
@@ -232,6 +247,11 @@ export interface EphemeralLockdown {
   pidsLimit: number;
   /** Scratch space: path in the container -> size in MiB. Counts against `memoryBytes`. */
   tmpfs: Record<string, number>;
+  /**
+   * The one network the run is on; left out, none. The way in to a container app
+   * (services/appProbe.ts): its own network, where nothing but the app and the stack is.
+   */
+  network?: string;
 }
 
 /**
@@ -365,7 +385,8 @@ export interface DockerPort {
   startContainer(name: string): Promise<void>;
   /** Stop, after `graceSeconds` (20) for the container to stop by itself. A container that is not there is not an error. */
   stopContainer(name: string, graceSeconds?: number): Promise<void>;
-  restartContainer(name: string): Promise<void>;
+  /** `graceSeconds`: how long the stop half waits (20 s left out). */
+  restartContainer(name: string, graceSeconds?: number): Promise<void>;
   removeContainer(name: string): Promise<void>;
   renameContainer(name: string, to: string): Promise<void>;
   containerState(name: string): Promise<ContainerState>;
@@ -622,6 +643,8 @@ export class DockerService implements DockerPort {
       Image: spec.image,
       Env: Object.entries(spec.env).map(([k, v]) => `${k}=${v}`),
       Labels: spec.labels,
+      ...(spec.user ? { User: spec.user } : {}),
+      ...(spec.stopTimeout !== undefined ? { StopTimeout: spec.stopTimeout } : {}),
       HostConfig: {
         Mounts: spec.binds.map(bindToMount),
         RestartPolicy: { Name: 'unless-stopped' },
@@ -630,8 +653,11 @@ export class DockerService implements DockerPort {
         // other site on it. PidsLimit is the fork-bomb equivalent.
         ...(nanoCpus ? { NanoCpus: nanoCpus } : {}),
         ...(spec.pidsLimit ? { PidsLimit: spec.pidsLimit } : {}),
-        CapDrop: SITE_CAP_DROP,
+        CapDrop: spec.capDrop ?? SITE_CAP_DROP,
         SecurityOpt: SITE_SECURITY_OPT,
+        ...(spec.readOnlyRootfs ? { ReadonlyRootfs: true } : {}),
+        ...(spec.tmpfs ? { Tmpfs: spec.tmpfs } : {}),
+        ...(spec.extraHosts?.length ? { ExtraHosts: spec.extraHosts } : {}),
       },
       NetworkingConfig: {
         EndpointsConfig: { [networks[0]!]: {} },
@@ -661,8 +687,8 @@ export class DockerService implements DockerPort {
     }
   }
 
-  async restartContainer(name: string): Promise<void> {
-    await this.docker.getContainer(name).restart({ t: 20 });
+  async restartContainer(name: string, graceSeconds = 20): Promise<void> {
+    await this.docker.getContainer(name).restart({ t: graceSeconds });
   }
 
   async removeContainer(name: string): Promise<void> {
@@ -1074,7 +1100,7 @@ export class DockerService implements DockerPort {
 
   async runEphemeral(opts: EphemeralOpts): Promise<RunResult> {
     const lock = opts.lockdown;
-    const networks = lock ? [] : (opts.networks ?? [this.proxyNetwork, this.dbNetwork]);
+    const networks = lock ? (lock.network ? [lock.network] : []) : (opts.networks ?? [this.proxyNetwork, this.dbNetwork]);
     const container = await this.docker.createContainer({
       name: opts.name,
       Image: opts.image,
@@ -1086,7 +1112,7 @@ export class DockerService implements DockerPort {
       HostConfig: lock
         ? {
             Mounts: (opts.binds ?? []).map(bindToMount),
-            NetworkMode: 'none',
+            NetworkMode: lock.network ?? 'none',
             CapDrop: ['ALL'],
             SecurityOpt: ['no-new-privileges'],
             ReadonlyRootfs: true,

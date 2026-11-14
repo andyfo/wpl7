@@ -30,7 +30,33 @@ import { requireAccess } from '../plugins/auth.js';
 import { checkSiteUrl, clearSiteCaches, siteContainerStack } from '../services/siteCaches.js';
 import type { AppDeps } from './deps.js';
 import { isPhpSite, phpNoPageCache } from '../lib/siteKind.js';
+import { resolveTargetServer } from '../services/sites.js';
 import { audit } from '../lib/audit.js';
+
+/**
+ * A domain becomes the sender domain of the site that claims it (services/mail.ts
+ * senderOwners), and its mail goes out signed with the DKIM key of that domain - or of the
+ * domain it is under: the signing policy gives every key its subdomains too
+ * (services/mailDkim.ts renderSigningPolicy), and signs for whatever the site owns. Where that key
+ * is not one of this site's own domains - kept after its site was deleted, made ahead of a
+ * migration, or another site's - claiming the domain would let this site sign mail as someone
+ * else. That is mail identity, Full's (docs/mcp.md), not work inside a site.
+ */
+export function holdSigningDomainsOf(deps: Pick<AppDeps, 'mail'>, req: FastifyRequest, domains: string[], held: string[] = []): void {
+  const own = new Set(held.map((d) => d.toLowerCase()));
+  const foreign = deps.mail
+    .listDkimKeys()
+    .map((key) => key.domain.toLowerCase())
+    .filter((k) => !own.has(k));
+  const claimed = domains.filter((d) => {
+    const name = d.toLowerCase();
+    return !own.has(name) && foreign.some((k) => name === k || name.endsWith(`.${k}`));
+  });
+  if (claimed.length > 0) {
+    const what = `a domain whose mail would be signed with a DKIM key this site does not hold (${claimed.join(', ')})`;
+    requireAccess(req, 'full', what);
+  }
+}
 
 // Addressing an existing site: no reserved-name check, see siteSlugParam.
 const slugParams = z.object({ slug: siteSlugParam });
@@ -39,35 +65,18 @@ const cronLineParams = z.object({ slug: siteSlugParam, id: z.coerce.number().int
 export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
 
-  /**
-   * A domain becomes the sender domain of the site that claims it (services/mail.ts
-   * senderOwners), and its mail goes out signed with the DKIM key of that domain - or of the
-   * domain it is under: the signing policy gives every key its subdomains too
-   * (services/mailDkim.ts renderSigningPolicy), and signs for whatever the site owns. Where that key is not one of this site's own domains - kept after
-   * its site was deleted, made ahead of a migration, or another site's - claiming the domain
-   * would let this site sign mail as someone else. That is mail identity, Full's (docs/mcp.md),
-   * not work inside a site.
-   */
-  const holdSigningDomains = (req: FastifyRequest, domains: string[], held: string[] = []) => {
-    const own = new Set(held.map((d) => d.toLowerCase()));
-    const foreign = deps.mail
-      .listDkimKeys()
-      .map((key) => key.domain.toLowerCase())
-      .filter((k) => !own.has(k));
-    const claimed = domains.filter((d) => {
-      const name = d.toLowerCase();
-      return !own.has(name) && foreign.some((k) => name === k || name.endsWith(`.${k}`));
-    });
-    if (claimed.length > 0) {
-      const what = `a domain whose mail would be signed with a DKIM key this site does not hold (${claimed.join(', ')})`;
-      requireAccess(req, 'full', what);
-    }
-  };
+  const holdSigningDomains = (req: FastifyRequest, domains: string[], held: string[] = []) => holdSigningDomainsOf(deps, req, domains, held);
 
   r.get('/api/sites', async () => ({ items: deps.sites.list() }));
 
   r.post('/api/sites', { schema: { body: siteCreateBody } }, async (req, reply) => {
     holdSigningDomains(req, req.body.domains ?? []);
+    if (req.body.app === 'container') {
+      // An app's hosts are its routes': the ones no site holds become its own, the others are borrowed.
+      const { own, borrowed } = deps.apps.hostsOfCreate(req.body, resolveTargetServer(deps, req.body.serverId));
+      holdSigningDomains(req, own);
+      if (borrowed.length > 0) requireAccess(req, 'full', `a route on another site's domain (${borrowed.join(', ')})`);
+    }
     await deps.sites.assertCanCreate(req.body);
     const { job } = deps.sites.create(req.body);
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });

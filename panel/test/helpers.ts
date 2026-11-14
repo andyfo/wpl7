@@ -35,6 +35,7 @@ import type {
 } from '../src/services/docker.js';
 import { fileFromTar } from '../src/services/imageArchive.js';
 import { AppRoutesService, appHttpHosts } from '../src/services/appRoutes.js';
+import { AppsService } from '../src/services/apps.js';
 import { TarWriter } from '../src/lib/tarWriter.js';
 import { SPEC_LABEL, fitCpus, serviceSpecHash } from '../src/services/docker.js';
 import { APACHE_RELOAD_COMMAND } from '../src/services/security.js';
@@ -370,8 +371,8 @@ export class FakeDocker implements DockerPort {
     this.record('stopContainer', graceSeconds === undefined ? [name] : [name, graceSeconds]);
     if (this.containers.has(name)) this.containers.set(name, 'exited');
   }
-  async restartContainer(name: string): Promise<void> {
-    this.record('restartContainer', [name]);
+  async restartContainer(name: string, graceSeconds?: number): Promise<void> {
+    this.record('restartContainer', graceSeconds === undefined ? [name] : [name, graceSeconds]);
     if (this.enforceFileBinds) this.mountFileBinds(name);
     this.containers.set(name, 'running');
   }
@@ -615,8 +616,23 @@ export class FakeDocker implements DockerPort {
     }
     throw new Error('FakeDocker has no relay: tests reach databases through a FakeDbBrowser');
   }
+  /**
+   * What a container app answers the way in (services/appProbe.ts): a status, or null for none at
+   * all. Unset, a running container answers 200 and any other none.
+   */
+  appHttp: ((req: { container: string; port: number; path: string; host: string }) => number | null) | null = null;
+  private answerProbe(opts: EphemeralOpts): RunResult {
+    const url = new URL(opts.cmd.at(-1)!);
+    const header = opts.cmd[opts.cmd.indexOf('--header') + 1] ?? '';
+    const req = { container: url.hostname, port: Number(url.port || 80), path: url.pathname, host: header.replace(/^Host:\s*/, '') };
+    const status = this.appHttp ? this.appHttp(req) : this.containers.get(req.container) === 'running' ? 200 : null;
+    if (status === null) return { stdout: '', stderr: `wget: bad address '${req.container}:${req.port}'\n`, exitCode: 1 };
+    const line = `  HTTP/1.1 ${status} ${status < 400 ? 'OK' : 'Error'}\n`;
+    return status < 400 ? { stdout: '', stderr: line, exitCode: 0 } : { stdout: '', stderr: `${line}wget: server returned error: HTTP/1.1 ${status} Error\n`, exitCode: 1 };
+  }
   async runEphemeral(opts: EphemeralOpts): Promise<RunResult> {
     this.record('runEphemeral', [opts]);
+    if (opts.labels?.['wpl7.probe']) return this.answerProbe(opts);
     // A refresh's changed files into the site's folder (importRefresh.ts), done on the fake's disk.
     if (opts.labels?.['wpl7.refresh'] && opts.entrypoint?.[0] === 'cp') {
       const from = (target: string) => opts.binds!.find((b) => b.split(':')[1] === target)!.split(':')[0]!;
@@ -1887,6 +1903,7 @@ export async function makeWorld(
   const serverInfo = new SystemInfoService(servers, log, null, opts.resolver);
   core.reminders = new ReminderService(core, serverInfo);
   core.siteCron = new SiteCronService(core);
+  core.apps = new AppsService(core);
   // The hourly check of each external site and every uptime probe are what the alerts hear from.
   core.connections.attachEvents({ checked: (site, conn) => core.alerts.connectorChecked(site, conn) });
   core.monitor.attachExternal(core.connections, {

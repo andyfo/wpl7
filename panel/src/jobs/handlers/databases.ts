@@ -13,7 +13,7 @@ import type { DbTarget } from '../../services/dbBrowser.js';
 import type { CoreServices } from '../../services/index.js';
 import { sitePaths, siteRuntimeFrom } from '../../services/siteSpec.js';
 import type { JobContext } from '../context.js';
-import { loadSite, probeSite, siteDomains, siteShouldRun, startSiteContainer, updateSiteRow, writeSiteJson } from './shared.js';
+import { loadSite, probeSite, siteDomains, siteShouldRun, startSiteContainer, stopGraceOf, updateSiteRow, writeSiteJson } from './shared.js';
 import { replaceContainer } from './sites.js';
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -392,7 +392,7 @@ export async function databaseImport(ctx: JobContext<z.infer<typeof databaseImpo
   try {
     if (stopped) {
       ctx.info('Stopping the site for the import…');
-      await server.docker.stopContainer(site.containerName);
+      await server.docker.stopContainer(site.containerName, stopGraceOf(s.db, site));
     }
     let failure: unknown = null;
     try {

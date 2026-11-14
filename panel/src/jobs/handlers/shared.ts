@@ -18,6 +18,7 @@ import { httpProbe, httpProbeAttempts, type ProbeAttempt, type ProbeOpts } from 
 import type { RecipeHook } from '../../../shared/recipes.js';
 import type { HookVars, RecipeOutcome } from '../../services/licenses.js';
 import { hasDatabase, isContainerApp, isExternal, isPhpSite, type SiteApps, type SiteKinds } from '../../lib/siteKind.js';
+import { appRows, ensureAppFolders } from '../../services/appSpec.js';
 
 /**
  * The site a job works on. An external site is refused unless the job is one that works for both
@@ -234,8 +235,12 @@ export async function ensureSiteMountSources(
   site: Pick<SiteRow, 'id' | 'slug' | 'mailPassword' | 'app' | 'webRoot'>,
   ctx?: Pick<JobContext<unknown>, 'warn'>,
 ): Promise<void> {
-  // A container app binds none of these: no PHP, no Apache, no relay file, no runtime files.
-  if (isContainerApp(site)) return;
+  // A container app binds none of these, only its own folders, owned by the user it runs as.
+  if (isContainerApp(site)) {
+    const rows = appRows(s.db, site.id);
+    if (rows) await ensureAppFolders(server.files, s.config, site, rows.settings, rows.mounts);
+    return;
+  }
   const p = sitePaths(s.config, site.slug);
   await server.files.mkdirp(p.configDir);
 
@@ -329,7 +334,16 @@ export async function restartSiteContainer(
   ctx?: Pick<JobContext<unknown>, 'warn'>,
 ): Promise<void> {
   await ensureSiteMountSources(server, s, site, ctx);
-  await server.docker.restartContainer(site.containerName);
+  await server.docker.restartContainer(site.containerName, stopGraceOf(s.db, site));
+}
+
+/**
+ * How long a stop of the site's container waits for it to end: a container app's own grace, so a
+ * worker in it can finish; undefined for every other site, which keeps Docker's call's default.
+ */
+export function stopGraceOf(db: Db, site: Pick<SiteRow, 'id' | 'app'>): number | undefined {
+  if (!isContainerApp(site)) return undefined;
+  return appRows(db, site.id)?.settings.stopGraceSec;
 }
 
 /** Create/repair the site's network and report infrastructure that could not be attached. */

@@ -36,6 +36,8 @@ import Docker from 'dockerode';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DockerService } from '../../src/services/docker.js';
 import { imageUserIds, platformRefusal } from '../../src/services/appImages.js';
+import { appLabels, buildAppContainerSpec } from '../../src/services/appSpec.js';
+import type { Config } from '../../src/config.js';
 import { inspectArchive, renamedArchive } from '../../src/services/imageArchive.js';
 import { ARCH, disagreeingArchive, imageStore, namesOf, renameArchive, unpackArchive } from '../containerAppChecks.js';
 
@@ -258,8 +260,10 @@ describe.skipIf(!ENABLED)('container apps: images and containers on the real Doc
   });
 
   describe('5. the image’s user and volumes, and the container’s hardening', () => {
-    const data = path.join(root, 'app5', 'data');
+    // The panel's own layout (services/appSpec.ts appPaths): data/<dir> and mounts/<name>, under the app's folder.
+    const data = path.join(root, 'app5', 'data', 'data');
     const secret = path.join(root, 'app5', 'mounts', 'secret');
+    const NETWORK = `wpl7-engine-images-net-${PID}`;
     const NAME = `wpl7-engine-images-app5-${PID}`;
     const alias = 'www.shop.example.com';
     /** As root on the host, which the panel is: here, a throwaway container with the folder mounted. */
@@ -269,6 +273,36 @@ describe.skipIf(!ENABLED)('container apps: images and containers on the real Doc
 
     /** What the app's own check says, asked inside its container (as the image's user). */
     const ask = async (name: string, p: string) => must(dockerCli('exec', name, 'wget', '-qO-', `http://127.0.0.1:80${p}`), `GET ${p}`);
+
+    /**
+     * The container as the panel makes an app's (services/appSpec.ts buildAppContainerSpec, through
+     * DockerService.createSiteContainer): every capability dropped, a read-only root, the host alias.
+     */
+    async function startApp(name: string, opts: { env?: Record<string, string> } = {}) {
+      const spec = buildAppContainerSpec(
+        { paths: { sites: root } as Config['paths'], mariadb: { host: 'mariadb' } as Config['mariadb'] },
+        {
+          site: { slug: 'app5', containerName: name, domains: JSON.stringify(['shop.example.com']), dbName: '', dbUser: '', dbPassword: '', mailPassword: null },
+          settings: {
+            runAs: '',
+            dropAllCaps: 1,
+            readOnlyRoot: 1,
+            extraHosts: JSON.stringify([{ host: alias, address: '127.0.0.1' }]),
+            dataPaths: JSON.stringify([{ path: '/data', dir: 'data', fromImage: true }]),
+            stopGraceSec: 20,
+          },
+          env: Object.entries({ APP_ALIAS: alias, ...opts.env }).map(([k, v]) => ({ name: k, value: v })),
+          mounts: [{ name: 'secret', containerPath: '/mnt/secret', writable: 0 }],
+          runtime: { memoryBytes: 256 * 1024 * 1024 },
+          image: APP_IMAGE,
+        },
+      );
+      expect(spec.labels).toEqual(appLabels('app5'));
+      await dockerService.createSiteContainer({ ...spec, labels: { ...spec.labels, [ENGINE_LABEL]: String(PID) }, networks: [NETWORK] });
+      containers.push(name);
+      await dockerService.startContainer(name);
+      return docker.getContainer(name);
+    }
 
     async function startHardened(name: string, opts: { sysctls?: Record<string, string>; extraEnv?: string[]; mounts?: boolean } = {}) {
       const c = await docker.createContainer({
@@ -297,7 +331,13 @@ describe.skipIf(!ENABLED)('container apps: images and containers on the real Doc
       return c;
     }
 
+    afterAll(async () => {
+      await dockerCli('rm', '-f', '-v', ...containers.filter((c) => c.startsWith(NAME)));
+      await dockerCli('network', 'rm', NETWORK);
+    });
+
     beforeAll(async () => {
+      await must(dockerCli('network', 'create', '--label', `${ENGINE_LABEL}=${PID}`, NETWORK), 'its network');
       fs.mkdirSync(data, { recursive: true });
       fs.mkdirSync(secret, { recursive: true });
       fs.writeFileSync(path.join(secret, 'key.txt'), 'the signing key\n');
@@ -345,7 +385,7 @@ describe.skipIf(!ENABLED)('container apps: images and containers on the real Doc
 
     it('runs as that uid, with no capability, no new privileges, a read-only root and its host alias', async () => {
       await asRoot(path.join(root, 'app5'), `chown -R ${uid}:${gid} /x/data /x/mounts`);
-      const c = await startHardened(NAME);
+      const c = await startApp(NAME);
       await waitFor('the app', async () => (await dockerCli('exec', NAME, 'wget', '-qO-', 'http://127.0.0.1/health')).status === 0, 20_000);
       const who = JSON.parse(await ask(NAME, '/whoami')) as Record<string, unknown>;
       expect(who).toMatchObject({ uid: 10001, gid: 10001, capEff: '0000000000000000', noNewPrivs: '1', alias: '127.0.0.1' });
@@ -358,7 +398,11 @@ describe.skipIf(!ENABLED)('container apps: images and containers on the real Doc
       // Docker Desktop's file sharing shows every file as root's; a Linux daemon, the writer's.
       if (PERMISSIONS_HOLD) expect(await asRoot(data, 'stat -c %u:%g /x/note.txt')).toBe(`${uid}:${gid}`);
       // The data folder takes the VOLUME's place: no anonymous volume.
-      expect((await c.inspect()).Mounts.map((m) => m.Type).sort()).toEqual(['bind', 'bind']);
+      const info = await c.inspect();
+      expect(info.Mounts.map((m) => m.Type).sort()).toEqual(['bind', 'bind']);
+      // A `docker stop` from a shell waits the app's grace too.
+      expect((info.Config as { StopTimeout?: number }).StopTimeout).toBe(20);
+      expect(info.Config.Labels['traefik.enable']).toBe('false');
     });
 
     it('the port is the sysctl’s: with it at 1024 the app cannot listen on 80', async () => {
@@ -370,7 +414,7 @@ describe.skipIf(!ENABLED)('container apps: images and containers on the real Doc
 
     it('the stop it is given decides whether its worker finishes: none, then ten seconds', async () => {
       const name = `${NAME}-drain`;
-      const c = await startHardened(name, { extraEnv: ['APP_DRAIN_SECONDS=2'] });
+      const c = await startApp(name, { env: { APP_DRAIN_SECONDS: '2' } });
       await waitFor('the app', async () => (await dockerCli('exec', name, 'wget', '-qO-', 'http://127.0.0.1/health')).status === 0, 20_000);
       fs.rmSync(path.join(data, 'drained'), { force: true });
       // What setAside does to a site's container today.

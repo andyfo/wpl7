@@ -9,7 +9,7 @@ import type { JobContext } from '../context.js';
 import { assertPhpImage, sitePaths, siteImage } from '../../services/siteSpec.js';
 import { APP_MOVES_STOPPED, PHP_NO_MAINTENANCE, hasDatabase, isContainerApp, isPhpSite } from '../../lib/siteKind.js';
 import { removeSiteNetwork } from '../../services/siteNetwork.js';
-import { loadSite, removeSiteContainers, siteDomains, siteUrl, startSiteContainer, updateSiteRow, writeSiteJson } from './shared.js';
+import { loadSite, removeSiteContainers, siteDomains, siteUrl, startSiteContainer, stopGraceOf, updateSiteRow, writeSiteJson } from './shared.js';
 import { ensureSiteImage, wildcardCovers } from './sites.js';
 import { pipeBetweenServers, proxyConfigPathFor, proxyConfigYaml, rmOn } from './moveHelpers.js';
 import { extraDbFile } from '../../services/backup.js';
@@ -183,7 +183,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
       }
     } else if (p.quiesce === 'stop') {
       ctx.info('Stopping the source site…');
-      await source.docker.stopContainer(site.containerName);
+      await source.docker.stopContainer(site.containerName, stopGraceOf(s.db, site));
       quiesced = true;
       ctx.pushCompensation('restart source container', async () => {
         await startSiteContainer(source, s, site, ctx);
@@ -298,7 +298,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
 
     if (wasStopped) {
       ctx.info('Site was stopped before the move; stopping it again on the target…');
-      await target.docker.stopContainer(site.containerName);
+      await target.docker.stopContainer(site.containerName, stopGraceOf(s.db, site));
     }
 
     // ------------------------------------------------------------ 5: cutover

@@ -12,6 +12,7 @@ import type { CoreServices } from './index.js';
 import type { JobWorker } from '../jobs/worker.js';
 import { siteScheme } from './labels.js';
 import { assertDomainsFree } from './domainGuard.js';
+import { appsRoutingOn, routedOnRefusal } from './appRoutes.js';
 import {
   APP_HOSTS_FROM_ROUTES,
   APP_MOVES_STOPPED,
@@ -101,6 +102,7 @@ export class SitesService {
    * version, which can run one.
    */
   async assertCanCreate(body: SiteCreateBody): Promise<void> {
+    if (body.app === 'container') return this.s.apps.assertCanCreate(body, resolveTargetServer(this.s, body.serverId));
     if (body.app !== 'php') return;
     const server = resolveTargetServer(this.s, body.serverId);
     const phpVersion = body.phpVersion ?? this.s.settings.get('defaultPhpVersion');
@@ -118,6 +120,8 @@ export class SitesService {
   }
 
   create(body: SiteCreateBody): { site: SiteRow; job: JobRow } {
+    // Its own rows and checks: no PHP version, no administrator, hosts from its routes (services/apps.ts).
+    if (body.app === 'container') return this.s.apps.create(body, resolveTargetServer(this.s, body.serverId));
     // Left out by callers inside the panel that predate PHP sites.
     const php = (body.app ?? 'wordpress') === 'php';
     const offered = this.s.settings.get('phpVersions') ?? [];
@@ -249,6 +253,9 @@ export class SitesService {
     if (this.s.imports.activeForSite(site.id)) {
       throw conflict('This site is being imported. Delete the import under Sites → Import site first.');
     }
+    // A path of one of its domains is a container app's: that app would answer for a host nobody holds.
+    const routedOn = routedOnRefusal(site.slug, appsRoutingOn(this.db, site));
+    if (routedOn) throw conflict(routedOn);
     // A recently-moved site still has a parked copy on its old server, and site.delete
     // tears that down too. Claim the source lane as well, or that teardown races whatever
     // else the source server is doing.
@@ -379,6 +386,15 @@ export class SitesService {
       .get();
     if (pending) {
       throw conflict('A previous move is still awaiting cleanup; finalize it first (site page banner)');
+    }
+    // A route borrows a path of a site on the same server only, both ways.
+    const routedOn = routedOnRefusal(site.slug, appsRoutingOn(this.db, site));
+    if (routedOn) throw conflict(routedOn);
+    if (isContainerApp(site)) {
+      const borrowed = this.s.apps.detail(site).routes.filter((r) => r.borrowedFrom !== null);
+      if (borrowed.length > 0) {
+        throw conflict(`"${site.slug}" has routes on ${[...new Set(borrowed.map((r) => r.host))].join(', ')}, which another site on this server holds: take them off first.`);
+      }
     }
     const isLive = site.isLive === 1;
     // Maintenance mode is WordPress's. A live PHP site is stopped while it is copied: a short
@@ -536,6 +552,9 @@ export class SitesService {
     if (isContainerApp(site)) throw conflict(APP_HOSTS_FROM_ROUTES(site.slug));
     const unique = [...new Set(domains)];
     this.assertDomainsFree(unique, site.id, site.devHostname);
+    const dropped = (JSON.parse(site.domains) as string[]).filter((d) => !unique.includes(d));
+    const routedOn = routedOnRefusal(site.slug, appsRoutingOn(this.db, site, dropped));
+    if (routedOn) throw conflict(routedOn);
     return this.worker.enqueue(
       'site.updateDomains',
       {
@@ -612,7 +631,8 @@ export class SitesService {
     try {
       const { docker } = this.s.servers.handleFor(site.serverId);
       containerState = await docker.containerState(site.containerName);
-      stack = await siteContainerStack(docker, site.containerName);
+      // A container app's has no stack: none of its labels would read as the old PHP setup.
+      if (!isContainerApp(site)) stack = await siteContainerStack(docker, site.containerName);
       if (site.webRoot !== '' && containerState === 'running') webRootMissing = await webRootMissingIn(docker, site);
     } catch (err) {
       // The registry still answers when the hosting server cannot be reached: the metadata,
@@ -665,8 +685,9 @@ export class SitesService {
       stack,
       // A restore or a move can put it on stack 2 by another way than the switch, which is the only
       // thing that clears this. A container on stack 2 has nothing left to report.
-      stackSwitchError: stack === 2 ? null : site.stackSwitchError,
-      cache: this.cacheDto(site, stack, containerState),
+      stackSwitchError: stack === 2 || isContainerApp(site) ? null : site.stackSwitchError,
+      cache: isContainerApp(site) ? null : this.cacheDto(site, stack, containerState),
+      container: isContainerApp(site) ? this.s.apps.detail(site) : null,
     };
   }
 
@@ -837,6 +858,7 @@ export class SitesService {
       stack: null,
       stackSwitchError: null,
       cache: null,
+      container: null,
     };
   }
 }
