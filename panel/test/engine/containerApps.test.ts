@@ -906,11 +906,14 @@ describe.skipIf(!ENABLED)('container apps against the real Traefik and Docker', 
         timeoutMs: 60_000,
         lockdown: MOUNT_UNPACK_LOCKDOWN,
       });
-    const fresh = (name: string) => {
+    // As the panel makes it (files.mkdirp with the app's owner, 0700): root does that, in a
+    // throwaway container. A Linux daemon keeps owners, so the unpacker, as the app's user, may
+    // chmod only a folder of its own, and the runner reads what it made only as root.
+    const asRoot = (out: string, script: string) => must(dockerCli('run', '--rm', '-v', `${out}:/x`, 'busybox:1.37', 'sh', '-c', script), script);
+    const fresh = async (name: string) => {
       const out = path.join(dir, name);
       fs.mkdirSync(out, { recursive: true });
-      // The panel makes it as the app's user; here anyone may write it.
-      fs.chmodSync(out, 0o777);
+      await asRoot(out, 'chown 10001:10001 /x && chmod 700 /x');
       return out;
     };
 
@@ -927,36 +930,34 @@ describe.skipIf(!ENABLED)('container apps against the real Traefik and Docker', 
 
     it('lists a .tar.gz’s names and unpacks it, folders 0700 and files 0600', async () => {
       const archive = path.join(dir, 'good.tar.gz');
-      const listed = await unpack(archive, fresh('l1'), mountListScript('tar.gz'));
+      const listed = await unpack(archive, await fresh('l1'), mountListScript('tar.gz'));
       expect(listed.exitCode, listed.stderr).toBe(0);
       expect(listed.stdout.split('\n').filter(Boolean).sort()).toEqual(['./', './css/', './css/site.css', './logo.txt']);
       expect(listed.stdout.split('\n').filter(Boolean).map(mountEntryProblem)).toEqual([null, null, null, null]);
-      const out = fresh('t1');
+      const out = await fresh('t1');
       const done = await unpack(archive, out, mountUnpackScript('tar.gz'));
       expect(done.exitCode, done.stderr).toBe(0);
-      expect(fs.readFileSync(path.join(out, 'css', 'site.css'), 'utf8')).toBe('body{}');
-      // Docker Desktop's file sharing shows every mode as it likes; a Linux daemon, as they are.
+      expect(await asRoot(out, 'cat /x/css/site.css')).toBe('body{}');
+      // Docker Desktop's file sharing shows every mode and owner as it likes; a Linux daemon, as they are.
       if (process.platform === 'linux') {
-        expect((fs.statSync(path.join(out, 'logo.txt')).mode & 0o777).toString(8)).toBe('600');
-        expect((fs.statSync(path.join(out, 'css')).mode & 0o777).toString(8)).toBe('700');
-        expect(fs.statSync(path.join(out, 'logo.txt')).uid).toBe(10001);
+        expect(await asRoot(out, 'stat -c "%a %u" /x/logo.txt /x/css')).toBe('600 10001\n700 10001');
       }
     });
 
     it('lists a .zip’s names as unzip -l prints them, and unpacks it', async () => {
       const archive = path.join(dir, 'good.zip');
-      const listed = await unpack(archive, fresh('l2'), mountListScript('zip'));
+      const listed = await unpack(archive, await fresh('l2'), mountListScript('zip'));
       expect(listed.exitCode, listed.stderr).toBe(0);
       fact('11. unzip -l, as busybox prints it', listed.stdout);
       expect(zipListNames(listed.stdout).sort()).toEqual(['css/site.css', 'logo.txt']);
-      const out = fresh('z1');
+      const out = await fresh('z1');
       const done = await unpack(archive, out, mountUnpackScript('zip'));
       expect(done.exitCode, done.stderr).toBe(0);
-      expect(fs.readFileSync(path.join(out, 'logo.txt'), 'utf8')).toBe('logo');
+      expect(await asRoot(out, 'cat /x/logo.txt')).toBe('logo');
     });
 
     it('refuses an archive with a link in it, after unpacking it where it reaches nothing', async () => {
-      const out = fresh('k1');
+      const out = await fresh('k1');
       const done = await unpack(path.join(dir, 'link.tar.gz'), out, mountUnpackScript('tar.gz'));
       expect(done.exitCode).toBe(3);
       expect(done.stderr).toContain('links or special files: link');
