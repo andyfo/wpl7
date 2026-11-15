@@ -33,8 +33,9 @@ export interface SshTarget {
 
 const MAX_CHANNELS = 8;
 /**
- * How long a hung-up channel's slot waits for the 'close' that gives it back, before it comes back
- * anyway: no 'close' follows when the server closed the channel first, with output still unread.
+ * How long the slot of a hung-up dial-stdio channel waits for the 'close' that gives it back, before
+ * it comes back anyway: none follows when the server closed the channel first, or the connection
+ * dropped, with output still unread.
  */
 const HANG_UP_CLOSE_MS = 2_000;
 const FAIL_FAST_MS = 5_000;
@@ -61,11 +62,16 @@ export class SshConnection {
   /** Set when streamlocal forwarding is administratively prohibited on the server. */
   private useDialStdio = false;
   private warnedDialStdio = false;
+  private readonly hangUpCloseMs: number;
 
   constructor(
     private readonly target: SshTarget,
     private readonly warn: (msg: string) => void = () => undefined,
-  ) {}
+    /** HANG_UP_CLOSE_MS when left out; a test waits milliseconds. */
+    opts: { hangUpCloseMs?: number } = {},
+  ) {
+    this.hangUpCloseMs = opts.hangUpCloseMs ?? HANG_UP_CLOSE_MS;
+  }
 
   private unreachable(err: Error): ServerUnreachableError {
     if (err instanceof ServerUnreachableError) return err;
@@ -183,6 +189,8 @@ export class SshConnection {
     const release = await this.acquireSlot();
     try {
       const client = await this.acquire();
+      /** Set for the dial-stdio shim, whose channel is an sshd session (MaxSessions counts it). */
+      let session = false;
       const channel = await new Promise<Duplex>((resolve, reject) => {
         let settled = false;
         const timer = setTimeout(() => {
@@ -207,7 +215,11 @@ export class SshConnection {
         };
         const dialStdio = () => {
           try {
-            client.exec('docker system dial-stdio', (err, stream) => (err ? fail(err) : ok(stream)));
+            client.exec('docker system dial-stdio', (err, stream) => {
+              if (err) return fail(err);
+              session = true;
+              ok(stream);
+            });
           } catch (err) {
             fail(err instanceof Error ? err : new Error(String(err))); // 'Not connected'
           }
@@ -239,20 +251,23 @@ export class SshConnection {
       // halves have ended. Without this, every exec kept its slot, and once MAX_CHANNELS of them
       // had, every later Docker call to the server waited for one.
       channel.once('end', () => channel.end());
-      // A hang-up marks the stream as no longer readable, and the 'close' that follows gives the
-      // slot back. ssh2 says 'close' only once a stream has been read to its end or is no longer
-      // readable, and a reader that hangs up has stopped reading: a download whose tab was closed
-      // kept its slot for good, and node:http's agent kept its channel, never told that it had
-      // closed. The slot waits for the server to close the channel rather than coming back at
-      // once: on the dial-stdio fallback every channel is an sshd session, and one opened before
-      // the last has gone counts against sshd's MaxSessions, which refuses it.
+      // A hang-up marks the stream as no longer readable, so that a 'close' follows: ssh2 says
+      // 'close' only once a stream has been read to its end or is no longer readable, and a reader
+      // that hangs up has stopped reading. Without it a download whose tab was closed kept its slot
+      // for good, and node:http's agent kept its channel, never told that it had closed.
+      //
+      // A forwarded socket's channel gives its slot back at the hang-up. It is no sshd session, and
+      // sshd may keep it a long while yet, until Docker lets go of a connection it holds unread
+      // input for. A dial-stdio channel is a session, and one opened before the last has gone counts
+      // against sshd's MaxSessions, which refuses it: its slot waits for the 'close'.
       const destroy = channel.destroy.bind(channel);
       let hungUp = false;
       channel.destroy = (err?: Error) => {
         if (!hungUp) {
           hungUp = true;
           channel.readable = false;
-          setTimeout(release, HANG_UP_CLOSE_MS).unref();
+          if (session) setTimeout(release, this.hangUpCloseMs).unref();
+          else release();
         }
         return destroy(err);
       };

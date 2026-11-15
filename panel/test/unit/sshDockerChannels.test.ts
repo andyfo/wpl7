@@ -2,7 +2,7 @@ import { once } from 'node:events';
 import http from 'node:http';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
-import { Writable } from 'node:stream';
+import { type Duplex, Writable } from 'node:stream';
 import Docker from 'dockerode';
 import { Server, utils, type ServerChannel } from 'ssh2';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -139,6 +139,16 @@ function printForEver(channel: ServerChannel): void {
   pump();
 }
 
+/** Output, and the channel closed at once by the server: a command that is done, read or not. */
+function closeFirst(channel: ServerChannel): void {
+  channel.write(Buffer.alloc(256 * 1024, 'y'));
+  channel.close();
+}
+
+/** Whether the server's close has arrived. ssh2 says so only once the stream has been read. */
+const closedByServer = (channel: Duplex): boolean =>
+  (channel as unknown as { incoming: { state: string } }).incoming.state === 'closed';
+
 interface FakeSshd {
   port: number;
   /** The docker.sock channels it still holds. */
@@ -146,28 +156,43 @@ interface FakeSshd {
 }
 
 /**
- * An sshd that forwards docker.sock to `backendPort` and runs every command as `printForEver`.
+ * An sshd that forwards docker.sock to `backendPort` and runs every other command as `printForEver`.
  * `drop` instead cuts the connection the moment a forward is asked for: a network that goes away.
+ * `refuseForwarding` leaves the panel `docker system dial-stdio`, served like the socket, and
+ * `closeFirst` serves both with `closeFirst` instead of a backend.
  */
-async function fakeSshd(opts: { backendPort?: number; drop?: boolean }): Promise<FakeSshd> {
+async function fakeSshd(opts: {
+  backendPort?: number;
+  drop?: boolean;
+  refuseForwarding?: boolean;
+  closeFirst?: boolean;
+}): Promise<FakeSshd> {
   let open = 0;
   let socket: net.Socket | null = null;
+  const serveDocker = (channel: ServerChannel) => {
+    if (opts.closeFirst) return closeFirst(channel);
+    open++;
+    forwardLikeOpenSsh(channel, net.connect(opts.backendPort!, '127.0.0.1'), () => open--);
+  };
   // An OpenSSH ident: ssh2 only asks other servers for socket forwarding with strictVendor off.
   const ssh = new Server({ hostKeys: [utils.generateKeyPairSync('ed25519').private], ident: 'OpenSSH_9.9' }, (client) => {
     client.on('error', () => undefined);
     client.on('authentication', (ctx) => ctx.accept());
     client.on('ready', () => {
-      client.on('openssh.streamlocal', (accept) => {
+      client.on('openssh.streamlocal', (accept, reject) => {
         if (opts.drop) {
           socket?.destroy();
           return;
         }
-        const channel = accept();
-        open++;
-        forwardLikeOpenSsh(channel, net.connect(opts.backendPort!, '127.0.0.1'), () => open--);
+        if (opts.refuseForwarding) return reject();
+        serveDocker(accept());
       });
       client.on('session', (accept) => {
-        accept().on('exec', (acceptExec) => printForEver(acceptExec()));
+        accept().on('exec', (acceptExec, _reject, info) => {
+          const channel = acceptExec();
+          if (info.command === 'docker system dial-stdio') serveDocker(channel);
+          else printForEver(channel);
+        });
       });
     });
   });
@@ -180,7 +205,11 @@ async function fakeSshd(opts: { backendPort?: number; drop?: boolean }): Promise
   return { port, open: () => open };
 }
 
-function connect(sshPort: number, warn: (msg: string) => void = () => undefined): SshConnection {
+function connect(
+  sshPort: number,
+  warn: (msg: string) => void = () => undefined,
+  opts: { hangUpCloseMs?: number } = {},
+): SshConnection {
   const key = utils.generateKeyPairSync('ed25519').private;
   const conn = new SshConnection(
     {
@@ -193,6 +222,7 @@ function connect(sshPort: number, warn: (msg: string) => void = () => undefined)
       pinnedHostKey: () => null,
     },
     warn,
+    opts,
   );
   cleanups.push(() => conn.close());
   return conn;
@@ -230,6 +260,39 @@ describe('Docker channels over SSH', () => {
       await within(closed, 3_000, `'close' of channel ${i}`);
     }
     await waitFor(() => sshd.open() === 0, 3_000);
+  });
+
+  it("gives back a forwarded channel's slot at the hang-up, though no 'close' can follow it", async () => {
+    const sshd = await fakeSshd({ closeFirst: true });
+    // Long enough to notice: a forwarded channel is no sshd session, and never waits it out.
+    const conn = connect(sshd.port, () => undefined, { hangUpCloseMs: 60_000 });
+    const held: Duplex[] = [];
+    for (let i = 1; i <= 8; i++) {
+      const channel = await within(conn.openDockerChannel(), 5_000, `channel ${i}`);
+      await waitFor(() => closedByServer(channel), 3_000); // closed, its output unread
+      held.push(channel);
+    }
+    for (const channel of held) channel.destroy();
+    (await within(conn.openDockerChannel(), 2_000, 'the ninth channel')).destroy();
+  });
+
+  it("gives back a dial-stdio channel's slot after a wait, not at the hang-up", async () => {
+    const warnings: string[] = [];
+    const sshd = await fakeSshd({ refuseForwarding: true, closeFirst: true });
+    const conn = connect(sshd.port, (msg) => warnings.push(msg), { hangUpCloseMs: 300 });
+    const held: Duplex[] = [];
+    for (let i = 1; i <= 8; i++) {
+      const channel = await within(conn.openDockerChannel(), 5_000, `channel ${i}`);
+      await waitFor(() => closedByServer(channel), 3_000); // closed, its output unread
+      held.push(channel);
+    }
+    expect(warnings.join(' ')).toContain('dial-stdio');
+    const hungUpAt = Date.now();
+    for (const channel of held) channel.destroy();
+    // Each is a session that sshd may still count, so no slot comes back at the hang-up; and no
+    // 'close' can follow, so the wait gives them back.
+    (await within(conn.openDockerChannel(), 5_000, 'the ninth channel')).destroy();
+    expect(Date.now() - hungUpAt).toBeGreaterThanOrEqual(250);
   });
 
   it('fails a forward whose connection drops, without taking the panel down', async () => {

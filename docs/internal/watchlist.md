@@ -1400,11 +1400,11 @@ for a reason; remove one once there is nothing left to watch.
   - `'close'` comes only after `'end'`, or once the stream is not readable, and a hang-up
     (`destroy()`) changes neither. A reader that hangs up has stopped reading, so `'end'` never
     comes. `openDockerChannel`'s hang-up sets `readable = false`, so `'close'` comes as soon as the
-    server answers the channel's close; node:http's agent lets go of a socket on `'close'` only. The
-    slot comes back with that `'close'`, not at the hang-up: on the dial-stdio fallback every channel
-    is an sshd session, and one opened before the server has let go of the last is refused
-    (`MaxSessions`). When no `'close'` can follow (the server closed the channel first, with output
-    still unread), it comes back after `HANG_UP_CLOSE_MS`.
+    server answers the channel's close; node:http's agent lets go of a socket on `'close'` only. A
+    forwarded socket's channel gives its slot back at the hang-up. A dial-stdio channel is an sshd
+    session, and one opened before the server has let go of the last is refused (`MaxSessions`), so
+    its slot comes back with that `'close'`, or after `HANG_UP_CLOSE_MS` when none can follow: the
+    server closed the channel first, or the connection dropped, with output still unread.
 - **Check:** `npm view ssh2 version`. For a newer release, read its `lib/Channel.js` (`destroy`,
   `allowHalfOpen`) and `onCHANNEL_CLOSE` in `lib/utils.js` against the above, then install it in
   `panel/` and run `npx vitest run test/unit/sshDockerChannels.test.ts test/unit/dockerExecInput.test.ts`
