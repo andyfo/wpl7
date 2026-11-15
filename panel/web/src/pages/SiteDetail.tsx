@@ -170,7 +170,7 @@ export function SiteDetail() {
       {tab === 'files' && <FilesTab key={slug} slug={slug} />}
       {tab === 'ftp' && <FtpTab key={slug} slug={slug} />}
       {tab === 'database' && <DatabaseTab key={slug} slug={slug} />}
-      {tab === 'deploys' && <AppDeploysTab key={slug} slug={slug} />}
+      {tab === 'deploys' && <AppDeploysTab key={slug} site={s} />}
       {tab === 'logs' && <AppLogsTab key={slug} slug={slug} />}
       {tab === 'settings' && (external ? <ExternalSettings slug={slug} /> : <SettingsTab slug={slug} />)}
     </div>

@@ -162,7 +162,7 @@ export async function restoreSiteOnServer(
   };
   await s.security.kick(target.id);
   ctx.pushCompensation('remove container on target', async () => {
-    await target.docker.removeContainer(site.containerName);
+    await target.docker.removeContainer(site.containerName, app ? { volumes: true } : undefined);
   });
   if (app) {
     const rows = appRows(s.db, site.id)!;

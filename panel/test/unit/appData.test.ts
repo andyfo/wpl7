@@ -1,6 +1,7 @@
 /**
  * A container app's files: what its backups hold, what a restore puts back (its image too), its
- * final backup, a mount filled from an archive, and a move to another server.
+ * final backup, a mount filled from an archive (a new app's before it first runs), a mount taken
+ * off, and a move to another server.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -34,25 +35,26 @@ function prepare(docker: TestWorld['docker']): void {
 }
 
 /**
- * `chowns`: each `chown -R` of the app's folders is noted there, by owner, and not run: on a test
- * machine it would fail for any user but the one the tests run as.
+ * No `chown` is run: on a test machine it would fail for any user but the one the tests run as.
+ * Each `chown -R` of the app's folders is noted in `chowns`, by owner; one of a single file (a
+ * mount's archive) in `handed`, as its arguments.
  */
-async function world(opts: { chowns?: string[] } = {}): Promise<TestWorld> {
-  const { chowns } = opts;
-  const exec: ExecPort = chowns
-    ? {
-        ...hostExec,
-        run: async (cmd, args, o) => {
-          if (cmd !== 'chown') return hostExec.run(cmd, args, o);
-          if (args[0] === '-R') chowns.push(args[1]!);
-          return { stdout: '', stderr: '', exitCode: 0 };
-        },
-      }
-    : hostExec;
+async function world(): Promise<TestWorld & { chowns: string[]; handed: string[] }> {
+  const chowns: string[] = [];
+  const handed: string[] = [];
+  const exec: ExecPort = {
+    ...hostExec,
+    run: async (cmd, args, o) => {
+      if (cmd !== 'chown') return hostExec.run(cmd, args, o);
+      if (args[0] === '-R') chowns.push(args[1]!);
+      else handed.push(args.join(' '));
+      return { stdout: '', stderr: '', exitCode: 0 };
+    },
+  };
   const w = await makeWorld({ exec });
   w.deps.settings.set('backupBeforeUpdates', 'never');
   prepare(w.docker);
-  return w;
+  return Object.assign(w, { chowns, handed });
 }
 
 async function finish(w: TestWorld, jobId: number) {
@@ -79,10 +81,13 @@ const body = {
   routes: [{ host: 'shop.example.com', scheme: 'both' }, { host: 'shop.dev.example.test' }],
 };
 
+/** Made, then started: an app with mounts is made stopped, for its mounts to be filled first. */
 async function createShop(w: TestWorld, extra: Record<string, unknown> = {}) {
   const { job } = w.deps.sites.create(siteCreateBody.parse({ ...body, ...extra }));
   const done = await finish(w, job.id);
   expect(done.status, done.error ?? '').toBe('succeeded');
+  const started = await finish(w, w.deps.sites.action('shop', 'start').id);
+  expect(started.status, started.error ?? '').toBe('succeeded');
   return w.db.select().from(sites).where(eq(sites.slug, 'shop')).get()!;
 }
 
@@ -180,8 +185,8 @@ describe('a container app’s backups', () => {
   });
 
   it('a restore onto an image that runs as another user hands it the folders, and is a deploy from then on', async () => {
-    const chowns: string[] = [];
-    const w = await world({ chowns });
+    const w = await world();
+    const { chowns } = w;
     const site = await createShop(w);
     fill(w);
     const backup = await w.core.backup.create(site, 'manual');
@@ -243,14 +248,23 @@ describe('a mount filled from an archive', () => {
     expect(mountEntryProblem('assets/')).toBeNull();
     expect(mountEntryProblem('../etc/passwd')).toBe('"../etc/passwd" has an empty, "." or ".." segment');
     expect(mountEntryProblem('/etc/passwd')).toBe('"/etc/passwd" has an absolute path');
+    // A name in any script, by the bytes the archive holds: one byte a character made 一 a NUL and Я a /.
+    expect(mountEntryProblem('./文档/一.txt')).toBeNull();
+    expect(mountEntryProblem('Яблоко.txt')).toBeNull();
+    expect(mountEntryProblem('文档/../../etc/passwd')).toBe('"文档/../../etc/passwd" has an empty, "." or ".." segment');
+    expect(mountEntryProblem('/Яблоко.txt')).toBe('"/Яблоко.txt" has an absolute path');
+    expect(mountEntryProblem('a\u0000b')).toBe('"a\\u0000b" has a NUL byte');
     expect(zipListNames('Archive:  /in/archive\n  Length      Date    Time    Name\n---------  ---------- -----   ----\n       12  11-14-2026 20:00   a.txt\n        0  11-14-2026 20:00   dir/\n---------                     -------\n       12                     2 files\n')).toEqual(['a.txt', 'dir/']);
   });
 
-  /** The unpacker, as busybox in Traefik's image runs it: the listing, then the files in /out. */
-  function unpacker(w: TestWorld, names: string[], files: Record<string, string>, opts: { links?: boolean } = {}) {
-    const runs: EphemeralOpts[] = [];
+  /**
+   * The unpacker, as busybox in Traefik's image runs it: the listing, then the files in /out. Each
+   * run notes the files handed to another owner by then.
+   */
+  function unpacker(w: Awaited<ReturnType<typeof world>>, names: string[], files: Record<string, string>, opts: { links?: boolean } = {}) {
+    const runs: (EphemeralOpts & { handed: string[] })[] = [];
     w.docker.ephemeral = (o) => {
-      runs.push(o);
+      runs.push({ ...o, handed: [...w.handed] });
       const script = o.cmd[0]!;
       if (script.startsWith('exec tar -tzf')) return { stdout: names.join('\n') + '\n', stderr: '', exitCode: 0 };
       const out = o.binds!.find((b) => b.endsWith(':/out'))!.slice(0, -':/out'.length);
@@ -284,9 +298,37 @@ describe('a mount filled from an archive', () => {
 
   const GZIP = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0]);
 
+  it('is filled before the app first runs: an app made with mounts is made stopped, with no gate and no routes', async () => {
+    const w = await world();
+    const routes = path.join(w.config.srvRoot, 'traefik', 'dynamic', appRoutesFileName('shop'));
+    const { site, job } = w.deps.sites.create(siteCreateBody.parse(body));
+    const done = await finish(w, job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()!.status).toBe('stopped');
+    // Made, never started, never asked.
+    expect(w.docker.containers.get('wp-shop')).toBe('created');
+    expect(w.docker.calls.filter((c) => c.method === 'startContainer' && c.args[0] === 'wp-shop')).toEqual([]);
+    expect(w.docker.calls.filter((c) => c.method === 'runEphemeral' && (c.args[0] as EphemeralOpts).labels?.['wpl7.probe'])).toEqual([]);
+    await w.deps.appRoutes.idle();
+    expect(fs.existsSync(routes)).toBe(false);
+    expect(w.db.select().from(appDeploys).where(eq(appDeploys.siteId, site.id)).all()).toMatchObject([{ origin: 'create', result: 'ok', digest: digest(1) }]);
+    const lines = w.db.select().from(jobLogs).where(eq(jobLogs.jobId, job.id)).orderBy(jobLogs.id).all();
+    expect(lines.at(-1)!.message).toBe('Created stopped: fill its mounts on the Settings tab, then Start it.');
+
+    // Filled while it is stopped, then started: it runs on its files, with its routes.
+    unpacker(w, ['./logo.png'], { 'logo.png': 'logo' });
+    const filled = await finish(w, (await upload(w, GZIP)).jobId);
+    expect(filled.status, filled.error ?? '').toBe('succeeded');
+    expect(jobLog(w, filled.id)).toContain('The app is not running: it gets the new files when it starts.');
+    expect((await finish(w, w.deps.sites.action('shop', 'start').id)).status).toBe('succeeded');
+    expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()!.status).toBe('running');
+    await w.deps.appRoutes.idle();
+    expect(fs.readFileSync(routes, 'utf8')).toContain('url: "http://wp-shop:8000"');
+  });
+
   it('unpacks as the app’s user in a locked-down container, swaps it in and restarts the app', async () => {
     const w = await world();
-    const site = await createShop(w);
+    const site = await createShop(w, { hardening: { runAs: '10001:10001' } });
     fill(w);
     const runs = unpacker(w, ['./', './logo.png', './css/site.css'], { 'logo.png': 'new logo', 'css/site.css': 'body{}' });
     const { id, jobId } = await upload(w, GZIP);
@@ -298,11 +340,14 @@ describe('a mount filled from an archive', () => {
     expect(fs.readFileSync(path.join(dir, 'logo.png'), 'utf8')).toBe('new logo');
     // No network, no capability, only the archive and the fresh folder, as the app's user.
     expect(runs).toHaveLength(2);
+    const archive = appPaths(w.config, 'shop').mountUpload(id);
     for (const r of runs) {
       expect(r.lockdown).toMatchObject({ pidsLimit: 64 });
       expect(r.lockdown!.network).toBeUndefined();
-      expect(r.user).toBe('0:0');
-      expect(r.binds).toEqual([`${appPaths(w.config, 'shop').mountUpload(id)}:/in/archive:ro`, expect.stringMatching(/mounts\/\.uploads\.new-\d+:\/out$/)]);
+      expect(r.user).toBe('10001:10001');
+      expect(r.binds).toEqual([`${archive}:/in/archive:ro`, expect.stringMatching(/mounts\/\.uploads\.new-\d+:\/out$/)]);
+      // The upload left it root's, 0600: that user reads it only once it is the user's, handed over never through a link.
+      expect(r.handed).toEqual([`-h -- 10001:10001 ${archive}`]);
     }
     expect(runs[1]!.cmd[0]).toContain('find /out -type d -exec chmod 700');
     expect(w.docker.calls.filter((c) => c.method === 'restartContainer').map((c) => c.args)).toEqual([['wp-shop', 20]]);
@@ -334,6 +379,106 @@ describe('a mount filled from an archive', () => {
     expect(w.worker.cancel(jobId)).toBe('canceled');
     expect(() => w.deps.apps.assertUploadFree(`mount:${id}`)).not.toThrow();
     await waitFor(() => !fs.existsSync(appPaths(w.config, 'shop').mountUpload(id)));
+  });
+});
+
+describe('a mount taken off the app', () => {
+  /** What PATCH mounts does with one it leaves out: the row goes at once, and a recreate is queued. */
+  function takeOff(w: TestWorld, site: SiteRow, name: string) {
+    w.db.delete(appMounts).where(and(eq(appMounts.siteId, site.id), eq(appMounts.name, name))).run();
+    return w.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 });
+  }
+  /** A recreate no one asked for: the hourly sweep's, a CPU cap's. */
+  const sweep = (w: TestWorld, site: SiteRow) => finish(w, w.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 }).id);
+  /** Folders of a fill that is swapping one in, and one no mount could be called: never a mount's. */
+  function notMounts(w: TestWorld): string[] {
+    const names = ['.secrets.new-7', '.uploads.old-8', 'Notes'];
+    for (const name of names) fs.mkdirSync(path.join(appPaths(w.config, 'shop').mounts, name), { recursive: true });
+    return names;
+  }
+  const mountFolders = (w: TestWorld) => fs.readdirSync(appPaths(w.config, 'shop').mounts).sort();
+  const failing = (w: TestWorld, site: SiteRow) => {
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    w.docker.appHttp = () => 500;
+  };
+
+  it('takes its files with it once the new container is in, and no other folder', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    fill(w);
+    const others = notMounts(w);
+    const done = await finish(w, takeOff(w, site, 'secrets').id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(creates(w.docker).at(-1)!.binds.some((b) => b.includes('/mounts/secrets'))).toBe(false);
+    expect(mountFolders(w)).toEqual([...others, 'uploads'].sort());
+    expect(jobLog(w, done.id)).toContain('Removed the files of secrets, which is no longer a mount.');
+    expect(fs.readFileSync(path.join(appPaths(w.config, 'shop').mountDir('uploads'), 'logo.png'), 'utf8')).toBe('logo v1');
+  });
+
+  it('leaves them to the old container when the new one does not pass, and the next recreate that passes takes them, whatever queued it', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    fill(w);
+    const others = notMounts(w);
+    failing(w, site);
+    const done = await finish(w, takeOff(w, site, 'secrets').id);
+    expect(done.status).toBe('failed');
+    expect(w.docker.containers.get('wp-shop')).toBe('running');
+    expect(fs.readFileSync(path.join(appPaths(w.config, 'shop').mountDir('secrets'), 'key.pem'), 'utf8')).toBe('key v1');
+    w.docker.appHttp = null;
+    const next = await sweep(w, site);
+    expect(next.status, next.error ?? '').toBe('succeeded');
+    expect(mountFolders(w)).toEqual([...others, 'uploads'].sort());
+    expect(jobLog(w, next.id)).toContain('Removed the files of secrets, which is no longer a mount.');
+  });
+
+  it('leaves them while the old container, which has them, could not be removed', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    fill(w);
+    w.docker.failOn.set('removeContainer', 'the daemon did not answer');
+    const done = await finish(w, takeOff(w, site, 'secrets').id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(w.docker.containers.has('wp-shop.previous')).toBe(true);
+    expect(fs.readFileSync(path.join(appPaths(w.config, 'shop').mountDir('secrets'), 'key.pem'), 'utf8')).toBe('key v1');
+    expect(jobLog(w, done.id)).toContain(`The files of secrets stay in ${appPaths(w.config, 'shop').mounts}: the old container, which has them, is still there.`);
+  });
+
+  it('takes its files with a deploy too, of an app that is stopped, after a recreate that never ran', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    fill(w);
+    expect((await finish(w, w.deps.sites.action('shop', 'stop').id)).status).toBe('succeeded');
+    expect(w.worker.cancel(takeOff(w, site, 'uploads').id)).toBe('canceled');
+    expect(mountFolders(w)).toEqual(['secrets', 'uploads']);
+    push(w.docker, 2);
+    const deployed = await finish(w, (await w.deps.apps.deploy('shop', {})).id);
+    expect(deployed.status, deployed.error ?? '').toBe('succeeded');
+    expect(w.docker.containers.get('wp-shop')).toBe('created');
+    expect(mountFolders(w)).toEqual(['secrets']);
+    expect(jobLog(w, deployed.id)).toContain('Removed the files of uploads, which is no longer a mount.');
+  });
+
+  it('keeps the files of one that is on the app again by then', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    fill(w);
+    const again = () => w.db.insert(appMounts).values({ siteId: site.id, name: 'secrets', containerPath: '/run/secrets/app', inBackups: 0 }).run();
+    // Back before its recreate ran.
+    const job = takeOff(w, site, 'secrets');
+    again();
+    expect((await finish(w, job.id)).status).toBe('succeeded');
+    expect(fs.readFileSync(path.join(appPaths(w.config, 'shop').mountDir('secrets'), 'key.pem'), 'utf8')).toBe('key v1');
+    // Back after its recreate failed, before the next one passed.
+    failing(w, site);
+    expect((await finish(w, takeOff(w, site, 'secrets').id)).status).toBe('failed');
+    again();
+    w.docker.appHttp = null;
+    const next = await sweep(w, site);
+    expect(next.status, next.error ?? '').toBe('succeeded');
+    expect(creates(w.docker).at(-1)!.binds).toContain(`${appPaths(w.config, 'shop').mountDir('secrets')}:/run/secrets/app:ro`);
+    expect(fs.readFileSync(path.join(appPaths(w.config, 'shop').mountDir('secrets'), 'key.pem'), 'utf8')).toBe('key v1');
+    expect(jobLog(w, next.id)).not.toContain('Removed the files');
   });
 });
 
@@ -372,6 +517,43 @@ describe('moving a container app', () => {
     const forwarder = fs.readFileSync(path.join(w.config.srvRoot, 'traefik', 'dynamic', 'move-shop.yml'), 'utf8');
     expect(forwarder).toContain('rule: "Host(`shop.example.com`) || Host(`shop.dev.example.test`)"');
     expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()!.serverId).toBe(s2.id);
+  });
+
+  it('leaves a stopped app stopped on the source when its move fails after the stop', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    expect((await finish(w, w.deps.sites.action('shop', 'stop').id)).status).toBe('succeeded');
+    const s2 = w.addSshServer('s2', { real: true, publicIp: '203.0.113.9' });
+    prepare(s2.docker);
+    // The snapshot fails: after the source has stopped, before anything reached the target.
+    w.core.backup.createOn = async () => {
+      throw new Error('the disk is full');
+    };
+    const starts = () => w.docker.calls.filter((c) => c.method === 'startContainer' && c.args[0] === 'wp-shop').length;
+    const before = starts();
+    const done = await finish(w, w.deps.sites.move('shop', { targetServerId: s2.id }).id);
+    expect(done.error).toBe('the disk is full');
+    expect(w.docker.calls.filter((c) => c.method === 'stopContainer').map((c) => c.args).at(-1)).toEqual(['wp-shop', 20]);
+    expect(starts()).toBe(before);
+    expect(w.docker.containers.get('wp-shop')).toBe('exited');
+    expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()!).toMatchObject({ status: 'stopped', serverId: 1 });
+    // And the log says so.
+    expect(jobLog(w, done.id)).toContain('Target rolled back; the site stays stopped on the source. Re-running the move is safe.');
+    expect(jobLog(w, done.id)).not.toContain('keeps running');
+  });
+
+  it('says a running app keeps running on the source when its move fails', async () => {
+    const w = await world();
+    await createShop(w);
+    const s2 = w.addSshServer('s2', { real: true, publicIp: '203.0.113.9' });
+    prepare(s2.docker);
+    w.core.backup.createOn = async () => {
+      throw new Error('the disk is full');
+    };
+    const done = await finish(w, w.deps.sites.move('shop', { targetServerId: s2.id }).id);
+    expect(done.error).toBe('the disk is full');
+    expect(w.docker.containers.get('wp-shop')).toBe('running');
+    expect(jobLog(w, done.id)).toContain('Target rolled back; the site keeps running on the source. Re-running the move is safe.');
   });
 
   it('pulls its image on the target from the repository it came by, after the app’s reference has changed', async () => {

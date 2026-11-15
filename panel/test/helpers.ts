@@ -376,8 +376,9 @@ export class FakeDocker implements DockerPort {
     if (this.enforceFileBinds) this.mountFileBinds(name);
     this.containers.set(name, 'running');
   }
-  async removeContainer(name: string): Promise<void> {
-    this.record('removeContainer', [name]);
+  /** Recorded with its options when given: whether it asked for the anonymous volumes. */
+  async removeContainer(name: string, opts?: { volumes?: boolean }): Promise<void> {
+    this.record('removeContainer', opts === undefined ? [name] : [name, opts]);
     this.containers.delete(name);
     this.bindsByContainer.delete(name);
     this.labelsByContainer.delete(name);

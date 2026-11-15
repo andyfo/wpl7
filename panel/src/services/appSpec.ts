@@ -112,19 +112,42 @@ export function dataDirFor(containerPath: string, taken: Iterable<string>): stri
   return dir;
 }
 
+/** A VOLUME as Docker puts it in the container: `/data/` and `/data//x` are `/data` and `/data/x`. */
+function volumePath(volume: string): string {
+  return (volume.startsWith('/') ? path.posix.normalize(volume) : volume).replace(/\/+$/, '') || '/';
+}
+
 /**
  * The data paths after an image's VOLUMEs are read: every one of them kept, each new VOLUME
  * added. A VOLUME the image no longer has stays a data path: what it holds is never dropped by a
- * deploy, only by someone removing the path.
+ * deploy, only by someone removing the path. `fromImage` says of each whether this image declares it.
  */
 export function withImageVolumes(current: DataPath[], volumes: string[], mountPaths: string[]): DataPath[] {
-  const out = [...current];
+  const declared = new Set(volumes.map(volumePath));
+  const out = current.map((d) => ({ ...d, fromImage: declared.has(d.path) }));
   const have = new Set([...out.map((d) => d.path), ...mountPaths]);
-  for (const volume of volumes) {
-    const p = volume.replace(/\/+$/, '') || '/';
+  for (const p of declared) {
     if (have.has(p) || containerPathProblem(p)) continue;
     out.push({ path: p, dir: dataDirFor(p, out.map((d) => d.dir)), fromImage: true });
     have.add(p);
+  }
+  return out;
+}
+
+/**
+ * The image's VOLUMEs that no data path or mount keeps, and why. Docker makes an anonymous volume
+ * for each at every create of the container: what the app writes there is in no backup, and is
+ * gone at the next deploy or recreate.
+ */
+export function unkeptVolumes(volumes: string[], dataPaths: DataPath[], mountPaths: string[]): { path: string; why: string }[] {
+  const kept = new Set([...dataPaths.map((d) => d.path), ...mountPaths]);
+  const out: { path: string; why: string }[] = [];
+  for (const p of new Set(volumes.map(volumePath))) {
+    if (kept.has(p)) continue;
+    const problem = containerPathProblem(p);
+    // Said of the VOLUME: "/usr/x is in /usr, …" is "it is in /usr, …".
+    const why = problem === null ? 'no data path or mount keeps it.' : problem.startsWith(`${p} `) ? `it ${problem.slice(p.length + 1)}` : problem;
+    out.push({ path: p, why });
   }
   return out;
 }

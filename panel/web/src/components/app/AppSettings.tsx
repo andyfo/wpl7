@@ -1,10 +1,11 @@
 // @docs sites/container
 /**
- * A container app's own cards on its Settings tab. A change to how its container runs (port,
- * environment, mounts, data paths, hardening) recreates it behind the health check, as a job the
- * console shows; routes, health and updates take effect as they are saved.
+ * A container app's own cards on its Settings tab. A change to how its container runs (environment,
+ * mounts, data paths, hardening) recreates it behind the health check, as a job the console shows;
+ * routes, health and updates take effect as they are saved. A new port of an app that runs waits
+ * for the next image deployed, or Recreate container.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { AppDto, JobDto, SiteDetail } from '../../../../shared/types';
 import type { AppRouteMatch, AppRouteScheme, AppUpdateMode } from '../../../../shared/schemas';
@@ -12,21 +13,27 @@ import { api } from '../../api/client';
 import { useMeta } from '../../api/hooks';
 import { clearDeployToken, makeDeployToken, patchApp, saveRegistryAuth, saveRoutes, uploadMountArchive } from '../../api/apps';
 import { useFollowJob } from '../jobConsole/context';
-import { Button, Card, CopyField, ErrorNote, Field, Segmented, Toggle, inputClass } from '../ui';
+import { Button, Card, CopyField, ErrorNote, Field, Segmented, Toggle, UploadButton, inputClass } from '../ui';
 import { formatDate } from '../../lib/format';
 import {
   RUNS_UNEDITED,
+  dataPathsHint,
   editEnv,
   envBody,
   envEdits,
+  healthPathProblem,
   mountEdits,
   mountsBody,
   newRowKey,
+  portHint,
   replaceSecret,
   routeEdits,
   routeErrorLines,
+  runAsHint,
   runsPatch,
+  runsSaveNote,
   runsShown,
+  uploadPercent,
   type EnvEdit,
   type MountEdit,
   type RouteEdit,
@@ -67,7 +74,7 @@ function useSave(slug: string) {
   return { save, keep, saving, saved, error };
 }
 
-function SaveRow({ label, onClick, s, disabled, note }: { label: string; onClick: () => void; s: ReturnType<typeof useSave>; disabled?: boolean; note?: string }) {
+function SaveRow({ label, onClick, s, disabled, note }: { label: string; onClick: () => void; s: ReturnType<typeof useSave>; disabled?: boolean; note?: string | null }) {
   return (
     <div className="mt-4 flex flex-wrap items-center gap-3">
       <Button onClick={onClick} busy={s.saving} disabled={disabled}>
@@ -433,30 +440,32 @@ export function MountsCard({ site }: { site: SiteDetail }) {
 
 function MountUpload({ slug, name, filledAt }: { slug: string; name: string; filledAt: number | null }) {
   const follow = useFollowJob();
-  const input = useRef<HTMLInputElement>(null);
-  const [progress, setProgress] = useState<number | null>(null);
+  const [percent, setPercent] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
   const pick = (file: File) => {
     setError(null);
-    void uploadMountArchive(slug, file, (sent, total) => setProgress(Math.round((sent / Math.max(1, total)) * 100)))
+    setPercent(0);
+    void uploadMountArchive(slug, file, (sent, total) => setPercent(uploadPercent(sent, total)))
       .then((uploadId) => api<{ job: JobDto }>(`/api/sites/${slug}/app/mounts/${name}`, { method: 'PUT', body: { uploadId } }))
       .then((res) => follow(res.job, { refresh: [['site', slug]] }))
       .catch(setError)
-      .finally(() => setProgress(null));
+      .finally(() => setPercent(null));
   };
   return (
     <span className="flex items-center gap-2">
-      <input ref={input} type="file" className="hidden" accept=".tar.gz,.tgz,.zip" onChange={(e) => e.target.files?.[0] && pick(e.target.files[0])} />
-      <Button small variant="secondary" busy={progress !== null} onClick={() => input.current?.click()}>
-        {progress !== null ? `${progress} %` : 'Upload'}
-      </Button>
-      <span className="text-xs text-neutral-500">{filledAt ? `Filled ${formatDate(filledAt)}` : 'Empty'}</span>
+      <UploadButton small accept=".tar.gz,.tgz,.zip" percent={percent} onFile={pick}>
+        Upload
+      </UploadButton>
+      {percent === null && <span className="text-xs text-neutral-500">{filledAt ? `Filled ${formatDate(filledAt)}` : 'Empty'}</span>}
       <ErrorNote error={error} />
     </span>
   );
 }
 
 // --------------------------------------------------------------- Health check
+
+/** A field's hint, or why what was typed in would be refused, in its place: also New site's Settings step. */
+export const problemHint = (problem: string | null, hint?: string) => (problem ? <span className="text-red-700">{problem}</span> : hint);
 
 export function HealthCard({ site }: { site: SiteDetail }) {
   const app = site.container!;
@@ -466,19 +475,21 @@ export function HealthCard({ site }: { site: SiteDetail }) {
   const [check, setCheck] = useState(app.health.deployCheckPath);
   const [timeout, setTimeoutSec] = useState(String(app.health.timeoutSec));
   const t = Number(timeout);
+  const pathProblem = healthPathProblem(path);
+  const checkProblem = healthPathProblem(check, true);
   return (
     <Card title="Health check">
       <p className="measure mb-4 text-sm text-neutral-600">
         A deploy keeps the new container only once this path answers 2xx, asked on the app's own network. The uptime check asks it too.
       </p>
       <div className="grid max-w-2xl gap-4 sm:grid-cols-2">
-        <Field label="Path">
+        <Field label="Path" hint={problemHint(pathProblem)}>
           <input className={inputClass} value={path} onChange={(e) => setPath(e.target.value.trim())} placeholder="/healthz" />
         </Field>
         <Field label="Host" hint="Empty: the app's first host.">
           <input className={inputClass} value={host} onChange={(e) => setHost(e.target.value.trim().toLowerCase())} />
         </Field>
-        <Field label="Deploy check path" hint="Asked once after the health path, at a deploy. Empty: none.">
+        <Field label="Deploy check path" hint={problemHint(checkProblem, 'Asked once after the health path, at a deploy. Empty: none.')}>
           <input className={inputClass} value={check} onChange={(e) => setCheck(e.target.value.trim())} placeholder="/ready" />
         </Field>
         <Field label="Wait for it (seconds)">
@@ -488,7 +499,7 @@ export function HealthCard({ site }: { site: SiteDetail }) {
       <SaveRow
         label="Save health check"
         s={s}
-        disabled={!path.startsWith('/') || !Number.isInteger(t) || t < 5 || t > 600}
+        disabled={pathProblem !== null || checkProblem !== null || !Number.isInteger(t) || t < 5 || t > 600}
         onClick={() => s.save(() => patchApp(site.slug, { health: { path, host, deployCheckPath: check, timeoutSec: t } }))}
       />
     </Card>
@@ -500,22 +511,20 @@ export function HealthCard({ site }: { site: SiteDetail }) {
 export function RunsCard({ site }: { site: SiteDetail }) {
   const app = site.container!;
   const s = useSave(site.slug);
-  // What was typed in. The rest shows the app as it is now, with a port or user that is going in.
+  // What was typed in. The rest shows the app as it is now, with a staged port or a user that is going in.
   const [edit, setEdit] = useState<RunsEdit>(RUNS_UNEDITED);
   const set = (field: Partial<RunsEdit>) => setEdit((e) => ({ ...e, ...field }));
   const shown = runsShown(app, edit);
   const patch = runsPatch(app, edit);
-  const fromImage = app.dataPaths.filter((d) => d.fromImage).map((d) => d.path);
-  // A port or user going in stays as it is until its recreate is done: that job holds the site, so a change now is refused.
-  const portHeld = app.pending?.port !== undefined ? `${app.pending.port} is going in. Change it once that is done.` : undefined;
-  const runAsHeld = app.pending?.runAs !== undefined ? `${app.pending.runAs || "The image's user"} is going in. Change it once that is done.` : undefined;
+  // A user going in stays as it is until its recreate is done: that job holds the site, so a change now is refused.
+  const runAsHeld = app.pending?.runAs !== undefined ? runAsHint(app) : undefined;
   return (
     <Card title="How it runs">
       <div className="grid max-w-2xl gap-4 sm:grid-cols-2">
-        <Field label="Port" hint={portHeld ?? 'Where the container listens.'}>
-          <input className={inputClass} type="number" min={1} max={65535} value={shown.port} disabled={!!portHeld} title={portHeld} onChange={(e) => set({ port: e.target.value })} />
+        <Field label="Port" hint={portHint(app)}>
+          <input className={inputClass} type="number" min={1} max={65535} value={shown.port} onChange={(e) => set({ port: e.target.value })} />
         </Field>
-        <Field label="Run as" hint={runAsHeld ?? `uid:gid. Empty: the image's user (${app.user.uid}:${app.user.gid}).`}>
+        <Field label="Run as" hint={runAsHint(app)}>
           <input className={inputClass} value={shown.runAs} disabled={!!runAsHeld} title={runAsHeld} onChange={(e) => set({ runAs: e.target.value.trim() })} placeholder="1000:1000" />
         </Field>
         <Field label="Stop grace (seconds)" hint="How long a stop waits for it to finish.">
@@ -527,7 +536,7 @@ export function RunsCard({ site }: { site: SiteDetail }) {
         <Toggle checked={shown.readOnlyRoot} onChange={(v) => set({ readOnlyRoot: v })} label="Read-only root (with a writable /tmp)" />
       </div>
       <div className="mt-4">
-        <Field label="Data folders" hint={`One path a line: kept across deploys, and in backups.${fromImage.length > 0 ? ` From the image: ${fromImage.join(', ')}.` : ''}`} width="lg">
+        <Field label="Data folders" hint={dataPathsHint(app)} width="lg">
           <textarea className={`${inputClass} font-mono text-xs`} rows={3} value={shown.dataPaths} onChange={(e) => set({ dataPaths: e.target.value })} />
         </Field>
       </div>
@@ -535,7 +544,7 @@ export function RunsCard({ site }: { site: SiteDetail }) {
         label="Save"
         s={s}
         disabled={!patch || Object.keys(patch).length === 0}
-        note="Saving recreates the container."
+        note={runsSaveNote(app, patch, site.status === 'running')}
         onClick={() => patch && s.save(() => patchApp(site.slug, { ...patch }).then((res) => (setEdit(RUNS_UNEDITED), res)))}
       />
     </Card>

@@ -1,0 +1,1 @@
+ALTER TABLE `app_settings` ADD `next_port` integer DEFAULT 0 NOT NULL;

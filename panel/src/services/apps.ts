@@ -163,10 +163,11 @@ export class AppsService {
         stopGraceSec: settings.stopGraceSec,
       },
       user: appOwner(settings),
+      imageUser: { uid: settings.imageUid, gid: settings.imageGid },
       health: { path: settings.healthPath, host: settings.healthHost, deployCheckPath: settings.deployCheckPath, timeoutSec: settings.healthTimeoutSec },
       updates: { mode: settings.updateMode, checkMinutes: settings.checkMinutes, checkedAt: settings.checkedAt, checkError: settings.checkError },
       deployToken: { set: settings.deployTokenHash !== null, setAt: settings.deployTokenSetAt },
-      pending: this.pendingOf(site.id),
+      pending: this.pendingOf(site.id, settings),
       routesState: routes$.state,
       routesProblem: routes$.problem,
       routeErrors: this.s.security.appRouteRejections(site.slug),
@@ -188,27 +189,33 @@ export class AppsService {
   }
 
   /**
-   * A port or a user the patch handed to the app's site.reconcile, which saves them once the new
-   * container has passed: what the page shows as going in until then.
+   * What the page shows as going in: the port staged for the next image deployed or Recreate
+   * container, and a user the patch handed to the app's site.reconcile. Each is saved once a new
+   * container has passed.
    */
-  private pendingOf(siteId: number): AppDto['pending'] {
+  private pendingOf(siteId: number, settings: Pick<AppSettingsRow, 'nextPort'>): AppDto['pending'] {
+    const pending: NonNullable<AppDto['pending']> = {};
+    if (settings.nextPort !== 0) pending.port = settings.nextPort;
+    const runAs = this.pendingRunAs(siteId);
+    if (runAs !== undefined) pending.runAs = runAs;
+    return pending.port !== undefined || pending.runAs !== undefined ? pending : null;
+  }
+
+  /** The user a queued or running site.reconcile of the app puts in force; undefined when none does. */
+  private pendingRunAs(siteId: number): string | undefined {
     const job = this.db
       .select({ payload: jobsTable.payload })
       .from(jobsTable)
       .where(and(eq(jobsTable.siteId, siteId), eq(jobsTable.type, 'site.reconcile'), inArray(jobsTable.status, ['queued', 'running'])))
       .orderBy(desc(jobsTable.id))
       .get();
-    if (!job) return null;
-    let payload: { appPort?: unknown; appRunAs?: unknown };
+    if (!job) return undefined;
     try {
-      payload = JSON.parse(job.payload) as typeof payload;
+      const payload = JSON.parse(job.payload) as { appRunAs?: unknown };
+      return typeof payload.appRunAs === 'string' ? payload.appRunAs : undefined;
     } catch {
-      return null;
+      return undefined;
     }
-    const pending: NonNullable<AppDto['pending']> = {};
-    if (typeof payload.appPort === 'number') pending.port = payload.appPort;
-    if (typeof payload.appRunAs === 'string') pending.runAs = payload.appRunAs;
-    return pending.port !== undefined || pending.runAs !== undefined ? pending : null;
   }
 
   // ------------------------------------------------------------------ checks
@@ -312,8 +319,13 @@ export class AppsService {
     return input;
   }
 
-  /** The data paths as they are kept: each keeps its folder, a new one gets its own. */
-  private planDataPaths(input: string[], current: DataPath[]): DataPath[] {
+  /**
+   * The data paths as they are kept: each keeps its folder, a new one gets its own. One of the
+   * image's VOLUMEs stays when the list leaves it out, unless a mount takes its path: the recreate
+   * would have no bind there, and Docker would put an anonymous volume in its place, outside the
+   * app's folder and its backups. One its image no longer declares goes as any other.
+   */
+  private planDataPaths(input: string[], current: DataPath[], mountPaths: string[] = []): DataPath[] {
     const out: DataPath[] = [];
     for (const p of input) {
       const problem = containerPathProblem(p);
@@ -322,7 +334,8 @@ export class AppsService {
       const kept = current.find((d) => d.path === p);
       out.push(kept ?? { path: p, dir: dataDirFor(p, [...current.map((d) => d.dir), ...out.map((d) => d.dir)]), fromImage: false });
     }
-    return out;
+    const image = current.filter((d) => d.fromImage && !input.includes(d.path) && !mountPaths.includes(d.path));
+    return [...out, ...image];
   }
 
   private planExtraHosts(input: { host: string; address: string }[]): { host: string; address: string }[] {
@@ -493,15 +506,35 @@ export class AppsService {
   }
 
   /**
-   * Save what the body names. A change the container is made with (port, environment, mounts, data
+   * Refused while a deploy or a recreate of the app is queued or running, with the answer
+   * worker.enqueue gives: that job reads the row as it starts, and may write its port back over a
+   * change made meanwhile.
+   */
+  private assertNotRecreating(site: SiteRow): void {
+    const job = this.s.worker.activeSiteJob(site.id);
+    if (job?.type === 'app.deploy' || job?.type === 'site.reconcile') {
+      throw jobConflict(`Site "${site.slug}" already has an active job (#${job.id} ${job.type}); wait for it to finish`);
+    }
+  }
+
+  /**
+   * Save what the body names. A change the container is made with (environment, mounts, data
    * paths, host aliases, hardening) is put in force by recreating it, behind the health gate: the
    * job is returned. The rest takes effect as it is saved.
    *
-   * A new port or user of an app that has a container goes to that job instead, which saves it once
-   * the new container has passed: saved now, the routes would send to a port nothing listens on
-   * yet, and the recreate would not see that its folders need another owner. Until it has, a change
-   * is from the one that job carries: the saved one sent back is a change, which waits for that job
-   * (one job per site), and the pending one sent again is none.
+   * A new port of an app that runs is staged (`next_port`) and queues nothing by itself: the next
+   * image deployed, or Recreate container, gates on it and saves it once its container has passed.
+   * Saved now, the routes would send to a port nothing listens on yet. The running port sent back
+   * unstages it. An app that is stopped, or has no container, takes a port as it is saved. Either
+   * way, a port that changes is refused while a deploy or recreate of the app is queued or running
+   * (assertNotRecreating).
+   *
+   * A new user of an app that has a container goes to the recreate, which saves it once the new
+   * container has passed: saved now, the recreate would not see that its folders need another
+   * owner. Until it has, a user is a change from the one that job carries: the saved one sent back
+   * waits for that job (one job per site), and the pending one sent again is none. A mount taken
+   * off keeps its folder for the old container, the way back: the next swap that passes removes
+   * every folder no mount names.
    */
   patch(slug: string, body: AppPatchBody): { job: JobRow | null } {
     const { site, settings } = this.bySlug(slug);
@@ -510,10 +543,7 @@ export class AppsService {
     const set: Partial<typeof appSettings.$inferInsert> = { updatedAt: now };
     // A container that was never made (a create that failed) has nothing to put a change into.
     const hasContainer = site.status === 'running' || site.status === 'stopped';
-    const withContainer: { appPort?: number; appRunAs?: string } = {};
-    const pending = this.pendingOf(site.id);
-    const port = pending?.port ?? settings.port;
-    const runAs = pending?.runAs ?? settings.runAs;
+    const withContainer: { appRunAs?: string } = {};
     let recreate = false;
     if (body.reference !== undefined) {
       if (settings.source !== 'registry') throw conflict(`"${slug}" runs an uploaded image: it has no reference to watch.`);
@@ -525,13 +555,21 @@ export class AppsService {
         set.registryToken = '';
       }
     }
-    if (body.port !== undefined && body.port !== port) {
-      if (hasContainer) withContainer.appPort = body.port;
-      else set.port = body.port;
-      recreate = true;
+    if (body.port !== undefined) {
+      // The routes and the checks keep the port that answers until a new container passes on this one.
+      const running = site.status === 'running';
+      const port = running ? settings.port : body.port;
+      const nextPort = running && body.port !== settings.port ? body.port : 0;
+      if (port !== settings.port || nextPort !== settings.nextPort) {
+        this.assertNotRecreating(site);
+        set.port = port;
+        set.nextPort = nextPort;
+      }
     }
+    const currentMounts = this.db.select({ path: appMounts.containerPath }).from(appMounts).where(eq(appMounts.siteId, site.id)).all();
     const currentPaths = parseDataPaths(settings.dataPaths);
-    const dataPaths = body.dataPaths !== undefined ? this.planDataPaths(body.dataPaths, currentPaths) : null;
+    const dataPaths =
+      body.dataPaths !== undefined ? this.planDataPaths(body.dataPaths, currentPaths, (body.mounts ?? currentMounts).map((m) => m.path)) : null;
     if (dataPaths) {
       set.dataPaths = JSON.stringify(dataPaths);
       recreate = true;
@@ -541,8 +579,7 @@ export class AppsService {
     if (mounts) recreate = true;
     if (dataPaths && !mounts) {
       // The mounts it keeps hold their paths: a data path is never one of them.
-      const kept = this.db.select({ path: appMounts.containerPath }).from(appMounts).where(eq(appMounts.siteId, site.id)).all();
-      const twice = kept.find((m) => dataPaths.some((d) => d.path === m.path));
+      const twice = currentMounts.find((m) => dataPaths.some((d) => d.path === m.path));
       if (twice) throw badRequest(`${twice.path} is mounted twice.`);
     }
     if (body.extraHosts !== undefined) {
@@ -555,7 +592,7 @@ export class AppsService {
     if (h) {
       if (h.dropAllCaps !== undefined) set.dropAllCaps = h.dropAllCaps ? 1 : 0;
       if (h.readOnlyRoot !== undefined) set.readOnlyRoot = h.readOnlyRoot ? 1 : 0;
-      if (h.runAs !== undefined && h.runAs !== runAs) {
+      if (h.runAs !== undefined && h.runAs !== (this.pendingRunAs(site.id) ?? settings.runAs)) {
         if (hasContainer) withContainer.appRunAs = h.runAs;
         else set.runAs = h.runAs;
       }
@@ -577,6 +614,9 @@ export class AppsService {
       }
       if (body.updates.checkMinutes !== undefined) set.checkMinutes = body.updates.checkMinutes;
     }
+    // Without a container nothing is queued to refuse it, and a deploy that read the row at its start
+    // would write its data paths and mounts over these.
+    if (!hasContainer && (dataPaths || mounts)) this.assertNotRecreating(site);
     const job = this.db.transaction(() => {
       this.db.update(appSettings).set(set).where(eq(appSettings.siteId, site.id)).run();
       if (env) this.writeEnv(site.id, env);

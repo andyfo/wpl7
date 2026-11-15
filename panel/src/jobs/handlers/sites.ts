@@ -508,7 +508,7 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   const hadFtp = s.ftp.hasLogins(site.id);
   try {
     ctx.info('Removing container…');
-    await removeSiteContainers(server.docker, site.containerName);
+    await removeSiteContainers(server.docker, site.containerName, isContainerApp(site) ? { volumes: true } : undefined);
     if (isContainerApp(site)) await (await import('./apps.js')).removeAppImages(ctx, s, server, site);
     if (hadFtp) {
       // Before the files go: its FTP file server has them mounted.
@@ -693,6 +693,8 @@ export async function siteRestart(ctx: JobContext<z.infer<typeof siteIdPayload>>
   ctx.info(`Restarting ${site.containerName}…`);
   await restartSiteContainer(server, s, site, ctx);
   updateSiteRow(s.db, site.id, { status: 'running' });
+  // A stopped app runs again: its routes come back with it, as at a start.
+  if (isContainerApp(site)) await s.appRoutes.kick(server.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -807,12 +809,15 @@ export async function setAside(docker: ServerHandle['docker'], name: string, gra
   await docker.stopContainer(asideContainerName(name), graceSeconds);
 }
 
-/** The new container goes, if it got that far, and the old one takes its name back, not started. */
-export async function putBack(docker: ServerHandle['docker'], name: string): Promise<void> {
+/**
+ * The new container goes, if it got that far, and the old one takes its name back, not started.
+ * `removal`: how the new one is removed (a container app's with its anonymous volumes).
+ */
+export async function putBack(docker: ServerHandle['docker'], name: string, removal?: { volumes?: boolean }): Promise<void> {
   const aside = asideContainerName(name);
   // Never renamed: the name is still the old container's, and nothing else has it.
   if ((await docker.containerState(aside)) === 'missing') return;
-  await docker.removeContainer(name);
+  await docker.removeContainer(name, removal);
   await docker.renameContainer(aside, name);
 }
 
@@ -829,7 +834,7 @@ export async function putBack(docker: ServerHandle['docker'], name: string): Pro
 export async function takeBackAside(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, row: SiteRow, name: string, run: boolean): Promise<void> {
   if ((await server.docker.containerState(asideContainerName(name))) === 'missing') return;
   ctx.warn(`${asideContainerName(name)} is the container from before a change that did not finish. It comes back first.`);
-  await putBack(server.docker, name);
+  await putBack(server.docker, name, isContainerApp(row) ? { volumes: true } : undefined);
   if (!run) return;
   try {
     await startSiteContainer(server, s, row, ctx);
@@ -838,10 +843,13 @@ export async function takeBackAside(ctx: JobContext<unknown>, server: ServerHand
   }
 }
 
-/** The old container, once the new one is in place. Never a reason to fail: the next change, or the image sweep, deals with it. */
-export async function dropAside(ctx: JobContext<unknown>, docker: ServerHandle['docker'], name: string): Promise<void> {
+/**
+ * The old container, once the new one is in place. Never a reason to fail: the next change, or the
+ * image sweep, deals with it. `removal` as for putBack.
+ */
+export async function dropAside(ctx: JobContext<unknown>, docker: ServerHandle['docker'], name: string, removal?: { volumes?: boolean }): Promise<void> {
   try {
-    await docker.removeContainer(asideContainerName(name));
+    await docker.removeContainer(asideContainerName(name), removal);
   } catch (err) {
     ctx.warn(`Could not remove the old container, ${asideContainerName(name)} (${errMsg(err)}).`);
   }
@@ -1093,13 +1101,17 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
 
 export const siteReconcilePayload = z.object({
   siteId: z.number().int(),
-  /** Someone asked for this: a site whose move to stack 2 failed tries again, on the same image. */
+  /**
+   * Someone asked for this (Recreate container, Retry): a site whose move to stack 2 failed tries
+   * again, on the same image, and a container app's new container takes the port staged for it
+   * (app_settings.next_port). No other recreate of an app does: they keep the port it runs on.
+   */
   retrySwitch: z.boolean().optional(),
   /**
-   * A container app's new port and user (services/apps.ts patch): the new container's, and the
-   * app's row's only once it has passed (handlers/apps.ts reconcileApp). Checked as the patch is.
+   * A container app's new user (services/apps.ts patch): the new container's, and the app's row's
+   * only once it has passed (handlers/apps.ts reconcileApp). Checked as the patch is. A new port
+   * is staged on the row instead, for a deploy or Recreate container (retrySwitch).
    */
-  appPort: z.number().int().min(1).max(65535).optional(),
   appRunAs: appHardeningInput.shape.runAs,
 });
 
@@ -1127,7 +1139,7 @@ export const siteReconcilePayload = z.object({
 export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcilePayload>>, s: CoreServices): Promise<void> {
   let site = loadSite(s.db, ctx.payload.siteId);
   // Made from its own image, behind its health gate (handlers/apps.ts).
-  if (isContainerApp(site)) return (await import('./apps.js')).reconcileApp(ctx, s, site, { port: ctx.payload.appPort, runAs: ctx.payload.appRunAs });
+  if (isContainerApp(site)) return (await import('./apps.js')).reconcileApp(ctx, s, site, { runAs: ctx.payload.appRunAs, takeStagedPort: ctx.payload.retrySwitch === true });
   if (ctx.payload.retrySwitch && site.stackSwitchImage !== null) {
     updateSiteRow(s.db, site.id, { stackSwitchImage: null });
     site = loadSite(s.db, site.id);

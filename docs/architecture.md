@@ -313,7 +313,11 @@ is `docs/site/src/content/docs/sites/container.mdx`.
   Three images per app stay. `app-updates` asks the registry each app's `check_minutes` and
   deploys (Automatic), notes and emails (Ask first), or does nothing (Pinned), and leaves a
   declined digest alone (its newest deploy failed, or a roll back or restore went back from it).
-  A port or `runAs` change goes in the `site.reconcile` payload and is saved once the gate passes.
+  A `runAs` change goes in the `site.reconcile` payload and is saved once the gate passes. A port
+  on a running app is staged in `app_settings.next_port`: a deploy, or the user's Recreate container
+  (`retrySwitch`), gates on it and saves it; every other recreate keeps the running port. An app
+  created with mounts is made stopped. After a passing swap, `mounts/` folders no row names go, and
+  a removed app container takes its anonymous volumes (an unkept VOLUME's) with it.
   The hook (`POST /api/hooks/app-deploy`, `X-WPL7-Deploy-Token`, sha256 only) answers a waiting
   tag deploy, or notes a call while the app is busy; an app with an uploaded image has none.
 - **The way in** (`services/appProbe.ts`): a locked-down container of the running Traefik's image on

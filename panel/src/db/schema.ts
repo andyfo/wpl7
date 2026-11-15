@@ -1924,8 +1924,13 @@ export const appSettings = sqliteTable('app_settings', {
   imageId: text('image_id').notNull().default(''),
   /** Ask first: the digest waiting for its Update; '' when none is. */
   pendingDigest: text('pending_digest').notNull().default(''),
-  /** Where the container listens. */
+  /** Where the container listens: the port it passed its health gate on, which the routes and checks ask. */
   port: integer('port').notNull(),
+  /**
+   * A port staged for the next image deployed, or the user's Recreate container (services/apps.ts
+   * patch): that one gates on it, and saves it as `port` once its container has passed. 0 = none.
+   */
+  nextPort: integer('next_port').notNull().default(0),
   /** How long a stop waits for the container to end by itself. */
   stopGraceSec: integer('stop_grace_sec').notNull().default(20),
   /** '' = the image's own user; else `uid:gid`. */

@@ -35,10 +35,13 @@ behind a health check when a new image comes.
    image, fill in **Registry user** and **Registry token**. Or choose **Upload an archive** and pick a
    `docker save` archive.
 4. On **Settings**, the **Port** is the one the image exposes unless you enter one. The **Health path**
-   is what a deploy waits for. Switch on **Database** if the app needs one, and add its
-   **Environment** and **Mounts**.
+   is what a deploy waits for, and may carry a query, such as `/health?deep=1`. Switch on
+   **Database** if the app needs one, and add its **Environment** and **Mounts**.
 5. On **Routes**, say where the app answers. It starts with its dev hostname.
 6. Check the **Review** step and choose **Create site**.
+
+An app with mounts is created stopped, because its mounts are empty until you fill them. Fill
+them on its **Settings** tab, then choose **Start**.
 
 <Screenshot name="site-new-container" alt="The New site wizard for a container app, on its Image step" />
 
@@ -83,8 +86,12 @@ beside it and pick a `.tar.gz` or `.zip`. A job unpacks it in place of what the 
 app's user, and restarts the app. With **In backups** off, a mount stays out of every backup and
 still moves with the app.
 
+Taking a mount off removes its files once a new container without it has passed.
+
 **Data folders** under **How it runs** are kept across deploys and are in backups. Each `VOLUME` of
-the image is one.
+the image is one, for as long as the image declares it. A `VOLUME` in the container's own system
+folders, such as `/usr`, is not kept: the job log says so, and what the app writes there is lost at
+each deploy.
 
 ## Deploy a new image
 
@@ -95,6 +102,8 @@ the image is one.
   newer one.
 - A reference on another registry clears the registry login. Enter the new login with it and
   choose **Save reference and login**.
+- With **Back up before updates** on **Ask each time**, **Deploy now**, **Update**, **Roll back** and
+  an upload ask first, with **Back up first** on for a live app.
 - The **Deploy hook** lets your CI start a deploy after a push. Choose **Make token**. The token is
   shown once. Send it in a header:
 
@@ -120,13 +129,15 @@ every 2 seconds.
 A deploy asks the registry which image the reference names and pulls it by its digest. It checks
 that the image is for the server's platform and carries no Traefik or panel labels. It holds the
 app's routes, so Traefik answers 503, and stops the old container with its **Stop grace**. It
-starts the new one and asks the health path every 2 seconds until it answers 2xx. The new container
-is kept only then. Otherwise the old one comes back, and an email says why. If the routes cannot
-be held, the deploy stops before anything changes.
+starts the new one and asks the health path every 2 seconds until it answers 2xx. Then it asks the
+deploy check once, if there is one, with the same wait of its own. The new container is kept only
+then. Otherwise the old one comes back, and an email says why. If the routes cannot be held, the
+deploy stops before anything changes.
 
-A change under **How it runs**, **Environment** or **Mounts** recreates the container the same way.
-A new port or user is saved only once the new container passes. Until then the card shows it as
-going in, and it cannot be changed.
+A change under **How it runs**, **Environment** or **Mounts** recreates the container the same way,
+and a new user is saved only once the new container passes. A new port waits: it goes in with the
+next image deployed, or **Recreate container**, and the app keeps answering on the old one until
+then. So a new image that listens on another port goes in behind one health check.
 
 The container runs as the image's user, with no published port and no new privileges. The panel
 asks it on its own network, so the health check and the uptime check work with every route off.

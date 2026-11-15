@@ -10,10 +10,11 @@ import { describe, expect, it } from 'vitest';
 import { siteCreateBody } from '../../shared/schemas.js';
 import { appDeploys, appSettings, jobLogs, jobs, sites } from '../../src/db/schema.js';
 import { TarWriter } from '../../src/lib/tarWriter.js';
+import { PROBE_LABEL } from '../../src/services/appProbe.js';
 import { appLabels, appPaths } from '../../src/services/appSpec.js';
 import { appRoutesFileName } from '../../src/services/appRoutes.js';
 import { TRAEFIK_CONTAINER } from '../../src/services/stack.js';
-import type { SiteContainerSpec } from '../../src/services/docker.js';
+import type { EphemeralOpts, SiteContainerSpec } from '../../src/services/docker.js';
 import { addPhpSite, makeApp, makeWorld, waitFor, type TestWorld } from '../helpers.js';
 
 const REF = 'ghcr.io/example/shop:stable';
@@ -70,7 +71,6 @@ const shopBody = {
     { name: 'API_KEY', value: 'env-secret-value', secret: true },
   ],
   database: true,
-  mounts: [{ name: 'secrets', path: '/run/secrets/app' }],
   routes: [{ host: 'shop.example.com' }, { host: 'shop.dev.example.test' }],
 };
 
@@ -85,6 +85,9 @@ async function createShop(w: TestWorld, body: Record<string, unknown> = shopBody
 }
 
 const creates = (w: TestWorld) => w.docker.calls.filter((c) => c.method === 'createSiteContainer').map((c) => c.args[0] as SiteContainerSpec);
+/** The ids of the images on the server, however each went: by its id or by its names. */
+const imagesOn = async (w: TestWorld) => (await w.docker.listImages()).map((i) => i.id);
+const probes = (w: TestWorld) => w.docker.calls.filter((c) => c.method === 'runEphemeral' && (c.args[0] as EphemeralOpts).labels?.[PROBE_LABEL]);
 const settingsOf = (w: TestWorld, siteId: number) => w.db.select().from(appSettings).where(eq(appSettings.siteId, siteId)).get()!;
 const deploysOf = (w: TestWorld, siteId: number) => w.db.select().from(appDeploys).where(eq(appDeploys.siteId, siteId)).orderBy(appDeploys.id).all();
 const routesFile = (w: TestWorld, slug = 'shop') => path.join(w.config.srvRoot, 'traefik', 'dynamic', appRoutesFileName(slug));
@@ -109,7 +112,7 @@ describe('creating a container app', () => {
       image: `${REPO}@${digest(1)}`,
       labels: appLabels('shop'),
       env: { DATABASE_URL: `mysql://wp_shop:${site.dbPassword}@${w.config.mariadb.host}/wp_shop`, API_KEY: 'env-secret-value' },
-      binds: [`${root}/data/var-lib-shop:/var/lib/shop`, `${root}/mounts/secrets:/run/secrets/app:ro`],
+      binds: [`${root}/data/var-lib-shop:/var/lib/shop`],
       networks: ['wpl7_site_shop', 'wpl7_egress'],
       stopTimeout: 20,
     });
@@ -117,7 +120,7 @@ describe('creating a container app', () => {
     expect(spec!.user).toBeUndefined();
     const s = settingsOf(w, site.id);
     expect([s.port, s.imageUid, s.imageGid, s.digest, s.imageId]).toEqual([8000, 10001, 10001, digest(1), 'sha256:img1']);
-    expect(fs.existsSync(`${root}/data/var-lib-shop`) && fs.existsSync(`${root}/mounts/secrets`)).toBe(true);
+    expect(fs.existsSync(`${root}/data/var-lib-shop`)).toBe(true);
     expect(fs.existsSync(path.join(root, 'wordpress'))).toBe(false);
     expect(w.dbAdmin.calls.filter((c) => c.method === 'createSiteDb').map((c) => c.args.slice(0, 2))).toEqual([['wp_shop', 'wp_shop']]);
 
@@ -126,6 +129,32 @@ describe('creating a container app', () => {
     expect(file).toContain('Host(`shop.example.com`)');
     expect(file).toContain('url: "http://wp-shop:8000"');
     expect(deploysOf(w, site.id).map((d) => [d.origin, d.result, d.digest, d.imageId])).toEqual([['create', 'ok', digest(1), 'sha256:img1']]);
+  });
+
+  it('is made stopped when it has mounts, which can only be filled once it exists: no gate, no routes, and Start runs it', async () => {
+    const w = await world();
+    // A gate would fail: the app needs what its mount holds.
+    w.docker.appHttp = () => 503;
+    const made = w.deps.sites.create(parsed({ ...shopBody, mounts: [{ name: 'secrets', path: '/run/secrets/app' }] }));
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, made.site.id)).run();
+    const done = await finish(w, made.job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    const site = w.db.select().from(sites).where(eq(sites.slug, 'shop')).get()!;
+    expect(site.status).toBe('stopped');
+    const root = appPaths(w.config, 'shop').root;
+    expect(creates(w).map((c) => c.binds)).toEqual([[`${root}/data/var-lib-shop:/var/lib/shop`, `${root}/mounts/secrets:/run/secrets/app:ro`]]);
+    expect(fs.existsSync(`${root}/mounts/secrets`)).toBe(true);
+    expect(w.docker.containers.get('wp-shop')).toBe('created');
+    expect(probes(w)).toEqual([]);
+    expect(fs.existsSync(routesFile(w))).toBe(false);
+    expect(deploysOf(w, site.id).map((d) => [d.origin, d.result])).toEqual([['create', 'ok']]);
+    expect(jobLog(w, made.job.id).split('\n').at(-1)).toMatch(/fill .*mounts.*start/i);
+    // Once they are filled, Start runs it, with its routes.
+    w.docker.appHttp = null;
+    const started = await finish(w, w.deps.sites.action('shop', 'start').id);
+    expect(started.status, started.error ?? '').toBe('succeeded');
+    expect(w.docker.containers.get('wp-shop')).toBe('running');
+    expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:8000"');
   });
 
   it('never gives a secret back, nor puts one in a job', async () => {
@@ -234,7 +263,7 @@ describe('creating a container app', () => {
     expect(w.docker.containers.has('wp-shop')).toBe(false);
     expect(fs.existsSync(routesFile(w))).toBe(false);
     // The image it pulled went with it.
-    expect(w.docker.calls.filter((c) => c.method === 'removeImage').map((c) => c.args[0])).toContain('sha256:img1');
+    expect(await imagesOn(w)).not.toContain('sha256:img1');
   });
 
   it('takes its port from the image, and says so when the image has none to offer', async () => {
@@ -277,7 +306,7 @@ describe('deploying a container app', () => {
     expect(deploys.slice(1).every((d) => d.gapMs !== null && d.gapMs >= 0)).toBe(true);
     expect(deploys.at(-1)!.actor).toBe('admin');
     // What runs and the two before it stay: a roll back's images.
-    expect(w.docker.calls.filter((c) => c.method === 'removeImage').map((c) => c.args[0])).toEqual(['sha256:img1']);
+    expect((await imagesOn(w)).filter((id) => id.startsWith('sha256:img')).sort()).toEqual(['sha256:img2', 'sha256:img3', 'sha256:img4']);
     expect(settingsOf(w, site.id).digest).toBe(digest(4));
   });
 
@@ -510,7 +539,7 @@ describe('starting, stopping and deleting a container app', () => {
     expect(done.status, done.error ?? '').toBe('succeeded');
     expect(fs.existsSync(routesFile(w))).toBe(false);
     expect(w.docker.containers.has('wp-shop')).toBe(false);
-    expect(w.docker.calls.filter((c) => c.method === 'removeImage').map((c) => c.args[0])).toEqual(['sha256:img1']);
+    expect(await imagesOn(w)).not.toContain('sha256:img1');
     expect(w.dbAdmin.calls.filter((c) => c.method === 'dropSiteDb').map((c) => c.args)).toEqual([['wp_shop', 'wp_shop']]);
     expect(fs.existsSync(appPaths(w.config, 'shop').root)).toBe(false);
     expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()).toBeUndefined();

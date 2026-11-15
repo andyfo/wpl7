@@ -298,6 +298,7 @@ export interface AppDto {
   pendingDigest: string;
   registryUser: string;
   registryToken: { secret: true; set: boolean };
+  /** The port the running container passed its health gate on: what the routes send to. */
   port: number;
   env: AppEnvDto[];
   routes: AppRouteDto[];
@@ -307,12 +308,16 @@ export interface AppDto {
   hardening: { dropAllCaps: boolean; readOnlyRoot: boolean; runAs: string; stopGraceSec: number };
   /** Who the container runs as, and owns its folders. */
   user: { uid: number; gid: number };
+  /** Who the image runs as, read at its deploy: what an empty Run as comes to. */
+  imageUser: { uid: number; gid: number };
   health: { path: string; host: string; deployCheckPath: string; timeoutSec: number };
   updates: { mode: AppUpdateMode; checkMinutes: number; checkedAt: number | null; checkError: string | null };
   deployToken: { set: boolean; setAt: number | null };
   /**
-   * A new port or user on its way in: the recreate that takes it saves it once the new container
-   * has passed, and `port` and `hardening.runAs` say what runs until then. Null when none is.
+   * What is on its way in, and saved once a new container has passed: `port`, staged for the next
+   * image deployed or the user's Recreate container; `runAs`, for the recreate that is queued or
+   * running. `port` and
+   * `hardening.runAs` say what runs until then. Null when nothing is.
    */
   pending: { port?: number; runAs?: string } | null;
   /** What Traefik is told: the routes are in force, held for a deploy, or there are none (stopped). */

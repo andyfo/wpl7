@@ -1,11 +1,14 @@
 /**
- * A container app while it runs: its log, a command in it, its uptime asked through the way in, and
- * the emails it sends when a deploy fails or an update waits.
+ * A container app while it runs: its log, a command in it, a restart, its uptime asked through the
+ * way in, the emails it sends when a deploy fails or an update waits, and a new database password.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { siteCreateBody } from '../../shared/schemas.js';
-import { appDeploys, appSettings, jobs, sites } from '../../src/db/schema.js';
+import { appDeploys, appSettings, jobLogs, jobs, sites } from '../../src/db/schema.js';
+import { appRoutesFileName } from '../../src/services/appRoutes.js';
 import { appLogLines } from '../../src/services/appSpec.js';
 import type { EphemeralOpts } from '../../src/services/docker.js';
 import { TRAEFIK_CONTAINER } from '../../src/services/stack.js';
@@ -114,6 +117,22 @@ describe('a command in a container app', () => {
   });
 });
 
+describe('a container app’s restart', () => {
+  it('brings a stopped app’s routes back with it, as a start does', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    expect(site.status).toBe('running');
+    const routes = path.join(w.config.srvRoot, 'traefik', 'dynamic', appRoutesFileName('shop'));
+    expect((await finish(w, w.deps.sites.action('shop', 'stop').id)).status).toBe('succeeded');
+    await w.deps.appRoutes.idle();
+    expect(fs.existsSync(routes)).toBe(false);
+    const done = await finish(w, w.deps.sites.action('shop', 'restart').id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    await w.deps.appRoutes.idle();
+    expect(fs.readFileSync(routes, 'utf8')).toContain('url: "http://wp-shop:8000"');
+  });
+});
+
 describe('a container app’s uptime', () => {
   it('is its health path, asked on its own network: up below 400, down without an answer', async () => {
     const w = await world();
@@ -201,6 +220,32 @@ describe('a container app’s database password', () => {
     expect(w.dbAdmin.calls.filter((c) => c.method === 'setUserPassword').map((c) => c.args)).toEqual([['wp_shop', now.dbPassword]]);
     const spec = w.docker.calls.filter((c) => c.method === 'createSiteContainer').at(-1)!.args[0] as { env: Record<string, string> };
     expect(spec.env.DATABASE_URL).toContain(`:${now.dbPassword}@`);
+  });
+
+  it('stays the new one once the new container is in, though a step after that fails', async () => {
+    const w = await world();
+    const site = await createShop(w, withDb);
+    // The site.json the recreate writes once its container is in: refused once.
+    const files = w.servers.handleFor(1).files;
+    const writeFile = files.writeFile.bind(files);
+    let refused = 0;
+    files.writeFile = async (file, content, opts) => {
+      if (file.endsWith('/shop/site.json') && refused++ === 0) throw new Error('the disk is full');
+      return writeFile(file, content, opts);
+    };
+    const job = w.worker.enqueue('database.password', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 });
+    const done = await finish(w, job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(refused).toBeGreaterThan(0);
+    const now = w.db.select().from(sites).where(eq(sites.id, site.id)).get()!;
+    expect(now.dbPassword).not.toBe(site.dbPassword);
+    // MariaDB has the one the running container was made with, and never got the old one back.
+    expect(w.dbAdmin.calls.filter((c) => c.method === 'setUserPassword').map((c) => c.args)).toEqual([['wp_shop', now.dbPassword]]);
+    const spec = w.docker.calls.filter((c) => c.method === 'createSiteContainer').at(-1)!.args[0] as { env: Record<string, string> };
+    expect(spec.env.DATABASE_URL).toContain(`:${now.dbPassword}@`);
+    expect(w.docker.containers.get('wp-shop')).toBe('running');
+    const log = w.db.select().from(jobLogs).where(eq(jobLogs.jobId, job.id)).all().map((l) => l.message);
+    expect(log).toContain("Could not write the app's site.json (the disk is full).");
   });
 
   it('comes back as it was when the new container fails its check', async () => {

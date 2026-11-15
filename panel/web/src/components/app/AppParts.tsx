@@ -9,11 +9,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { AppDeployDto, JobDto, SiteDetail } from '../../../../shared/types';
 import type { AppDeployOrigin } from '../../../../shared/schemas';
 import { api } from '../../api/client';
-import { useRunJob } from '../../api/hooks';
+import { useMeta, useRunJob } from '../../api/hooks';
 import { imageOf, shortDigest, uploadAppImage, useAppLogs } from '../../api/apps';
 import { useFollowJob } from '../jobConsole/context';
-import { Button, Card, EmptyState, ErrorNote, Spinner, Toggle } from '../ui';
+import { keptFor } from '../wp/BulkRunOptions';
+import { Button, Card, ConfirmDialog, EmptyState, ErrorNote, Spinner, Toggle, UploadButton } from '../ui';
 import { formatDate, timeAgo } from '../../lib/format';
+import { deployBody, deployQuestion, uploadPercent } from '../../lib/appForm';
 
 /** Beside a container app's name, in the site list and on its page. */
 export function AppLabel() {
@@ -40,10 +42,58 @@ const ORIGIN: Record<AppDeployOrigin, string> = {
 
 const UPDATES = { auto: 'Automatic', ask: 'Ask first', pinned: 'Pinned' } as const;
 
+/** Start a deploy: `go` gets the answer about a backup first, or undefined where nobody was asked. */
+type Deploy = (title: string, go: (backupFirst?: boolean) => void) => void;
+
+/** A deploy waiting for its answer: what it is, where its switch starts, and what goes once answered. */
+interface DeployAsked {
+  title: string;
+  backupFirst: boolean;
+  go: (backupFirst: boolean) => void;
+}
+
+/**
+ * Deploys from the page: at once where the app's Back up before updates setting decides, after a
+ * question where it asks each time (lib/appForm.ts deployQuestion). `dialog` is that question.
+ */
+function useDeploy(site: SiteDetail): { deploy: Deploy; dialog: React.ReactNode } {
+  const meta = useMeta();
+  const [asked, setAsked] = useState<DeployAsked | null>(null);
+  const deploy: Deploy = (title, go) => {
+    const question = deployQuestion(site, meta.data?.backupBeforeUpdates);
+    if (question) setAsked({ title, backupFirst: question.backupFirst, go });
+    else go();
+  };
+  const kept = keptFor([site.backupKeepDays], meta.data?.backupKeepDays ?? 0);
+  const hint = `${site.isLive ? 'On by default for a live app. ' : ''}${kept.charAt(0).toUpperCase()}${kept.slice(1)}.`;
+  return { deploy, dialog: asked && <DeployDialog asked={asked} hint={hint} onClose={() => setAsked(null)} /> };
+}
+
+function DeployDialog({ asked, hint, onClose }: { asked: DeployAsked; hint: string; onClose: () => void }) {
+  const [backupFirst, setBackupFirst] = useState(asked.backupFirst);
+  return (
+    <ConfirmDialog
+      title={asked.title}
+      message="The old container stays until the new one passes the health check."
+      confirmLabel="Deploy"
+      onClose={onClose}
+      onConfirm={() => asked.go(backupFirst)}
+    >
+      <div>
+        <Toggle checked={backupFirst} onChange={setBackupFirst} label="Back up first" />
+        <p className="pl-11 text-xs text-neutral-500">{hint}</p>
+      </div>
+    </ConfirmDialog>
+  );
+}
+
 /** The image an app runs, and what deploys it: on its Overview. */
 export function AppImageCard({ site }: { site: SiteDetail }) {
   const app = site.container!;
   const run = useRunJob([['site', site.slug], ['app-deploys', site.slug]]);
+  const { deploy, dialog } = useDeploy(site);
+  const deployNow = (title: string, action: string) =>
+    deploy(title, (backupFirst) => run.mutate({ path: `/api/sites/${site.slug}/app/deploy`, body: deployBody({}, backupFirst), action }));
   const last = app.deploys[0];
   const registry = app.source === 'registry';
   const routes = { serving: 'In force', held: 'Held for a deploy (503)', none: 'Off while it is stopped' }[app.routesState];
@@ -54,7 +104,7 @@ export function AppImageCard({ site }: { site: SiteDetail }) {
           <span>
             A new image is waiting: <code>{shortDigest(app.pendingDigest)}</code>
           </span>
-          <Button small busy={run.busy('update')} onClick={() => run.mutate({ path: `/api/sites/${site.slug}/app/deploy`, body: {}, action: 'update' })}>
+          <Button small busy={run.busy('update')} onClick={() => deployNow(`Update to ${shortDigest(app.pendingDigest)}`, 'update')}>
             Update
           </Button>
         </div>
@@ -89,17 +139,18 @@ export function AppImageCard({ site }: { site: SiteDetail }) {
       </dl>
       <div className="mt-4 flex flex-wrap items-center gap-2">
         {registry ? (
-          <Button small busy={run.busy('deploy')} onClick={() => run.mutate({ path: `/api/sites/${site.slug}/app/deploy`, body: {}, action: 'deploy' })}>
+          <Button small busy={run.busy('deploy')} onClick={() => deployNow('Deploy now', 'deploy')}>
             Deploy now
           </Button>
         ) : (
-          <UploadImageButton slug={site.slug} />
+          <UploadImageButton slug={site.slug} deploy={deploy} />
         )}
         <span className="text-xs text-neutral-500">
           {registry ? 'Deploys what the reference names now, behind the health check.' : 'Deploys a new archive behind the health check.'}
         </span>
       </div>
       <ErrorNote error={run.error} />
+      {dialog}
     </Card>
   );
 }
@@ -113,26 +164,26 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-/** Upload a `docker save` archive and deploy it. */
-function UploadImageButton({ slug }: { slug: string }) {
+/** Upload a `docker save` archive and deploy it. Asked about a backup first, it asks before the upload. */
+function UploadImageButton({ slug, deploy }: { slug: string; deploy: Deploy }) {
   const follow = useFollowJob();
-  const input = useRef<HTMLInputElement>(null);
-  const [progress, setProgress] = useState<{ sent: number; total: number } | null>(null);
+  const [percent, setPercent] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const pick = (file: File) => {
+  const send = (file: File, backupFirst?: boolean) => {
     setError(null);
-    void uploadAppImage(file, (sent, total) => setProgress({ sent, total }))
-      .then((uploadId) => api<{ job: JobDto }>(`/api/sites/${slug}/app/image`, { method: 'POST', body: { uploadId } }))
+    setPercent(0);
+    void uploadAppImage(file, (sent, total) => setPercent(uploadPercent(sent, total)))
+      .then((uploadId) => api<{ job: JobDto }>(`/api/sites/${slug}/app/image`, { method: 'POST', body: deployBody({ uploadId }, backupFirst) }))
       .then((res) => follow(res.job, { refresh: [['site', slug], ['app-deploys', slug]] }))
       .catch(setError)
-      .finally(() => setProgress(null));
+      .finally(() => setPercent(null));
   };
+  const pick = (file: File) => deploy(`Deploy ${file.name}`, (backupFirst) => send(file, backupFirst));
   return (
     <>
-      <input ref={input} type="file" className="hidden" accept=".tar" onChange={(e) => e.target.files?.[0] && pick(e.target.files[0])} />
-      <Button small busy={progress !== null} onClick={() => input.current?.click()}>
-        {progress ? `Uploading ${Math.round((progress.sent / Math.max(1, progress.total)) * 100)} %` : 'Upload new image'}
-      </Button>
+      <UploadButton small variant="primary" accept=".tar" percent={percent} onFile={pick}>
+        Upload new image
+      </UploadButton>
       <ErrorNote error={error} />
     </>
   );
@@ -140,13 +191,15 @@ function UploadImageButton({ slug }: { slug: string }) {
 
 // --------------------------------------------------------------- Deploys
 
-export function AppDeploysTab({ slug }: { slug: string }) {
+export function AppDeploysTab({ site }: { site: SiteDetail }) {
+  const slug = site.slug;
   const deploys = useQuery({
     queryKey: ['app-deploys', slug],
     queryFn: () => api<{ items: AppDeployDto[] }>(`/api/sites/${slug}/app/deploys`),
     refetchInterval: 15_000,
   });
   const run = useRunJob([['site', slug], ['app-deploys', slug]]);
+  const { deploy, dialog } = useDeploy(site);
   const [open, setOpen] = useState<number | null>(null);
   if (!deploys.data) return deploys.error ? <ErrorNote error={deploys.error} /> : <Spinner />;
   const items = deploys.data.items;
@@ -176,7 +229,11 @@ export function AppDeploysTab({ slug }: { slug: string }) {
                   current={d.id === current?.id}
                   open={open === d.id}
                   onToggle={() => setOpen(open === d.id ? null : d.id)}
-                  rollBack={() => run.mutate({ path: `/api/sites/${slug}/app/deploy`, body: { deployId: d.id }, action: `rollback-${d.id}` })}
+                  rollBack={() =>
+                    deploy(`Roll back to ${imageOf(d)}`, (backupFirst) =>
+                      run.mutate({ path: `/api/sites/${slug}/app/deploy`, body: deployBody({ deployId: d.id }, backupFirst), action: `rollback-${d.id}` }),
+                    )
+                  }
                   busy={run.busy(`rollback-${d.id}`)}
                   disabled={run.active}
                 />
@@ -186,6 +243,7 @@ export function AppDeploysTab({ slug }: { slug: string }) {
         </div>
       )}
       <ErrorNote error={run.error} />
+      {dialog}
     </Card>
   );
 }

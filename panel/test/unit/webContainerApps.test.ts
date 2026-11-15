@@ -1,4 +1,7 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import type { BackupBeforeUpdates } from '../../shared/schemas.js';
 import type { AppDto, AppRouteDto } from '../../shared/types.js';
 import {
   RUNS_UNEDITED,
@@ -6,25 +9,38 @@ import {
   appStepOk,
   archiveChosen,
   archiveUploaded,
+  createdStoppedNote,
+  dataPathsHint,
+  deployBody,
+  deployQuestion,
   editEnv,
   editedRoutes,
   emptyAppDraft,
   envBody,
   envEdits,
+  healthPathProblem,
+  portHint,
   replaceSecret,
   routeErrorLines,
   routesOf,
+  runAsHint,
   runsPatch,
+  runsSaveNote,
   runsShown,
+  uploadPercent,
+  type MountEdit,
   type RouteEdit,
 } from '../../web/src/lib/appForm.js';
 import type { NewAppDraft } from '../../web/src/lib/siteCreation.js';
 import { databaseOwner, sendsTestMail } from '../../web/src/lib/siteKind.js';
 import { moveBody, moveFreeze } from '../../web/src/pages/siteMove.js';
+import { UploadButton } from '../../web/src/components/ui.js';
 
 /**
- * A container app's pages: what its forms send, and the places that tell it apart from a
- * WordPress site and a PHP site. The rules are the components', kept in lib/ to be tested here.
+ * A container app's pages: what its forms send, what a deploy asks first, and the places that tell
+ * it apart from a WordPress site and a PHP site. The rules are the components', kept in lib/ to be
+ * tested here; the upload button is drawn as the page draws it, since what is wrong there is where
+ * the percentage goes.
  */
 
 const app = (over: Partial<AppDto> = {}): AppDto => ({
@@ -43,6 +59,7 @@ const app = (over: Partial<AppDto> = {}): AppDto => ({
   extraHosts: [],
   hardening: { dropAllCaps: false, readOnlyRoot: false, runAs: '', stopGraceSec: 20 },
   user: { uid: 1000, gid: 1000 },
+  imageUser: { uid: 1000, gid: 1000 },
   health: { path: '/', host: '', deployCheckPath: '', timeoutSec: 60 },
   updates: { mode: 'auto', checkMinutes: 15, checkedAt: null, checkError: null },
   deployToken: { set: false, setAt: null },
@@ -106,19 +123,6 @@ describe("a stored secret in an app's environment", () => {
 });
 
 describe('How it runs', () => {
-  it('sends no data folders unless they were changed, so one a deploy added since the card opened stays', () => {
-    // An image with a VOLUME was deployed while the card was open: the app has its folder now.
-    const now = app({ dataPaths: [...app().dataPaths, { path: '/var/lib/shop', dir: 'var-lib-shop', fromImage: true }] });
-    const edit = { ...RUNS_UNEDITED, stopGraceSec: '30' };
-    expect(runsPatch(now, edit)).toEqual({ hardening: { stopGraceSec: 30 } });
-    expect(runsShown(now, edit).dataPaths).toBe('/data\n/var/lib/shop');
-  });
-
-  it('sends the data folders as they were typed in once they were changed', () => {
-    expect(runsPatch(app(), { ...RUNS_UNEDITED, dataPaths: '/data\n /cache \n\n' })).toEqual({ dataPaths: ['/data', '/cache'] });
-    expect(runsPatch(app(), { ...RUNS_UNEDITED, dataPaths: '/data\n' })).toEqual({});
-  });
-
   it('sends only what changed, and nothing while a field is not valid', () => {
     expect(runsPatch(app(), RUNS_UNEDITED)).toEqual({});
     expect(runsPatch(app(), { ...RUNS_UNEDITED, port: '8080', dropAllCaps: true })).toEqual({ port: 8080, hardening: { dropAllCaps: true } });
@@ -127,27 +131,191 @@ describe('How it runs', () => {
     expect(runsPatch(app(), { ...RUNS_UNEDITED, stopGraceSec: '' })).toBeNull();
     expect(runsPatch(app(), { ...RUNS_UNEDITED, runAs: 'www-data' })).toBeNull();
   });
+});
 
-  it('shows a port and a user going in with a recreate, and does not send them again', () => {
-    const going = app({ port: 8000, pending: { port: 8080, runAs: '2000:2000' } });
-    expect(runsShown(going, RUNS_UNEDITED)).toMatchObject({ port: '8080', runAs: '2000:2000' });
-    expect(runsPatch(going, { ...RUNS_UNEDITED, readOnlyRoot: true })).toEqual({ hardening: { readOnlyRoot: true } });
-    // The recreate failed: the app keeps its port, and the card shows it.
-    expect(runsShown(app({ port: 8000, pending: null }), RUNS_UNEDITED).port).toBe('8000');
+describe("How it runs: the app's data folders", () => {
+  // An image with a VOLUME: the app has its folder, which the panel keeps whatever a save sends.
+  const withVolume = () => app({ dataPaths: [...app().dataPaths, { path: '/var/lib/shop', dir: 'var-lib-shop', fromImage: true }] });
+
+  it("edits the app's own, and names the image's as kept", () => {
+    expect(runsShown(withVolume(), RUNS_UNEDITED).dataPaths).toBe('/data');
+    expect(dataPathsHint(withVolume())).toBe('One path a line: kept across deploys, and in backups. From the image, always kept: /var/lib/shop.');
+    expect(dataPathsHint(app())).toBe('One path a line: kept across deploys, and in backups.');
   });
 
-  it('sends no port or user while one is going in: its recreate holds the site, so the change would be refused', () => {
-    const going = app({ port: 8000, pending: { port: 8080, runAs: '2000:2000' } });
-    // Typed in before the recreate began: the card shows what is going in, and a save leaves both out.
-    const typed = { ...RUNS_UNEDITED, port: '9000', runAs: '3000:3000', readOnlyRoot: true };
-    expect(runsShown(going, typed)).toMatchObject({ port: '8080', runAs: '2000:2000' });
+  it("sends them without the image's", () => {
+    expect(runsPatch(withVolume(), { ...RUNS_UNEDITED, dataPaths: '/data\n /cache \n\n' })).toEqual({ dataPaths: ['/data', '/cache'] });
+    // One of the image's typed in is kept anyway: it is not sent, and alone it is no change.
+    expect(runsPatch(withVolume(), { ...RUNS_UNEDITED, dataPaths: '/data\n/var/lib/shop\n/cache' })).toEqual({ dataPaths: ['/data', '/cache'] });
+    expect(runsPatch(withVolume(), { ...RUNS_UNEDITED, dataPaths: '/var/lib/shop\n/data' })).toEqual({});
+    // The app's own taken out: the image's stays.
+    expect(runsPatch(withVolume(), { ...RUNS_UNEDITED, dataPaths: '' })).toEqual({ dataPaths: [] });
+  });
+
+  it('sends none unless they were changed, so one a deploy added since the card opened stays', () => {
+    const edit = { ...RUNS_UNEDITED, stopGraceSec: '30' };
+    expect(runsPatch(withVolume(), edit)).toEqual({ hardening: { stopGraceSec: 30 } });
+    expect(runsPatch(app(), { ...RUNS_UNEDITED, dataPaths: '/data\n' })).toEqual({});
+  });
+});
+
+describe('How it runs: the port', () => {
+  // 9000 is staged: the next image deployed, or Recreate container, gates on it, and the app runs on 8000 until one passes.
+  const staged = () => app({ port: 8000, pending: { port: 9000 } });
+
+  it('shows the staged port, and what runs until it goes in', () => {
+    expect(runsShown(staged(), RUNS_UNEDITED).port).toBe('9000');
+    // Not any deploy: a Deploy now that finds the same image deploys nothing, and a settings change's recreate keeps 8000.
+    expect(portHint(staged())).toBe('Runs on 8000. 9000 goes in with the next image deployed, or Recreate container.');
+    expect(portHint(app())).toBe('Where the container listens.');
+    expect(runsShown(app(), RUNS_UNEDITED).port).toBe('8000');
+  });
+
+  it('takes another over the staged one: no job holds it', () => {
+    expect(runsShown(staged(), { ...RUNS_UNEDITED, port: '9500' }).port).toBe('9500');
+    expect(runsPatch(staged(), { ...RUNS_UNEDITED, port: '9500' })).toEqual({ port: 9500 });
+    // The staged one again is no change.
+    expect(runsPatch(staged(), { ...RUNS_UNEDITED, port: '9000' })).toEqual({});
+    expect(runsPatch(staged(), RUNS_UNEDITED)).toEqual({});
+  });
+
+  it('sends the running port back, which takes the staged one back', () => {
+    expect(runsPatch(staged(), { ...RUNS_UNEDITED, port: '8000' })).toEqual({ port: 8000 });
+  });
+
+  it('says a port starts no job, and that the rest recreates the container on the port that runs', () => {
+    expect(runsSaveNote(app(), { port: 9000 }, true)).toBe('A port alone goes in with the next image deployed, or Recreate container.');
+    // The recreate the rest starts gates on 8000 and leaves 9000 staged.
+    expect(runsSaveNote(app(), { port: 9000, hardening: { readOnlyRoot: true } }, true)).toBe(
+      'Saving recreates the container on 8000. 9000 goes in with the next image deployed, or Recreate container.',
+    );
+    // The running port sent back takes the staged one back: nothing waits for a deploy.
+    expect(runsSaveNote(staged(), { port: 8000 }, true)).toBe('It stays on 8000: nothing restarts.');
+    expect(runsSaveNote(staged(), { port: 8000, dataPaths: [] }, true)).toBe('Saving recreates the container.');
+    // A stopped app takes it as it is saved, and starts on it.
+    expect(runsSaveNote(app(), { port: 9000 }, false)).toBe('A port alone goes in when the app starts.');
+    expect(runsSaveNote(app(), { port: 9000, hardening: { readOnlyRoot: true } }, false)).toBe('Saving recreates the container.');
+    expect(runsSaveNote(app(), { dataPaths: ['/data'] }, true)).toBe('Saving recreates the container.');
+  });
+
+  it('says nothing beside Save while there is nothing to save, as once a port alone was saved', () => {
+    // The card after that save: what was typed is reset, and the app has 9000 staged. "Saved." stands alone.
+    expect(runsSaveNote(staged(), runsPatch(staged(), RUNS_UNEDITED), true)).toBeNull();
+    // A stopped app took it as it was saved.
+    const stopped = app({ port: 9000 });
+    expect(runsSaveNote(stopped, runsPatch(stopped, RUNS_UNEDITED), false)).toBeNull();
+    // Nothing valid typed in is nothing to save either: Save is off.
+    expect(runsSaveNote(app(), runsPatch(app(), { ...RUNS_UNEDITED, port: '' }), true)).toBeNull();
+  });
+});
+
+describe('How it runs: the user', () => {
+  it('shows a user going in with a recreate, and sends no other until it is done: that job holds the site', () => {
+    const going = app({ port: 8000, pending: { runAs: '2000:2000' } });
+    const typed = { ...RUNS_UNEDITED, runAs: '3000:3000', readOnlyRoot: true };
+    expect(runsShown(going, typed).runAs).toBe('2000:2000');
     expect(runsPatch(going, typed)).toEqual({ hardening: { readOnlyRoot: true } });
-    // The port that runs now is another change too.
-    expect(runsPatch(going, { ...RUNS_UNEDITED, port: '8000', runAs: '' })).toEqual({});
+    expect(runAsHint(going)).toBe('2000:2000 is going in. Change it once that is done.');
+    // A port goes as typed: the panel refuses one while that job is queued or running (409), and the card shows why as any save error.
+    expect(runsPatch(going, { ...typed, port: '9000' })).toEqual({ port: 9000, hardening: { readOnlyRoot: true } });
     // Back to the image's user, going in: an empty user is one too.
-    expect(runsPatch(app({ hardening: { ...app().hardening, runAs: '2000:2000' }, pending: { runAs: '' } }), { ...RUNS_UNEDITED, runAs: '3000:3000' })).toEqual({});
+    const back = app({ hardening: { ...app().hardening, runAs: '2000:2000' }, pending: { runAs: '' } });
+    expect(runsPatch(back, { ...RUNS_UNEDITED, runAs: '3000:3000' })).toEqual({});
+    expect(runAsHint(back)).toBe("The image's user is going in. Change it once that is done.");
     // Once it is done, what was typed is the card's again.
-    expect(runsPatch(app({ port: 8080 }), typed)).toEqual({ port: 9000, hardening: { runAs: '3000:3000', readOnlyRoot: true } });
+    expect(runsPatch(app({ hardening: { ...app().hardening, runAs: '2000:2000' } }), typed)).toEqual({ hardening: { runAs: '3000:3000', readOnlyRoot: true } });
+  });
+
+  it("names the image's own user as what an empty Run as comes to, not the one it runs as now", () => {
+    const overridden = app({ hardening: { ...app().hardening, runAs: '2000:2000' }, user: { uid: 2000, gid: 2000 }, imageUser: { uid: 1000, gid: 1000 } });
+    expect(runAsHint(overridden)).toBe("uid:gid. Empty: the image's user (1000:1000).");
+  });
+});
+
+describe('A health path', () => {
+  // The panel's own words, as the field shows them.
+  const refused = /^A path from \/ with .+\.$/;
+
+  it('takes a query, as the panel does', () => {
+    expect(healthPathProblem('/healthz')).toBeNull();
+    expect(healthPathProblem('/health?deep=1')).toBeNull();
+    expect(healthPathProblem('/ready?check=db,cache&x=1;y=2')).toBeNull();
+  });
+
+  it('says why the panel would refuse one', () => {
+    for (const path of ['', 'health', '/health#top', '/health?q=a b', "/health?q='1'", '/health?q="1"', '/a=b']) {
+      expect(healthPathProblem(path), path).toMatch(refused);
+    }
+  });
+
+  it('lets the deploy check be empty, which asks none', () => {
+    expect(healthPathProblem('', true)).toBeNull();
+    expect(healthPathProblem('/ready?full=1', true)).toBeNull();
+    expect(healthPathProblem('ready', true)).toMatch(refused);
+  });
+
+  it("keeps New site's Settings step until the panel would take it", () => {
+    const draft: NewAppDraft = { ...emptyAppDraft(), healthPath: '/health?deep=1' };
+    expect(appStepOk('settings', draft, DEV)).toBe(true);
+    expect(appBody(draft, DEV)?.health).toEqual({ path: '/health?deep=1' });
+    // A leading / was all it asked for: these went on to a create the panel refused.
+    expect(appStepOk('settings', { ...draft, healthPath: '/health#top' }, DEV)).toBe(false);
+    expect(appStepOk('settings', { ...draft, healthPath: '/health?q="1"' }, DEV)).toBe(false);
+  });
+});
+
+describe("New site's review of an app with mounts", () => {
+  const mount: MountEdit = { key: 1, name: 'keys', path: '/run/secrets/app', writable: false, inBackups: true, filledAt: null, saved: false };
+
+  it('says it is made stopped: its mounts are filled once it exists', () => {
+    expect(createdStoppedNote({ ...emptyAppDraft(), mounts: [mount] })).toBe('Created stopped: fill its mounts, then Start it.');
+    expect(createdStoppedNote(emptyAppDraft())).toBeNull();
+  });
+});
+
+describe('A deploy from the page', () => {
+  const site = (backupBeforeUpdates: BackupBeforeUpdates | null, isLive = true) => ({ backupBeforeUpdates, isLive });
+
+  it('asks about a backup first only where the app asks each time: the panel reads no answer as yes', () => {
+    expect(deployQuestion(site(null), 'ask')).not.toBeNull();
+    expect(deployQuestion(site('ask'), 'always')).not.toBeNull();
+    expect(deployQuestion(site(null), 'always')).toBeNull();
+    expect(deployQuestion(site(null), 'never')).toBeNull();
+    expect(deployQuestion(site('always'), 'ask')).toBeNull();
+    expect(deployQuestion(site('never'), 'ask')).toBeNull();
+    // The panel's setting not read yet: it asks.
+    expect(deployQuestion(site(null), undefined)).not.toBeNull();
+  });
+
+  it('starts the switch on for a live app and off for a dev copy', () => {
+    expect(deployQuestion(site(null, true), 'ask')).toEqual({ backupFirst: true });
+    expect(deployQuestion(site(null, false), 'ask')).toEqual({ backupFirst: false });
+  });
+
+  it('sends the answer where it asked, and nothing where the setting decides', () => {
+    expect(deployBody({}, false)).toEqual({ backupFirst: false });
+    expect(deployBody({ deployId: 4 }, true)).toEqual({ deployId: 4, backupFirst: true });
+    expect(deployBody({}, undefined)).toEqual({});
+    expect(deployBody({ uploadId: 'image-upload-0001' }, undefined)).toEqual({ uploadId: 'image-upload-0001' });
+  });
+});
+
+describe('An upload under way', () => {
+  // A busy Button draws its label clear under its spinner (components/ui.tsx): what is in it is not seen.
+  const clear = (html: string) => /<span class="[^"]*\bopacity-0\b[^"]*">(.*?)<\/span>/.exec(html)?.[1];
+  const rendered = (percent: number | null) => renderToStaticMarkup(createElement(UploadButton, { accept: '.tar', onFile: () => undefined, percent, children: 'Upload' }));
+
+  it('shows how far it has gone beside its button, where it is seen', () => {
+    const html = rendered(uploadPercent(420, 1000));
+    expect(html).toContain('aria-busy="true"');
+    expect(clear(html)).toBe('Upload');
+    expect(html).toContain('>Uploading 42 %</span>');
+  });
+
+  it('shows the label alone while nothing goes up', () => {
+    const html = rendered(null);
+    expect(clear(html)).toBeUndefined();
+    expect(html).not.toContain('Uploading');
   });
 });
 

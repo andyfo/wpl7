@@ -94,8 +94,11 @@ export interface GateOpts {
 }
 
 /**
- * The health gate: the health path, every 2 s, until it answers 2xx or the app's timeout passes;
- * then the deploy check path once, when there is one. The reason it failed, or null.
+ * The health gate: the health path, every 2 s, until it answers 2xx or the app's timeout passes,
+ * each try waiting at most 10 s and never past that timeout; then the deploy check path once, when
+ * there is one, with a wait of its own: the app's whole timeout. A check that does real work (a
+ * database, a queue) may take longer than a health answer, and one asked after a late health
+ * answer would otherwise get what little of the timeout was left. The reason it failed, or null.
  */
 export async function healthGate(
   server: Pick<ServerHandle, 'docker' | 'name'>,
@@ -105,13 +108,12 @@ export async function healthGate(
 ): Promise<string | null> {
   const host = settings.healthHost || (JSON.parse(app.domains) as string[])[0] || app.slug;
   const deadline = Date.now() + settings.healthTimeoutSec * 1000;
-  const ask = (p: string) =>
-    askApp(server, app, { port: settings.port, path: p, host, timeoutSec: Math.min(10, Math.max(1, (deadline - Date.now()) / 1000)) });
+  const ask = (p: string, timeoutSec: number) => askApp(server, app, { port: settings.port, path: p, host, timeoutSec });
   let last: AppAnswer;
   let tries = 0;
   for (;;) {
     opts.canceled?.();
-    last = await ask(settings.healthPath);
+    last = await ask(settings.healthPath, Math.min(10, Math.max(1, (deadline - Date.now()) / 1000)));
     tries++;
     if (isHealthy(last)) break;
     if (Date.now() >= deadline) {
@@ -122,7 +124,7 @@ export async function healthGate(
   }
   opts.log?.(`${settings.healthPath} answered ${last.detail}.`);
   if (opts.deployCheck && settings.deployCheckPath) {
-    const check = await ask(settings.deployCheckPath);
+    const check = await ask(settings.deployCheckPath, settings.healthTimeoutSec);
     if (!isHealthy(check)) return `The deploy check ${settings.deployCheckPath} answered ${check.detail}.`;
     opts.log?.(`The deploy check ${settings.deployCheckPath} answered ${check.detail}.`);
   }

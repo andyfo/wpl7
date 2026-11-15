@@ -443,12 +443,22 @@ export const IMAGE_REFERENCE_RE =
   /^(?:[a-z0-9]+(?:[.-][a-z0-9]+)*(?::\d{1,5})?\/)?[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:\/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[0-9a-f]{64})?$/;
 export const imageReferenceSchema = z.string().trim().max(255).regex(IMAGE_REFERENCE_RE, 'not an image reference, such as ghcr.io/example/app:stable');
 
-/** A path a route takes, or a health check asks: from the root, nothing Traefik's rules or a URL would read twice. */
+/** A path a route takes: from the root, nothing Traefik's rules or a URL would read twice. */
 const APP_URL_PATH_RE = /^\/[A-Za-z0-9._~\-/%@:+]*$/;
 export const appUrlPathSchema = z
   .string()
   .max(MAX_APP_ROUTE_PATH)
   .regex(APP_URL_PATH_RE, 'a path from / with letters, digits and . _ ~ - / % @ : + only');
+
+/**
+ * A path a health check asks: a route's, and a query after it, such as `/health?deep=1`. No
+ * fragment, space or quote: the probe hands it to wget as one argument (services/appProbe.ts).
+ */
+const APP_HEALTH_PATH_RE = /^\/[A-Za-z0-9._~\-/%@:+]*(?:\?[A-Za-z0-9._~\-/%@:+=&,;!*$]*)?$/;
+export const appHealthPathSchema = z
+  .string()
+  .max(MAX_APP_ROUTE_PATH)
+  .regex(APP_HEALTH_PATH_RE, 'a path from / with letters, digits and . _ ~ - / % @ : + only, and after a ? also = & , ; ! * $');
 
 export const appRouteInput = z
   .object({
@@ -526,11 +536,11 @@ export const appHardeningInput = z
 
 export const appHealthInput = z
   .object({
-    path: appUrlPathSchema,
+    path: appHealthPathSchema,
     /** '' = the app's primary host. */
     host: z.union([domainSchema, z.literal('')]),
     /** Asked once after the health path answers, at a deploy; '' = none. */
-    deployCheckPath: z.union([appUrlPathSchema, z.literal('')]),
+    deployCheckPath: z.union([appHealthPathSchema, z.literal('')]),
     timeoutSec: z.number().int().min(5).max(600),
   })
   .strict()

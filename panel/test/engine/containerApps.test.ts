@@ -916,6 +916,15 @@ describe.skipIf(!ENABLED)('container apps against the real Traefik and Docker', 
       await asRoot(out, 'chown 10001:10001 /x && chmod 700 /x');
       return out;
     };
+    /** An archive as the upload leaves it on the app's server (routes/apps.ts): root's, 0600. */
+    const uploaded = async (name: string) => {
+      const file = path.join(dir, `uploaded-${name}`);
+      fs.copyFileSync(path.join(dir, name), file);
+      await asRoot(file, 'chown 0:0 /x && chmod 600 /x');
+      return file;
+    };
+    /** As the job hands it over before the listing: the app's user's, still 0600. */
+    const handOver = (file: string) => asRoot(file, 'chown 10001:10001 /x');
 
     beforeAll(() => {
       const src = path.join(dir, 'src');
@@ -928,8 +937,17 @@ describe.skipIf(!ENABLED)('container apps against the real Traefik and Docker', 
       fs.writeFileSync(path.join(dir, 'good.zip'), zipOf({ 'logo.txt': 'logo', 'css/site.css': 'body{}' }));
     });
 
-    it('lists a .tar.gz’s names and unpacks it, folders 0700 and files 0600', async () => {
-      const archive = path.join(dir, 'good.tar.gz');
+    it('lists a .tar.gz’s names and unpacks it, folders 0700 and files 0600, once the archive is the app’s user’s', async () => {
+      const archive = await uploaded('good.tar.gz');
+      // The app's user, with no capability, cannot open it as the upload left it.
+      const refused = await unpack(archive, await fresh('r1'), mountListScript('tar.gz'));
+      fact('11. a root 0600 archive, listed as the app’s user', { exitCode: refused.exitCode, stderr: refused.stderr.trim() });
+      // Docker Desktop's file sharing shows every mode and owner as it likes; a Linux daemon, as they are.
+      if (process.platform === 'linux') {
+        expect(refused.exitCode).not.toBe(0);
+        expect(refused.stderr).toContain('Permission denied');
+      }
+      await handOver(archive);
       const listed = await unpack(archive, await fresh('l1'), mountListScript('tar.gz'));
       expect(listed.exitCode, listed.stderr).toBe(0);
       expect(listed.stdout.split('\n').filter(Boolean).sort()).toEqual(['./', './css/', './css/site.css', './logo.txt']);
@@ -944,8 +962,12 @@ describe.skipIf(!ENABLED)('container apps against the real Traefik and Docker', 
       }
     });
 
-    it('lists a .zip’s names as unzip -l prints them, and unpacks it', async () => {
-      const archive = path.join(dir, 'good.zip');
+    it('lists a .zip’s names as unzip -l prints them, and unpacks it, once the archive is the app’s user’s', async () => {
+      const archive = await uploaded('good.zip');
+      const refused = await unpack(archive, await fresh('r2'), mountListScript('zip'));
+      fact('11. a root 0600 .zip, listed as the app’s user', { exitCode: refused.exitCode, stderr: refused.stderr.trim() });
+      if (process.platform === 'linux') expect(refused.exitCode).not.toBe(0);
+      await handOver(archive);
       const listed = await unpack(archive, await fresh('l2'), mountListScript('zip'));
       expect(listed.exitCode, listed.stderr).toBe(0);
       fact('11. unzip -l, as busybox prints it', listed.stdout);
@@ -957,8 +979,10 @@ describe.skipIf(!ENABLED)('container apps against the real Traefik and Docker', 
     });
 
     it('refuses an archive with a link in it, after unpacking it where it reaches nothing', async () => {
+      const archive = await uploaded('link.tar.gz');
+      await handOver(archive);
       const out = await fresh('k1');
-      const done = await unpack(path.join(dir, 'link.tar.gz'), out, mountUnpackScript('tar.gz'));
+      const done = await unpack(archive, out, mountUnpackScript('tar.gz'));
       expect(done.exitCode).toBe(3);
       expect(done.stderr).toContain('links or special files: link');
     });

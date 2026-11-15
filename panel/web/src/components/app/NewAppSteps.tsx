@@ -5,10 +5,10 @@
  * the steps check and send is in lib/appForm.ts.
  */
 import { useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
-import { Button, ErrorNote, Field, Segmented, Toggle, inputClass } from '../ui';
+import { ErrorNote, Field, Segmented, Toggle, UploadButton, inputClass } from '../ui';
 import { uploadAppImage } from '../../api/apps';
-import { EnvEditor, MountsEditor, RoutesEditor } from './AppSettings';
-import { archiveChosen, archiveUploaded, editedRoutes, routesOf } from '../../lib/appForm';
+import { EnvEditor, MountsEditor, RoutesEditor, problemHint } from './AppSettings';
+import { archiveChosen, archiveUploaded, editedRoutes, healthPathProblem, routesOf, uploadPercent } from '../../lib/appForm';
 import type { NewAppDraft } from '../../lib/siteCreation';
 
 const SOURCES = [
@@ -17,7 +17,6 @@ const SOURCES = [
 ] as const;
 
 export function AppImageStep({ draft, onChange }: { draft: NewAppDraft; onChange: Dispatch<SetStateAction<NewAppDraft>> }) {
-  const input = useRef<HTMLInputElement>(null);
   const upload = useRef<AbortController | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -30,7 +29,7 @@ export function AppImageStep({ draft, onChange }: { draft: NewAppDraft; onChange
     setError(null);
     setProgress(0);
     onChange(archiveChosen);
-    void uploadAppImage(file, (sent, total) => setProgress(Math.round((sent / Math.max(1, total)) * 100)), controller.signal)
+    void uploadAppImage(file, (sent, total) => setProgress(uploadPercent(sent, total)), controller.signal)
       .then((id) => {
         if (!controller.signal.aborted) onChange(archiveUploaded(id, file.name));
       })
@@ -65,11 +64,10 @@ export function AppImageStep({ draft, onChange }: { draft: NewAppDraft; onChange
         </>
       ) : (
         <div className="space-y-2">
-          <input ref={input} type="file" className="hidden" accept=".tar" onChange={(e) => e.target.files?.[0] && pick(e.target.files[0])} />
           <div className="flex items-center gap-3">
-            <Button variant="secondary" busy={progress !== null} onClick={() => input.current?.click()}>
-              {progress !== null ? `Uploading ${progress} %` : draft.upload ? 'Choose another' : 'Choose archive'}
-            </Button>
+            <UploadButton accept=".tar" percent={progress} onFile={pick}>
+              {draft.upload ? 'Choose another' : 'Choose archive'}
+            </UploadButton>
             {draft.upload && <span className="text-sm">{draft.upload.name}</span>}
           </div>
           <p className="measure text-xs text-neutral-500">
@@ -83,13 +81,15 @@ export function AppImageStep({ draft, onChange }: { draft: NewAppDraft; onChange
 }
 
 export function AppSettingsStep({ draft, onChange }: { draft: NewAppDraft; onChange: (d: NewAppDraft) => void }) {
+  // Continue waits for a path the panel takes (lib/appForm.ts appStepOk): this says why it waits.
+  const healthProblem = healthPathProblem(draft.healthPath);
   return (
     <div className="space-y-6">
       <div className="grid max-w-2xl gap-4 sm:grid-cols-2">
         <Field label="Port" hint="Empty: the one the image exposes.">
           <input className={inputClass} value={draft.port} onChange={(e) => onChange({ ...draft, port: e.target.value })} placeholder="8000" />
         </Field>
-        <Field label="Health path" hint="A deploy waits for it to answer 2xx.">
+        <Field label="Health path" hint={problemHint(healthProblem, 'A deploy waits for it to answer 2xx.')}>
           <input className={inputClass} value={draft.healthPath} onChange={(e) => onChange({ ...draft, healthPath: e.target.value.trim() })} />
         </Field>
       </div>

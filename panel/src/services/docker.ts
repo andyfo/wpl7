@@ -389,7 +389,11 @@ export interface DockerPort {
   stopContainer(name: string, graceSeconds?: number): Promise<void>;
   /** `graceSeconds`: how long the stop half waits (20 s left out). */
   restartContainer(name: string, graceSeconds?: number): Promise<void>;
-  removeContainer(name: string): Promise<void>;
+  /**
+   * A container that is not there is not an error. `volumes`: its anonymous volumes go with it, as
+   * `docker rm -v`: a container app's image may declare a VOLUME, and each container gets its own.
+   */
+  removeContainer(name: string, opts?: { volumes?: boolean }): Promise<void>;
   renameContainer(name: string, to: string): Promise<void>;
   containerState(name: string): Promise<ContainerState>;
   /** The image reference a container was created from; null when it does not exist. */
@@ -693,9 +697,9 @@ export class DockerService implements DockerPort {
     await this.docker.getContainer(name).restart({ t: graceSeconds });
   }
 
-  async removeContainer(name: string): Promise<void> {
+  async removeContainer(name: string, opts?: { volumes?: boolean }): Promise<void> {
     try {
-      await this.docker.getContainer(name).remove({ force: true });
+      await this.docker.getContainer(name).remove({ force: true, v: opts?.volumes === true });
     } catch (err) {
       if (isStatusError(err, 404)) return;
       throw err;

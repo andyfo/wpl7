@@ -105,7 +105,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     if ((await target.docker.containerState(site.containerName)) !== 'missing') {
       ctx.warn(`Removing leftover container ${site.containerName} on "${target.name}" (previous attempt)`);
     }
-    await removeSiteContainers(target.docker, site.containerName);
+    await removeSiteContainers(target.docker, site.containerName, isContainerApp(site) ? { volumes: true } : undefined);
     if (await target.files.exists(paths.root)) {
       ctx.warn(`Removing leftover files on "${target.name}" (previous attempt)`);
       await rmOn(target, s.config.paths.sites, site.slug);
@@ -195,9 +195,12 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
       ctx.info('Stopping the source site…');
       await source.docker.stopContainer(site.containerName, stopGraceOf(s.db, site));
       quiesced = true;
-      ctx.pushCompensation('restart source container', async () => {
-        await startSiteContainer(source, s, site, ctx);
-      });
+      // Only a site that ran starts again: a stopped one stays as its row says, with no routes.
+      if (!wasStopped) {
+        ctx.pushCompensation('restart source container', async () => {
+          await startSiteContainer(source, s, site, ctx);
+        });
+      }
     } else {
       ctx.info('Copying while the source keeps serving (writes made during the copy will not transfer).');
     }
@@ -463,7 +466,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     }
     stopKeepalive();
     try {
-      await removeSiteContainers(source.docker, site.containerName);
+      await removeSiteContainers(source.docker, site.containerName, isContainerApp(site) ? { volumes: true } : undefined);
       ctx.info('Source container removed.');
     } catch (err) {
       ctx.warn(`Could not remove the source container (${errMsg(err)}); finalize will retry.`);
@@ -499,7 +502,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
       throw err;
     }
     await ctx.runCompensations();
-    ctx.info('Target rolled back; the site keeps running on the source. Re-running the move is safe.');
+    ctx.info(`Target rolled back; the site ${wasStopped ? 'stays stopped' : 'keeps running'} on the source. Re-running the move is safe.`);
     throw err;
   } finally {
     stopKeepalive();
@@ -587,7 +590,8 @@ export async function finalizeCleanup(ctx: JobContext<unknown>, s: CoreServices,
   }
   const source = s.servers.handleFor(cleanup.sourceServerId);
   ctx.info(`Removing the old copy of "${cleanup.siteSlug}" from "${source.name}"…`);
-  await removeSiteContainers(source.docker, cleanup.containerName);
+  // A container app's anonymous volumes (an image VOLUME the panel does not keep) go with it.
+  await removeSiteContainers(source.docker, cleanup.containerName, owner && isContainerApp(owner) ? { volumes: true } : undefined);
   // '' for a site that has no database of its own.
   if (cleanup.dbName !== '') await source.dbAdmin.dropSiteDb(cleanup.dbName, cleanup.dbUser);
   for (const name of parseNames(cleanup.extraDbs)) {

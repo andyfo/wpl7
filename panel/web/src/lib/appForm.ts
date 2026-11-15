@@ -1,11 +1,13 @@
 // @docs sites/container
 /**
  * A container app's forms, kept apart from the components so they can be tested without a browser:
- * the lists New site's steps and the Settings tab edit, and what each of them sends.
+ * the lists New site's steps and the Settings tab edit, what each of them sends, and what a deploy
+ * from the page asks first.
  */
-import type { AppDto, AppRouteDto } from '../../../shared/types';
-import type { AppRouteMatch, AppRouteScheme } from '../../../shared/schemas';
+import type { AppDto, AppRouteDto, SiteDetail } from '../../../shared/types';
+import { appHealthPathSchema, type AppRouteMatch, type AppRouteScheme } from '../../../shared/schemas';
 import { describeRoute, parseAppRouterName, routeIdOfKind } from '../../../shared/apps';
+import { backupBeforeUpdatesOf } from '../../../shared/updateBackups';
 import type { NewAppDraft } from './siteCreation';
 
 /** `key`: the row's own, for React; `id`: a saved route's, which names its routers. */
@@ -125,24 +127,33 @@ export interface RunsEdit {
 
 export const RUNS_UNEDITED: RunsEdit = { port: null, runAs: null, dropAllCaps: null, readOnlyRoot: null, stopGraceSec: null, dataPaths: null };
 
-/** The port and user the app has, or the ones going in with a recreate that has not passed its health check yet. */
+/**
+ * The port the field edits: the one staged for the next image deployed or Recreate container, or
+ * else the one that runs. `app.port` stays the running one until a new container has passed on the
+ * staged one.
+ */
 const portOf = (app: AppDto): number => app.pending?.port ?? app.port;
+/** The user going in with a recreate that has not passed its health check yet, or the app's. */
 const runAsOf = (app: AppDto): string => app.pending?.runAs ?? app.hardening.runAs;
-const pathsOf = (app: AppDto) => app.dataPaths.map((d) => d.path);
+/** The data folders the card edits: the app's own. The panel keeps the image's VOLUMEs whatever a save sends. */
+const ownPaths = (app: AppDto): string[] => app.dataPaths.filter((d) => !d.fromImage).map((d) => d.path);
+const imagePaths = (app: AppDto): string[] => app.dataPaths.filter((d) => d.fromImage).map((d) => d.path);
 
 /**
- * What the card shows: what was typed in, or else what the app has. A port or user going in shows
- * as it is, whatever was typed: its recreate holds the site until it is done, so a change to it
- * now would be refused, and a save leaves it out.
+ * What the card shows: what was typed in, or else what the app has. A user going in shows as it
+ * is, whatever was typed: its recreate holds the site until it is done, so a change to it now
+ * would be refused, and a save leaves it out. A staged port waits for no job, so it can be typed
+ * over. While a deploy or recreate of the app is queued or running the panel refuses any port
+ * (409): the card leaves that to the save's error, which shows as any other.
  */
 export function runsShown(app: AppDto, edit: RunsEdit) {
   return {
-    port: app.pending?.port !== undefined ? String(app.pending.port) : (edit.port ?? String(app.port)),
+    port: edit.port ?? String(portOf(app)),
     runAs: app.pending?.runAs ?? edit.runAs ?? app.hardening.runAs,
     dropAllCaps: edit.dropAllCaps ?? app.hardening.dropAllCaps,
     readOnlyRoot: edit.readOnlyRoot ?? app.hardening.readOnlyRoot,
     stopGraceSec: edit.stopGraceSec ?? String(app.hardening.stopGraceSec),
-    dataPaths: edit.dataPaths ?? pathsOf(app).join('\n'),
+    dataPaths: edit.dataPaths ?? ownPaths(app).join('\n'),
   };
 }
 
@@ -153,8 +164,9 @@ export interface RunsPatch {
 }
 
 /**
- * What a save sends: only what differs from what the app has. The data folders as the card opened
- * with them would take back a folder a deploy added since, from a VOLUME of its image. Null while
+ * What a save sends: only what differs from what the app has. The running port sent back while
+ * another is staged takes that one back. The data folders go without the image's: the panel keeps
+ * those, one a deploy added since the card opened too, so one typed in is no change. Null while
  * something typed in is not valid.
  */
 export function runsPatch(app: AppDto, edit: RunsEdit): RunsPatch | null {
@@ -169,12 +181,57 @@ export function runsPatch(app: AppDto, edit: RunsEdit): RunsPatch | null {
   if (shown.dropAllCaps !== app.hardening.dropAllCaps) hardening.dropAllCaps = shown.dropAllCaps;
   if (shown.readOnlyRoot !== app.hardening.readOnlyRoot) hardening.readOnlyRoot = shown.readOnlyRoot;
   if (grace !== app.hardening.stopGraceSec) hardening.stopGraceSec = grace;
-  const paths = shown.dataPaths.split('\n').map((p) => p.trim()).filter(Boolean);
+  const fromImage = new Set(imagePaths(app));
+  const paths = shown.dataPaths
+    .split('\n')
+    .map((p) => p.trim())
+    .filter((p) => p !== '' && !fromImage.has(p));
   return {
     ...(port !== portOf(app) ? { port } : {}),
     ...(Object.keys(hardening).length > 0 ? { hardening } : {}),
-    ...(paths.join('\n') !== pathsOf(app).join('\n') ? { dataPaths: paths } : {}),
+    ...(paths.join('\n') !== ownPaths(app).join('\n') ? { dataPaths: paths } : {}),
   };
+}
+
+/**
+ * The Port field's hint: what runs, and the port staged while one is. Only the next image deployed
+ * or Recreate container takes it: a Deploy now that finds the same image deploys nothing, and the
+ * recreate a settings change starts keeps the port that runs.
+ */
+export function portHint(app: AppDto): string {
+  const next = app.pending?.port;
+  return next === undefined ? 'Where the container listens.' : `Runs on ${app.port}. ${next} goes in with the next image deployed, or Recreate container.`;
+}
+
+/** The Run as field's hint: the image's own user, which an empty field comes to, or the user going in. */
+export function runAsHint(app: AppDto): string {
+  const going = app.pending?.runAs;
+  if (going !== undefined) return `${going || "The image's user"} is going in. Change it once that is done.`;
+  return `uid:gid. Empty: the image's user (${app.imageUser.uid}:${app.imageUser.gid}).`;
+}
+
+/** The Data folders hint: the image's VOLUMEs are named, not edited, as the panel keeps them. */
+export function dataPathsHint(app: AppDto): string {
+  const fromImage = imagePaths(app);
+  return `One path a line: kept across deploys, and in backups.${fromImage.length > 0 ? ` From the image, always kept: ${fromImage.join(', ')}.` : ''}`;
+}
+
+/**
+ * What a save does, beside Save. Null while there is nothing to save: after a save the card is
+ * back to the app, and a note there would read as what that save did. A port starts no job. An
+ * app that runs stages it for the next image deployed or Recreate container: the recreate anything
+ * else starts keeps the port that runs. The running port sent back takes the staged one back. An
+ * app that does not run takes a port as it is saved.
+ */
+export function runsSaveNote(app: AppDto, patch: RunsPatch | null, running: boolean): string | null {
+  if (!patch || Object.keys(patch).length === 0) return null;
+  const recreates = Object.keys(patch).some((k) => k !== 'port');
+  if (running && patch.port !== undefined && patch.port !== app.port) {
+    const when = 'goes in with the next image deployed, or Recreate container.';
+    return recreates ? `Saving recreates the container on ${app.port}. ${patch.port} ${when}` : `A port alone ${when}`;
+  }
+  if (recreates) return 'Saving recreates the container.';
+  return running ? `It stays on ${app.port}: nothing restarts.` : 'A port alone goes in when the app starts.';
 }
 
 // --------------------------------------------------------------- New site
@@ -216,16 +273,40 @@ export const archiveUploaded =
   (id: string, name: string) =>
   (draft: NewAppDraft): NewAppDraft => ({ ...draft, upload: { id, name } });
 
+/**
+ * Why a health path or a deploy check path would be refused, or null: the panel's own check, so
+ * that a path it refuses never gets past the form. `emptyOk`: the deploy check's, where empty is none.
+ */
+export function healthPathProblem(path: string, emptyOk = false): string | null {
+  if (emptyOk && path === '') return null;
+  const parsed = appHealthPathSchema.safeParse(path);
+  if (parsed.success) return null;
+  const message = parsed.error.issues[0]?.message ?? 'not a path the panel can ask';
+  return `${message.charAt(0).toUpperCase()}${message.slice(1)}.`;
+}
+
 /** Whether a step may be left for the next one. */
 export function appStepOk(step: 'image' | 'settings' | 'routes', draft: NewAppDraft, devHostname: string): boolean {
   if (step === 'image') return draft.source === 'registry' ? IMAGE_REFERENCE_RE.test(draft.reference.trim()) && (draft.registryUser === '') === (draft.registryToken === '') : draft.upload !== null;
   if (step === 'settings') {
     const port = draft.port.trim();
-    return (port === '' || (/^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535)) && draft.env.every((v) => v.name !== '') && draft.mounts.every((m) => m.name !== '' && m.path !== '') && draft.healthPath.startsWith('/');
+    return (
+      (port === '' || (/^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535)) &&
+      draft.env.every((v) => v.name !== '') &&
+      draft.mounts.every((m) => m.name !== '' && m.path !== '') &&
+      healthPathProblem(draft.healthPath) === null
+    );
   }
   const routes = routesOf(draft, devHostname);
   return routes.length > 0 && routes.every((r) => r.host !== '');
 }
+
+/**
+ * The Review step's line for an app with mounts: it is made stopped, as its mounts are empty until
+ * they are filled, which only works once it exists.
+ */
+export const createdStoppedNote = (draft: NewAppDraft): string | null =>
+  draft.mounts.length > 0 ? 'Created stopped: fill its mounts, then Start it.' : null;
 
 /** The image as the API takes it. Null while there is no archive to send: none chosen yet, or one still going up. */
 const imageBody = (draft: NewAppDraft) =>
@@ -250,3 +331,23 @@ export function appBody(draft: NewAppDraft, devHostname: string) {
     health: { path: draft.healthPath },
   };
 }
+
+// --------------------------------------------------------------- Deploys
+
+/**
+ * Whether a deploy from the page (Deploy now, Update, Roll back, an uploaded image) asks about a
+ * backup first, and where its switch starts: on for a live app, off for a dev copy, as WordPress
+ * updates have it. Only an app set to ask each time is asked: the panel reads no answer as yes.
+ * Before the panel's own setting is read, it asks. Null: the setting decides, and the deploy goes
+ * at once.
+ */
+export function deployQuestion(site: Pick<SiteDetail, 'backupBeforeUpdates' | 'isLive'>, panelSetting: unknown): { backupFirst: boolean } | null {
+  return backupBeforeUpdatesOf(site.backupBeforeUpdates, panelSetting) === 'ask' ? { backupFirst: site.isLive } : null;
+}
+
+/** A deploy's body: with the answer where the app was asked, as it is where its setting decides. */
+export const deployBody = <T extends object>(body: T, backupFirst: boolean | undefined): T & { backupFirst?: boolean } =>
+  backupFirst === undefined ? body : { ...body, backupFirst };
+
+/** How far an upload has gone, in whole percent. */
+export const uploadPercent = (sent: number, total: number): number => Math.round((sent / Math.max(1, total)) * 100);

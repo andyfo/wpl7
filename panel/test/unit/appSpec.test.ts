@@ -2,7 +2,8 @@
  * A container app's container, as the panel makes it (services/appSpec.ts), and what the way in
  * reads off busybox wget (services/appProbe.ts).
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { ServerHandle } from '../../src/servers/registry.js';
 import {
   appLabels,
   buildAppContainerSpec,
@@ -11,10 +12,12 @@ import {
   envProblem,
   placeholdersIn,
   resolveEnv,
+  unkeptVolumes,
   usesMail,
   withImageVolumes,
 } from '../../src/services/appSpec.js';
-import { readWgetAnswer } from '../../src/services/appProbe.js';
+import { healthGate, readWgetAnswer } from '../../src/services/appProbe.js';
+import type { EphemeralOpts, RunResult } from '../../src/services/docker.js';
 import { mailLogin } from '../../src/services/mailAuth.js';
 import { makeTestConfig } from '../helpers.js';
 
@@ -91,8 +94,22 @@ describe('a container app’s paths', () => {
       ...current,
       { path: '/uploads', dir: 'uploads', fromImage: true },
     ]);
-    // The image dropped /var/lib/shop: what it holds stays where it is.
-    expect(withImageVolumes(current, [], [])).toEqual(current);
+    // The image dropped /var/lib/shop: what it holds stays where it is, no longer the image's.
+    expect(withImageVolumes(current, [], [])).toEqual([{ ...current[0], fromImage: false }, current[1]]);
+    // A path of the app's own that the image declares now is the image's.
+    expect(withImageVolumes(current, ['/var/lib/shop', '/cache'], [])).toEqual([current[0], { ...current[1], fromImage: true }]);
+    // As Docker reads a VOLUME: /data//x/ is /data/x.
+    expect(withImageVolumes([], ['/data//x/'], [])).toEqual([{ path: '/data/x', dir: 'data-x', fromImage: true }]);
+  });
+
+  it('names each VOLUME no data path or mount keeps, and why', () => {
+    const data = [{ path: '/var/lib/shop', dir: 'var-lib-shop', fromImage: true }];
+    expect(unkeptVolumes(['/var/lib/shop/', '/mnt/secrets', '/usr/share/shop/data', '/etc/shop', '/data dir'], data, ['/mnt/secrets'])).toEqual([
+      { path: '/usr/share/shop/data', why: "it is in /usr, which belongs to the container's own system." },
+      { path: '/etc/shop', why: "it is in /etc, which belongs to the container's own system." },
+      { path: '/data dir', why: 'it may hold only letters, digits and . _ @ + - /.' },
+    ]);
+    expect(unkeptVolumes([], data, [])).toEqual([]);
   });
 });
 
@@ -148,6 +165,51 @@ describe('a container app’s container', () => {
       stopTimeout: 90,
     });
     expect(spec.labels['traefik.enable']).toBe('false');
+  });
+});
+
+describe('the health gate', () => {
+  const app = { slug: 'shop', containerName: 'wp-shop', domains: JSON.stringify(['shop.example.com']) };
+  const gateSettings = { port: 8000, healthPath: '/healthz', healthHost: '', healthTimeoutSec: 30, deployCheckPath: '/ready?deep=1' };
+
+  /** A way in that answers as `answer` says: each question's URL, and how long wget is let wait (-T). */
+  function probe(answer: (url: string) => number) {
+    const asked: { url: string; wait: number }[] = [];
+    const runEphemeral = async (o: EphemeralOpts): Promise<RunResult> => {
+      const url = o.cmd.at(-1)!;
+      asked.push({ url, wait: Number(o.cmd[o.cmd.indexOf('-T') + 1]) });
+      const status = answer(url);
+      return { stdout: '', stderr: `  HTTP/1.1 ${status} ${status < 400 ? 'OK' : 'Error'}\n`, exitCode: status < 400 ? 0 : 1 };
+    };
+    const server = { name: 'local', docker: { containerImage: async () => 'traefik:v3', runEphemeral } } as unknown as Pick<ServerHandle, 'docker' | 'name'>;
+    return { server, asked };
+  }
+
+  it('asks the health path for at most 10 s a try, and the deploy check for the app’s whole timeout', async () => {
+    let now = Date.parse('2026-11-15T12:00:00Z');
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const first = probe(() => 200);
+      expect(await healthGate(first.server, app, gateSettings, { deployCheck: true, intervalMs: 0 })).toBeNull();
+      // The deploy check is one argument to wget, its query and all.
+      expect(first.asked).toEqual([
+        { url: 'http://wp-shop:8000/healthz', wait: 10 },
+        { url: 'http://wp-shop:8000/ready?deep=1', wait: 30 },
+      ]);
+
+      // The health path answers with half a second left: its last try gets that, the deploy check its own wait.
+      let tries = 0;
+      const late = probe((url) => {
+        if (!url.endsWith('/healthz')) return 200;
+        if (++tries > 1) return 200;
+        now += 29_500;
+        return 503;
+      });
+      expect(await healthGate(late.server, app, gateSettings, { deployCheck: true, intervalMs: 0 })).toBeNull();
+      expect(late.asked.map((a) => a.wait)).toEqual([10, 1, 30]);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });
 

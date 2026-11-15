@@ -86,6 +86,49 @@ export function Button({
   );
 }
 
+/**
+ * A button that picks a file to send, busy while it goes, with how far it has gone beside it: a
+ * busy Button draws its label clear under the spinner, so a percentage in the label is never seen.
+ * `percent`: null while nothing goes up.
+ */
+export function UploadButton({
+  accept,
+  onFile,
+  percent,
+  children,
+  small,
+  variant = 'secondary',
+}: {
+  accept: string;
+  onFile: (file: File) => void;
+  percent: number | null;
+  children: ReactNode;
+  small?: boolean;
+  variant?: 'primary' | 'secondary';
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <input
+        ref={input}
+        type="file"
+        className="hidden"
+        accept={accept}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          // Emptied, so the same file chosen again (after a failed upload, or a Cancel) is a change too.
+          e.target.value = '';
+          if (file) onFile(file);
+        }}
+      />
+      <Button small={small} variant={variant} busy={percent !== null} onClick={() => input.current?.click()}>
+        {children}
+      </Button>
+      {percent !== null && <span className={`${small ? 'text-xs' : 'text-sm'} tabular-nums text-neutral-500`}>{`Uploading ${percent} %`}</span>}
+    </>
+  );
+}
+
 const STATUS_COLORS: Record<string, string> = {
   running: 'bg-emerald-100 text-emerald-800',
   succeeded: 'bg-emerald-100 text-emerald-800',

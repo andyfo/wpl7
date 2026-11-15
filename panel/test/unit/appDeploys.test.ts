@@ -1,9 +1,11 @@
 /**
  * A container app's deploys and recreates past their happy path, in the fake world: what Read only
  * reads of a failed one's log, the images that run after the app's reference has moved to another
- * repository, a new port or user, the order its folders change hands in, the images it leaves
- * behind, a step after the swap that fails, the gap, a hold that cannot be written, an upload whose
- * job was canceled before it ran, and one a create's job names out of the uploads folder.
+ * repository, a new port or user, a port staged for the next image and the recreates that take it,
+ * the order its folders change hands in, the images it leaves behind, the image VOLUMEs it keeps,
+ * the ones it cannot and one a mount gave back, a step after the swap that fails, the gap, a hold
+ * that cannot be written, an upload whose job was canceled before it ran, and one a create's job
+ * names out of the uploads folder.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,6 +16,7 @@ import { appDeploys, appSettings, jobLogs, jobs, sites, type SiteRow } from '../
 import type { ExecPort } from '../../src/lib/exec.js';
 import { TarWriter } from '../../src/lib/tarWriter.js';
 import { appRoutesFileName } from '../../src/services/appRoutes.js';
+import { appPaths } from '../../src/services/appSpec.js';
 import type { SiteContainerSpec } from '../../src/services/docker.js';
 import { TRAEFIK_CONTAINER } from '../../src/services/stack.js';
 import { fakeExecOk, makeApp, makeWorld, waitFor, type TestWorld } from '../helpers.js';
@@ -76,8 +79,13 @@ async function createShop(w: TestWorld, extra: Record<string, unknown> = {}) {
 }
 
 const deploy = async (w: TestWorld, body: { deployId?: number } = {}) => finish(w, (await w.deps.apps.deploy('shop', body)).id);
-const reconcile = (w: TestWorld, site: SiteRow, extra: { appPort?: number; appRunAs?: string } = {}) =>
+/** A recreate no one asked for (a sweep's, a CPU cap's), or a settings change's with `appRunAs`. */
+const reconcile = (w: TestWorld, site: SiteRow, extra: { appRunAs?: string } = {}) =>
   finish(w, w.worker.enqueue('site.reconcile', { siteId: site.id, ...extra }, { id: site.id, slug: 'shop', serverId: 1 }).id);
+/** Recreate container on the app's page: someone asked for it. */
+const recreate = (w: TestWorld) => finish(w, w.deps.sites.reconcile('shop').id);
+/** What PATCH port does to an app whose container runs: the port waits on its row for the next deploy or recreate. */
+const stage = (w: TestWorld, site: SiteRow, port: number) => w.db.update(appSettings).set({ nextPort: port }).where(eq(appSettings.siteId, site.id)).run();
 const creates = (w: TestWorld) => w.docker.calls.filter((c) => c.method === 'createSiteContainer').map((c) => c.args[0] as SiteContainerSpec);
 const pulls = (w: TestWorld) => w.docker.calls.filter((c) => c.method === 'pullImage').map((c) => c.args[0] as string);
 const removed = (w: TestWorld) => w.docker.calls.filter((c) => c.method === 'removeImage').map((c) => c.args[0] as string);
@@ -104,6 +112,18 @@ function mailbox(w: TestWorld): string[] {
     return true;
   };
   return sent;
+}
+
+/** As Docker answers the removal of an image with two names by its id. */
+function refuseIdOfTwoNames(w: TestWorld): void {
+  const remove = w.docker.removeImage.bind(w.docker);
+  w.docker.removeImage = async (ref) => {
+    const image = (await w.docker.listImages()).find((i) => i.id === ref);
+    if (image && image.tags.length > 1) {
+      throw Object.assign(new Error(`conflict: unable to delete ${ref.slice(7, 19)} (must be forced) - image is referenced in multiple repositories`), { statusCode: 409 });
+    }
+    return remove(ref);
+  };
 }
 
 /** A `docker save` archive of one image that names itself `names`. */
@@ -221,7 +241,7 @@ describe('after the app’s reference names another repository', () => {
 });
 
 describe('a new port or user', () => {
-  it('goes into the new container, and into the app’s row once that has passed, routes and all', async () => {
+  it('a staged port goes into the new container of Recreate container, and into the app’s row once that has passed, routes and all', async () => {
     const w = await world();
     const site = await createShop(w);
     const asked: { port: number; row: number }[] = [];
@@ -238,32 +258,55 @@ describe('a new port or user', () => {
       await release(s);
       atRelease.push(/url: "http:\/\/wp-shop:\d+"/.exec(fs.readFileSync(routesFile(w), 'utf8'))?.[0] ?? 'no url');
     };
-    const done = await reconcile(w, site, { appPort: 9000, appRunAs: '1000:1000' });
+    stage(w, site, 9000);
+    const done = await recreate(w);
     expect(done.status, done.error ?? '').toBe('succeeded');
     // The health gate asked the new port while the row still said the old one.
     expect(asked[0]).toEqual({ port: 9000, row: 8000 });
-    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, runAs: '1000:1000' });
-    expect(creates(w).at(-1)!.user).toBe('1000:1000');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 0 });
     // Released onto the new port: never onto the old one, which nothing listens on any more.
     expect(atRelease).toEqual(['url: "http://wp-shop:9000"']);
     await w.deps.appRoutes.idle();
     expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:9000"');
+  });
+
+  it('a user goes into the new container of the recreate its change queued, and into the row once that has passed; a staged port waits', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    const asked: number[] = [];
+    w.docker.appHttp = (req) => {
+      asked.push(req.port);
+      return req.port === 8000 ? 200 : null;
+    };
+    stage(w, site, 9000);
+    const done = await reconcile(w, site, { appRunAs: '1000:1000' });
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect([...new Set(asked)]).toEqual([8000]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000, runAs: '1000:1000' });
+    expect(creates(w).at(-1)!.user).toBe('1000:1000');
     // The row's old user is what showed the folders had to change hands: once the old container stopped.
     expect(w.chowns).toEqual([{ owner: '1000:1000', old: 'exited' }]);
   });
 
-  it('changes nothing when the new container does not pass', async () => {
+  it('changes nothing when the new container does not pass, and the port stays staged', async () => {
     const w = await world();
     const site = await createShop(w);
     w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
     w.docker.appHttp = (req) => (req.port === 8000 ? 200 : null);
-    const done = await reconcile(w, site, { appPort: 9000, appRunAs: '1000:1000' });
+    stage(w, site, 9000);
+    // Recreate container asks on 9000, which nothing answers.
+    const done = await recreate(w);
     expect(done.status).toBe('failed');
-    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, runAs: '' });
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000 });
     expect(w.docker.containers.get('wp-shop')).toBe('running');
     expect(w.docker.containers.has('wp-shop.previous')).toBe(false);
     await w.deps.appRoutes.idle();
     expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:8000"');
+    // A new user's recreate that does not pass saves no user, and hands the folders back.
+    w.docker.appHttp = () => 500;
+    expect((await reconcile(w, site, { appRunAs: '1000:1000' })).status).toBe('failed');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000, runAs: '' });
     expect(w.chowns).toEqual([
       { owner: '1000:1000', old: 'exited' },
       { owner: '0:0', old: 'gone' },
@@ -277,6 +320,118 @@ describe('a new port or user', () => {
     expect(done.status).toBe('failed');
     expect(done.error).toMatch(/^Invalid job payload/);
     expect(settingsOf(w, site.id).runAs).toBe('');
+  });
+});
+
+describe('a port staged for the next container', () => {
+  /** Image 1 answers on 8000 and image 2 on 9000, nothing else; the ports asked are noted. */
+  function listen(w: TestWorld): number[] {
+    const on = new Map([
+      ['sha256:img1', 8000],
+      ['sha256:img2', 9000],
+    ]);
+    const asked: number[] = [];
+    w.docker.appHttp = (req) => {
+      asked.push(req.port);
+      return on.get(w.docker.imageByContainer.get(req.container) ?? '') === req.port ? 200 : null;
+    };
+    return asked;
+  }
+
+  it('goes in with a new image that listens on it, behind the one gate of its deploy', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    const asked = listen(w);
+    push(w, 2);
+    // The image first: asked on the port that runs, which it does not listen on.
+    expect((await deploy(w)).status).toBe('failed');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, digest: digest(1) });
+    // With its port staged, the deploy asks it there, and saves the port with the rest.
+    stage(w, site, 9000);
+    asked.length = 0;
+    const made = creates(w).length;
+    const done = await deploy(w);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect([...new Set(asked)]).toEqual([9000]);
+    expect(creates(w)).toHaveLength(made + 1);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 0, digest: digest(2) });
+    await w.deps.appRoutes.idle();
+    expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:9000"');
+  });
+
+  it('fails Recreate container on an image that does not listen on it, and stays staged', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    listen(w);
+    stage(w, site, 9000);
+    // Nothing new under the tag: nothing goes in, and the log says what the port waits for.
+    const same = await deploy(w);
+    expect(JSON.parse(same.result!)).toMatchObject({ unchanged: true });
+    expect(jobLog(w, same.id)).toContain('Port 9000 goes in with the next new image, or with Recreate container.');
+    const done = await recreate(w);
+    expect(done.status).toBe('failed');
+    expect(done.error).toMatch(/^\/ did not answer 2xx within 1 s/);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000 });
+    expect(w.docker.containers.get('wp-shop')).toBe('running');
+    await w.deps.appRoutes.idle();
+    expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:8000"');
+  });
+
+  it('is taken by Recreate container alone: a new database password, a sweep’s recreate and a settings change’s keep the port that runs', async () => {
+    const w = await world();
+    const withDb = { database: true, env: [{ name: 'DATABASE_URL', value: 'mysql://{{db.user}}:{{db.password}}@{{db.host}}/{{db.name}}' }] };
+    const site = await createShop(w, withDb);
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    // Image 1 listens on 8000 only: 9000 is staged for an image that is not out yet.
+    const asked = listen(w);
+    stage(w, site, 9000);
+    const { app, headers } = await authed(w);
+    const queued = [
+      async () => {
+        const res = await app.inject({ method: 'PATCH', url: '/api/sites/shop/app', headers, payload: { env: [...withDb.env, { name: 'MODE', value: 'live' }] } });
+        expect(res.statusCode).toBe(202);
+        return res.json().job.id as number;
+      },
+      async () => w.worker.enqueue('database.password', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 }).id,
+      async () => w.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 }).id,
+    ];
+    for (const queue of queued) {
+      asked.length = 0;
+      const id = await queue();
+      const done = await finish(w, id);
+      expect(done.status, done.error ?? '').toBe('succeeded');
+      expect([...new Set(asked)]).toEqual([8000]);
+      expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000 });
+      expect(jobLog(w, id)).toContain('Port 9000 goes in with the next new image, or with Recreate container.');
+    }
+    expect(creates(w).at(-1)!.env).toMatchObject({ MODE: 'live' });
+
+    // Someone asks for it, once the app listens on 9000: in it goes.
+    w.docker.appHttp = (req) => (req.port === 9000 ? 200 : null);
+    const done = await recreate(w);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 0 });
+    await w.deps.appRoutes.idle();
+    expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:9000"');
+  });
+
+  it('is the next container’s when another one is staged while a deploy runs', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    stage(w, site, 9000);
+    push(w, 2);
+    let again = false;
+    w.docker.appHttp = (req) => {
+      if (req.port === 9000 && !again) {
+        again = true;
+        stage(w, site, 9100);
+      }
+      return 200;
+    };
+    expect((await deploy(w)).status).toBe('succeeded');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 9100 });
   });
 });
 
@@ -314,8 +469,8 @@ describe('the images an app leaves behind', () => {
       push(w, n, { ref });
       expect((await deploy(w)).status).toBe('succeeded');
     }
-    // What runs and the two before it stay.
-    expect(removed(w)).toEqual(['sha256:img1']);
+    // What runs and the two before it stay. By the name Docker lists, which it reads as the long one.
+    expect(removed(w)).toEqual([`shop@${digest(1)}`]);
   });
 
   it('are an earlier reference’s too, while the app runs and when it goes', async () => {
@@ -328,10 +483,51 @@ describe('the images an app leaves behind', () => {
       push(w, n, { ref: NEW_REF });
       expect((await deploy(w)).status).toBe('succeeded');
     }
-    expect(removed(w)).toEqual(['sha256:img1', 'sha256:img2']);
+    expect(removed(w)).toEqual([`${REPO}@${digest(1)}`, `${REPO}@${digest(2)}`]);
     const gone = await finish(w, w.deps.sites.delete('shop', false).id);
     expect(gone.status, gone.error ?? '').toBe('succeeded');
-    expect(removed(w).slice(2).sort()).toEqual(['sha256:img5', 'sha256:img6', 'sha256:img7']);
+    expect(removed(w).slice(2).sort()).toEqual([5, 6, 7].map((n) => `${NEW_REPO}@${digest(n)}`));
+  });
+
+  it('go by each of their names in the app’s repositories, which Docker needs once there are two, and keep another’s', async () => {
+    const w = await world();
+    refuseIdOfTwoNames(w);
+    const site = await createShop(w);
+    // Image 1, deployed again from a second repository of the app's, and named in one that is not its.
+    push(w, 1, { ref: NEW_REF });
+    changeReference(w, site, NEW_REF);
+    expect((await deploy(w)).status).toBe('succeeded');
+    await w.docker.tagImage('sha256:img1', 'ghcr.io/example/other:kept');
+    const later: number[] = [];
+    for (const n of [5, 6, 7]) {
+      push(w, n, { ref: NEW_REF });
+      const done = await deploy(w);
+      expect(done.status).toBe('succeeded');
+      later.push(done.id);
+    }
+    expect(removed(w)).toEqual([`${REPO}@${digest(1)}`, `${NEW_REPO}@${digest(1)}`]);
+    expect(await w.docker.imageId('ghcr.io/example/other:kept')).toBe('sha256:img1');
+    for (const id of later) expect(jobLog(w, id)).not.toContain('Could not remove');
+  });
+
+  it('go by both names of a build uploaded twice', async () => {
+    const w = await world();
+    refuseIdOfTwoNames(w);
+    fs.mkdirSync(w.deps.apps.uploadDir(), { recursive: true });
+    const put = async (id: string) => fs.writeFileSync(w.deps.apps.uploadPath(id), await archive(['shop:1']));
+    // The same build twice, then three others.
+    w.docker.loadIds = ['sha256:same', 'sha256:same', 'sha256:up3', 'sha256:up4', 'sha256:up5'];
+    await put('upload-same-build-0001');
+    const made = w.deps.sites.create(parsed({ title: 'Shop', slug: 'shop', app: 'container', image: { uploadId: 'upload-same-build-0001' }, port: 3000 }));
+    expect((await finish(w, made.job.id)).status).toBe('succeeded');
+    for (const id of ['upload-same-build-0002', 'upload-other-build-0003', 'upload-other-build-0004', 'upload-other-build-0005']) {
+      await put(id);
+      const done = await finish(w, (await w.deps.apps.deployUpload('shop', id)).id);
+      expect(done.status, done.error ?? '').toBe('succeeded');
+      expect(jobLog(w, done.id)).not.toContain('Could not remove');
+    }
+    expect(removed(w)).toEqual(['wpl7-app-shop:uupload-same-build-0001', 'wpl7-app-shop:uupload-same-build-0002']);
+    expect(await w.docker.imageExists('sha256:same')).toBe(false);
   });
 
   it('are a failed deploy’s at once, once the old container is back', async () => {
@@ -347,10 +543,74 @@ describe('the images an app leaves behind', () => {
       return removeImage(ref);
     };
     expect((await deploy(w)).status).toBe('failed');
-    expect(removed(w)).toEqual(['sha256:img2']);
+    expect(removed(w)).toEqual([`${REPO}@${digest(2)}`]);
     expect(backFirst).toEqual([true]);
     expect(w.docker.images.has(`${REPO}@${digest(2)}`)).toBe(false);
     expect(w.docker.images.has(`${REPO}@${digest(1)}`)).toBe(true);
+  });
+});
+
+describe('an image’s VOLUMEs', () => {
+  it('that the panel does not keep are named in the create’s log and each deploy’s; the kept ones say whether this image declares them', async () => {
+    const w = await world();
+    w.docker.publish(REF, digest(1), { imageId: 'sha256:img1', config: { exposedPorts: ['8000/tcp'], volumes: ['/var/lib/shop', '/usr/share/shop/data'] } });
+    const { site, job } = w.deps.sites.create(parsed({ title: 'Shop', slug: 'shop', app: 'container', image: { reference: REF }, dataPaths: ['/srv/cache'] }));
+    const created = await finish(w, job.id);
+    expect(created.status, created.error ?? '').toBe('succeeded');
+    const warnings = (jobId: number) => w.db.select().from(jobLogs).where(eq(jobLogs.jobId, jobId)).all().filter((l) => l.level === 'warn').map((l) => l.message);
+    const unkept = "The image's VOLUME /usr/share/shop/data is not kept: it is in /usr, which belongs to the container's own system. What the app writes there is lost at each deploy.";
+    expect(warnings(created.id)).toEqual([unkept]);
+    expect(JSON.parse(settingsOf(w, site.id).dataPaths)).toEqual([
+      { path: '/srv/cache', dir: 'srv-cache', fromImage: false },
+      { path: '/var/lib/shop', dir: 'var-lib-shop', fromImage: true },
+    ]);
+    // The next image declares /srv/cache and no longer /var/lib/shop: both stay, each marked as it is now.
+    w.docker.publish(REF, digest(2), { imageId: 'sha256:img2', config: { exposedPorts: ['8000/tcp'], volumes: ['/srv/cache/', '/usr/share/shop/data'] } });
+    const deployed = await deploy(w);
+    expect(deployed.status, deployed.error ?? '').toBe('succeeded');
+    expect(warnings(deployed.id)).toEqual([unkept]);
+    expect(JSON.parse(settingsOf(w, site.id).dataPaths)).toEqual([
+      { path: '/srv/cache', dir: 'srv-cache', fromImage: true },
+      { path: '/var/lib/shop', dir: 'var-lib-shop', fromImage: false },
+    ]);
+  });
+
+  it('that a mount took the place of get their folder back once the mount is taken off, not an anonymous volume', async () => {
+    const w = await world();
+    w.docker.publish(REF, digest(1), { imageId: 'sha256:img1', config: { exposedPorts: ['8000/tcp'], volumes: ['/var/lib/shop'] } });
+    const site = await createShop(w);
+    const { app, headers } = await authed(w);
+    const patch = async (payload: Record<string, unknown>) => {
+      const res = await app.inject({ method: 'PATCH', url: '/api/sites/shop/app', headers, payload });
+      expect(res.statusCode, res.body).toBe(202);
+      const done = await finish(w, res.json().job.id);
+      expect(done.status, done.error ?? '').toBe('succeeded');
+      return done;
+    };
+    const root = appPaths(w.config, 'shop').root;
+    const kept = `${root}/data/var-lib-shop:/var/lib/shop`;
+    expect(creates(w).at(-1)!.binds).toEqual([kept]);
+    // A mount takes the VOLUME's path: its data path goes.
+    await patch({ dataPaths: [], mounts: [{ name: 'seed', path: '/var/lib/shop', writable: true }] });
+    expect(creates(w).at(-1)!.binds).toEqual([`${root}/mounts/seed:/var/lib/shop`]);
+    expect(JSON.parse(settingsOf(w, site.id).dataPaths)).toEqual([]);
+    // The mount taken off, the VOLUME is the image's again: its folder is back, in the container and on the row.
+    const off = await patch({ mounts: [] });
+    expect(creates(w).at(-1)!.binds).toEqual([kept]);
+    expect(JSON.parse(settingsOf(w, site.id).dataPaths)).toEqual([{ path: '/var/lib/shop', dir: 'var-lib-shop', fromImage: true }]);
+    expect(jobLog(w, off.id)).toContain("Recreated: the image's VOLUME /var/lib/shop kept in data/var-lib-shop.");
+    expect(w.db.select().from(jobLogs).where(eq(jobLogs.jobId, off.id)).all().filter((l) => l.level === 'warn')).toEqual([]);
+  });
+
+  it('that the panel cannot keep are named in a recreate’s log too', async () => {
+    const w = await world();
+    w.docker.publish(REF, digest(1), { imageId: 'sha256:img1', config: { exposedPorts: ['8000/tcp'], volumes: ['/usr/share/shop/data'] } });
+    const site = await createShop(w);
+    const done = await reconcile(w, site);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(w.db.select().from(jobLogs).where(eq(jobLogs.jobId, done.id)).all().filter((l) => l.level === 'warn').map((l) => l.message)).toEqual([
+      "The image's VOLUME /usr/share/shop/data is not kept: it is in /usr, which belongs to the container's own system. What the app writes there is lost at each deploy.",
+    ]);
   });
 });
 
@@ -423,12 +683,13 @@ describe('a hold that cannot be written', () => {
     const failedDeploy = await deploy(w);
     expect(failedDeploy.error).toMatch(/^Could not hold the app's routes/);
     expect(deploysOf(w, site.id).at(-1)).toMatchObject({ result: 'failed', error: expect.stringMatching(/^Could not hold/) });
-    const failedRecreate = await reconcile(w, site, { appPort: 9000 });
+    stage(w, site, 9000);
+    const failedRecreate = await reconcile(w, site);
     expect(failedRecreate.error).toMatch(/^Could not hold the app's routes/);
     expect(w.docker.calls.filter((c) => c.method === 'renameContainer')).toEqual([]);
     expect(released).toBe(0);
     expect(w.docker.containers.get('wp-shop')).toBe('running');
-    expect(settingsOf(w, site.id)).toMatchObject({ digest: digest(1), port: 8000 });
+    expect(settingsOf(w, site.id)).toMatchObject({ digest: digest(1), port: 8000, nextPort: 9000 });
   });
 });
 

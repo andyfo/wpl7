@@ -319,11 +319,11 @@ export async function siteShouldRun(
  * Remove a site's container for good, with the old one a change may have left aside
  * (replaceContainer): for a site that leaves a server, or a leftover where one arrives. Left
  * behind, that old container would come back as the site's at its next change, and on a slug
- * used again, as another site's.
+ * used again, as another site's. `volumes` for a container app's (DockerPort removeContainer).
  */
-export async function removeSiteContainers(docker: Pick<DockerPort, 'removeContainer'>, containerName: string): Promise<void> {
-  await docker.removeContainer(asideContainerName(containerName));
-  await docker.removeContainer(containerName);
+export async function removeSiteContainers(docker: Pick<DockerPort, 'removeContainer'>, containerName: string, opts?: { volumes?: boolean }): Promise<void> {
+  await docker.removeContainer(asideContainerName(containerName), opts);
+  await docker.removeContainer(containerName, opts);
 }
 
 /** A site, as much of it as the mount helpers need. */

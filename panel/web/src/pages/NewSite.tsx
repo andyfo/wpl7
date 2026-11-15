@@ -11,7 +11,7 @@ import { LocaleSelect } from '../components/LocaleSelect';
 import { localeName } from '../lib/format';
 import { draftOf, keepDraft, type NewAppDraft, type NewSiteDraft } from '../lib/siteCreation';
 import { AppImageStep, AppRoutesStep, AppSettingsStep, appReviewRows } from '../components/app/NewAppSteps';
-import { appBody, appStepOk, emptyAppDraft } from '../lib/appForm';
+import { appBody, appStepOk, createdStoppedNote, emptyAppDraft } from '../lib/appForm';
 
 type StepId = 'name' | 'wordpress' | 'plugins' | 'php' | 'image' | 'settings' | 'routes' | 'review';
 
@@ -145,6 +145,7 @@ export function NewSite() {
   };
   // A container app's is null while it has no archive to send: none chosen yet, or one still going up.
   const appPart = app === 'container' ? appBody(container, devHostname) : null;
+  const appStopped = createdStoppedNote(container);
   const body =
     app === 'container'
       ? appPart && { title: common.title, slug: common.slug, serverId: common.serverId, ...appPart }
@@ -405,6 +406,7 @@ export function NewSite() {
             {appReviewRows(container, devHostname, `wp_${slug.replace(/-/g, '_')}`).map(([label, value]) => (
               <ReviewRow key={label} label={label} value={value} />
             ))}
+            {appStopped && <p className="text-neutral-600">{appStopped}</p>}
             <ErrorNote error={run.error} />
           </div>
         )}
