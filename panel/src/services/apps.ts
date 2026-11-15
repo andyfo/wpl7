@@ -6,9 +6,12 @@
  *
  * - Its hosts are the ones its routes name. A host no site holds becomes the app's own, and goes
  *   into its `domains` with its dev hostname, which every app has; a host another site holds is
- *   borrowed, a path of it only, never in `domains` (services/appRoutes.ts hostRefusal).
+ *   borrowed, a path of it only, never in `domains` (services/appRoutes.ts hostRefusal), and each
+ *   new path of it needs Full (newClaims).
  * - Secrets (a secret env value, the registry token, the deploy token) are written here and read
- *   only by the jobs, from the rows. No answer, job payload or log carries one.
+ *   only by the jobs, from the rows. No answer, job payload or log carries one. A login is for one
+ *   registry: a reference on another drops it (patch). What a failed deploy's container printed
+ *   goes only to a viewer who sees commands (detail).
  */
 // @docs sites/container
 import path from 'node:path';
@@ -39,17 +42,18 @@ import type {
   SiteCreateBody,
 } from '../../shared/schemas.js';
 import { describeRoute } from '../../shared/apps.js';
+import { UPLOAD_ID_RE } from '../../shared/siteFilePath.js';
 import type { AppDeployDto, AppDto } from '../../shared/types.js';
 import { backupBeforeUpdatesOf } from '../../shared/updateBackups.js';
-import { badRequest, conflict, notFound } from '../lib/errors.js';
+import { badRequest, conflict, jobConflict, notFound } from '../lib/errors.js';
 import { generateSecret, sameSecret, sha256Hex } from '../lib/crypto.js';
 import { containerName, dbIdentifier, isValidSlug, slugify } from '../lib/slug.js';
 import { containerApps, containerAppOnly, hostedSites, isContainerApp } from '../lib/siteKind.js';
 import type { CoreServices } from './index.js';
 import { assertDomainsFree } from './domainGuard.js';
-import { appDomains, hostOwners, hostRefusal, plainHttpRefusal } from './appRoutes.js';
-import { appOwner, appPaths, containerPathProblem, dataDirFor, envProblem, parseDataPaths, parseExtraHosts, type DataPath } from './appSpec.js';
-import { registryAuthFor, resolveDigest } from './appImages.js';
+import { appDomains, appsRoutingOn, hostOwners, hostRefusal, plainHttpRefusal, routedOnRefusal } from './appRoutes.js';
+import { appOwner, appPaths, containerPathProblem, dataDirFor, envProblem, parseDataPaths, parseExtraHosts, runningReference, type DataPath } from './appSpec.js';
+import { registryAuthFor, registryOf, repositoryKey, resolveDigest } from './appImages.js';
 import { queueReconcile, type HardeningSweep } from './siteHardening.js';
 import { containerOfAside } from './siteSpec.js';
 
@@ -115,7 +119,12 @@ export class AppsService {
     return row;
   }
 
-  detail(site: SiteRow): AppDto {
+  /**
+   * `logTails`: the last lines a failed deploy's container printed, which can hold whatever the app
+   * knows (a DATABASE_URL with its password). Only for a viewer who sees commands (lib/dto.ts
+   * seesCommands), as the app's log is: left out, none.
+   */
+  detail(site: SiteRow, opts: { logTails?: boolean } = {}): AppDto {
     const settings = this.settingsOf(site.id);
     const owners = hostOwners(this.db);
     const routes = this.db.select().from(appRoutes).where(eq(appRoutes.siteId, site.id)).orderBy(asc(appRoutes.position)).all();
@@ -157,23 +166,49 @@ export class AppsService {
       health: { path: settings.healthPath, host: settings.healthHost, deployCheckPath: settings.deployCheckPath, timeoutSec: settings.healthTimeoutSec },
       updates: { mode: settings.updateMode, checkMinutes: settings.checkMinutes, checkedAt: settings.checkedAt, checkError: settings.checkError },
       deployToken: { set: settings.deployTokenHash !== null, setAt: settings.deployTokenSetAt },
+      pending: this.pendingOf(site.id),
       routesState: routes$.state,
       routesProblem: routes$.problem,
-      deploys: this.deploys(site, settings, RECENT_DEPLOYS),
+      routeErrors: this.s.security.appRouteRejections(site.slug),
+      deploys: this.deploys(site, { settings, limit: RECENT_DEPLOYS, logTails: opts.logTails }),
     };
   }
 
-  /** Newest first. */
-  deploys(site: Pick<SiteRow, 'id'>, settings?: AppSettingsRow, limit = 50): AppDeployDto[] {
-    const s = settings ?? this.settingsOf(site.id);
+  /** Newest first. A failed one's last lines only with `logTails` (detail). */
+  deploys(site: Pick<SiteRow, 'id'>, opts: { settings?: AppSettingsRow; limit?: number; logTails?: boolean } = {}): AppDeployDto[] {
+    const s = opts.settings ?? this.settingsOf(site.id);
     const rows = this.db
       .select()
       .from(appDeploys)
       .where(eq(appDeploys.siteId, site.id))
       .orderBy(desc(appDeploys.startedAt), desc(appDeploys.id))
-      .limit(limit)
+      .limit(opts.limit ?? 50)
       .all();
-    return rows.map((d) => deployToDto(d, s));
+    return rows.map((d) => deployToDto(d, s, opts.logTails === true));
+  }
+
+  /**
+   * A port or a user the patch handed to the app's site.reconcile, which saves them once the new
+   * container has passed: what the page shows as going in until then.
+   */
+  private pendingOf(siteId: number): AppDto['pending'] {
+    const job = this.db
+      .select({ payload: jobsTable.payload })
+      .from(jobsTable)
+      .where(and(eq(jobsTable.siteId, siteId), eq(jobsTable.type, 'site.reconcile'), inArray(jobsTable.status, ['queued', 'running'])))
+      .orderBy(desc(jobsTable.id))
+      .get();
+    if (!job) return null;
+    let payload: { appPort?: unknown; appRunAs?: unknown };
+    try {
+      payload = JSON.parse(job.payload) as typeof payload;
+    } catch {
+      return null;
+    }
+    const pending: NonNullable<AppDto['pending']> = {};
+    if (typeof payload.appPort === 'number') pending.port = payload.appPort;
+    if (typeof payload.appRunAs === 'string') pending.runAs = payload.appRunAs;
+    return pending.port !== undefined || pending.runAs !== undefined ? pending : null;
   }
 
   // ------------------------------------------------------------------ checks
@@ -214,20 +249,28 @@ export class AppsService {
       if (refusal) throw conflict(refusal);
       const other = taken.get(key);
       if (other) throw conflict(`${describeRoute(r)} is a route of "${other}" already.`);
-      if (owner && owner.id !== app.id && r.host !== app.devHostname) borrowed.set(r.host, owner.slug);
-      else own.add(r.host);
+      if (owner && owner.id !== app.id && r.host !== app.devHostname) {
+        // Every path from / is the whole site: that is its own, not a path to lend.
+        if (r.match === 'prefix' && r.path === '/') throw conflict(`${r.host} belongs to "${owner.slug}": a route there takes a path of it, not all of it.`);
+        borrowed.set(r.host, owner.slug);
+      } else own.add(r.host);
       routes.push({ ...(r.id !== undefined ? { id: r.id } : {}), host: r.host, match: r.match, path: r.path, scheme: r.scheme, enabled: r.enabled });
     }
     return { routes, own, borrowed };
   }
 
   /**
-   * The hosts of another site a route list claims that the app does not route on yet: a new claim
-   * needs Full (routes/apps.ts), as a domain with another site's DKIM key does.
+   * The hosts of another site a route list takes something new of: a new claim needs Full
+   * (routes/apps.ts), as a domain with another site's DKIM key does. Each route there counts: one
+   * the app has already, by match and path, with a scheme that covers it (the same, or both), takes
+   * nothing new. Switching it on or off, or narrowing its scheme, is the app's own business; another
+   * path, or another scheme, is not.
    */
   newClaims(app: { id: number | null }, plan: RoutePlan): string[] {
-    const have = new Set(app.id === null ? [] : this.db.select({ host: appRoutes.host }).from(appRoutes).where(eq(appRoutes.siteId, app.id)).all().map((r) => r.host));
-    return [...plan.borrowed.keys()].filter((h) => !have.has(h));
+    const have = app.id === null ? [] : this.db.select().from(appRoutes).where(eq(appRoutes.siteId, app.id)).all();
+    const covered = (r: PlannedRoute) =>
+      have.some((h) => h.host === r.host && h.match === r.match && h.path === r.path && (h.scheme === r.scheme || h.scheme === 'both'));
+    return [...new Set(plan.routes.filter((r) => plan.borrowed.has(r.host) && !covered(r)).map((r) => r.host))];
   }
 
   /** Refused, before anything is written, on a server whose Traefik cannot answer plain http for an app yet. */
@@ -404,6 +447,8 @@ export class AppsService {
         return { site, job };
       });
     } catch (err) {
+      // No job takes the upload now: another create or a deploy may.
+      if (upload) this.releaseUpload(upload);
       if (err instanceof Error && /UNIQUE constraint failed: sites\.slug/.test(err.message)) throw conflict(`Site name "${slug}" is already taken`);
       throw err;
     }
@@ -451,20 +496,38 @@ export class AppsService {
    * Save what the body names. A change the container is made with (port, environment, mounts, data
    * paths, host aliases, hardening) is put in force by recreating it, behind the health gate: the
    * job is returned. The rest takes effect as it is saved.
+   *
+   * A new port or user of an app that has a container goes to that job instead, which saves it once
+   * the new container has passed: saved now, the routes would send to a port nothing listens on
+   * yet, and the recreate would not see that its folders need another owner. Until it has, a change
+   * is from the one that job carries: the saved one sent back is a change, which waits for that job
+   * (one job per site), and the pending one sent again is none.
    */
   patch(slug: string, body: AppPatchBody): { job: JobRow | null } {
     const { site, settings } = this.bySlug(slug);
     this.changeable(site);
     const now = Date.now();
     const set: Partial<typeof appSettings.$inferInsert> = { updatedAt: now };
+    // A container that was never made (a create that failed) has nothing to put a change into.
+    const hasContainer = site.status === 'running' || site.status === 'stopped';
+    const withContainer: { appPort?: number; appRunAs?: string } = {};
+    const pending = this.pendingOf(site.id);
+    const port = pending?.port ?? settings.port;
+    const runAs = pending?.runAs ?? settings.runAs;
     let recreate = false;
     if (body.reference !== undefined) {
       if (settings.source !== 'registry') throw conflict(`"${slug}" runs an uploaded image: it has no reference to watch.`);
       set.reference = body.reference;
       set.pendingDigest = '';
+      // A login is for its own registry: no other one is ever sent it.
+      if (registryOf(body.reference) !== registryOf(settings.reference)) {
+        set.registryUser = '';
+        set.registryToken = '';
+      }
     }
-    if (body.port !== undefined && body.port !== settings.port) {
-      set.port = body.port;
+    if (body.port !== undefined && body.port !== port) {
+      if (hasContainer) withContainer.appPort = body.port;
+      else set.port = body.port;
       recreate = true;
     }
     const currentPaths = parseDataPaths(settings.dataPaths);
@@ -476,6 +539,12 @@ export class AppsService {
     const mountPaths = (dataPaths ?? currentPaths).map((d) => d.path);
     const mounts = body.mounts !== undefined ? this.planMounts(body.mounts, mountPaths) : null;
     if (mounts) recreate = true;
+    if (dataPaths && !mounts) {
+      // The mounts it keeps hold their paths: a data path is never one of them.
+      const kept = this.db.select({ path: appMounts.containerPath }).from(appMounts).where(eq(appMounts.siteId, site.id)).all();
+      const twice = kept.find((m) => dataPaths.some((d) => d.path === m.path));
+      if (twice) throw badRequest(`${twice.path} is mounted twice.`);
+    }
     if (body.extraHosts !== undefined) {
       set.extraHosts = JSON.stringify(this.planExtraHosts(body.extraHosts));
       recreate = true;
@@ -486,7 +555,10 @@ export class AppsService {
     if (h) {
       if (h.dropAllCaps !== undefined) set.dropAllCaps = h.dropAllCaps ? 1 : 0;
       if (h.readOnlyRoot !== undefined) set.readOnlyRoot = h.readOnlyRoot ? 1 : 0;
-      if (h.runAs !== undefined) set.runAs = h.runAs;
+      if (h.runAs !== undefined && h.runAs !== runAs) {
+        if (hasContainer) withContainer.appRunAs = h.runAs;
+        else set.runAs = h.runAs;
+      }
       if (h.stopGraceSec !== undefined) set.stopGraceSec = h.stopGraceSec;
       recreate = true;
     }
@@ -509,17 +581,26 @@ export class AppsService {
       this.db.update(appSettings).set(set).where(eq(appSettings.siteId, site.id)).run();
       if (env) this.writeEnv(site.id, env);
       if (mounts) this.writeMounts(site.id, mounts);
-      // A container that was never made (a create that failed) has nothing to put the change into.
-      if (!recreate || (site.status !== 'running' && site.status !== 'stopped')) return null;
-      return this.s.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug, serverId: site.serverId });
+      if (!recreate || !hasContainer) return null;
+      return this.s.worker.enqueue('site.reconcile', { siteId: site.id, ...withContainer }, { id: site.id, slug, serverId: site.serverId });
     });
-    if (set.port !== undefined) void this.s.appRoutes.kick(site.serverId);
     return { job };
+  }
+
+  /**
+   * Refused while a move of the app is queued or running: the move writes the routes the app has at
+   * its cutover onto the other server, whose Traefik was asked only about the ones it had when the
+   * move was queued (SitesService.assertAppRoutesOn), and setRoutes asks the server it leaves.
+   */
+  private assertNotMoving(site: SiteRow): void {
+    const job = this.s.worker.activeSiteJob(site.id);
+    if (job?.type === 'site.move') throw jobConflict(`"${site.slug}" is moving (job #${job.id}): change its routes once the move is done.`);
   }
 
   /**
    * Replace the route list. No job: the routes file is rewritten, nothing restarts. `guard` asks the
    * caller's access of what needs more: a new own host a DKIM key holds, a path of another site's domain.
+   * Not while the app moves (assertNotMoving).
    */
   async setRoutes(
     slug: string,
@@ -528,6 +609,7 @@ export class AppsService {
   ): Promise<void> {
     const { site } = this.bySlug(slug);
     this.changeable(site);
+    this.assertNotMoving(site);
     const existing = this.db.select().from(appRoutes).where(eq(appRoutes.siteId, site.id)).all();
     const plan = this.planRoutes(site, input, existing);
     const held = JSON.parse(site.domains) as string[];
@@ -537,6 +619,12 @@ export class AppsService {
     await this.assertHttpRoutesOn(site.serverId, plan.routes.filter((r) => r.enabled));
     const domains = appDomains(site.devHostname, plan.routes, plan.own);
     assertDomainsFree(this.s, domains, { excludeSiteId: site.id, allowDevHostname: site.devHostname });
+    // A host of its own that another app borrows a path of stays its own until that app lets it go.
+    const dropped = held.filter((d) => !domains.includes(d));
+    const routedOn = routedOnRefusal(site.slug, appsRoutingOn(this.db, site, dropped));
+    if (routedOn) throw conflict(routedOn);
+    // Again, with nothing awaited before the write: a move queued while Traefik was asked counts too.
+    this.assertNotMoving(site);
     const before = site.domains;
     this.db.transaction(() => {
       this.writeRoutes(site.id, plan.routes, Date.now());
@@ -593,11 +681,16 @@ export class AppsService {
     if (settings.source !== 'upload') throw conflict(`"${slug}" pulls its image from a registry: deploy it from there.`);
     await this.assertUploadReady(uploadId);
     this.claimUpload(uploadId);
-    return this.s.worker.enqueue(
-      'app.deploy',
-      { siteId: site.id, origin: 'upload', uploadId, backupFirst: this.backupFirstFor(site, 'upload', backupFirst) },
-      { id: site.id, slug, serverId: site.serverId },
-    );
+    try {
+      return this.s.worker.enqueue(
+        'app.deploy',
+        { siteId: site.id, origin: 'upload', uploadId, backupFirst: this.backupFirstFor(site, 'upload', backupFirst) },
+        { id: site.id, slug, serverId: site.serverId },
+      );
+    } catch (err) {
+      this.releaseUpload(uploadId);
+      throw err;
+    }
   }
 
   // ------------------------------------------------------------------ mounts
@@ -624,7 +717,8 @@ export class AppsService {
 
   /** Make a new hook token, replacing the one there was. Shown once: only its hash is kept. */
   makeDeployToken(slug: string): string {
-    const { site } = this.bySlug(slug);
+    const { site, settings } = this.bySlug(slug);
+    if (settings.source !== 'registry') throw conflict(`"${slug}" runs an uploaded image, which has no tag for a hook to deploy: upload a new one to deploy it.`);
     const token = `${DEPLOY_TOKEN_PREFIX}${generateSecret(32)}`;
     this.db.update(appSettings).set({ deployTokenHash: sha256Hex(token), deployTokenSetAt: Date.now(), updatedAt: Date.now() }).where(eq(appSettings.siteId, site.id)).run();
     return token;
@@ -636,22 +730,25 @@ export class AppsService {
   }
 
   /**
-   * A call of the deploy hook. While a deploy of the app waits, that one is the answer: it resolves
-   * the tag when it starts, so a burst of pushes ends in one deploy of the newest. While the app is
-   * busy with anything else, the call is noted, and app-updates deploys once it is free.
+   * A call of the deploy hook. While a deploy of the app's tag waits, that one is the answer: it
+   * resolves the tag when it starts, so a burst of pushes ends in one deploy of the newest. While the
+   * app is busy with anything else, a roll back or an upload's deploy among it, the call is noted,
+   * and app-updates deploys once it is free. An uploaded image has no tag: its app has no hook.
    */
   hook(token: string): { outcome: 'queued' | 'waiting' | 'noted'; job: JobRow | null; slug: string } | null {
     if (!token.startsWith(DEPLOY_TOKEN_PREFIX)) return null;
     const hash = sha256Hex(token);
     const row = this.db.select().from(appSettings).where(eq(appSettings.deployTokenHash, hash)).get();
     if (!row?.deployTokenHash || !sameSecret(row.deployTokenHash, hash)) return null;
+    if (row.source !== 'registry') return null;
     const site = this.db.select().from(sites).where(eq(sites.id, row.siteId)).get();
     if (!site || !isContainerApp(site)) return null;
     const waiting = this.db
       .select()
       .from(jobsTable)
       .where(and(eq(jobsTable.siteId, site.id), eq(jobsTable.type, 'app.deploy'), eq(jobsTable.status, 'queued')))
-      .get();
+      .all()
+      .find((j) => deploysTheTag(j.payload));
     if (waiting) return { outcome: 'waiting', job: waiting, slug: site.slug };
     if (site.status === 'provisioning' || site.status === 'deleting' || this.s.worker.activeSiteJob(site.id)) {
       this.db.update(appSettings).set({ deployWantedAt: Date.now() }).where(eq(appSettings.siteId, site.id)).run();
@@ -714,13 +811,50 @@ export class AppsService {
     return n;
   }
 
+  /**
+   * The mount archives no fill took within a day, beside each app on its server (appPaths
+   * mountUpload): outside every backup, they would stay there for good. A server that cannot be
+   * reached is asked next time.
+   */
+  async removeStaleMountUploads(now = Date.now()): Promise<number> {
+    let n = 0;
+    for (const server of this.s.servers.listRows()) {
+      if (server.status === 'unreachable' || server.status === 'provisioning') continue;
+      const apps = this.db.select({ slug: sites.slug }).from(sites).where(and(eq(sites.serverId, server.id), hostedSites(), containerApps())).all();
+      if (apps.length === 0) continue;
+      const { files } = this.s.servers.handleFor(server.id);
+      for (const app of apps) {
+        const p = appPaths(this.s.config, app.slug);
+        try {
+          // One listing per app, times and all: the folder holds the uploads alone.
+          const found = await files.tree(path.dirname(p.mountUpload('x'.repeat(16))));
+          for (const [name, file] of found.files) {
+            // An upload's time is its last chunk's; one a fill has taken is the job's to remove.
+            if (!UPLOAD_ID_RE.test(name) || this.claimed.has(`mount:${name}`)) continue;
+            if (now - file.mtimeS * 1000 <= UPLOAD_KEEP_MS) continue;
+            await files.rm(p.mountUpload(name));
+            n++;
+          }
+        } catch (err) {
+          this.s.log.warn(`Old mount uploads of "${app.slug}" on "${server.name}" were not cleared: ${err instanceof Error ? err.message : err}`);
+        }
+      }
+    }
+    return n;
+  }
+
   // ------------------------------------------------------------------ app-updates
 
   /**
    * The minute tick of `app-updates`: each registry app is due once its interval has passed, and
    * the registry is asked what the reference names (one manifest request, no pull). A new digest
-   * is deployed (Automatic), noted for its Update (Ask first), or left (Pinned). A hook call that
-   * came while its app was busy is deployed once it is free. A busy app is asked again next tick.
+   * is deployed (Automatic), noted for its Update (Ask first), or left (Pinned), unless it is one
+   * the panel declines (declined): that one is neither deployed nor offered. The digest that runs is
+   * deployed too, by Automatic only, when it came from another repository than the reference's: an
+   * image copied to a new registry keeps its digest, and what runs is pulled again from where it
+   * came (runningReference), whose login a reference on another registry drops (patch). Ask first
+   * and Pinned leave that to Deploy now. A hook call that came while its app was busy is deployed
+   * once it is free. A busy app is asked again next tick.
    */
   async updatesTick(now = Date.now()): Promise<{ checked: number; queued: number }> {
     const rows = this.db
@@ -739,7 +873,8 @@ export class AppsService {
       };
       if (settings.deployWantedAt !== null) {
         this.db.update(appSettings).set({ deployWantedAt: null }).where(eq(appSettings.siteId, site.id)).run();
-        enqueue('hook');
+        // An uploaded image has no tag for the hook to deploy.
+        if (settings.source === 'registry') enqueue('hook');
         continue;
       }
       if (settings.source !== 'registry' || settings.updateMode === 'pinned' || !settings.reference) continue;
@@ -754,16 +889,24 @@ export class AppsService {
       }
       const set: Partial<typeof appSettings.$inferInsert> = { checkedAt: now, checkError: null };
       if (digest !== settings.digest) {
+        const declined = this.declined(site.id, digest);
         if (settings.updateMode === 'ask') {
-          if (settings.pendingDigest !== digest) {
+          // Nothing is offered then: Update would deploy what the tag names, and that is the declined one.
+          if (declined) {
+            if (settings.pendingDigest) set.pendingDigest = '';
+          } else if (settings.pendingDigest !== digest) {
             set.pendingDigest = digest;
             await this.s.alerts.appUpdateWaiting(site, settings.reference, digest).catch(() => undefined);
           }
-        } else if (!this.failedBefore(site.id, digest)) {
+        } else if (!declined) {
           enqueue('auto');
         }
-      } else if (settings.pendingDigest) {
-        set.pendingDigest = '';
+      } else {
+        if (settings.pendingDigest) set.pendingDigest = '';
+        // What runs came from another repository than the reference's (a copy keeps its digest):
+        // Automatic deploys it from the reference's, and tries that once, as it tries a new image.
+        const elsewhere = repositoryKey(runningReference(this.db, settings)) !== repositoryKey(settings.reference);
+        if (settings.updateMode === 'auto' && elsewhere && !this.declined(site.id, digest)) enqueue('auto');
       }
       this.db.update(appSettings).set(set).where(eq(appSettings.siteId, site.id)).run();
     }
@@ -771,17 +914,30 @@ export class AppsService {
   }
 
   /**
-   * Whether this image's deploy has failed, and not gone in since: an automatic deploy tries it once,
-   * not at every check. A new push, Deploy now or Update try again.
+   * Whether app-updates leaves the image the tag names alone: neither deploys nor offers it. Its
+   * newest deploy failed: an automatic deploy tries an image once, not at every check. Or what runs
+   * was put back by a roll back or a restore after this image last went in: the panel does not undo
+   * that by itself, and whatever this image did wrong is not done again. An image the tag moves on to
+   * is new, and goes as usual; Deploy now, Update and the hook deploy whatever the tag names.
    */
-  private failedBefore(siteId: number, digest: string): boolean {
+  private declined(siteId: number, digest: string): boolean {
+    const newestFirst = [desc(appDeploys.startedAt), desc(appDeploys.id)];
     const last = this.db
-      .select({ result: appDeploys.result })
+      .select({ id: appDeploys.id, startedAt: appDeploys.startedAt, result: appDeploys.result })
       .from(appDeploys)
       .where(and(eq(appDeploys.siteId, siteId), eq(appDeploys.digest, digest)))
-      .orderBy(desc(appDeploys.startedAt), desc(appDeploys.id))
+      .orderBy(...newestFirst)
       .get();
-    return last?.result === 'failed';
+    if (!last) return false;
+    if (last.result === 'failed') return true;
+    const runs = this.db
+      .select({ id: appDeploys.id, startedAt: appDeploys.startedAt, origin: appDeploys.origin, digest: appDeploys.digest })
+      .from(appDeploys)
+      .where(and(eq(appDeploys.siteId, siteId), eq(appDeploys.result, 'ok')))
+      .orderBy(...newestFirst)
+      .get();
+    if (!runs || runs.digest === digest || (runs.origin !== 'rollback' && runs.origin !== 'restore')) return false;
+    return runs.startedAt > last.startedAt || (runs.startedAt === last.startedAt && runs.id > last.id);
   }
 
   // ------------------------------------------------------------------ recovery
@@ -862,7 +1018,18 @@ export class AppsService {
   }
 }
 
-export function deployToDto(d: AppDeployRow, settings: Pick<AppSettingsRow, 'source'>): AppDeployDto {
+/** Whether a queued app.deploy deploys what the tag names when it starts: not a roll back, not an upload. */
+function deploysTheTag(payload: string): boolean {
+  try {
+    const p = JSON.parse(payload) as { deployId?: unknown; uploadId?: unknown };
+    return p.deployId === undefined && p.uploadId === undefined;
+  } catch {
+    return false;
+  }
+}
+
+/** `logTail` only when asked: see AppsService.detail. */
+export function deployToDto(d: AppDeployRow, settings: Pick<AppSettingsRow, 'source'>, logTail = false): AppDeployDto {
   return {
     id: d.id,
     reference: d.reference,
@@ -876,7 +1043,7 @@ export function deployToDto(d: AppDeployRow, settings: Pick<AppSettingsRow, 'sou
     jobId: d.jobId,
     gapMs: d.gapMs,
     error: d.error,
-    logTail: d.logTail,
+    logTail: logTail ? d.logTail : null,
     // A registry image comes back by its digest; an upload only while its image is on the server, which the deploy checks.
     canRollBack: d.result === 'ok' && (d.digest !== '' || (settings.source === 'upload' && d.imageId !== '')),
   };

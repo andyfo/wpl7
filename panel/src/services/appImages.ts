@@ -28,12 +28,22 @@ export function registryHost(reference: string): string {
   return reference.includes('/') && (first.includes('.') || first.includes(':') || first === 'localhost') ? first : DOCKER_HUB;
 }
 
-/** `ghcr.io/example/app:stable` → `ghcr.io/example/app`. */
+/** `ghcr.io/example/app:stable` → `ghcr.io/example/app`, and so does `ghcr.io/example/app:stable@sha256:…`. */
 export function repositoryOfReference(reference: string): string {
   const at = reference.indexOf('@');
-  if (at >= 0) return reference.slice(0, at);
-  const colon = reference.lastIndexOf(':');
-  return colon > reference.lastIndexOf('/') ? reference.slice(0, colon) : reference;
+  const name = at >= 0 ? reference.slice(0, at) : reference;
+  const colon = name.lastIndexOf(':');
+  return colon > name.lastIndexOf('/') ? name.slice(0, colon) : name;
+}
+
+/**
+ * A reference's repository as Docker lists it, to compare two ways of writing one: Docker Hub's
+ * `docker.io/library/x` is `x` in an image list (as imageArchive.ts normalImageName has it).
+ */
+export function repositoryKey(reference: string): string {
+  return repositoryOfReference(reference)
+    .replace(/^(?:index\.)?docker\.io\//, '')
+    .replace(/^library\//, '');
 }
 
 /** The pinned form of what a reference named: `ghcr.io/example/app@sha256:…`. */
@@ -43,6 +53,25 @@ export const pinned = (reference: string, digest: string): string => `${reposito
 export function registryAuthFor(app: { reference: string; registryUser: string; registryToken: string }): RegistryAuth | undefined {
   if (!app.registryUser && !app.registryToken) return undefined;
   return { username: app.registryUser, password: app.registryToken, serveraddress: registryHost(app.reference) };
+}
+
+/** Docker Hub by each of its names: `x/app` and `docker.io/x/app` are one registry. */
+const DOCKER_HUB_NAMES = new Set([DOCKER_HUB, 'docker.io', 'index.docker.io', 'registry-1.docker.io']);
+
+/** The registry a reference pulls from, by one name: Docker Hub's is `docker.io`. */
+export function registryOf(reference: string): string {
+  const host = registryHost(reference);
+  return DOCKER_HUB_NAMES.has(host) ? 'docker.io' : host;
+}
+
+/**
+ * The login to pull `reference` with, which may not be the app's own reference: an older one a
+ * deploy, a backup or what runs came by. The app's login is for its own reference's registry, and
+ * is sent to no other.
+ */
+export function pullAuthFor(app: { reference: string; registryUser: string; registryToken: string }, reference: string): RegistryAuth | undefined {
+  if (registryOf(reference) !== registryOf(app.reference)) return undefined;
+  return registryAuthFor({ ...app, reference });
 }
 
 /** The name an upload gets on its server, never one of the archive's own (services/imageArchive.ts). */

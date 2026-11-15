@@ -21,6 +21,7 @@ import { rootKeyInstallScript, sshShellConnect } from '../../src/servers/termina
 import { ExecFiles } from '../../src/lib/files.js';
 import { DockerService } from '../../src/services/docker.js';
 import { siteNetworkName } from '../../src/services/siteNetwork.js';
+import { askApp } from '../../src/services/appProbe.js';
 import { imageUserIds, platformRefusal } from '../../src/services/appImages.js';
 import { inspectArchive, renamedArchive } from '../../src/services/imageArchive.js';
 import { ARCH, disagreeingArchive, imageStore, namesOf, unpackArchive } from '../containerAppChecks.js';
@@ -399,6 +400,13 @@ async function containerApps(raw: Docker, docker: DockerService, files: ExecFile
     if (i === 0) ok('container apps: ...and from a short-lived container on the site’s network, over ssh', helper.exitCode === 0 && helper.stdout === 'ok', JSON.stringify(helper));
   }
   fact('8. checks over ssh, ms', times);
+  // The panel's own way in (services/appProbe.ts): locked down, on the app's network alone, as a
+  // worker's apps are asked over ssh.
+  const way = { name: 'e2e', docker: Object.assign(Object.create(docker) as DockerService, { containerImage: async () => 'traefik:v3.7' }) };
+  const t0 = Date.now();
+  const answer = await askApp(way, { slug: 'e2egate', containerName: 'wp-e2egate' }, { port: 80, path: '/health', host: 'gate.example.net', timeoutSec: 5 });
+  ok('container apps: the panel’s way in, locked down, answers 200 over ssh', answer.status === 200, JSON.stringify(answer));
+  fact('8. the panel’s way in over ssh, ms', Date.now() - t0);
 
   // --- 9. The names an archive carries, on this store: a load takes an existing name, the check
   // sees it first, and a rename inside the archive keeps the server's names where they are.

@@ -15,9 +15,13 @@ import {
   loadUploaded,
   pinned,
   platformRefusal,
+  pullAuthFor,
   pullPinned,
   registryAuthFor,
   registryHost,
+  registryOf,
+  repositoryKey,
+  repositoryOfReference,
   resolveDigest,
   uploadImageName,
 } from '../../src/services/appImages.js';
@@ -61,9 +65,37 @@ describe('references and logins', () => {
     expect(pinned('registry.example.com:5050/app', DIGEST)).toBe(`registry.example.com:5050/app@${DIGEST}`);
   });
 
+  it('takes the repository off a reference with a tag, a digest or both', () => {
+    expect(repositoryOfReference('ghcr.io/example/app:stable')).toBe('ghcr.io/example/app');
+    expect(repositoryOfReference(`ghcr.io/example/app@${DIGEST}`)).toBe('ghcr.io/example/app');
+    expect(repositoryOfReference(`ghcr.io/example/app:stable@${DIGEST}`)).toBe('ghcr.io/example/app');
+    expect(repositoryOfReference(`registry.example.com:5050/app:1@${DIGEST}`)).toBe('registry.example.com:5050/app');
+    expect(repositoryOfReference('registry.example.com:5050/app')).toBe('registry.example.com:5050/app');
+    // A reference with a tag and a digest is pulled by the digest alone.
+    expect(pinned(`ghcr.io/example/app:stable@${DIGEST}`, DIGEST)).toBe(`ghcr.io/example/app@${DIGEST}`);
+  });
+
+  it('compares repositories as Docker lists them', () => {
+    expect(repositoryKey('docker.io/library/nginx:1.27')).toBe('nginx');
+    expect(repositoryKey(`nginx@${DIGEST}`)).toBe('nginx');
+    expect(repositoryKey('library/nginx')).toBe('nginx');
+    expect(repositoryKey('index.docker.io/example/app:1')).toBe('example/app');
+    expect(repositoryKey('docker.io/example/app')).toBe(repositoryKey(`example/app@${DIGEST}`));
+    expect(repositoryKey(`ghcr.io/example/app:stable@${DIGEST}`)).toBe('ghcr.io/example/app');
+    expect(repositoryKey('registry.example.com/library/app')).toBe('registry.example.com/library/app');
+  });
+
   it('logs in only when the app has a login', () => {
     expect(registryAuthFor({ reference: 'ghcr.io/example/app:stable', registryUser: '', registryToken: '' })).toBeUndefined();
     expect(registryAuthFor({ reference: 'ghcr.io/example/app:stable', registryUser: 'u', registryToken: 't' })).toEqual({ username: 'u', password: 't', serveraddress: 'ghcr.io' });
+  });
+
+  it('sends the login to its own registry only, when an older reference is pulled', () => {
+    const app = { reference: 'ghcr.io/example/app:stable', registryUser: 'u', registryToken: 't' };
+    expect(pullAuthFor(app, 'ghcr.io/example/old-app:1')).toEqual({ username: 'u', password: 't', serveraddress: 'ghcr.io' });
+    expect(pullAuthFor(app, 'registry.example.com/app:1')).toBeUndefined();
+    expect(pullAuthFor({ ...app, reference: 'example/app:1' }, 'docker.io/example/app:2')).toMatchObject({ username: 'u' });
+    expect([registryOf('example/app'), registryOf('docker.io/example/app'), registryOf('registry-1.docker.io/example/app')]).toEqual(['docker.io', 'docker.io', 'docker.io']);
   });
 
   it('names an upload after the app and the upload, never after the archive', () => {

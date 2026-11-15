@@ -160,6 +160,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
     updatesTick: hosted('hostedSites()'),
     sweep: hosted('hostedSites()'),
     keptImagesOn: both('container apps only (containerApps()), which are always hosted'),
+    removeStaleMountUploads: hosted('hostedSites()'),
   },
 };
 
@@ -307,6 +308,7 @@ const SITE_APP_REVIEW: Record<string, Record<string, AppVerdict>> = {
     updatesTick: apps('container apps only (containerApps())'),
     sweep: apps('container apps only (containerApps())'),
     keptImagesOn: apps('container apps only (containerApps())'),
+    removeStaleMountUploads: apps('container apps only (containerApps())'),
   },
 };
 
@@ -530,6 +532,7 @@ const SITE_IMAGE_REVIEW: Record<string, Record<string, ImageVerdict>> = {
     updatesTick: images("container apps' own registries"),
     sweep: images("container apps' own containers"),
     keptImagesOn: images("container apps' own images"),
+    removeStaleMountUploads: images("container apps' own mount uploads"),
   },
 };
 

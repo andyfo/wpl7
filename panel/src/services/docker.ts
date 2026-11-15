@@ -1369,13 +1369,21 @@ export class DockerService implements DockerPort {
       Labels: { 'wpl7.managed': 'true', 'wpl7.role': 'probe' },
       HostConfig: { NetworkMode: 'none' },
     });
+    // A file of up to 1 MiB, and its header blocks: /etc/passwd and /etc/group are far smaller, and
+    // the rest of a bigger one is never read into memory.
+    const most = 1024 * 1024 + 16 * 512;
     try {
       for (let hops = 0, wanted = file; hops < 2; hops++) {
         let tar: Buffer;
         try {
           const stream = (await container.getArchive({ path: wanted })) as unknown as NodeJS.ReadableStream;
           const chunks: Buffer[] = [];
-          for await (const chunk of stream) chunks.push(chunk as Buffer);
+          let bytes = 0;
+          for await (const chunk of stream) {
+            bytes += (chunk as Buffer).length;
+            if (bytes > most) throw new Error(`The image's ${file} is larger than 1 MiB, more than the panel reads: give the image's USER as numbers (uid:gid).`);
+            chunks.push(chunk as Buffer);
+          }
           tar = Buffer.concat(chunks);
         } catch (err) {
           if (isStatusError(err, 404)) return null;

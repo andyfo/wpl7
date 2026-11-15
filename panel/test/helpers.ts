@@ -34,7 +34,7 @@ import type {
   ServerPlatform,
 } from '../src/services/docker.js';
 import { fileFromTar } from '../src/services/imageArchive.js';
-import { AppRoutesService, appHttpHosts } from '../src/services/appRoutes.js';
+import { AppRoutesService } from '../src/services/appRoutes.js';
 import { AppsService } from '../src/services/apps.js';
 import { TarWriter } from '../src/lib/tarWriter.js';
 import { SPEC_LABEL, fitCpus, serviceSpecHash } from '../src/services/docker.js';
@@ -1824,11 +1824,16 @@ export async function makeWorld(
     }
     return host;
   };
+  // Wired as src/index.ts wires them, without the debounce.
   const firewall = new FirewallSyncService(config, servers, settings, blocklist, proxyRanges, (id) => firewallHost(id).port(), log, {
     debounceMs: 0,
-    webHosts: (serverId) => appHttpHosts(db, serverId),
+    webHosts: (serverId) => appRoutes.webHosts(serverId),
   });
-  const appRoutes = new AppRoutesService(db, config, servers, dns, log, { debounceMs: 0 });
+  const appRoutes = new AppRoutesService(db, config, servers, dns, log, {
+    debounceMs: 0,
+    onWebHostsChange: (serverId) => void firewall.kick(serverId),
+    onFileWritten: (slug) => security.clearAppRouteRejections(slug),
+  });
   blocklist.onChange = () => void firewall.kickAll();
   const securityEvents = new SecurityEventsService(db, settings, geoip, blocklist);
   const detector = new AttackDetector(settings, blocklist, proxyRanges, log, { reverse: async () => [], lookup: async () => [] });

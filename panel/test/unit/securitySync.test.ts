@@ -192,6 +192,85 @@ describe("Traefik's own word", () => {
     await w.core.security.idle();
     expect(w.core.security.rejections('alpha')).toEqual([]);
   });
+
+  it('keeps what Traefik said about a container app’s routers apart, until its routes file is written', async () => {
+    const w = await makeWorld();
+    w.core.security.noteTraefikLog(
+      [
+        '2026-11-15T09:00:00Z ERR error="error while adding rule Host: empty args for matcher Host, []" entryPointName=web routerName=wpl7app_r3-http_orders@file',
+        '2026-11-15T09:00:01Z ERR error="error while adding rule PathRegexp: error parsing regexp" entryPointName=websecure routerName=wpl7sec_block-x7_orders@file',
+      ].join('\n'),
+    );
+    expect(w.core.security.appRouteRejections('orders')).toMatchObject([{ router: 'wpl7app_r3-http_orders', message: expect.stringContaining('empty args') }]);
+    w.core.security.clearAppRouteRejections('orders');
+    expect(w.core.security.appRouteRejections('orders')).toEqual([]);
+    // The protection's own are its file's to clear.
+    expect(w.core.security.rejections('orders')).toMatchObject([{ router: 'wpl7sec_block-x7_orders' }]);
+    w.core.security.clearAppRouteRejections('nothing-here');
+    expect(w.core.security.rejections('nothing-here')).toEqual([]);
+  });
+
+  it('does not take back what Traefik said about an app’s file that is gone when the same lines are read again', async () => {
+    const w = await makeWorld();
+    const at = (time: string) => Date.parse(`2026-11-15T${time}Z`);
+    const said = (time: string) =>
+      `2026-11-15T${time}Z ERR error="error while adding rule Host: empty args for matcher Host, []" entryPointName=web routerName=wpl7app_r1-http_orders@file`;
+    // On a quiet server every read hands over the same lines again (services/traffic.ts).
+    const chunk = [said('09:00:00'), '2026-11-15T09:00:00Z INF Configuration loaded from file: /etc/traefik/dynamic/app-orders.yml'].join('\n');
+    w.core.security.noteTraefikLog(chunk, at('09:00:30'));
+    expect(w.core.security.appRouteRejections('orders')).toMatchObject([{ router: 'wpl7app_r1-http_orders', at: at('09:00:00') }]);
+    // The app's file is written again, and the next read hands over the same lines.
+    w.core.security.clearAppRouteRejections('orders', at('09:01:00'));
+    w.core.security.noteTraefikLog(chunk, at('09:01:30'));
+    expect(w.core.security.appRouteRejections('orders')).toEqual([]);
+    // What Traefik says of the new file is heard, at its own time.
+    w.core.security.noteTraefikLog([chunk, said('09:01:05')].join('\n'), at('09:01:30'));
+    expect(w.core.security.appRouteRejections('orders')).toMatchObject([{ router: 'wpl7app_r1-http_orders', at: at('09:01:05') }]);
+    // A line a second before a clear may be about the new file still: stamped to the second, by a clock a little behind.
+    w.core.security.clearAppRouteRejections('orders', at('09:02:00'));
+    w.core.security.noteTraefikLog([chunk, said('09:01:05'), said('09:01:59')].join('\n'), at('09:02:30'));
+    expect(w.core.security.appRouteRejections('orders')).toMatchObject([{ router: 'wpl7app_r1-http_orders', at: at('09:01:59') }]);
+  });
+
+  it('reads the time off Traefik’s JSON lines and its coloured ones, and takes a line that says none as new', async () => {
+    const w = await makeWorld();
+    const at = (time: string) => Date.parse(`2026-11-15T${time}Z`);
+    const chunk = [
+      '{"level":"error","error":"error while adding rule Host: empty args","entryPointName":"web","routerName":"wpl7app_r2_orders@file","time":"2026-11-15T09:00:10Z","message":"Error"}',
+      '\x1b[90m2026-11-15T10:00:10+01:00\x1b[0m \x1b[31mERR\x1b[0m \x1b[36merror=\x1b[0m\x1b[31m"error while adding rule Host: empty args"\x1b[0m \x1b[36mrouterName=\x1b[0mwpl7app_r3_orders@file',
+      'ERR error="error while adding rule Host: empty args" routerName=wpl7app_r4_orders@file',
+    ].join('\n');
+    w.core.security.noteTraefikLog(chunk, at('09:00:30'));
+    expect(w.core.security.appRouteRejections('orders').map((r) => [r.router, r.at])).toEqual([
+      ['wpl7app_r2_orders', at('09:00:10')],
+      ['wpl7app_r3_orders', at('09:00:10')],
+      ['wpl7app_r4_orders', at('09:00:30')],
+    ]);
+    w.core.security.clearAppRouteRejections('orders', at('09:01:00'));
+    w.core.security.noteTraefikLog(chunk, at('09:01:30'));
+    expect(w.core.security.appRouteRejections('orders').map((r) => [r.router, r.at])).toEqual([['wpl7app_r4_orders', at('09:01:30')]]);
+  });
+
+  it('reads Traefik’s coloured lines as Traefik 3.7 writes them, with no colour codes kept', async () => {
+    const w = await makeWorld();
+    const c = (code: string, text: string) => `\x1b[${code}m${text}\x1b[0m`;
+    // Its level in colour is the only word that says this one is an error.
+    const chunk = [
+      `${c('90', '2026-11-15T09:50:32Z')} ${c('31', 'ERR')} Router uses a nonexistent certificate resolver ${c('36', 'certificateResolver=')}letsencrypt ${c('36', 'routerName=')}wpl7app_r1_shop@file`,
+      `${c('90', '2026-11-15T09:50:32Z')} ${c('31', 'ERR')} ${c('36', 'error=')}${c('31', '\x1b[1m"error while parsing rule Host(`shop.example.com`) && PathPrefix(`/api`"')}\x1b[0m ${c('36', 'entryPointName=')}web ${c('36', 'routerName=')}wpl7sec_r2_blog@file`,
+    ].join('\n');
+    w.core.security.noteTraefikLog(chunk, Date.parse('2026-11-15T09:51:00Z'));
+    expect(w.core.security.appRouteRejections('shop')).toEqual([
+      {
+        router: 'wpl7app_r1_shop',
+        message: '2026-11-15T09:50:32Z ERR Router uses a nonexistent certificate resolver certificateResolver=letsencrypt routerName=wpl7app_r1_shop@file',
+        at: Date.parse('2026-11-15T09:50:32Z'),
+      },
+    ]);
+    expect(w.core.security.rejections('blog').map((r) => r.message)).toEqual([
+      '2026-11-15T09:50:32Z ERR error="error while parsing rule Host(`shop.example.com`) && PathPrefix(`/api`" entryPointName=web routerName=wpl7sec_r2_blog@file',
+    ]);
+  });
 });
 
 describe('site jobs', () => {

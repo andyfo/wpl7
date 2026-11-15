@@ -1,85 +1,47 @@
 // @docs sites/container
 /**
  * New site's steps for a container app: Image, Settings, Routes, and its part of Review. The form
- * is kept as a draft (lib/siteCreation.ts), so Back to the form brings it back as it was sent.
+ * is kept as a draft (lib/siteCreation.ts), so Back to the form brings it back as it was sent. What
+ * the steps check and send is in lib/appForm.ts.
  */
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 import { Button, ErrorNote, Field, Segmented, Toggle, inputClass } from '../ui';
 import { uploadAppImage } from '../../api/apps';
-import { EnvEditor, MountsEditor, RoutesEditor, envBody, mountsBody } from './AppSettings';
+import { EnvEditor, MountsEditor, RoutesEditor } from './AppSettings';
+import { archiveChosen, archiveUploaded, editedRoutes, routesOf } from '../../lib/appForm';
 import type { NewAppDraft } from '../../lib/siteCreation';
-
-export const emptyAppDraft = (): NewAppDraft => ({
-  source: 'registry',
-  reference: '',
-  registryUser: '',
-  registryToken: '',
-  upload: null,
-  port: '',
-  env: [],
-  database: false,
-  mounts: [],
-  dropAllCaps: false,
-  readOnlyRoot: false,
-  routes: null,
-  healthPath: '/',
-});
-
-const IMAGE_REFERENCE_RE = /^[a-z0-9][a-z0-9._\-/:]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[0-9a-f]{64})?$/;
-
-/** The route a new app starts with: its dev hostname, over HTTPS. */
-const firstRoute = (devHostname: string) => [{ key: 0, host: devHostname, match: 'none' as const, path: '', scheme: 'https' as const, enabled: true }];
-
-export const routesOf = (draft: NewAppDraft, devHostname: string) => draft.routes ?? firstRoute(devHostname);
-
-/** Whether a step may be left for the next one. */
-export function appStepOk(step: 'image' | 'settings' | 'routes', draft: NewAppDraft, devHostname: string): boolean {
-  if (step === 'image') return draft.source === 'registry' ? IMAGE_REFERENCE_RE.test(draft.reference.trim()) && (draft.registryUser === '') === (draft.registryToken === '') : draft.upload !== null;
-  if (step === 'settings') {
-    const port = draft.port.trim();
-    return (port === '' || (/^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535)) && draft.env.every((v) => v.name !== '') && draft.mounts.every((m) => m.name !== '' && m.path !== '') && draft.healthPath.startsWith('/');
-  }
-  const routes = routesOf(draft, devHostname);
-  return routes.length > 0 && routes.every((r) => r.host !== '');
-}
-
-/** What POST /api/sites takes for it, beside the fields every site has. */
-export function appBody(draft: NewAppDraft, devHostname: string) {
-  const port = draft.port.trim();
-  return {
-    app: 'container' as const,
-    image:
-      draft.source === 'upload'
-        ? { uploadId: draft.upload!.id }
-        : {
-            reference: draft.reference.trim(),
-            ...(draft.registryUser ? { registryUser: draft.registryUser, registryToken: draft.registryToken } : {}),
-          },
-    ...(port ? { port: Number(port) } : {}),
-    database: draft.database,
-    env: envBody(draft.env),
-    mounts: mountsBody(draft.mounts),
-    routes: routesOf(draft, devHostname).map(({ host, match, path, scheme, enabled }) => ({ host, match, path: match === 'none' ? '' : path, scheme, enabled })),
-    hardening: { dropAllCaps: draft.dropAllCaps, readOnlyRoot: draft.readOnlyRoot },
-    health: { path: draft.healthPath },
-  };
-}
 
 const SOURCES = [
   { id: 'registry', label: 'From a registry' },
   { id: 'upload', label: 'Upload an archive' },
 ] as const;
 
-export function AppImageStep({ draft, onChange }: { draft: NewAppDraft; onChange: (d: NewAppDraft) => void }) {
+export function AppImageStep({ draft, onChange }: { draft: NewAppDraft; onChange: Dispatch<SetStateAction<NewAppDraft>> }) {
   const input = useRef<HTMLInputElement>(null);
+  const upload = useRef<AbortController | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
+  // Leaving the step stops an upload still going, as leaving the Files tab does.
+  useEffect(() => () => upload.current?.abort(), []);
   const pick = (file: File) => {
+    upload.current?.abort();
+    const controller = new AbortController();
+    upload.current = controller;
     setError(null);
-    void uploadAppImage(file, (sent, total) => setProgress(Math.round((sent / Math.max(1, total)) * 100)))
-      .then((id) => onChange({ ...draft, upload: { id, name: file.name } }))
-      .catch(setError)
-      .finally(() => setProgress(null));
+    setProgress(0);
+    onChange(archiveChosen);
+    void uploadAppImage(file, (sent, total) => setProgress(Math.round((sent / Math.max(1, total)) * 100)), controller.signal)
+      .then((id) => {
+        if (!controller.signal.aborted) onChange(archiveUploaded(id, file.name));
+      })
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) setError(err);
+      })
+      .finally(() => {
+        if (upload.current !== controller) return;
+        upload.current = null;
+        setProgress(null);
+      });
   };
   return (
     <div className="space-y-4">
@@ -167,7 +129,7 @@ export function AppRoutesStep({ draft, onChange, devHostname }: { draft: NewAppD
       <p className="measure text-sm text-neutral-600">
         Where the app answers. A host no other site has becomes its own; on another site's host, a route takes a path. Plain HTTP answers on port 80 without the redirect.
       </p>
-      <RoutesEditor rows={routesOf(draft, devHostname)} onChange={(routes) => onChange({ ...draft, routes })} />
+      <RoutesEditor rows={routesOf(draft, devHostname)} onChange={(routes) => onChange({ ...draft, routes: editedRoutes(routes, devHostname) })} />
     </div>
   );
 }

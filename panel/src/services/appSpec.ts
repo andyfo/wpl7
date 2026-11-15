@@ -18,9 +18,9 @@
 import path from 'node:path';
 import type { Config } from '../config.js';
 import type { AppEnvRow, AppMountRow, AppSettingsRow, SiteRow } from '../db/schema.js';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, ne } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
-import { appMounts, appSettings } from '../db/schema.js';
+import { appDeploys, appMounts, appSettings } from '../db/schema.js';
 import type { FilesPort } from '../lib/files.js';
 import { hasDatabase } from '../lib/siteKind.js';
 import { pinned } from './appImages.js';
@@ -268,9 +268,25 @@ export function buildAppContainerSpec(config: Pick<Config, 'paths' | 'mariadb'>,
   };
 }
 
-/** The image a running app's container is made from again: pinned for a registry app, its id for an upload. */
-export function currentImageRef(settings: Pick<AppSettingsRow, 'source' | 'reference' | 'digest' | 'imageId'>): string | null {
-  if (settings.source === 'registry' && settings.digest) return pinned(settings.reference, settings.digest);
+/**
+ * The reference the image that runs was pulled by: that of the newest deploy that put its digest
+ * in. The app's own reference may name another repository since, which that digest is not in. An
+ * upload, or a digest no deploy names, goes by the app's own.
+ */
+export function runningReference(db: Db, settings: Pick<AppSettingsRow, 'siteId' | 'reference' | 'digest'>): string {
+  if (!settings.digest) return settings.reference;
+  const row = db
+    .select({ reference: appDeploys.reference })
+    .from(appDeploys)
+    .where(and(eq(appDeploys.siteId, settings.siteId), eq(appDeploys.result, 'ok'), eq(appDeploys.digest, settings.digest), ne(appDeploys.reference, '')))
+    .orderBy(desc(appDeploys.startedAt), desc(appDeploys.id))
+    .get();
+  return row?.reference ?? settings.reference;
+}
+
+/** The image a running app's container is made from again: pinned by the reference it came by for a registry app, its id for an upload. */
+export function currentImageRef(db: Db, settings: Pick<AppSettingsRow, 'siteId' | 'source' | 'reference' | 'digest' | 'imageId'>): string | null {
+  if (settings.source === 'registry' && settings.digest) return pinned(runningReference(db, settings), settings.digest);
   return settings.imageId || null;
 }
 

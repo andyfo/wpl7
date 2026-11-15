@@ -206,6 +206,9 @@ The HTTP layer is on `websecure`. For a host a container app answers plain http 
 `wpl7-blocked.yml` has a `-web` twin on `web`, at the same priority and limited to those hosts
 (`firewallRender.ts webHosts`, `appRoutes.ts appHttpHosts`): otherwise a blocked visitor behind a
 proxy would reach the app's http route. A server with no such route gets the file it always had.
+The twins follow a change at once (the app routes sync kicks the firewall when the hosts change),
+count an app pinned on a server before its row says so (a create, a move's target), and stay on a
+move's source while its forwarder sends port 80 on, until the move is finalized.
 
 The network layer is loaded by `wpl7-firewall`, a helper `provision/setup.sh` installs with a
 unit of its own that loads the last list at boot (docs/scripts.md). It never touches another
@@ -226,7 +229,9 @@ A container app gets no `sec-<slug>.yml`: `SecurityService.plan` takes `siteImag
 routers in `app-<slug>.yml` sit at `PRIORITY.app` (950,000 and up), above every router of a site's
 protection file (900,030 at most) and below `PRIORITY.blocked`, so the block list still refuses
 first, and a path an app takes of another site's domain is the app's whatever that site's rules say.
-Attack detection reads its access log lines by router name (`parseAppRouterName`).
+Attack detection reads its access log lines by router name (`parseAppRouterName`). Traefik's
+errors about an app's routers are shown on its Routes card (`appRouteRejections`) and cleared when
+its file is written again; a line stamped before that clear is not taken back in.
 
 ## Malware scans
 

@@ -291,7 +291,9 @@ is `docs/site/src/content/docs/sites/container.mdx`.
   answer gives the digest without a pull; a list without the server's platform is refused before it,
   a single image after it. `traefik.*`/`wpl7.*` labels are refused. An uploaded archive is read entry
   by entry and loaded with every name rewritten to `wpl7-app-<slug>:u<id>` (`manifest.json`,
-  `index.json`, `repositories`), one image only.
+  `index.json`, `repositories`), one image only. What reaches the daemon has headers the panel
+  wrote itself, never the upload's: files, folders and links only, canonical names, none twice, no
+  entry under a link, so neither image store reads a name from it that the panel did not check.
 - **Routes** (`services/appRoutes.ts`): a file per app, `traefik/dynamic/app-<slug>.yml`, routers
   `wpl7app_r<id>_<slug>` (websecure) and `wpl7app_r<id>-http_<slug>` (web) at `PRIORITY.app`
   (950,000) plus the path's specificity, one service by container name. Written only when its digest
@@ -305,10 +307,15 @@ is `docs/site/src/content/docs/sites/container.mdx`.
 - **Deploys** (`jobs/handlers/apps.ts`): `app.deploy` resolves the digest, pulls or loads, checks,
   holds the routes, sets the old container aside with its grace (`setAside`), starts the new one and
   keeps it once `healthGate` passes; otherwise the old one is put back and the new one's last 50
-  lines are kept. Three images per app stay. `app-updates` asks the registry each app's
-  `check_minutes` and deploys (Automatic), notes and emails (Ask first), or does nothing (Pinned).
+  lines are kept (shown from Manage access: in the job log as `withoutOutput`, in the API as
+  `logTail`). Every sync of a server's routes goes through one chain (`AppRoutesService.enqueue`),
+  so a hold is written before the swap; a hold that cannot be written fails the deploy first.
+  Three images per app stay. `app-updates` asks the registry each app's `check_minutes` and
+  deploys (Automatic), notes and emails (Ask first), or does nothing (Pinned), and leaves a
+  declined digest alone (its newest deploy failed, or a roll back or restore went back from it).
+  A port or `runAs` change goes in the `site.reconcile` payload and is saved once the gate passes.
   The hook (`POST /api/hooks/app-deploy`, `X-WPL7-Deploy-Token`, sha256 only) answers a waiting
-  deploy, or notes a call while the app is busy.
+  tag deploy, or notes a call while the app is busy; an app with an uploaded image has none.
 - **The way in** (`services/appProbe.ts`): a locked-down container of the running Traefik's image on
   the app's network alone, busybox `wget -S`, the first status line deciding. The health gate and
   the uptime check use it, so they work with every route off.

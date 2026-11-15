@@ -81,7 +81,9 @@ target, and the job log names the step that failed.
 - A [container app](/docs/sites/container/) is always stopped while it is copied, so its worker never
   runs twice. Its image goes to the new server first: pulled there by its digest, or carried
   through the panel when it was uploaded. Its mounts kept out of backups are copied beside the
-  snapshot.
+  snapshot. Its routes do not change while it moves.
+- A container app with plain HTTP routes moves only to a server whose Traefik answers plain HTTP.
+  Update that server first.
 - A container app that takes a path of another site's domain does not move, and neither does that
   site.
 

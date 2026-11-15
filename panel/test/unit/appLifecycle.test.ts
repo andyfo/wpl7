@@ -333,6 +333,9 @@ describe('deploying a container app', () => {
     expect(deploysOf(w, site.id).at(-1)).toMatchObject({ origin: 'rollback', result: 'ok', digest: digest(1) });
     // The tag still names image 2: a roll back is not undone by the next check.
     expect(settingsOf(w, site.id).digest).toBe(digest(1));
+    w.db.update(appSettings).set({ checkedAt: null }).where(eq(appSettings.siteId, site.id)).run();
+    expect(await w.deps.apps.updatesTick()).toEqual({ checked: 1, queued: 0 });
+    expect(w.db.select().from(jobs).where(and(eq(jobs.type, 'app.deploy'), eq(jobs.status, 'queued'))).all()).toEqual([]);
   });
 });
 

@@ -1,7 +1,10 @@
 // @docs backups/delete, get-started/first-site, integrations/cloudflare, integrations/dns, panel/updating, sites/create, sites/domains, sites/php, sites/settings
+import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
+import { appHardeningInput } from '../../../shared/schemas.js';
+import { UPLOAD_ID_RE } from '../../../shared/siteFilePath.js';
 import { siteConnections, backups, moveCleanups, sites, type SiteRow } from '../../db/schema.js';
 import { BACKUP_DELETE_LANE } from '../../services/backup.js';
 import type { CoreServices } from '../../services/index.js';
@@ -72,8 +75,8 @@ export const siteCreatePayload = z.object({
   pluginZipPaths: z.array(z.string()).default([]),
   /** Default for jobs enqueued before the option existed - same answer the form gives. */
   discourageSearchEngines: z.boolean().default(true),
-  /** A container app's uploaded image, when it was made from one (services/apps.ts). */
-  uploadId: z.string().optional(),
+  /** A container app's uploaded image, when it was made from one (services/apps.ts): checked as a deploy's is. */
+  uploadId: z.string().regex(UPLOAD_ID_RE).optional(),
 });
 
 /**
@@ -331,10 +334,23 @@ async function publishWordPress(ctx: JobContext<unknown>, s: CoreServices, serve
 
 /**
  * A create that was canceled while still queued never ran: nothing exists yet except the
- * row that reserves the slug. Without this the site stayed `provisioning` for ever - the
- * slug taken, start/stop refused - until someone worked out that Delete was the way out.
+ * row that reserves the slug, and a container app's upload the create took. Without this the
+ * site stayed `provisioning` for ever - the slug taken, start/stop refused - until someone
+ * worked out that Delete was the way out; and the upload stayed taken, which no clean-up
+ * removes, until the panel restarted.
  */
 export function siteCreateQueuedCancel(payload: z.infer<typeof siteCreatePayload>, s: CoreServices): void {
+  // Let go of and removed, as a canceled deploy's is (handlers/apps.ts appDeployQueuedCancel).
+  // Synchronous: it runs inside the worker's cancel.
+  const { uploadId } = payload;
+  if (uploadId) {
+    s.apps.releaseUpload(uploadId);
+    try {
+      if (UPLOAD_ID_RE.test(uploadId)) rmSync(s.apps.uploadPath(uploadId), { force: true });
+    } catch (err) {
+      s.log.warn(`The uploaded image of a canceled create was not removed: ${errMsg(err)}`);
+    }
+  }
   const site = s.db.select().from(sites).where(eq(sites.id, payload.siteId)).get();
   if (!site || site.status !== 'provisioning') return;
   s.db.delete(sites).where(eq(sites.id, site.id)).run();
@@ -1079,6 +1095,12 @@ export const siteReconcilePayload = z.object({
   siteId: z.number().int(),
   /** Someone asked for this: a site whose move to stack 2 failed tries again, on the same image. */
   retrySwitch: z.boolean().optional(),
+  /**
+   * A container app's new port and user (services/apps.ts patch): the new container's, and the
+   * app's row's only once it has passed (handlers/apps.ts reconcileApp). Checked as the patch is.
+   */
+  appPort: z.number().int().min(1).max(65535).optional(),
+  appRunAs: appHardeningInput.shape.runAs,
 });
 
 /**
@@ -1105,7 +1127,7 @@ export const siteReconcilePayload = z.object({
 export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcilePayload>>, s: CoreServices): Promise<void> {
   let site = loadSite(s.db, ctx.payload.siteId);
   // Made from its own image, behind its health gate (handlers/apps.ts).
-  if (isContainerApp(site)) return (await import('./apps.js')).reconcileApp(ctx, s, site);
+  if (isContainerApp(site)) return (await import('./apps.js')).reconcileApp(ctx, s, site, { port: ctx.payload.appPort, runAs: ctx.payload.appRunAs });
   if (ctx.payload.retrySwitch && site.stackSwitchImage !== null) {
     updateSiteRow(s.db, site.id, { stackSwitchImage: null });
     site = loadSite(s.db, site.id);

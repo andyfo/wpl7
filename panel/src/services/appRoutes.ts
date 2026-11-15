@@ -20,12 +20,12 @@
 // @docs sites/container
 import crypto from 'node:crypto';
 import path from 'node:path';
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, ne } from 'drizzle-orm';
 import { APP_LIMITS, APP_ROUTE_PRIORITY, appRoutePriority, appRouterName } from '../../shared/apps.js';
 import type { AppRouteMatch, AppRouteScheme } from '../../shared/schemas.js';
 import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
-import { appRoutes, appSettings, sites, type AppRouteRow, type ServerRow, type SiteRow } from '../db/schema.js';
+import { appRoutes, appSettings, moveCleanups, sites, type AppRouteRow, type ServerRow, type SiteRow } from '../db/schema.js';
 import { isUnderDevDomain } from '../jobs/handlers/shared.js';
 import { containerApps, isContainerApp } from '../lib/siteKind.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
@@ -170,21 +170,32 @@ export function appsRoutingOn(db: Db, site: Pick<SiteRow, 'id' | 'domains' | 'de
   return rows.filter((r) => !seen.has(`${r.slug} ${r.host}`) && seen.add(`${r.slug} ${r.host}`));
 }
 
+/** A route that is on, on plain http. */
+const onPlainHttp = () => and(eq(appRoutes.enabled, 1), inArray(appRoutes.scheme, ['http', 'both']));
+
 /**
- * The hosts container apps answer plain http on, on a server: the block list follows them onto web
- * (services/firewallRender.ts webHosts).
+ * The hosts container apps answer plain http on, on a server, sorted: the block list follows them
+ * onto web (services/firewallRender.ts webHosts), with the pinned apps' (AppRoutesService
+ * webHosts). A move's source counts the ones its forwarder still sends on to the target until the
+ * move is finalized (jobs/handlers/move.ts): the target sees the source's address, not the
+ * visitor's, so only the source can turn a blocked visitor away.
  */
 export function appHttpHosts(db: Db, serverId: number): string[] {
-  if (db.select({ id: sites.id }).from(sites).where(and(eq(sites.serverId, serverId), containerApps())).limit(1).all().length === 0) return [];
-  return db
+  const http = onPlainHttp();
+  const own = db
     .select({ host: appRoutes.host })
     .from(appRoutes)
     .innerJoin(sites, eq(sites.id, appRoutes.siteId))
-    .where(
-      and(eq(sites.serverId, serverId), containerApps(), eq(sites.status, 'running'), eq(appRoutes.enabled, 1), inArray(appRoutes.scheme, ['http', 'both'])),
-    )
-    .all()
-    .map((r) => r.host);
+    .where(and(eq(sites.serverId, serverId), containerApps(), eq(sites.status, 'running'), http))
+    .all();
+  const forwarded = db
+    .select({ host: appRoutes.host })
+    .from(moveCleanups)
+    .innerJoin(sites, eq(sites.id, moveCleanups.siteId))
+    .innerJoin(appRoutes, eq(appRoutes.siteId, sites.id))
+    .where(and(eq(moveCleanups.sourceServerId, serverId), eq(moveCleanups.status, 'pending'), isNotNull(moveCleanups.proxyConfigPath), containerApps(), http))
+    .all();
+  return [...new Set([...own, ...forwarded].map((r) => r.host))].sort();
 }
 
 /** The flag deploy/docker-compose.yml gives Traefik so that a router on web can win over the redirect. */
@@ -220,6 +231,7 @@ export function routedOnRefusal(siteSlug: string, routing: { slug: string; host:
 
 const VERIFY_MS = 10 * 60_000;
 const digest = (text: string) => crypto.createHash('sha256').update(text).digest('hex');
+const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 export interface AppRoutesState {
   /** What the app's file says now: the routes are in force, held for a deploy, or the app has none. */
@@ -228,16 +240,54 @@ export interface AppRoutesState {
   problem: string | null;
 }
 
+export interface AppRoutesServiceOpts {
+  /** Coalescing window for kicks; 0 in tests. */
+  debounceMs?: number;
+  /**
+   * A server's plain http hosts (webHosts) are not what its last sync saw, or this sync is its
+   * first: the block list's twins on web follow them (services/firewallSync.ts), now rather than at
+   * its next recheck.
+   */
+  onWebHostsChange?: (serverId: number) => void;
+  /** An app's file was written or removed: what Traefik said about the one before no longer applies. */
+  onFileWritten?: (slug: string) => void;
+}
+
+/** What one sync of a server did: what a hold or a release asks of it. */
+interface SyncOutcome {
+  /** The server's name, for a message. */
+  server: string;
+  /** The sites whose file this sync wrote, or found as it should be. */
+  inForce: Set<number>;
+  /** Why a site's file could not be built: it keeps the one it had. */
+  problems: Map<number, string>;
+  /** Why the sync stopped short, if it did: the server unreachable, a write that failed. */
+  error: string | null;
+}
+
+/**
+ * Why a sync left a site's file other than its plan says, or null. A site the plan has no file for
+ * is fine unless the sync stopped short, which may have left its old one there.
+ */
+const failureOf = (outcome: SyncOutcome, siteId: number): string | null =>
+  outcome.problems.get(siteId) ?? (outcome.inForce.has(siteId) ? null : outcome.error);
+
 export class AppRoutesService {
   private readonly held = new Map<number, number>();
   private readonly written = new Map<string, string>();
-  private readonly chains = new Map<number, Promise<void>>();
-  private readonly waiting = new Map<number, Promise<void>>();
+  /** Per server: the last sync queued there. Each one starts when the one before it is done. */
+  private readonly chains = new Map<number, Promise<SyncOutcome>>();
+  /** Per server: the sync queued and not started yet, which every request until then rides along with. */
+  private readonly waiting = new Map<number, { run: Promise<SyncOutcome>; hurry: () => void }>();
   private readonly verifiedAt = new Map<number, number>();
   private readonly problems = new Map<number, string>();
-  /** Sites a job wants routed on a server ahead of the database: a move's target. */
+  /** Sites a job wants routed on a server ahead of the database: a new app, a move's target. */
   private readonly pins = new Map<number, Map<number, number>>();
+  /** Per server: the plain http hosts its last sync saw. */
+  private readonly webHostsSeen = new Map<number, string>();
   private readonly debounceMs: number;
+  private readonly onWebHostsChange: AppRoutesServiceOpts['onWebHostsChange'];
+  private readonly onFileWritten: AppRoutesServiceOpts['onFileWritten'];
 
   constructor(
     private readonly db: Db,
@@ -245,33 +295,58 @@ export class AppRoutesService {
     private readonly servers: ServerRegistry,
     private readonly dns: Pick<DnsService, 'wildcardProvider'>,
     private readonly log: Logger,
-    opts: { debounceMs?: number } = {},
+    opts: AppRoutesServiceOpts = {},
   ) {
     this.debounceMs = opts.debounceMs ?? 300;
+    this.onWebHostsChange = opts.onWebHostsChange;
+    this.onFileWritten = opts.onFileWritten;
   }
 
   /**
    * Hold an app's routes: every router stays and Traefik answers 503 until `release`, which a deploy
    * calls once its new container has passed, or the old one is back. Resolves once the file says so.
-   * In memory only: after a panel restart nothing is held, and the next sync writes the routes.
+   * Rejects when it could not be made to, and holds nothing then: the caller must not swap the
+   * container, and has nothing to release. In memory only: after a panel restart nothing is held,
+   * and the next sync writes the routes.
    */
   async hold(site: Pick<SiteRow, 'id' | 'serverId'>): Promise<void> {
     this.held.set(site.id, (this.held.get(site.id) ?? 0) + 1);
-    await this.syncServer(site.serverId);
+    const outcome = await this.enqueue(site.serverId, false);
+    const why = failureOf(outcome, site.id);
+    if (why === null) return;
+    this.unhold(site.id);
+    // A write that failed may still have landed (an atomic rename done before the command timed
+    // out), and the file then says held with nothing holding it: the next sync goes at once.
+    if (!outcome.problems.has(site.id)) void this.enqueue(site.serverId, false);
+    throw new Error(`Could not hold the app's routes on "${outcome.server}": ${why}`);
   }
 
+  /**
+   * Let a held app's routes serve again. Never throws: a file that could not be written is logged,
+   * and the minute tick writes it.
+   */
   async release(site: Pick<SiteRow, 'id' | 'serverId'>): Promise<void> {
-    const n = (this.held.get(site.id) ?? 1) - 1;
-    if (n <= 0) this.held.delete(site.id);
-    else this.held.set(site.id, n);
-    await this.syncServer(site.serverId);
+    this.unhold(site.id);
+    const outcome = await this.enqueue(site.serverId, false);
+    const why = failureOf(outcome, site.id);
+    if (why !== null) this.log.warn(`Routes of site #${site.id} still held on "${outcome.server}": ${why}. The minute tick tries again.`);
+  }
+
+  private unhold(siteId: number): void {
+    const n = (this.held.get(siteId) ?? 1) - 1;
+    if (n <= 0) this.held.delete(siteId);
+    else this.held.set(siteId, n);
   }
 
   isHeld(siteId: number): boolean {
     return this.held.has(siteId);
   }
 
-  /** Route an app on a server regardless of the database - a move's target, before its cutover. */
+  /**
+   * Route an app on a server regardless of the database - a new app before its row says it runs, a
+   * move's or a restore's target before its cutover. Letting go queues a sync there: the file goes
+   * unless the row keeps it, and the block list hears if the hosts on web changed.
+   */
   pin(serverId: number, siteId: number): () => void {
     const onServer = this.pins.get(serverId) ?? new Map<number, number>();
     onServer.set(siteId, (onServer.get(siteId) ?? 0) + 1);
@@ -283,7 +358,26 @@ export class AppRoutesService {
       const n = (onServer.get(siteId) ?? 1) - 1;
       if (n <= 0) onServer.delete(siteId);
       else onServer.set(siteId, n);
+      void this.kick(serverId);
     };
+  }
+
+  /**
+   * The hosts the block list follows onto web on a server (services/firewallSync.ts webHosts): the
+   * ones appHttpHosts counts, and the pinned apps', whose routes are there before their row says so.
+   */
+  webHosts(serverId: number): string[] {
+    const hosts = appHttpHosts(this.db, serverId);
+    const pinned = [...(this.pins.get(serverId)?.keys() ?? [])];
+    if (pinned.length === 0) return hosts;
+    // Only a container app has routes, and only an app is pinned.
+    const more = this.db
+      .select({ host: appRoutes.host })
+      .from(appRoutes)
+      .where(and(inArray(appRoutes.siteId, pinned), onPlainHttp()))
+      .all()
+      .map((r) => r.host);
+    return [...new Set([...hosts, ...more])].sort();
   }
 
   state(siteId: number): AppRoutesState {
@@ -341,10 +435,64 @@ export class AppRoutesService {
     return path.join(this.config.srvRoot, 'traefik', 'dynamic');
   }
 
-  /** Make a server's routes files say what the database says. Never throws. */
+  /** Make a server's routes files say what the database says, in turn with every other sync there. Never throws. */
   async syncServer(serverId: number): Promise<void> {
+    await this.enqueue(serverId, false);
+  }
+
+  /**
+   * Queue a sync of a server. One runs at a time on a server, each after the one before, and each
+   * plans as it starts: the newest plan is always the one written last. A request while one waits
+   * to start rides along with it, since that one plans after the request; one that may not wait (a
+   * hold, a release, the tick) cuts its debounce short. Never rejects.
+   */
+  private enqueue(serverId: number, debounce: boolean): Promise<SyncOutcome> {
+    const pending = this.waiting.get(serverId);
+    if (pending) {
+      if (!debounce) pending.hurry();
+      return pending.run;
+    }
+    let hurried = !debounce || this.debounceMs <= 0;
+    let cutShort = () => {
+      hurried = true;
+    };
+    const before = this.chains.get(serverId) ?? Promise.resolve();
+    const run = before
+      .then(() =>
+        hurried
+          ? undefined
+          : new Promise<void>((resolve) => {
+              const timer = setTimeout(resolve, this.debounceMs);
+              cutShort = () => {
+                clearTimeout(timer);
+                resolve();
+              };
+            }),
+      )
+      .then(() => {
+        this.waiting.delete(serverId);
+        return this.sync(serverId);
+      })
+      // A link that failed would stop every sync after it on the server.
+      .catch((err: unknown): SyncOutcome => {
+        this.log.warn(`App routes on server #${serverId}: ${errorText(err)}`);
+        return { server: `#${serverId}`, inForce: new Set(), problems: new Map(), error: errorText(err) };
+      });
+    this.waiting.set(serverId, { run, hurry: () => cutShort() });
+    this.chains.set(serverId, run);
+    return run;
+  }
+
+  /** One sync of a server, in its turn (`enqueue`): the plan, made as it starts, then the writes. */
+  private async sync(serverId: number): Promise<SyncOutcome> {
+    const outcome: SyncOutcome = { server: `#${serverId}`, inForce: new Set(), problems: new Map(), error: null };
     const row = this.servers.rowById(serverId);
-    if (!row || row.status === 'provisioning') return;
+    if (!row) {
+      this.webHostsSeen.delete(serverId);
+      return { ...outcome, error: 'the panel has no such server' };
+    }
+    outcome.server = row.name;
+    if (row.status === 'provisioning') return { ...outcome, error: 'it is still being set up' };
     const startedAt = Date.now();
     try {
       const handle = this.servers.handleFor(serverId);
@@ -355,18 +503,25 @@ export class AppRoutesService {
       let wrote = 0;
       for (const [file, entry] of plan) {
         if (entry.content === null) {
-          this.problems.set(entry.siteId, entry.problem ?? 'cannot be written');
-          this.log.warn(`Routes of site #${entry.siteId} not rewritten: ${entry.problem}`);
+          const problem = entry.problem ?? 'cannot be written';
+          this.problems.set(entry.siteId, problem);
+          outcome.problems.set(entry.siteId, problem);
+          this.log.warn(`Routes of site #${entry.siteId} not rewritten: ${problem}`);
           continue;
         }
         this.problems.delete(entry.siteId);
-        if (await this.put(handle, path.join(dir, file), entry.content, verify)) wrote++;
+        if (await this.put(handle, path.join(dir, file), entry.content, verify)) {
+          wrote++;
+          this.fileWritten(file);
+        }
+        outcome.inForce.add(entry.siteId);
       }
       let removed = 0;
       for (const name of await handle.files.readdir(dir)) {
         if (!APP_ROUTES_FILE_RE.test(name) || plan.has(name)) continue;
         await handle.files.rm(path.join(dir, name));
         this.written.delete(`${serverId}:${path.join(dir, name)}`);
+        this.fileWritten(name);
         removed++;
       }
       if (verify) this.verifiedAt.set(serverId, startedAt);
@@ -374,7 +529,34 @@ export class AppRoutesService {
     } catch (err) {
       for (const key of [...this.written.keys()]) if (key.startsWith(`${serverId}:`)) this.written.delete(key);
       this.verifiedAt.delete(serverId);
-      if (!(err instanceof ServerUnreachableError)) this.log.warn(`App routes on "${row.name}": ${(err as Error).message}`);
+      outcome.error = errorText(err);
+      if (!(err instanceof ServerUnreachableError)) this.log.warn(`App routes on "${row.name}": ${outcome.error}`);
+    }
+    this.noteWebHosts(serverId);
+    return outcome;
+  }
+
+  private fileWritten(name: string): void {
+    const slug = APP_ROUTES_FILE_RE.exec(name)?.[1];
+    if (slug) this.onFileWritten?.(slug);
+  }
+
+  /**
+   * Tell the block list when a server's plain http hosts (webHosts) are not what this last saw
+   * there: a route switched to http, an app started, stopped, made, deleted or pinned. The first
+   * sight of a server counts as a change: the block list read them as the panel started, before
+   * this first ran, and a change in between would go untold. When nothing changed, its sync finds
+   * its file as it should be and writes nothing.
+   */
+  private noteWebHosts(serverId: number): void {
+    if (!this.onWebHostsChange) return;
+    try {
+      const hosts = this.webHosts(serverId).join(' ');
+      const before = this.webHostsSeen.get(serverId);
+      this.webHostsSeen.set(serverId, hosts);
+      if (before !== hosts) this.onWebHostsChange(serverId);
+    } catch (err) {
+      this.log.warn(`App routes on server #${serverId}: the block list was not told of its http hosts: ${errorText(err)}`);
     }
   }
 
@@ -396,18 +578,7 @@ export class AppRoutesService {
 
   /** Soon, once: kicks that arrive while one waits ride along. Resolves once a sync started after it is done. */
   kick(serverId: number): Promise<void> {
-    const pending = this.waiting.get(serverId);
-    if (pending) return pending;
-    const before = this.chains.get(serverId) ?? Promise.resolve();
-    const run = before
-      .then(() => (this.debounceMs > 0 ? new Promise<void>((r) => setTimeout(r, this.debounceMs)) : undefined))
-      .then(() => {
-        this.waiting.delete(serverId);
-        return this.syncServer(serverId);
-      });
-    this.waiting.set(serverId, run);
-    this.chains.set(serverId, run);
-    return run;
+    return this.enqueue(serverId, true).then(() => undefined);
   }
 
   /**

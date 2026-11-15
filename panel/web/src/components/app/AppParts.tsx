@@ -34,6 +34,8 @@ const ORIGIN: Record<AppDeployOrigin, string> = {
   user: 'Deploy now',
   rollback: 'Roll back',
   upload: 'Upload',
+  // A restore that put the app back on its backup's image.
+  restore: 'Restore',
 };
 
 const UPDATES = { auto: 'Automatic', ask: 'Ask first', pinned: 'Pinned' } as const;

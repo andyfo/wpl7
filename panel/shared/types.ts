@@ -280,7 +280,7 @@ export interface AppDeployDto {
   /** How long the app answered nothing (Traefik's 503) during the swap. */
   gapMs: number | null;
   error: string | null;
-  /** The new container's last lines, kept when it failed. */
+  /** The new container's last lines, kept when it failed. Null below Manage: they can hold whatever the app knows. */
   logTail: string | null;
   /** Whether Roll back can run it again: its image is on the server, or can be pulled by digest. */
   canRollBack: boolean;
@@ -310,10 +310,17 @@ export interface AppDto {
   health: { path: string; host: string; deployCheckPath: string; timeoutSec: number };
   updates: { mode: AppUpdateMode; checkMinutes: number; checkedAt: number | null; checkError: string | null };
   deployToken: { set: boolean; setAt: number | null };
+  /**
+   * A new port or user on its way in: the recreate that takes it saves it once the new container
+   * has passed, and `port` and `hardening.runAs` say what runs until then. Null when none is.
+   */
+  pending: { port?: number; runAs?: string } | null;
   /** What Traefik is told: the routes are in force, held for a deploy, or there are none (stopped). */
   routesState: 'serving' | 'held' | 'none';
   /** Why the routes could not be written, when they could not. */
   routesProblem: string | null;
+  /** What Traefik said about the app's routers since its routes file was last written: each one it refused. */
+  routeErrors: { router: string; message: string; at: number }[];
   /** The newest deploys, newest first. */
   deploys: AppDeployDto[];
 }

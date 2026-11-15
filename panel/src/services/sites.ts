@@ -4,7 +4,7 @@ import type { BackupBeforeUpdates, JobType, SiteCacheBody, SiteCreateBody, SiteL
 import { CACHE_RULE_GROUPS, cacheGroupInUse, cacheOffProblem, parseSiteCacheRules, withCacheRuleIds } from '../../shared/cacheRules.js';
 import { isBackupBeforeUpdates } from '../../shared/updateBackups.js';
 import type { SiteCacheDto, SiteDetail, SiteLimits, SiteSummary, SiteWpSummary } from '../../shared/types.js';
-import { jobs as jobsTable, moveCleanups, plugins, sites, type JobRow, type ServerRow, type SiteRow } from '../db/schema.js';
+import { appRoutes, jobs as jobsTable, moveCleanups, plugins, sites, type JobRow, type ServerRow, type SiteRow } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { generatePassword, generateSecret } from '../lib/crypto.js';
 import { containerName, dbIdentifier, isValidSlug, slugify } from '../lib/slug.js';
@@ -117,6 +117,18 @@ export class SitesService {
   async assertPhpImageOn(site: SiteRow, serverId: number, phpVersion = site.phpVersion): Promise<void> {
     if (!isPhpSite(site) || !this.s.servers.rowById(serverId)) return;
     await assertPhpImage(this.s.servers.handleFor(serverId), siteImage(phpVersion), { missingIsFine: true });
+  }
+
+  /**
+   * The early check for a container app that is to move to `serverId`: its plain http routes need a
+   * Traefik there that can answer them, or they would turn into redirects to https. Refused before
+   * anything is queued, as a route saved there would be (services/apps.ts assertHttpRoutesOn). A
+   * target move() refuses anyway is left to it, in its own words.
+   */
+  async assertAppRoutesOn(site: SiteRow, serverId: number): Promise<void> {
+    if (!isContainerApp(site) || serverId === site.serverId || this.s.servers.rowById(serverId)?.status !== 'ok') return;
+    const enabled = this.db.select({ scheme: appRoutes.scheme }).from(appRoutes).where(and(eq(appRoutes.siteId, site.id), eq(appRoutes.enabled, 1))).all();
+    await this.s.apps.assertHttpRoutesOn(serverId, enabled);
   }
 
   create(body: SiteCreateBody): { site: SiteRow; job: JobRow } {
@@ -621,7 +633,8 @@ export class SitesService {
     return this.db.select().from(sites).all().map((s) => this.toSummary(s, names, traffic, wp));
   }
 
-  async detail(slug: string): Promise<SiteDetail> {
+  /** `logTails`: a container app's failed deploys with their last lines (AppsService.detail); left out, without. */
+  async detail(slug: string, opts: { logTails?: boolean } = {}): Promise<SiteDetail> {
     const site = this.bySlug(slug, { kinds: 'any' });
     const summary = this.toSummary(site);
     if (isExternal(site)) return this.externalDetail(site, summary);
@@ -687,7 +700,7 @@ export class SitesService {
       // thing that clears this. A container on stack 2 has nothing left to report.
       stackSwitchError: stack === 2 || isContainerApp(site) ? null : site.stackSwitchError,
       cache: isContainerApp(site) ? null : this.cacheDto(site, stack, containerState),
-      container: isContainerApp(site) ? this.s.apps.detail(site) : null,
+      container: isContainerApp(site) ? this.s.apps.detail(site, opts) : null,
     };
   }
 

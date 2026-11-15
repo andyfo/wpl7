@@ -25,7 +25,7 @@ import {
 } from '../../shared/schemas.js';
 import { moveCleanups } from '../db/schema.js';
 import { conflict, notFound } from '../lib/errors.js';
-import { jobToDto, viewerOf } from '../lib/dto.js';
+import { jobToDto, seesCommands, viewerOf } from '../lib/dto.js';
 import { requireAccess } from '../plugins/auth.js';
 import { checkSiteUrl, clearSiteCaches, siteContainerStack } from '../services/siteCaches.js';
 import type { AppDeps } from './deps.js';
@@ -82,8 +82,9 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });
 
+  // A container app's failed deploys come with their last lines only for whoever may read its log.
   r.get('/api/sites/:slug', { schema: { params: slugParams } }, async (req) =>
-    deps.sites.detail(req.params.slug),
+    deps.sites.detail(req.params.slug, { logTails: seesCommands(viewerOf(req)) }),
   );
 
   r.delete(
@@ -291,7 +292,9 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
   );
 
   r.post('/api/sites/:slug/move', { schema: { params: slugParams, body: siteMoveBody } }, async (req, reply) => {
-    await deps.sites.assertPhpImageOn(deps.sites.bySlug(req.params.slug), req.body.targetServerId);
+    const site = deps.sites.bySlug(req.params.slug);
+    await deps.sites.assertPhpImageOn(site, req.body.targetServerId);
+    await deps.sites.assertAppRoutesOn(site, req.body.targetServerId);
     const job = deps.sites.move(req.params.slug, req.body);
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });

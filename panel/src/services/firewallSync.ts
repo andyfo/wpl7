@@ -88,7 +88,7 @@ export class FirewallSyncService {
     this.webHosts = opts.webHosts ?? (() => []);
   }
 
-  /** The hosts container apps answer plain http on, per server (services/appRoutes.ts appHttpHosts). */
+  /** The hosts container apps answer plain http on, per server, pinned ones too (services/appRoutes.ts AppRoutesService.webHosts). */
   private readonly webHosts: (serverId: number) => string[];
 
   private dir(): string {

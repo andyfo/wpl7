@@ -158,7 +158,9 @@ export interface BlockedFileInput {
    * The hosts a container app answers plain http on, on this server (services/appRoutes.ts). With
    * TLS on, every router here is on websecure, and port 80 only ever redirected: an app's http
    * route would answer a blocked visitor there. Each router gets a twin on web for these hosts
-   * alone, so no other site's answer on port 80 changes.
+   * alone, so no other site's answer on port 80 changes. A moved app's hosts are among them on its
+   * old server while that forwards them (jobs/handlers/moveHelpers.ts proxyConfigYaml): the
+   * forwarder's router has no priority of its own, so its rule's length, far below a twin's.
    */
   webHosts?: readonly string[];
 }

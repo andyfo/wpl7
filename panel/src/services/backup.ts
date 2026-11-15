@@ -22,7 +22,7 @@ import { safeJoin } from '../lib/slug.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
 import { sitePaths } from './siteSpec.js';
 import { hasDatabase, isContainerApp } from '../lib/siteKind.js';
-import { appOwner, appPaths, appRows } from './appSpec.js';
+import { appOwner, appPaths, appRows, runningReference } from './appSpec.js';
 
 export type LogFn = (level: 'info' | 'warn' | 'error', message: string) => void;
 const noopLog: LogFn = () => undefined;
@@ -324,13 +324,14 @@ export class BackupService {
         stack: container?.stack ?? null,
         /**
          * A container app's image, which a restore puts back (handlers/backups.ts), and the mounts in
-         * this archive. Never a secret: no registry token, no environment value.
+         * this archive. Never a secret: no registry token, no environment value. The reference is the
+         * one its digest came by, which the app's own may no longer be.
          */
         ...(app
           ? {
               container: {
                 source: app.settings.source,
-                reference: app.settings.reference,
+                reference: runningReference(this.db, app.settings),
                 digest: app.settings.digest,
                 imageId: app.settings.imageId,
                 port: app.settings.port,

@@ -128,7 +128,8 @@ Without one, the job log names the records to change, and the old server forward
 
 A [container app](/docs/sites/container/)'s deploy hook needs no key. Its CI sends the app's own token
 in the `X-WPL7-Deploy-Token` header to `POST /api/hooks/app-deploy`, and the app deploys what its
-reference names. A key with Full access makes the token, which is shown once.
+reference names. A key with Full access makes the token, which is shown once. An app that runs an
+uploaded image has no deploy hook.
 
 ## Limits
 

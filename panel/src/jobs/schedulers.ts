@@ -139,7 +139,7 @@ export class Schedulers {
   private readonly bootedAt = Date.now();
   /** When the site-networks task last looked for containers without the protection mounts. */
   private hardeningSweptAt = 0;
-  /** When app-updates last cleared old image uploads. */
+  /** When app-updates last cleared old image and mount uploads. */
   private uploadsSweptAt = 0;
   /** The intervals in force: read once, like the timers that use them. */
   private readonly uptimeMs: number;
@@ -500,7 +500,7 @@ export class Schedulers {
         group: 'jobs',
         name: 'Container app updates',
         description:
-          "Asks each container app's registry, when its interval has passed, which image its tag names now. A new one is deployed (Automatic) or offered (Ask first). Also deploys an app whose deploy hook was called while it was busy, and clears uploads nobody deployed within a day.",
+          "Asks each container app's registry, when its interval has passed, which image its tag names now. A new one is deployed (Automatic) or offered (Ask first). Also deploys an app whose deploy hook was called while it was busy, and clears image and mount uploads nobody used within a day.",
         pausable: true,
         pauseWarning: 'No container app is deployed by itself or by its hook until you resume. Deploy now still works.',
         cadence: () => ({ everyMs: MIN, text: "Every minute, each app at its own interval" }),
@@ -508,6 +508,7 @@ export class Schedulers {
           if (Date.now() - this.uploadsSweptAt >= 60 * MIN) {
             this.uploadsSweptAt = Date.now();
             await s.apps.removeStaleUploads().catch(() => 0);
+            await s.apps.removeStaleMountUploads().catch(() => 0);
           }
           const { checked, queued } = await s.apps.updatesTick();
           if (checked === 0 && queued === 0) return { idle: true };

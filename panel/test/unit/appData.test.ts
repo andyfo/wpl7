@@ -8,8 +8,8 @@ import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { siteCreateBody } from '../../shared/schemas.js';
-import { appMounts, appSettings, backups, jobLogs, jobs, sites } from '../../src/db/schema.js';
-import { hostExec } from '../../src/lib/exec.js';
+import { appDeploys, appMounts, appSettings, backups, jobLogs, jobs, sites, type SiteRow } from '../../src/db/schema.js';
+import { hostExec, type ExecPort } from '../../src/lib/exec.js';
 import { appPaths } from '../../src/services/appSpec.js';
 import { appRoutesFileName } from '../../src/services/appRoutes.js';
 import type { EphemeralOpts, SiteContainerSpec } from '../../src/services/docker.js';
@@ -33,8 +33,23 @@ function prepare(docker: TestWorld['docker']): void {
   push(docker, 1);
 }
 
-async function world(): Promise<TestWorld> {
-  const w = await makeWorld({ exec: hostExec });
+/**
+ * `chowns`: each `chown -R` of the app's folders is noted there, by owner, and not run: on a test
+ * machine it would fail for any user but the one the tests run as.
+ */
+async function world(opts: { chowns?: string[] } = {}): Promise<TestWorld> {
+  const { chowns } = opts;
+  const exec: ExecPort = chowns
+    ? {
+        ...hostExec,
+        run: async (cmd, args, o) => {
+          if (cmd !== 'chown') return hostExec.run(cmd, args, o);
+          if (args[0] === '-R') chowns.push(args[1]!);
+          return { stdout: '', stderr: '', exitCode: 0 };
+        },
+      }
+    : hostExec;
+  const w = await makeWorld({ exec });
   w.deps.settings.set('backupBeforeUpdates', 'never');
   prepare(w.docker);
   return w;
@@ -81,6 +96,10 @@ function fill(w: TestWorld, root = appPaths(w.config, 'shop').root, mark = 'v1')
 const tarNames = (file: string) => execFileSync('tar', ['-tzf', file], { encoding: 'utf8' }).split('\n').filter(Boolean);
 const creates = (docker: TestWorld['docker']) => docker.calls.filter((c) => c.method === 'createSiteContainer').map((c) => c.args[0] as SiteContainerSpec);
 const jobLog = (w: TestWorld, jobId: number) => w.db.select().from(jobLogs).where(eq(jobLogs.jobId, jobId)).all().map((l) => l.message).join('\n');
+const settingsOf = (w: TestWorld, siteId: number) => w.db.select().from(appSettings).where(eq(appSettings.siteId, siteId)).get()!;
+/** What PATCH reference does to the row: the app watches another repository from now on. */
+const watch = (w: TestWorld, site: SiteRow, reference: string) =>
+  w.db.update(appSettings).set({ reference, pendingDigest: '' }).where(eq(appSettings.siteId, site.id)).run();
 
 describe('a container app’s backups', () => {
   it('hold its data and the mounts kept in backups, and name its image with no secret', async () => {
@@ -105,6 +124,20 @@ describe('a container app’s backups', () => {
     const siteJson = fs.readFileSync(appPaths(w.config, 'shop').siteJson, 'utf8');
     expect(JSON.parse(siteJson).container).toMatchObject({ source: 'registry', digest: digest(1), port: 8000 });
     for (const text of [manifestText, siteJson]) expect(text).not.toMatch(/reg-token-secret|env-secret-value/);
+  });
+
+  it('name the image by the reference it came by, which the app’s own may no longer be', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    watch(w, site, 'ghcr.io/example/store:stable');
+    // Recreate container writes its site.json again, which the backup holds beside its manifest.
+    const recreate = w.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 });
+    expect((await finish(w, recreate.id)).status).toBe('succeeded');
+    const backup = await w.core.backup.create(site, 'manual');
+    const manifest = JSON.parse(fs.readFileSync(path.join(backup.path, 'manifest.json'), 'utf8'));
+    expect(manifest.container).toMatchObject({ reference: REF, digest: digest(1) });
+    const siteJson = JSON.parse(execFileSync('tar', ['-xzOf', path.join(backup.path, 'files.tar.gz'), 'site.json'], { encoding: 'utf8' }));
+    expect(siteJson.container).toMatchObject({ reference: REF, digest: digest(1) });
   });
 
   it('restore its data and the mounts they hold, and leave the others as they are', async () => {
@@ -144,6 +177,36 @@ describe('a container app’s backups', () => {
     expect(settings.registryToken).toBe(LOGIN.password);
     expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()!.status).toBe('running');
     expect(fs.existsSync(path.join(w.config.srvRoot, 'traefik', 'dynamic', appRoutesFileName('shop')))).toBe(true);
+  });
+
+  it('a restore onto an image that runs as another user hands it the folders, and is a deploy from then on', async () => {
+    const chowns: string[] = [];
+    const w = await world({ chowns });
+    const site = await createShop(w);
+    fill(w);
+    const backup = await w.core.backup.create(site, 'manual');
+    // Taken on an older image, of a repository the app has left since, that runs as a user of its own.
+    const OLD = 'ghcr.io/example/shop-legacy:1';
+    w.docker.publish(OLD, digest(8), { login: LOGIN, imageId: 'sha256:img8', config: { exposedPorts: ['8000/tcp'], user: 'app' } });
+    w.docker.imageFiles.set('sha256:img8', new Map([['/etc/passwd', 'root:x:0:0::/root:/bin/sh\napp:x:10001:10001::/srv:/bin/sh\n']]));
+    const manifestFile = path.join(backup.path, 'manifest.json');
+    const m = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    fs.writeFileSync(manifestFile, JSON.stringify({ ...m, container: { ...m.container, reference: OLD, digest: digest(8), imageId: 'sha256:img8' } }));
+
+    const restore = w.worker.enqueue('backup.restore', { backupId: backup.id, skipPreRestoreBackup: true }, { id: site.id, slug: 'shop', serverId: 1 });
+    const done = await finish(w, restore.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(creates(w.docker).at(-1)!.image).toBe(`ghcr.io/example/shop-legacy@${digest(8)}`);
+    expect(settingsOf(w, site.id)).toMatchObject({ digest: digest(8), imageId: 'sha256:img8', imageUid: 10001, imageGid: 10001, reference: REF });
+    // The files came back to the user the app ran as, then went to the one it runs as now.
+    expect(chowns).toEqual(['0:0', '10001:10001']);
+    const deploys = w.db.select().from(appDeploys).where(eq(appDeploys.siteId, site.id)).orderBy(appDeploys.id).all();
+    expect(deploys.at(-1)).toMatchObject({ origin: 'restore', result: 'ok', reference: OLD, digest: digest(8), imageId: 'sha256:img8', jobId: restore.id });
+
+    // What runs goes by the backup's reference from then on.
+    const recreate = w.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 });
+    expect((await finish(w, recreate.id)).status).toBe('succeeded');
+    expect(creates(w.docker).at(-1)!.image).toBe(`ghcr.io/example/shop-legacy@${digest(8)}`);
   });
 
   it('refuses to restore an uploaded image that is gone, before anything is touched', async () => {
@@ -263,6 +326,15 @@ describe('a mount filled from an archive', () => {
     expect(fs.readFileSync(path.join(dir, 'logo.png'), 'utf8')).toBe('logo v1');
     expect(fs.readdirSync(appPaths(w.config, 'shop').mounts).sort()).toEqual(['secrets', 'uploads']);
   });
+
+  it('lets go of the archive of a fill canceled before it ran, and removes it from the server', async () => {
+    const w = await world();
+    await createShop(w);
+    const { id, jobId } = await upload(w, GZIP);
+    expect(w.worker.cancel(jobId)).toBe('canceled');
+    expect(() => w.deps.apps.assertUploadFree(`mount:${id}`)).not.toThrow();
+    await waitFor(() => !fs.existsSync(appPaths(w.config, 'shop').mountUpload(id)));
+  });
 });
 
 describe('moving a container app', () => {
@@ -300,5 +372,17 @@ describe('moving a container app', () => {
     const forwarder = fs.readFileSync(path.join(w.config.srvRoot, 'traefik', 'dynamic', 'move-shop.yml'), 'utf8');
     expect(forwarder).toContain('rule: "Host(`shop.example.com`) || Host(`shop.dev.example.test`)"');
     expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()!.serverId).toBe(s2.id);
+  });
+
+  it('pulls its image on the target from the repository it came by, after the app’s reference has changed', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    watch(w, site, 'ghcr.io/example/store:stable');
+    const s2 = w.addSshServer('s2', { real: true, publicIp: '203.0.113.9' });
+    prepare(s2.docker);
+    const done = await finish(w, w.deps.sites.move('shop', { targetServerId: s2.id }).id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(s2.docker.calls.filter((c) => c.method === 'pullImage').map((c) => c.args)).toEqual([[`${REPO}@${digest(1)}`, { auth: 'ci' }]]);
+    expect(creates(s2.docker).at(-1)!.image).toBe(`${REPO}@${digest(1)}`);
   });
 });

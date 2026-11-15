@@ -18,7 +18,7 @@ import { httpProbe, httpProbeAttempts, type ProbeAttempt, type ProbeOpts } from 
 import type { RecipeHook } from '../../../shared/recipes.js';
 import type { HookVars, RecipeOutcome } from '../../services/licenses.js';
 import { hasDatabase, isContainerApp, isExternal, isPhpSite, type SiteApps, type SiteKinds } from '../../lib/siteKind.js';
-import { appRows, ensureAppFolders } from '../../services/appSpec.js';
+import { appRows, ensureAppFolders, runningReference } from '../../services/appSpec.js';
 
 /**
  * The site a job works on. An external site is refused unless the job is one that works for both
@@ -178,7 +178,8 @@ export async function writeSiteJson(server: ServerHandle, s: Pick<CoreServices, 
       ? {
           container: {
             source: app.settings.source,
-            reference: app.settings.reference,
+            // The one its digest came by, as the backup's manifest has it: the app's own may name another repository since.
+            reference: runningReference(s.db, app.settings),
             digest: app.settings.digest,
             imageId: app.settings.imageId,
             port: app.settings.port,

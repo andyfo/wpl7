@@ -70,6 +70,7 @@ import {
 } from '../components/SiteCreation';
 import { countryName, flagOf, formatBytes, formatDate, localeName, sitePhp, timeAgo } from '../lib/format';
 import { siteHealth } from '../lib/siteHealth';
+import { moveBody, moveFreeze, type MoveQuiesce } from './siteMove';
 
 const SITE_TABS = [
   { id: 'overview', label: 'Overview' },
@@ -444,12 +445,11 @@ function MoveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
   const servers = useServers();
   const run = useRunJob([['site', slug], ['servers']]);
   const [targetId, setTargetId] = useState<number | null>(null);
-  const [quiesce, setQuiesce] = useState<'maintenance' | 'stop' | 'none' | null>(null);
+  const [quiesce, setQuiesce] = useState<MoveQuiesce | null>(null);
   const s = site.data;
   if (!s) return null;
-  // Maintenance mode is WordPress's: a PHP site is stopped while it is copied.
-  const php = s.app === 'php';
-  const freeze = php ? 'stop' : 'maintenance';
+  // Maintenance mode is WordPress's: a PHP site is stopped while it is copied, a container app always.
+  const freeze = moveFreeze(s);
   const effQuiesce = quiesce ?? freeze;
 
   const candidates = (servers.data ?? []).filter((srv) => srv.id !== s.serverId && srv.status === 'ok');
@@ -507,18 +507,22 @@ function MoveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
                 </div>
               </div>
             )}
-            {s.isLive && (
-              <div className="space-y-1.5">
-                <div className="font-medium">While copying:</div>
-                <label className="flex items-center gap-2">
-                  <input type="radio" checked={effQuiesce === freeze} onChange={() => setQuiesce(freeze)} />
-                  {php ? 'Stop the site while it moves: nothing gets lost' : 'Freeze the site (maintenance page) — nothing gets lost'}
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="radio" checked={effQuiesce === 'none'} onChange={() => setQuiesce('none')} />
-                  {php ? 'Keep serving: changes made during the copy are lost' : 'Keep serving — changes made during the copy are lost'}
-                </label>
-              </div>
+            {s.app === 'container' ? (
+              <p className="text-neutral-600">The app is stopped while it moves: nothing gets lost.</p>
+            ) : (
+              freeze && (
+                <div className="space-y-1.5">
+                  <div className="font-medium">While copying:</div>
+                  <label className="flex items-center gap-2">
+                    <input type="radio" checked={effQuiesce === freeze} onChange={() => setQuiesce(freeze)} />
+                    {freeze === 'stop' ? 'Stop the site while it moves: nothing gets lost' : 'Freeze the site (maintenance page) — nothing gets lost'}
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="radio" checked={effQuiesce === 'none'} onChange={() => setQuiesce('none')} />
+                    {freeze === 'stop' ? 'Keep serving: changes made during the copy are lost' : 'Keep serving — changes made during the copy are lost'}
+                  </label>
+                </div>
+              )
             )}
             <ErrorNote error={run.error} />
             <div className="flex justify-end gap-2">
@@ -528,13 +532,7 @@ function MoveModal({ slug, onClose }: { slug: string; onClose: () => void }) {
                 busy={run.active}
                 onClick={() =>
                   target &&
-                  run.mutate(
-                    {
-                      path: `/api/sites/${slug}/move`,
-                      body: { targetServerId: target.id, ...(s.isLive ? { quiesce: effQuiesce } : {}) },
-                    },
-                    { onSuccess: onClose },
-                  )
+                  run.mutate({ path: `/api/sites/${slug}/move`, body: moveBody(s, target.id, quiesce) }, { onSuccess: onClose })
                 }
               >
                 Move site
@@ -1108,7 +1106,7 @@ function BackupsTab({ slug }: { slug: string }) {
                 onError={setActionError}
               />
               <span className="max-w-xl text-xs text-neutral-500">
-                Before a plugin, theme or WordPress update. Schedules use their own switch.
+                {site.data.app === 'container' ? 'Before a deploy.' : 'Before a plugin, theme or WordPress update. Schedules use their own switch.'}
               </span>
             </div>
           )}
@@ -1160,7 +1158,7 @@ function BackupsTab({ slug }: { slug: string }) {
                 <th className="pb-2">Type</th>
                 <th className="pb-2">Status</th>
                 {offsiteConfigured && <th className="pb-2">Remote</th>}
-                {site.data?.app !== 'php' && <th className="pb-2">WP</th>}
+                {site.data?.app === 'wordpress' && <th className="pb-2">WP</th>}
                 <th className="pb-2 text-right">Size</th>
                 <th className="pb-2" />
               </tr>
@@ -1201,7 +1199,7 @@ function BackupsTab({ slug }: { slug: string }) {
                       <OffsiteBadges copies={b.copies} />
                     </td>
                   )}
-                  {site.data?.app !== 'php' && <td className="py-2 pr-3 text-neutral-600">{b.wpVersion ?? '–'}</td>}
+                  {site.data?.app === 'wordpress' && <td className="py-2 pr-3 text-neutral-600">{b.wpVersion ?? '–'}</td>}
                   <td className="py-2 pr-3 text-right text-neutral-500">{formatBytes(b.sizeBytes)}</td>
                   <td className="py-2 text-right">
                     <BackupActions

@@ -102,6 +102,10 @@ A [container app](/docs/sites/container/)'s restore puts back its files, its dat
 the backup was taken with. An image that left the server is pulled again by its digest. The app keeps
 its settings and secrets as they are now. A mount kept out of backups stays as it is.
 
+On another image, the app runs as that image's user, and its **Deploys** tab lists the restore.
+Automatic updates leave alone the image the restore went back from, until the tag names a newer
+one.
+
 ## Limits
 
 - A restore replaces everything that changed since the backup: posts, orders, comments and uploads.

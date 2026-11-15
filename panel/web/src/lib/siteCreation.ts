@@ -67,7 +67,7 @@ export interface NewAppDraft {
   reference: string;
   registryUser: string;
   registryToken: string;
-  /** The uploaded archive: its upload id, and the file's name for the review. */
+  /** The uploaded archive: its upload id, and the file's name for the review. Null while one is still going up. */
   upload: { id: string; name: string } | null;
   /** '' = the port the image exposes. */
   port: string;
@@ -76,7 +76,7 @@ export interface NewAppDraft {
   mounts: MountEdit[];
   dropAllCaps: boolean;
   readOnlyRoot: boolean;
-  /** null = the one route it starts with, on its dev hostname. */
+  /** null = the one route it starts with, on its dev hostname, which an edited list keeps following (RouteEdit.devHost). */
   routes: RouteEdit[] | null;
   healthPath: string;
 }

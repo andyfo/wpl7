@@ -193,8 +193,8 @@ export type AppUpdateMode = (typeof appUpdateModes)[number];
 export const appDeployResults = ['running', 'ok', 'failed'] as const;
 export type AppDeployResult = (typeof appDeployResults)[number];
 
-/** What started a deploy. */
-export const appDeployOrigins = ['create', 'auto', 'hook', 'user', 'rollback', 'upload'] as const;
+/** What started a deploy. `restore`: a restore that put the image of its backup back in. */
+export const appDeployOrigins = ['create', 'auto', 'hook', 'user', 'rollback', 'upload', 'restore'] as const;
 export type AppDeployOrigin = (typeof appDeployOrigins)[number];
 
 export const jobStatuses = ['queued', 'running', 'succeeded', 'failed', 'canceled'] as const;

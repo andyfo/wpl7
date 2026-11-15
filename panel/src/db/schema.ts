@@ -2046,7 +2046,7 @@ export const appDeploys = sqliteTable(
     /** Who: a user's name, an API key's, `hook`, or null for the panel itself. */
     actor: text('actor'),
     jobId: integer('job_id'),
-    /** How long the app answered nothing: from the old container's stop to the new one's pass. */
+    /** How long the app answered 503: from when its routes were held to the new container's pass. */
     gapMs: integer('gap_ms'),
     error: text('error'),
     /** The new container's last lines, kept when it failed. */

@@ -10,7 +10,8 @@ import { WporgPluginSearch } from '../components/WporgPluginSearch';
 import { LocaleSelect } from '../components/LocaleSelect';
 import { localeName } from '../lib/format';
 import { draftOf, keepDraft, type NewAppDraft, type NewSiteDraft } from '../lib/siteCreation';
-import { AppImageStep, AppRoutesStep, AppSettingsStep, appBody, appReviewRows, appStepOk, emptyAppDraft } from '../components/app/NewAppSteps';
+import { AppImageStep, AppRoutesStep, AppSettingsStep, appReviewRows } from '../components/app/NewAppSteps';
+import { appBody, appStepOk, emptyAppDraft } from '../lib/appForm';
 
 type StepId = 'name' | 'wordpress' | 'plugins' | 'php' | 'image' | 'settings' | 'routes' | 'review';
 
@@ -142,9 +143,11 @@ export function NewSite() {
     domains: customDomain ? domains : undefined,
     phpVersion: effPhp,
   };
+  // A container app's is null while it has no archive to send: none chosen yet, or one still going up.
+  const appPart = app === 'container' ? appBody(container, devHostname) : null;
   const body =
     app === 'container'
-      ? { title: common.title, slug: common.slug, serverId: common.serverId, ...appBody(container, devHostname) }
+      ? appPart && { title: common.title, slug: common.slug, serverId: common.serverId, ...appPart }
       : app === 'php'
       ? { ...common, app, database, ...(webRootValue ? { webRoot: webRootValue } : {}) }
       : {
@@ -161,6 +164,7 @@ export function NewSite() {
         };
 
   const create = () => {
+    if (!body) return;
     const sent: NewSiteDraft = {
       app,
       title,
@@ -448,7 +452,7 @@ export function NewSite() {
               Continue
             </Button>
           ) : (
-            <Button onClick={create} busy={run.active}>
+            <Button onClick={create} busy={run.active} disabled={!body} title={body ? undefined : 'Choose the image archive first.'}>
               Create site
             </Button>
           )}

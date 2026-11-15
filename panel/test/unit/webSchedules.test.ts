@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { ScheduleDto } from '../../shared/types.js';
+import type { SiteApp, SiteStatus } from '../../shared/schemas.js';
 import {
   backgroundSummary,
   cronScheduleProblem,
   isPaused,
+  leftOutText,
   nextRunsTooltip,
   parseRestBody,
   restRouteProblem,
+  skipReason,
   sortSchedules,
   suggestName,
+  takesSite,
   targetText,
 } from '../../web/src/lib/schedules.js';
 
@@ -207,5 +211,27 @@ describe('the REST request fields', () => {
     expect(parseRestBody('{status: publish}').problem).toMatch(/^The body is not valid JSON/);
     expect(parseRestBody('"text"').problem).toBe('The body is a JSON object ({…}) or a list ([…]).');
     expect(parseRestBody(JSON.stringify({ big: 'x'.repeat(70_000) })).problem).toBe('The body may be at most 64 KB.');
+  });
+});
+
+describe('actions that need WordPress, on sites without it', () => {
+  const site = (app: SiteApp, status: SiteStatus = 'running') => ({ app, status, kind: 'hosted' as const });
+
+  it('skip a container app as they skip a PHP site, and say which it is', () => {
+    expect(skipReason('wp.update', site('container'))).toBe('a container app, with no WordPress');
+    expect(skipReason('wp.cli', site('php'))).toBe('a PHP site, with no WordPress');
+    expect(skipReason('wp.update', site('wordpress'))).toBeNull();
+    // What WordPress has nothing to do with runs on an app as on any site.
+    expect(skipReason('site.restart', site('container'))).toBeNull();
+    expect(skipReason('site.restart', site('container', 'stopped'))).toBe('stopped');
+  });
+
+  it('leave container apps out of All sites and Server, and say so', () => {
+    expect(takesSite('wp.scan', site('container'))).toBe(false);
+    expect(takesSite('backup', site('container'))).toBe(true);
+    expect(leftOutText('wp.update', [site('wordpress'), site('container')])).toBe('Container apps are left out.');
+    expect(leftOutText('wp.update', [site('php'), site('container')])).toBe('PHP sites and container apps are left out.');
+    expect(leftOutText('wp.rest', [site('php'), site('wordpress')])).toBe('PHP sites are left out.');
+    expect(leftOutText('backup', [site('php'), site('container')])).toBe('');
   });
 });

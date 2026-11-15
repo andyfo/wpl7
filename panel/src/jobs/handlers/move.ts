@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { appSettings, backups, moveCleanups, sites, type MoveCleanupRow } from '../../db/schema.js';
+import { appRoutes, appSettings, backups, moveCleanups, sites, type MoveCleanupRow } from '../../db/schema.js';
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
@@ -92,6 +92,13 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     if (alive.exitCode !== 0) throw new Error(`Target server check failed: ${alive.stderr.trim().slice(0, 200)}`);
     if ((await target.docker.containerState('wpl7-mariadb')) !== 'running') {
       throw new Error(`MariaDB is not running on "${target.name}"`);
+    }
+    // The request asked the target's Traefik too, but a route saved while it waited for the
+    // answer was not among the ones it asked about. Routes are frozen from here (AppsService
+    // setRoutes refuses an app that is moving), so this is the last word.
+    if (isContainerApp(site)) {
+      const enabled = s.db.select({ scheme: appRoutes.scheme }).from(appRoutes).where(and(eq(appRoutes.siteId, site.id), eq(appRoutes.enabled, 1))).all();
+      await s.apps.assertHttpRoutesOn(p.targetServerId, enabled);
     }
 
     // Leftovers from a previous failed attempt are provably garbage (slugs are unique).
@@ -596,7 +603,6 @@ export async function finalizeCleanup(ctx: JobContext<unknown>, s: CoreServices,
   if (owner && isContainerApp(owner)) {
     const rows = appRows(s.db, owner.id);
     if (rows) await cleanAppImages(ctx, s, source, owner, rows.settings, { all: true }).catch((err: unknown) => ctx.warn(`Could not remove the app's images there: ${errMsg(err)}`));
-    void s.appRoutes.kick(cleanup.sourceServerId);
   }
   await rmOn(source, s.config.paths.sites, cleanup.siteSlug);
   // The network outlives the container it was made for; left behind, every stack redeploy
@@ -613,6 +619,9 @@ export async function finalizeCleanup(ctx: JobContext<unknown>, s: CoreServices,
     .set({ status: 'done', finalizedAt: Date.now() })
     .where(eq(moveCleanups.id, cleanup.id))
     .run();
+  // After the row says done: until then the source counts the hosts it forwarded (appHttpHosts),
+  // and the block list keeps their twins there.
+  if (owner && isContainerApp(owner)) void s.appRoutes.kick(cleanup.sourceServerId);
   ctx.info('Source cleanup done.');
 }
 

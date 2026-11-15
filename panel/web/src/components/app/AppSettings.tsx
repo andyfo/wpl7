@@ -6,16 +6,37 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import type { AppDto, AppRouteDto, JobDto, SiteDetail } from '../../../../shared/types';
+import type { AppDto, JobDto, SiteDetail } from '../../../../shared/types';
 import type { AppRouteMatch, AppRouteScheme, AppUpdateMode } from '../../../../shared/schemas';
 import { api } from '../../api/client';
+import { useMeta } from '../../api/hooks';
 import { clearDeployToken, makeDeployToken, patchApp, saveRegistryAuth, saveRoutes, uploadMountArchive } from '../../api/apps';
 import { useFollowJob } from '../jobConsole/context';
 import { Button, Card, CopyField, ErrorNote, Field, Segmented, Toggle, inputClass } from '../ui';
 import { formatDate } from '../../lib/format';
-import type { EnvEdit, MountEdit, RouteEdit } from '../../lib/appForm';
+import {
+  RUNS_UNEDITED,
+  editEnv,
+  envBody,
+  envEdits,
+  mountEdits,
+  mountsBody,
+  newRowKey,
+  replaceSecret,
+  routeEdits,
+  routeErrorLines,
+  runsPatch,
+  runsShown,
+  type EnvEdit,
+  type MountEdit,
+  type RouteEdit,
+  type RunsEdit,
+} from '../../lib/appForm';
 
-/** One card's save: its call, the job it may start, and the site read again. */
+/**
+ * One card's save: its call, the job it may start, and the site read again. An answer with the app
+ * in it is the app as it is now: `keep` puts it in the site at once, so the cards show it.
+ */
 function useSave(slug: string) {
   const qc = useQueryClient();
   const follow = useFollowJob();
@@ -27,21 +48,23 @@ function useSave(slug: string) {
     const t = setTimeout(() => setSaved(false), 5_000);
     return () => clearTimeout(t);
   }, [saved]);
+  const keep = (app: AppDto) => qc.setQueryData<SiteDetail>(['site', slug], (old) => (old ? { ...old, container: app } : old));
   const save = (call: () => Promise<unknown>) => {
     setSaving(true);
     setSaved(false);
     setError(null);
     void call()
       .then((res) => {
-        const job = (res as { job?: JobDto | null } | undefined)?.job;
-        if (job) follow(job, { refresh: [['site', slug]] });
+        const answer = res as { job?: JobDto | null; app?: AppDto } | undefined;
+        if (answer?.app) keep(answer.app);
+        if (answer?.job) follow(answer.job, { refresh: [['site', slug]] });
         void qc.invalidateQueries({ queryKey: ['site', slug] });
         setSaved(true);
       })
       .catch(setError)
       .finally(() => setSaving(false));
   };
-  return { save, saving, saved, error };
+  return { save, keep, saving, saved, error };
 }
 
 function SaveRow({ label, onClick, s, disabled, note }: { label: string; onClick: () => void; s: ReturnType<typeof useSave>; disabled?: boolean; note?: string }) {
@@ -73,7 +96,8 @@ export function AppImageSettings({ site }: { site: SiteDetail }) {
   const login = useSave(site.slug);
   const updates = useSave(site.slug);
   const [reference, setReference] = useState(app.reference);
-  const [username, setUsername] = useState(app.registryUser);
+  // Null until typed in: it shows the stored user, which a reference on another registry clears.
+  const [username, setUsername] = useState<string | null>(null);
   const [token, setToken] = useState('');
   const [mode, setMode] = useState<AppUpdateMode>(app.updates.mode);
   const [minutes, setMinutes] = useState(String(app.updates.checkMinutes));
@@ -85,27 +109,38 @@ export function AppImageSettings({ site }: { site: SiteDetail }) {
     );
   }
   const n = Number(minutes);
+  const user = username ?? app.registryUser;
+  const newReference = reference.trim() !== app.reference;
+  const saveLogin = () =>
+    login.save(async () => {
+      // The reference first: one on another registry clears the login, so saved after it, this one stays.
+      if (newReference) login.keep((await patchApp(site.slug, { reference: reference.trim() })).app);
+      const saved = await saveRegistryAuth(site.slug, user.trim(), token);
+      setToken('');
+      setUsername(null);
+      return { app: saved };
+    });
   return (
     <Card title="Image and updates">
-      <Field label="Image reference" hint="Deploy now, and the next check, take the image it names." width="lg">
+      <Field label="Image reference" hint="What Deploy now and the update check pull. One on another registry clears the login." width="lg">
         <input className={inputClass} value={reference} onChange={(e) => setReference(e.target.value)} placeholder="ghcr.io/example/app:stable" />
       </Field>
-      <SaveRow label="Save reference" s={ref} disabled={reference.trim() === app.reference} onClick={() => ref.save(() => patchApp(site.slug, { reference: reference.trim() }))} />
+      <SaveRow label="Save reference" s={ref} disabled={!newReference} onClick={() => ref.save(() => patchApp(site.slug, { reference: reference.trim() }))} />
 
       <div className="mt-6 grid max-w-2xl gap-4 sm:grid-cols-2">
         <Field label="Registry user">
-          <input className={inputClass} value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
+          <input className={inputClass} value={user} onChange={(e) => setUsername(e.target.value)} autoComplete="off" />
         </Field>
         <Field label="Registry token" hint={app.registryToken.set ? 'Set. Type a new one to replace it.' : 'For a private image.'}>
           <input className={inputClass} type="password" value={token} onChange={(e) => setToken(e.target.value)} autoComplete="new-password" />
         </Field>
       </div>
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button busy={login.saving} disabled={username.trim() === '' || token === ''} onClick={() => login.save(() => saveRegistryAuth(site.slug, username.trim(), token).then(() => setToken('')))}>
-          Save login
+        <Button busy={login.saving} disabled={user.trim() === '' || token === ''} onClick={saveLogin}>
+          {newReference ? 'Save reference and login' : 'Save login'}
         </Button>
         {app.registryToken.set && (
-          <Button variant="secondary" disabled={login.saving} onClick={() => login.save(() => saveRegistryAuth(site.slug, '', '').then(() => setUsername('')))}>
+          <Button variant="secondary" disabled={login.saving} onClick={() => login.save(() => saveRegistryAuth(site.slug, '', '').then((saved) => (setUsername(null), { app: saved })))}>
             Remove login
           </Button>
         )}
@@ -144,12 +179,18 @@ export function DeployHookCard({ site }: { site: SiteDetail }) {
   const s = useSave(site.slug);
   const [token, setToken] = useState<string | null>(null);
   const url = `${window.location.origin}/api/hooks/app-deploy`;
+  // An uploaded image has no tag to pull a newer one of, so the panel makes it no token (409).
+  const registry = app.source === 'registry';
   return (
     <Card title="Deploy hook">
       <p className="measure text-sm text-neutral-600">
-        Your CI calls it after a push, with the token in a header. The app then deploys what its reference names.
+        {registry
+          ? 'Your CI calls it after a push, with the token in a header. The app then deploys what its reference names.'
+          : 'An app with an uploaded image has no hook. Upload a new image on the Overview.'}
       </p>
-      <p className="mt-2 text-sm">{app.deployToken.set ? `On, token made ${formatDate(app.deployToken.setAt!)}.` : 'Off.'}</p>
+      {(registry || app.deployToken.set) && (
+        <p className="mt-2 text-sm">{app.deployToken.set ? `On, token made ${formatDate(app.deployToken.setAt!)}.` : 'Off.'}</p>
+      )}
       {token && (
         <div className="mt-3 space-y-2">
           <p className="text-xs font-medium text-amber-800">Shown this once. Keep it in your CI's secrets.</p>
@@ -157,21 +198,20 @@ export function DeployHookCard({ site }: { site: SiteDetail }) {
           <CopyField value={`curl -fsS -X POST -H "X-WPL7-Deploy-Token: ${token}" ${url}`} />
         </div>
       )}
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <Button
-          busy={s.saving}
-          disabled={app.source !== 'registry'}
-          onClick={() => s.save(() => makeDeployToken(site.slug).then((r) => setToken(r.token)))}
-        >
-          {app.deployToken.set ? 'Replace token' : 'Make token'}
-        </Button>
-        {app.deployToken.set && (
-          <Button variant="secondary" disabled={s.saving} onClick={() => s.save(() => clearDeployToken(site.slug).then(() => setToken(null)))}>
-            Switch off
-          </Button>
-        )}
-        {app.source !== 'registry' && <span className="text-xs text-neutral-500">An app that runs uploaded images has nothing to pull.</span>}
-      </div>
+      {(registry || app.deployToken.set) && (
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          {registry && (
+            <Button busy={s.saving} onClick={() => s.save(() => makeDeployToken(site.slug).then((r) => setToken(r.token)))}>
+              {app.deployToken.set ? 'Replace token' : 'Make token'}
+            </Button>
+          )}
+          {app.deployToken.set && (
+            <Button variant="secondary" disabled={s.saving} onClick={() => s.save(() => clearDeployToken(site.slug).then(() => setToken(null)))}>
+              Switch off
+            </Button>
+          )}
+        </div>
+      )}
       <ErrorNote error={s.error} />
     </Card>
   );
@@ -190,9 +230,6 @@ const SCHEMES: { id: AppRouteScheme; label: string }[] = [
   { id: 'http', label: 'HTTP' },
   { id: 'both', label: 'Both' },
 ];
-
-let nextKey = 1;
-export const routeEdits = (routes: AppRouteDto[]): RouteEdit[] => routes.map((r) => ({ ...r, key: nextKey++ }));
 
 /** The route table: also New site's Routes step, with `onChange` and no save. */
 export function RoutesEditor({ rows, onChange }: { rows: RouteEdit[]; onChange: (rows: RouteEdit[]) => void }) {
@@ -228,7 +265,7 @@ export function RoutesEditor({ rows, onChange }: { rows: RouteEdit[]; onChange: 
           </button>
         </div>
       ))}
-      <Button small variant="secondary" onClick={() => onChange([...rows, { host: '', match: 'none', path: '', scheme: 'https', enabled: true, key: nextKey++ }])}>
+      <Button small variant="secondary" onClick={() => onChange([...rows, { host: '', match: 'none', path: '', scheme: 'https', enabled: true, key: newRowKey() }])}>
         Add route
       </Button>
     </div>
@@ -238,9 +275,21 @@ export function RoutesEditor({ rows, onChange }: { rows: RouteEdit[]; onChange: 
 export function RoutesCard({ site }: { site: SiteDetail }) {
   const app = site.container!;
   const s = useSave(site.slug);
+  // Without TLS a route's https router is on plain http too (services/appRoutes.ts).
+  const tls = useMeta().data?.tlsMode !== 'none';
   const [rows, setRows] = useState(() => routeEdits(app.routes));
+  const refused = routeErrorLines(app.routeErrors, app.routes, tls);
   return (
     <Card title="Routes">
+      {refused.length > 0 && (
+        <div className="mb-4 space-y-1 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+          {refused.map((line) => (
+            <p key={line.key} title={formatDate(line.at)}>
+              {line.text}
+            </p>
+          ))}
+        </div>
+      )}
       <p className="measure mb-4 text-sm text-neutral-600">
         A host no other site has is the app's own. On another site's host, a route takes a path. Plain HTTP answers on port 80 without the redirect.
       </p>
@@ -250,7 +299,13 @@ export function RoutesCard({ site }: { site: SiteDetail }) {
         s={s}
         disabled={rows.length === 0 || rows.some((r) => r.host === '')}
         note="Nothing restarts."
-        onClick={() => s.save(() => saveRoutes(site.slug, rows.map(({ id, host, match, path, scheme, enabled }) => ({ ...(id ? { id } : {}), host, match, path: match === 'none' ? '' : path, scheme, enabled }))).then((dto: AppDto) => setRows(routeEdits(dto.routes))))}
+        onClick={() =>
+          s.save(() =>
+            saveRoutes(site.slug, rows.map(({ id, host, match, path, scheme, enabled }) => ({ ...(id ? { id } : {}), host, match, path: match === 'none' ? '' : path, scheme, enabled }))).then(
+              (dto: AppDto) => (setRows(routeEdits(dto.routes)), { app: dto }),
+            ),
+          )
+        }
       />
     </Card>
   );
@@ -261,44 +316,53 @@ export function RoutesCard({ site }: { site: SiteDetail }) {
 
 const PLACEHOLDERS = ['db.host', 'db.port', 'db.name', 'db.user', 'db.password', 'mail.host', 'mail.port', 'mail.user', 'mail.password', 'site.domain'];
 
+/** Why a kept secret's name and switch do not move: the API keeps its value by both. */
+const KEPT_HINT = 'Replace it to rename it or switch Secret off.';
+
 /** The environment list: also New site's Settings step. A kept secret has a value the page never sees. */
 export function EnvEditor({ rows, onChange }: { rows: EnvEdit[]; onChange: (rows: EnvEdit[]) => void }) {
-  const edit = (key: number, patch: Partial<EnvEdit>) => onChange(rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  const edit = (key: number, patch: Partial<Pick<EnvEdit, 'name' | 'value' | 'secret'>>) => onChange(rows.map((r) => (r.key === key ? editEnv(r, patch) : r)));
   return (
     <div className="space-y-2">
       {rows.map((r) => (
         <div key={r.key} className="flex flex-wrap items-center gap-2">
-          <input className={`${inputClass} w-56 font-mono text-xs`} value={r.name} onChange={(e) => edit(r.key, { name: e.target.value.trim() })} placeholder="NAME" aria-label="Name" />
+          <input
+            className={`${inputClass} w-56 font-mono text-xs`}
+            value={r.name}
+            disabled={r.kept}
+            title={r.kept ? KEPT_HINT : undefined}
+            onChange={(e) => edit(r.key, { name: e.target.value.trim() })}
+            placeholder="NAME"
+            aria-label="Name"
+          />
           {r.kept ? (
             <span className="flex flex-1 items-center gap-2 text-sm text-neutral-500">
               •••••• set
-              <Button small variant="secondary" onClick={() => edit(r.key, { kept: false, value: '' })}>
+              <Button small variant="secondary" onClick={() => onChange(rows.map((x) => (x.key === r.key ? replaceSecret(x) : x)))}>
                 Replace
               </Button>
             </span>
           ) : (
             <input className={`${inputClass} min-w-[12rem] flex-1 font-mono text-xs`} type={r.secret ? 'password' : 'text'} value={r.value} onChange={(e) => edit(r.key, { value: e.target.value })} aria-label="Value" autoComplete="off" />
           )}
-          <Toggle checked={r.secret} onChange={(v) => edit(r.key, { secret: v, ...(v ? {} : { kept: false }) })} label="Secret" />
+          <span title={r.kept ? KEPT_HINT : undefined}>
+            <Toggle checked={r.secret} disabled={r.kept} onChange={(v) => edit(r.key, { secret: v })} label="Secret" />
+          </span>
           <button type="button" className="px-2 text-neutral-400 hover:text-neutral-700" aria-label={`Remove ${r.name || 'variable'}`} onClick={() => onChange(rows.filter((x) => x.key !== r.key))}>
             ✕
           </button>
         </div>
       ))}
-      <Button small variant="secondary" onClick={() => onChange([...rows, { key: nextKey++, name: '', value: '', secret: false, kept: false }])}>
+      <Button small variant="secondary" onClick={() => onChange([...rows, { key: newRowKey(), name: '', value: '', secret: false, kept: false }])}>
         Add variable
       </Button>
       <p className="measure text-xs text-neutral-500">
         Filled in at every start: {PLACEHOLDERS.map((p) => `{{${p}}}`).join(' ')}. A secret is never shown again.
+        {rows.some((r) => r.kept) && ` ${KEPT_HINT}`}
       </p>
     </div>
   );
 }
-
-export const envEdits = (env: AppDto['env']): EnvEdit[] => env.map((v) => ({ key: nextKey++, name: v.name, value: v.value ?? '', secret: v.secret, kept: v.secret && v.set }));
-
-/** What the API takes: a kept secret goes without its value, which it keeps. */
-export const envBody = (rows: EnvEdit[]) => rows.map((r) => (r.kept ? { name: r.name, secret: true } : { name: r.name, value: r.value, secret: r.secret }));
 
 export function EnvCard({ site }: { site: SiteDetail }) {
   const app = site.container!;
@@ -321,8 +385,6 @@ export function EnvCard({ site }: { site: SiteDetail }) {
 // --------------------------------------------------------------- Mounts
 
 
-export const mountEdits = (mounts: AppDto['mounts']): MountEdit[] => mounts.map((m) => ({ key: nextKey++, ...m, saved: true }));
-
 /** The mount list: also New site's Settings step, where nothing can be uploaded yet. */
 export function MountsEditor({ rows, onChange, upload }: { rows: MountEdit[]; onChange: (rows: MountEdit[]) => void; upload?: (name: string) => React.ReactNode }) {
   const edit = (key: number, patch: Partial<MountEdit>) => onChange(rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -340,14 +402,12 @@ export function MountsEditor({ rows, onChange, upload }: { rows: MountEdit[]; on
           </button>
         </div>
       ))}
-      <Button small variant="secondary" onClick={() => onChange([...rows, { key: nextKey++, name: '', path: '', writable: false, inBackups: true, filledAt: null, saved: false }])}>
+      <Button small variant="secondary" onClick={() => onChange([...rows, { key: newRowKey(), name: '', path: '', writable: false, inBackups: true, filledAt: null, saved: false }])}>
         Add mount
       </Button>
     </div>
   );
 }
-
-export const mountsBody = (rows: MountEdit[]) => rows.map(({ name, path, writable, inBackups }) => ({ name, path, writable, inBackups }));
 
 export function MountsCard({ site }: { site: SiteDetail }) {
   const app = site.container!;
@@ -440,52 +500,43 @@ export function HealthCard({ site }: { site: SiteDetail }) {
 export function RunsCard({ site }: { site: SiteDetail }) {
   const app = site.container!;
   const s = useSave(site.slug);
-  const [port, setPort] = useState(String(app.port));
-  const [runAs, setRunAs] = useState(app.hardening.runAs);
-  const [dropAllCaps, setDropAllCaps] = useState(app.hardening.dropAllCaps);
-  const [readOnlyRoot, setReadOnlyRoot] = useState(app.hardening.readOnlyRoot);
-  const [grace, setGrace] = useState(String(app.hardening.stopGraceSec));
-  const [paths, setPaths] = useState(app.dataPaths.map((d) => d.path).join('\n'));
-  const p = Number(port);
-  const g = Number(grace);
-  const dataPaths = paths.split('\n').map((x) => x.trim()).filter(Boolean);
-  const fromImage = new Set(app.dataPaths.filter((d) => d.fromImage).map((d) => d.path));
+  // What was typed in. The rest shows the app as it is now, with a port or user that is going in.
+  const [edit, setEdit] = useState<RunsEdit>(RUNS_UNEDITED);
+  const set = (field: Partial<RunsEdit>) => setEdit((e) => ({ ...e, ...field }));
+  const shown = runsShown(app, edit);
+  const patch = runsPatch(app, edit);
+  const fromImage = app.dataPaths.filter((d) => d.fromImage).map((d) => d.path);
+  // A port or user going in stays as it is until its recreate is done: that job holds the site, so a change now is refused.
+  const portHeld = app.pending?.port !== undefined ? `${app.pending.port} is going in. Change it once that is done.` : undefined;
+  const runAsHeld = app.pending?.runAs !== undefined ? `${app.pending.runAs || "The image's user"} is going in. Change it once that is done.` : undefined;
   return (
     <Card title="How it runs">
       <div className="grid max-w-2xl gap-4 sm:grid-cols-2">
-        <Field label="Port" hint="Where the container listens.">
-          <input className={inputClass} type="number" min={1} max={65535} value={port} onChange={(e) => setPort(e.target.value)} />
+        <Field label="Port" hint={portHeld ?? 'Where the container listens.'}>
+          <input className={inputClass} type="number" min={1} max={65535} value={shown.port} disabled={!!portHeld} title={portHeld} onChange={(e) => set({ port: e.target.value })} />
         </Field>
-        <Field label="Run as" hint={`uid:gid. Empty: the image's user (${app.user.uid}:${app.user.gid}).`}>
-          <input className={inputClass} value={runAs} onChange={(e) => setRunAs(e.target.value.trim())} placeholder="1000:1000" />
+        <Field label="Run as" hint={runAsHeld ?? `uid:gid. Empty: the image's user (${app.user.uid}:${app.user.gid}).`}>
+          <input className={inputClass} value={shown.runAs} disabled={!!runAsHeld} title={runAsHeld} onChange={(e) => set({ runAs: e.target.value.trim() })} placeholder="1000:1000" />
         </Field>
         <Field label="Stop grace (seconds)" hint="How long a stop waits for it to finish.">
-          <input className={inputClass} type="number" min={0} max={300} value={grace} onChange={(e) => setGrace(e.target.value)} />
+          <input className={inputClass} type="number" min={0} max={300} value={shown.stopGraceSec} onChange={(e) => set({ stopGraceSec: e.target.value })} />
         </Field>
       </div>
       <div className="mt-4 space-y-2">
-        <Toggle checked={dropAllCaps} onChange={setDropAllCaps} label="Drop every capability" />
-        <Toggle checked={readOnlyRoot} onChange={setReadOnlyRoot} label="Read-only root (with a writable /tmp)" />
+        <Toggle checked={shown.dropAllCaps} onChange={(v) => set({ dropAllCaps: v })} label="Drop every capability" />
+        <Toggle checked={shown.readOnlyRoot} onChange={(v) => set({ readOnlyRoot: v })} label="Read-only root (with a writable /tmp)" />
       </div>
       <div className="mt-4">
-        <Field label="Data folders" hint={`One path a line: kept across deploys, and in backups.${fromImage.size > 0 ? ` From the image: ${[...fromImage].join(', ')}.` : ''}`} width="lg">
-          <textarea className={`${inputClass} font-mono text-xs`} rows={3} value={paths} onChange={(e) => setPaths(e.target.value)} />
+        <Field label="Data folders" hint={`One path a line: kept across deploys, and in backups.${fromImage.length > 0 ? ` From the image: ${fromImage.join(', ')}.` : ''}`} width="lg">
+          <textarea className={`${inputClass} font-mono text-xs`} rows={3} value={shown.dataPaths} onChange={(e) => set({ dataPaths: e.target.value })} />
         </Field>
       </div>
       <SaveRow
         label="Save"
         s={s}
-        disabled={!Number.isInteger(p) || p < 1 || p > 65535 || !Number.isInteger(g) || g < 0 || g > 300 || !/^(\d+:\d+)?$/.test(runAs)}
+        disabled={!patch || Object.keys(patch).length === 0}
         note="Saving recreates the container."
-        onClick={() =>
-          s.save(() =>
-            patchApp(site.slug, {
-              ...(p !== app.port ? { port: p } : {}),
-              hardening: { runAs, dropAllCaps, readOnlyRoot, stopGraceSec: g },
-              dataPaths,
-            }),
-          )
-        }
+        onClick={() => patch && s.save(() => patchApp(site.slug, { ...patch }).then((res) => (setEdit(RUNS_UNEDITED), res)))}
       />
     </Card>
   );

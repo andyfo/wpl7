@@ -23,7 +23,7 @@ import {
 } from '../../shared/schemas.js';
 import { UPLOAD_ID_RE } from '../../shared/siteFilePath.js';
 import { AppError, badRequest, conflict, tooManyRequests } from '../lib/errors.js';
-import { jobToDto, viewerOf } from '../lib/dto.js';
+import { jobToDto, seesCommands, viewerOf } from '../lib/dto.js';
 import { requireAccess } from '../plugins/auth.js';
 import { DEPLOY_TOKEN_HEADER, MAX_IMAGE_UPLOAD_BYTES } from '../services/apps.js';
 import { appLogLines, appPaths } from '../services/appSpec.js';
@@ -70,9 +70,11 @@ export async function registerAppRoutes(app: FastifyInstance, deps: AppDeps): Pr
 
 function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
-  const appOf = (slug: string) => deps.apps.detail(deps.apps.bySlug(slug).site);
+  const appOf = (slug: string, opts: { logTails?: boolean } = {}) => deps.apps.detail(deps.apps.bySlug(slug).site, opts);
+  // A failed deploy's last lines are what the app printed, as its log is: for whoever may read that.
+  const logTailsFor = (req: FastifyRequest) => ({ logTails: seesCommands(viewerOf(req)) });
 
-  r.get('/api/sites/:slug/app', { schema: { params: slugParams } }, async (req) => appOf(req.params.slug));
+  r.get('/api/sites/:slug/app', { schema: { params: slugParams } }, async (req) => appOf(req.params.slug, logTailsFor(req)));
 
   r.patch('/api/sites/:slug/app', { schema: { params: slugParams, body: appPatchBody } }, async (req, reply) => {
     const { job } = deps.apps.patch(req.params.slug, req.body);
@@ -118,7 +120,7 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
   });
 
   r.get('/api/sites/:slug/app/deploys', { schema: { params: slugParams } }, async (req) => ({
-    items: deps.apps.deploys(deps.apps.bySlug(req.params.slug).site),
+    items: deps.apps.deploys(deps.apps.bySlug(req.params.slug).site, logTailsFor(req)),
   }));
 
   r.post('/api/sites/:slug/app/deploy-token', { schema: { params: slugParams } }, async (req) => ({
