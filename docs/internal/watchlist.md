@@ -20,11 +20,11 @@ for a reason; remove one once there is nothing left to watch.
 | [RDAP: registry endpoints and bootstrap](#rdap-registry-endpoints-and-bootstrap) | Medium | 2026-11-13 13:08 UTC | .co, .io, .me and .us still absent from IANA; all four supplement endpoints publish `expiration`; RFC 8056 and ICANN's profile unchanged |
 | [Reminders: PHP and OS support dates](#reminders-php-and-os-support-dates) | Medium | 2026-11-13 13:02 UTC | All dates match; PHP 8.6 not out (GA due 2026-11-19); the interim Ubuntu 26.10 is not in the map |
 | [Reminders: Cloudflare token lifetime](#reminders-cloudflare-token-lifetime) | Medium | 2026-11-13 13:15 UTC | Contracts unchanged; neither verify endpoint is documented to take `cfoat_` OAuth tokens, so one would get no date |
-| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-11-08 17:22 UTC | Open upstream, fix #13958 awaiting review; not in v3.7.17; worked around |
-| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-11-08 17:21 UTC | 0.21.15 is the latest; same definitions as the pinned 0.21.12 |
+| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-11-15 18:59 UTC | Open upstream, fix #13958 awaiting review; not in v3.7.19; worked around |
+| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-11-15 18:59 UTC | 0.21.20 is out as a tag and an image, with no release yet; same definitions as the pinned 0.21.12; its Lite mode skips more signatures |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-11-01 09:08 UTC | Both overrides still match in 0.21.15, the latest; `@preg_replace` is still 22c684e7; engine test not run at this check |
-| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-11-08 17:24 UTC | 2.7.6 is the latest; patch still needed |
-| [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-11-08 17:22 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12, still the latest; CVE-2026-115560 unfixed, mitigated by upload progress off |
+| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-11-15 18:59 UTC | 2.7.6 is the latest; patch still needed |
+| [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-11-15 18:59 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12, still the latest; CVE-2026-115560 unfixed, mitigated by upload progress off |
 | [phpredis: the pinned 6.3.0](#phpredis-the-pinned-630) | Medium | 2026-11-01 09:08 UTC | 6.3.0 is the latest on PECL and GitHub |
 | [Redis in the site image](#redis-in-the-site-image) | Medium | 2026-11-01 09:08 UTC | Debian's 5:8.0.2-3+deb13u3; three open issues on trixie, none reachable here; `LICENSE.txt` still offers AGPLv3 |
 | [The Redis Object Cache plugin: its constants and `wp redis`](#the-redis-object-cache-plugin-its-constants-and-wp-redis) | Medium | 2026-11-01 09:08 UTC | 3.0.0 is the latest; all seven constants and `status`, `enable`, `disable` are in its code |
@@ -65,22 +65,29 @@ for a reason; remove one once there is nothing left to watch.
 | [msmtp: one envelope sender, as `wpl7-sendmail` relies on it](#msmtp-one-envelope-sender-as-wpl7-sendmail-relies-on-it) | Low | 2026-11-11 23:04 UTC | msmtp 1.8.28 in the image, 1.8.34 upstream; nothing since changes the four behaviours; the engine mail tests pass |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
 | [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 22:05 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
-| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-11-08 17:25 UTC | 6.3.0 (2026-11-03) is out, 6.2.0 still pinned; its sign-in answers 303, which the panel refuses; no new advisory; base is PHP 8.4.27 |
+| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-11-15 18:59 UTC | 6.3.0 (2026-11-03) is out, 6.2.0 still pinned; its sign-in answers 303, which the panel refuses; no new advisory; base is PHP 8.4.27 |
 | [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-10-20 12:22 UTC | The feed calls five listed bbPress plugins closed and misses `captcha`; the directory answers as `wporgListing` reads them |
 | [Google's crawler address lists](#googles-crawler-address-lists) | Medium | 2026-11-03 09:35 UTC | Both answer: 589 prefixes, none wider than a /27 or a /64 |
+| [ssh2: how a channel closes, as the panel's SSH channels rely on it](#ssh2-how-a-channel-closes-as-the-panels-ssh-channels-rely-on-it) | Low | 2026-11-15 10:57 UTC | 1.17.0 is the latest; channels half-open by default, `destroy()` never marks one destroyed, `'close'` waits for `'end'` or an unreadable stream |
 
 ## Traefik: an idle visitor's rate limit refills
 
 - **Priority:** High
-- **Last checked:** 2026-11-08 17:22 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
+- **Last checked:** 2026-11-15 18:59 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
   is open, with nothing since the Traefik team said on 2026-09-28 they would reproduce it. Its
   fix, [traefik#13958](https://github.com/traefik/traefik/pull/13958) (against `v3.7`, milestone
   3.7), still waits for review, with nothing since a user's comment of 2026-10-29 asking for a
-  merge. v3.7.17 (2026-10-30) is now the latest, which `traefik:v3.7` in
-  `deploy/docker-compose.yml` follows. Neither it nor v2.11.61 and v3.8.0-rc.1, out the same day,
-  changes how the rate limiter expires a bucket: the rc's one rate-limiter item, #13825, takes
-  `table.maxn` out of the Redis limiter's Lua script and has been on `v3.7` since 2026-09-24.
-  Nothing under `pkg/middlewares/ratelimiter` has changed on `v3.7`, `v3.8` or `master` since.
+  merge. v3.7.19 (2026-11-13) is now the latest, which `traefik:v3.7` in
+  `deploy/docker-compose.yml` follows. Neither it nor v3.7.18 (2026-11-10) has a rate-limiter
+  item in its notes, and nor have v2.11.62, v2.11.63, v3.8.0-rc.2 and v3.8.0-rc.3, out on the same
+  two days. v3.7.18 fixes five advisories, in the Compress, BasicAuth and ForwardAuth
+  middlewares, the ingress-nginx provider and the clean-up of request paths; v3.7.19 moves three
+  dependencies. None of the five reaches WPL7, which sets up none of those middlewares and not the
+  ingress-nginx provider. The path one, [GHSA-cp28-5662-543f](https://github.com/traefik/traefik/security/advisories/GHSA-cp28-5662-543f),
+  leaves `/..;x/` in the path a router matches, which bypasses a rule only in front of a backend
+  that strips path parameters, such as a servlet container; Apache and nginx, in front of PHP,
+  take `..;x` for a folder's name. Nothing under `pkg/middlewares/ratelimiter` has changed on `v3.7`, `v3.8` or
+  `master` since 2026-09-24.
 - **The problem:** Traefik drops a visitor's rate-limit bucket after `1 + 1/rate` seconds without
   a request - 2 seconds for limits of one a second or more, 4 for 20 a minute - and starts the
   next request on a full burst. With logins at 20 a minute in bursts of 30, a guesser who paused
@@ -100,14 +107,19 @@ for a reason; remove one once there is nothing left to watch.
 ## AMWScan: the pinned image and its signatures
 
 - **Priority:** High
-- **Last checked:** 2026-11-08 17:21 UTC. No release or commit since the last check: the
-  repository was last pushed on 2026-10-03, and Docker Hub's newest tag is still 0.21.15. We pin
-  0.21.12, whose definitions are 2026.09.08.1. The latest release, v0.21.15 (2026-10-03, after
-  0.21.13 and 0.21.14 the day before), has the same 2026.09.08.1 definitions: only the manifest's
-  `createdAt` differs. Its engine changes are prompts without a terminal, which `--report-only`
-  and `--silent` never reach, and trusted administrators for `--scan-wordpress-db`, which WPL7
-  does not use. The pin stays: moving it would check every catalog zip again for the same
-  signatures.
+- **Last checked:** 2026-11-15 18:59 UTC. Upstream moved on the day of this check: 0.21.16 to
+  0.21.20 were tagged within half an hour, and of the five only 0.21.20 has a Docker Hub image.
+  None has a GitHub release yet, so v0.21.15 (2026-10-03) is still the latest there. We pin
+  0.21.12, whose definitions are 2026.09.08.1, and 0.21.20 bundles the same: its
+  `signatures.json`, `exploits.json` and `hashes.json` are those of 0.21.15 byte for byte,
+  `functions.json` has the same content, and the manifest differs in `createdAt` only. What
+  changed is the engine and the image. `--lite`, which WPL7 passes, now skips four more
+  signatures (`0f53abf5`, `85310fdd`, `8c60fbdb`, `e6300ec0`) and any signature match that
+  contains `ls-la` or a schema.org product snippet. There is a new `--memory-limit` (the default
+  stays 1G), a patched Symfony Filesystem, and libxml2 and musl from Alpine edge in the image. The
+  pin stays for now: the signatures are the same, and a release that took five tags in half an
+  hour may not have settled. Moving it comes up again once 0.21.20, or what follows it, has a
+  release: it would report fewer Lite-mode false positives, and check every catalog zip again.
 - **The problem:** the scanner image is pinned by digest (`SCANNER_IMAGE` in
   `panel/src/services/scanEngines.ts`) and runs with `--disable-definitions-update`. Its
   signatures are the ones bundled in that image, and they age until the pin moves. Upstream
@@ -156,17 +168,18 @@ for a reason; remove one once there is nothing left to watch.
 ## SFTPGo: our build and its overwrite patch
 
 - **Priority:** High
-- **Last checked:** 2026-11-08 17:24 UTC. We build v2.7.6 (commit 62ae9ba3) with
+- **Last checked:** 2026-11-15 18:59 UTC. We build v2.7.6 (commit 62ae9ba3) with
   `deploy/sftpgo-image/staged-overwrite.patch`; v2.7.6 (2026-09-19) is still the latest release,
   and no advisory has been published since the four of that day, which 2.7.6 fixes (one high:
   stored XSS through directory names in the WebClient). The `2.7.x` branch has not moved since
-  2026-09-26. `main` got 25 commits, pushed 2026-11-01 to 2026-11-07, among them FTP's `COMB`
-  removed, FTP passive port multiplexing, ML-DSA keys enabled and DSA removed for SFTP, and SCP
-  and HTTP overwrites no longer getting the old file's size added to the per-file upload limit
-  (WPL7 sets none). None changes how an upload replaces a file: the rename that completes an
-  atomic upload (`BaseTransfer.Close`, `internal/common/transfer.go`) is unchanged since
-  2026-10-17, and the new same-entry checks are for a client's rename or copy. The patch's code
-  still applies to `main`; one test hunk, in `internal/sftpd/sftpd_test.go`, does not.
+  2026-09-26. `main` got 12 commits, pushed 2026-11-09 to 2026-11-15, among them a fix for a
+  panic when a rename's target is missing on S3, a periodic check that closes sessions no longer
+  valid, the external auth hook answering first in keyboard-interactive sign-in, and an
+  ftpserverlib update. None changes how an upload replaces a file: they touch none of the upload
+  handlers the patch changes, and the rename that completes an atomic upload
+  (`BaseTransfer.Close`, `internal/common/transfer.go`) is unchanged since 2026-10-17. The
+  patch's code still applies to `main`; one test hunk, in `internal/sftpd/sftpd_test.go`, does
+  not.
 - **The problem:** SFTPGo is on the internet (FTP and SFTP). Upstream's `upload_mode: 1` renames
   an existing file to a temporary name before an overwrite, so the file is missing for the whole
   transfer - WordPress without its `wp-config.php` shows the installer - and is deleted if the
@@ -185,7 +198,7 @@ for a reason; remove one once there is nothing left to watch.
 ## PHP security releases and the site image's floor
 
 - **Priority:** High
-- **Last checked:** 2026-11-08 17:22 UTC. No PHP release and no GitHub advisory since the last
+- **Last checked:** 2026-11-15 18:59 UTC. No PHP release and no GitHub advisory since the last
   check. PHP 8.5.12, 8.4.27, 8.3.36 and 8.2.35 (2026-10-21) are still the latest; they fix two
   critical remote code execution bugs, CVE-2026-109618 and CVE-2026-109619 (GHSA-w8hw-w9fx-j79w,
   GHSA-6wmf-4rv5-p3rp), and the floor is set to them. The official `php` images carry the same
@@ -194,9 +207,9 @@ for a reason; remove one once there is nothing left to watch.
   switches `session.serialize_handler` to `php` at runtime. php.net asks for
   `session.upload_progress.enabled=0` until the next regular release, which will carry the fix
   and the full advisory; the site image already sets it off. That release is near: 8.5.13RC1 and
-  8.4.28RC1 were tagged on 2026-11-03 and 2026-11-04. php.net's only news since the last check is
-  8.6.0 RC5 (2026-11-05), with 8.6.0 planned for 2026-11-19; `WP_PHP_VERSIONS` does not offer
-  8.6, so it needs no floor yet.
+  8.4.28RC1 were tagged on 2026-11-03 and 2026-11-04, and are still the newest tags of their
+  branches. php.net's only news since the last check is 8.6.0 RC7 (2026-11-12), with 8.6.0
+  planned for 2026-11-19; `WP_PHP_VERSIONS` does not offer 8.6, so it needs no floor yet.
 - **The problem:** a site's PHP is whatever its `wordpress:php<X.Y>-fpm` base had when the site
   image was built. A stale base, cached on a server or in CI, ships an old PHP without anyone
   noticing, and a running container keeps its image until it is rebuilt.
@@ -1249,7 +1262,7 @@ for a reason; remove one once there is nothing left to watch.
 ## Adminer: the pinned build and its advisories
 
 - **Priority:** High
-- **Last checked:** 2026-11-08 17:25 UTC. Adminer 6.3.0 (2026-11-03) is the latest release; the
+- **Last checked:** 2026-11-15 18:59 UTC. Adminer 6.3.0 (2026-11-03) is the latest release; the
   image still pins 6.2.0. 6.3.0 fixes a CSRF regression from 6.0.1 that has no advisory: a POST
   with any `auth[]` field and a wrong token had the token replaced by a valid one, and ran its
   action in the existing session (vrana/adminer#1375). It does not reach our build: `router.php`
@@ -1364,3 +1377,40 @@ for a reason; remove one once there is nothing left to watch.
 - **When it changes:** update `googleCrawlers` in `RANGE_SOURCES`: a moved or new list's URL, or
   the limits once the wider ranges have had a look. Never take a list that covers Google Cloud
   in general: only addresses Google names as its crawlers'.
+
+## ssh2: how a channel closes, as the panel's SSH channels rely on it
+
+- **Priority:** Low
+- **Last checked:** 2026-11-15 10:57 UTC. 1.17.0, the version in `panel/package-lock.json`, is the
+  latest on npm. In it, `lib/Channel.js` makes a channel half-open unless it is opened with
+  `allowHalfOpen: false`, and replaces `destroy()` with an `end()` and a `close()` that never mark the
+  stream destroyed. `onCHANNEL_CLOSE` in `lib/utils.js` emits `'close'` only once the stream is no
+  longer readable, is destroyed, or has emitted `'end'`. `test/unit/sshDockerChannels.test.ts` passes,
+  and `test/e2e/ssh-transport.sh` passes over both ways to docker.sock, on OpenSSH 9.9p2 and Docker
+  27.5.1.
+- **What we rely on:** a server's Docker calls and host commands share one SSH connection, eight
+  channels at a time (`panel/src/servers/sshConnection.ts`), and a channel's slot comes back when the
+  channel closes. Two things in ssh2 decide when that is:
+  - A channel is half-open: an EOF from the server ends only its readable side. Docker ends its half
+    of an exec's connection when the command has exited and leaves the other to the client, and
+    OpenSSH keeps a forwarded socket's channel open until both halves have ended. So
+    `openDockerChannel` ends the panel's half when Docker's has ended, as Node does by itself for a
+    local socket. `DockerService.execWithInput` needs the half-open channel the other way round: it
+    ends its half to give a command EOF, and still reads the output after it.
+  - `'close'` comes only after `'end'`, or once the stream is not readable, and a hang-up
+    (`destroy()`) changes neither. A reader that hangs up has stopped reading, so `'end'` never
+    comes. `openDockerChannel`'s hang-up sets `readable = false`, so `'close'` comes as soon as the
+    server answers the channel's close; node:http's agent lets go of a socket on `'close'` only. A
+    forwarded socket's channel gives its slot back at the hang-up. A dial-stdio channel is an sshd
+    session, and one opened before the server has let go of the last is refused (`MaxSessions`), so
+    its slot comes back with that `'close'`, or after `HANG_UP_CLOSE_MS` when none can follow: the
+    server closed the channel first, or the connection dropped, with output still unread.
+- **Check:** `npm view ssh2 version`. For a newer release, read its `lib/Channel.js` (`destroy`,
+  `allowHalfOpen`) and `onCHANNEL_CLOSE` in `lib/utils.js` against the above, then install it in
+  `panel/` and run `npx vitest run test/unit/sshDockerChannels.test.ts test/unit/dockerExecInput.test.ts`
+  and `test/e2e/ssh-transport.sh`. A Dependabot bump runs the unit tests on its own.
+- **When it changes:** if `destroy()` comes to mark the stream destroyed, or `'close'` stops waiting
+  for `'end'`, the `readable = false` in `openDockerChannel` does nothing any more and can go. If a
+  channel stops being half-open by default, ending the panel's half would close the whole channel:
+  `execWithInput` would lose a command's output after its input, and the forwarded socket's channel
+  would need `allowHalfOpen` passed where ssh2 then takes it.

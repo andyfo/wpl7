@@ -12,6 +12,11 @@ RUN apk upgrade --no-cache \
   # default so key-only root login stays allowed if the base image changes it.
   && usermod -p '*' root \
   && echo 'PermitRootLogin prohibit-password' >> /etc/ssh/sshd_config \
+  # Forwarding on, as on a stock Ubuntu server: the panel reaches docker.sock through it, and
+  # Alpine's `AllowTcpForwarding no` refuses that too, which left only the dial-stdio fallback
+  # tested. test/e2e/sshTransport.ts turns it off again to check that fallback.
+  && sed -i '/^AllowTcpForwarding/d' /etc/ssh/sshd_config \
+  && echo 'AllowTcpForwarding yes' >> /etc/ssh/sshd_config \
   && useradd -m -s /bin/bash wpl7-panel \
   && usermod -p '*' wpl7-panel \
   && (getent group docker || addgroup docker) \

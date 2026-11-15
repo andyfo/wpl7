@@ -818,6 +818,10 @@ export class DockerService implements DockerPort {
       throw await this.timeoutError(exec, cmd, timeoutMs);
     } finally {
       detach();
+      // The output has ended, so the command is done with the connection. One that exited without
+      // reading all of its input leaves the rest queued, and the connection, over SSH with its
+      // channel, would wait to write it to no one until Docker let go of its end.
+      sock.destroy();
     }
     if (opts.signal?.aborted) throw abandoned(cmd);
     const exitCode = await this.exitCodeOf(exec, cmd, timeoutMs, startedAt);
@@ -984,6 +988,8 @@ export class DockerService implements DockerPort {
         reject(new Error('reading the command output was abandoned'));
       };
       opts.signal.addEventListener('abort', onAbort, { once: true });
+      // Aborted while the exec was still being set up: no 'abort' is coming any more.
+      if (opts.signal.aborted) onAbort();
     });
     aborted.catch(() => undefined);
     try {
