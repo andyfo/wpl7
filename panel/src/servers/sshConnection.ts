@@ -32,6 +32,11 @@ export interface SshTarget {
 }
 
 const MAX_CHANNELS = 8;
+/**
+ * How long a hung-up channel's slot waits for the 'close' that gives it back, before it comes back
+ * anyway: no 'close' follows when the server closed the channel first, with output still unread.
+ */
+const HANG_UP_CLOSE_MS = 2_000;
 const FAIL_FAST_MS = 5_000;
 const CHANNEL_OPEN_TIMEOUT_MS = 30_000;
 const OUTPUT_CAP = 1024 * 1024;
@@ -200,14 +205,23 @@ export class SshConnection {
           clearTimeout(timer);
           reject(err);
         };
-        const dialStdio = () =>
-          client.exec('docker system dial-stdio', (err, stream) => (err ? fail(err) : ok(stream)));
+        const dialStdio = () => {
+          try {
+            client.exec('docker system dial-stdio', (err, stream) => (err ? fail(err) : ok(stream)));
+          } catch (err) {
+            fail(err instanceof Error ? err : new Error(String(err))); // 'Not connected'
+          }
+        };
         if (this.useDialStdio) {
           dialStdio();
           return;
         }
         client.openssh_forwardOutStreamLocal('/var/run/docker.sock', (err, stream) => {
           if (!err) return ok(stream);
+          // A connection lost while the forward was being opened fails it too. That is no refusal,
+          // and the shim cannot run on a closed connection: client.exec would throw out of ssh2's
+          // event handler and take the panel down.
+          if (this.client !== client) return fail(err);
           // Non-default sshd may prohibit streamlocal forwarding; fall back to the docker CLI shim.
           this.useDialStdio = true;
           if (!this.warnedDialStdio) {
@@ -219,6 +233,29 @@ export class SshConnection {
           dialStdio();
         });
       });
+      // Docker ends its half of a connection once it is done with it (an exec's, when the command
+      // has exited) and leaves the other half to the client. Node ends a local socket's other half
+      // by itself; an SSH channel stays half-open, and sshd keeps a forwarded one open until both
+      // halves have ended. Without this, every exec kept its slot, and once MAX_CHANNELS of them
+      // had, every later Docker call to the server waited for one.
+      channel.once('end', () => channel.end());
+      // A hang-up marks the stream as no longer readable, and the 'close' that follows gives the
+      // slot back. ssh2 says 'close' only once a stream has been read to its end or is no longer
+      // readable, and a reader that hangs up has stopped reading: a download whose tab was closed
+      // kept its slot for good, and node:http's agent kept its channel, never told that it had
+      // closed. The slot waits for the server to close the channel rather than coming back at
+      // once: on the dial-stdio fallback every channel is an sshd session, and one opened before
+      // the last has gone counts against sshd's MaxSessions, which refuses it.
+      const destroy = channel.destroy.bind(channel);
+      let hungUp = false;
+      channel.destroy = (err?: Error) => {
+        if (!hungUp) {
+          hungUp = true;
+          channel.readable = false;
+          setTimeout(release, HANG_UP_CLOSE_MS).unref();
+        }
+        return destroy(err);
+      };
       channel.on('close', release);
       channel.on('error', release);
       return channel;
@@ -245,16 +282,26 @@ export class SshConnection {
           let out = '';
           let errText = '';
           let done = false;
-          const timer = setTimeout(() => {
+          // Stop waiting for the command and close its channel: the slot comes back as this settles.
+          const hangUp = (why: string) => {
             if (done) return;
             done = true;
+            clearTimeout(timer);
             stream.close();
-            reject(new Error(`ssh command timed out after ${opts.timeoutMs}ms: ${command.slice(0, 200)}`));
-          }, opts.timeoutMs);
+            reject(new Error(`${why}: ${command.slice(0, 200)}`));
+          };
+          const timer = setTimeout(() => hangUp(`ssh command timed out after ${opts.timeoutMs}ms`), opts.timeoutMs);
 
           if (opts.stdout) {
             stream.pipe(opts.stdout);
-            opts.stdout.on('error', () => stream.close());
+            // A destination gone before the output has ended (a download whose tab was closed)
+            // reads no more of it, and the command kept its channel until its deadline.
+            opts.stdout.on('error', (e: Error) => hangUp(`writing the command's output failed (${e.message})`));
+            opts.stdout.on('close', () => {
+              if (!stream.readableEnded) hangUp('the output destination closed before the command finished');
+            });
+            // Gone while this call waited for a channel: that 'close' came and went unheard.
+            if (opts.stdout.destroyed) hangUp('the output destination closed before the command started');
           } else {
             stream.on('data', (chunk: Buffer) => {
               if (out.length < OUTPUT_CAP) out += chunk.toString();
