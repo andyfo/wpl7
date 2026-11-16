@@ -30,6 +30,8 @@ interface Harness {
   service: DockerService;
   /** Server-side sockets, in connection order. */
   accepted: net.Socket[];
+  /** The panel's side of each of them. */
+  connections: net.Socket[];
   execConfigs: Record<string, unknown>[];
   close(): Promise<void>;
 }
@@ -46,6 +48,8 @@ async function harness(
   onConnection: (sock: net.Socket) => void,
   exitCode = 0,
   inspects: Inspect[] = [{ ExitCode: exitCode, Running: false }],
+  /** Runs as the exec starts, before its connection is there: a slow daemon or SSH hop. */
+  beforeStart: () => Promise<void> = async () => undefined,
 ): Promise<Harness> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-exec-'));
   const socketPath = path.join(dir, 'd.sock');
@@ -58,13 +62,19 @@ async function harness(
   servers.push(server);
   await new Promise<void>((r) => server.listen(socketPath, r));
   const execConfigs: Record<string, unknown>[] = [];
+  const connections: net.Socket[] = [];
   const fakeDocker = {
     modem: new Modem({ socketPath }),
     getContainer: () => ({
       exec: async (config: Record<string, unknown>) => {
         execConfigs.push(config);
         return {
-          start: async () => net.connect(socketPath),
+          start: async () => {
+            await beforeStart();
+            const conn = net.connect(socketPath);
+            connections.push(conn);
+            return conn;
+          },
           inspect: async () => (inspects.length > 1 ? inspects.shift()! : inspects[0]!),
         };
       },
@@ -74,6 +84,7 @@ async function harness(
     // Docker gives itself 3 s to record an exit; the fake records it on the given inspect or never.
     service: new DockerService('proxy', 'db', fakeDocker, { exitSettleMs: 200, exitPollMs: 10 }),
     accepted,
+    connections,
     execConfigs,
     close: async () => undefined,
   };
@@ -118,6 +129,23 @@ describe('DockerService.execWithInput', () => {
     const res = await h.service.execWithInput('wp-a', ['sh', '-c', 'exit 14'], crypto.randomBytes(5 * 1024 * 1024));
     expect(res.exitCode).toBe(14);
     expect(res.stderr).toContain('changed since you opened it');
+  });
+
+  it('hangs up once the answer is in, though the command left its input unread', async () => {
+    const h = await harness((sock) => {
+      // Answers at once and never reads: the rest of the input stays queued behind a full socket.
+      sock.pause();
+      sock.end(frame(2, 'refused\n'));
+    }, 3);
+    try {
+      const res = await h.service.execWithInput('wp-a', ['sh', '-c', 'exit 3'], crypto.randomBytes(8 * 1024 * 1024));
+      expect(res).toMatchObject({ stderr: 'refused\n', exitCode: 3 });
+      // Not left open, waiting to write the rest to no one.
+      expect(h.connections[0]!.destroyed).toBe(true);
+    } finally {
+      // Paused, it would not notice the hang-up, and the server could not close.
+      h.accepted[0]?.destroy();
+    }
   });
 
   it('handles empty input (a new, empty file)', async () => {
@@ -244,6 +272,19 @@ describe('DockerService.execToStream', () => {
     sink.resume();
     setTimeout(() => ac.abort(), 30);
     await expect(h.service.execToStream('wp-a', ['cat', 'big'], sink, { signal: ac.signal })).rejects.toThrow(/abandoned/);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(closed.at).not.toBeNull();
+  });
+
+  it('hangs up when the caller aborts while the exec is still being set up', async () => {
+    const closed = { at: null as number | null };
+    const ac = new AbortController();
+    const h = await harness(chatty(closed), 0, undefined, async () => ac.abort());
+    const sink = new PassThrough();
+    sink.resume();
+    await expect(h.service.execToStream('wp-a', ['cat', 'big'], sink, { signal: ac.signal, timeoutMs: 5_000 })).rejects.toThrow(
+      /abandoned/,
+    );
     await new Promise((r) => setTimeout(r, 50));
     expect(closed.at).not.toBeNull();
   });
