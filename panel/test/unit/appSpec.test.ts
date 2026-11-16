@@ -170,27 +170,30 @@ describe('a container app’s container', () => {
 
 describe('the health gate', () => {
   const app = { slug: 'shop', containerName: 'wp-shop', domains: JSON.stringify(['shop.example.com']) };
-  const gateSettings = { port: 8000, healthPath: '/healthz', healthHost: '', healthTimeoutSec: 30, deployCheckPath: '/ready?deep=1' };
+  const gateSettings = { healthPath: '/healthz', healthHost: '', healthTimeoutSec: 30, deployCheckPath: '/ready?deep=1' };
 
-  /** A way in that answers as `answer` says: each question's URL, and how long wget is let wait (-T). */
-  function probe(answer: (url: string) => number) {
+  /** A way in that answers as `answer` says (null: no answer at all): each question's URL, and how long wget is let wait (-T). */
+  function probe(answer: (url: string) => number | null) {
     const asked: { url: string; wait: number }[] = [];
     const runEphemeral = async (o: EphemeralOpts): Promise<RunResult> => {
       const url = o.cmd.at(-1)!;
       asked.push({ url, wait: Number(o.cmd[o.cmd.indexOf('-T') + 1]) });
       const status = answer(url);
+      if (status === null) return { stdout: '', stderr: `wget: can't connect to remote host: Connection refused\n`, exitCode: 1 };
       return { stdout: '', stderr: `  HTTP/1.1 ${status} ${status < 400 ? 'OK' : 'Error'}\n`, exitCode: status < 400 ? 0 : 1 };
     };
     const server = { name: 'local', docker: { containerImage: async () => 'traefik:v3', runEphemeral } } as unknown as Pick<ServerHandle, 'docker' | 'name'>;
     return { server, asked };
   }
+  /** The app listens on `port` alone, and answers 200 there. */
+  const listensOn = (port: number) => (url: string) => (new URL(url).port === String(port) ? 200 : null);
 
   it('asks the health path for at most 10 s a try, and the deploy check for the app’s whole timeout', async () => {
     let now = Date.parse('2026-11-15T12:00:00Z');
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     try {
       const first = probe(() => 200);
-      expect(await healthGate(first.server, app, gateSettings, { deployCheck: true, intervalMs: 0 })).toBeNull();
+      expect(await healthGate(first.server, app, gateSettings, [8000], { deployCheck: true, intervalMs: 0 })).toEqual({ port: 8000, failed: null });
       // The deploy check is one argument to wget, its query and all.
       expect(first.asked).toEqual([
         { url: 'http://wp-shop:8000/healthz', wait: 10 },
@@ -205,8 +208,66 @@ describe('the health gate', () => {
         now += 29_500;
         return 503;
       });
-      expect(await healthGate(late.server, app, gateSettings, { deployCheck: true, intervalMs: 0 })).toBeNull();
+      expect(await healthGate(late.server, app, gateSettings, [8000], { deployCheck: true, intervalMs: 0 })).toEqual({ port: 8000, failed: null });
       expect(late.asked.map((a) => a.wait)).toEqual([10, 1, 30]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('asks each port in turn every round, passes on the first that answers, and asks the deploy check there', async () => {
+    // The staged port first: an image that listens on it passes there, though the next one answers too.
+    const both = probe(() => 200);
+    expect(await healthGate(both.server, app, gateSettings, [9000, 8000], { deployCheck: true, intervalMs: 0 })).toEqual({ port: 9000, failed: null });
+    expect(both.asked.map((a) => a.url)).toEqual(['http://wp-shop:9000/healthz', 'http://wp-shop:9000/ready?deep=1']);
+
+    // One that does not listen there passes on the next, in the same round; nothing staged and nothing known (0) is no port.
+    const old = probe(listensOn(8000));
+    const lines: string[] = [];
+    expect(await healthGate(old.server, app, gateSettings, [9000, 0, 8000, 9000], { deployCheck: true, intervalMs: 0, log: (l) => lines.push(l) })).toEqual({
+      port: 8000,
+      failed: null,
+    });
+    expect(old.asked.map((a) => a.url)).toEqual(['http://wp-shop:9000/healthz', 'http://wp-shop:8000/healthz', 'http://wp-shop:8000/ready?deep=1']);
+    expect(lines).toEqual(['/healthz answered 200 OK on port 8000.', 'The deploy check /ready?deep=1 answered 200 OK.']);
+
+    // A deploy check that fails on the port that answered fails the gate.
+    const failing = probe((url) => (url.includes('/ready') ? 500 : listensOn(8000)(url)));
+    expect((await healthGate(failing.server, app, gateSettings, [9000, 8000], { deployCheck: true, intervalMs: 0 })).failed).toBe('The deploy check /ready?deep=1 answered 500 Error.');
+    expect(failing.asked.at(-1)!.url).toBe('http://wp-shop:8000/ready?deep=1');
+  });
+
+  it('keeps one timeout for every port, and names each port it asked when none answered', async () => {
+    let now = Date.parse('2026-11-15T12:00:00Z');
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      // Each question takes 4 s: two ports, two rounds, and the 10 s are over.
+      const none = probe(() => {
+        now += 4000;
+        return null;
+      });
+      const result = await healthGate(none.server, app, { ...gateSettings, healthTimeoutSec: 10 }, [9000, 8000], { deployCheck: true, intervalMs: 0 });
+      expect(result).toEqual({
+        port: null,
+        failed: "/healthz did not answer 2xx on port 9000 or 8000 within 10 s (2 tries each; last: 9000 no answer: can't connect to remote host: Connection refused; 8000 no answer: can't connect to remote host: Connection refused).",
+      });
+      // Each try waits what is left of the one timeout, at most 10 s and at least 1.
+      expect(none.asked.map((a) => [new URL(a.url).port, a.wait])).toEqual([
+        ['9000', 10],
+        ['8000', 6],
+        ['9000', 2],
+        ['8000', 1],
+      ]);
+
+      // One port: the message it always had.
+      const one = probe(() => {
+        now += 4000;
+        return 503;
+      });
+      expect((await healthGate(one.server, app, { ...gateSettings, healthTimeoutSec: 10 }, [0, 8000, 8000], { deployCheck: false, intervalMs: 0 })).failed).toBe(
+        '/healthz did not answer 2xx within 10 s (3 tries; last: 503 Error).',
+      );
+      expect((await healthGate(one.server, app, gateSettings, [0], { deployCheck: false })).failed).toBe('The app has no port to ask: give the port it listens on.');
     } finally {
       clock.mockRestore();
     }

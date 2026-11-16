@@ -314,8 +314,12 @@ is `docs/site/src/content/docs/sites/container.mdx`.
   deploys (Automatic), notes and emails (Ask first), or does nothing (Pinned), and leaves a
   declined digest alone (its newest deploy failed, or a roll back or restore went back from it).
   A `runAs` change goes in the `site.reconcile` payload and is saved once the gate passes. A port
-  on a running app is staged in `app_settings.next_port`: a deploy, or the user's Recreate container
-  (`retrySwitch`), gates on it and saves it; every other recreate keeps the running port. An app
+  on a running app is staged in `app_settings.next_port`. The gate of a deploy, a recreate, a
+  restore, and a Start or Restart with a port staged asks a short list of ports and keeps the first
+  that answers: the staged one, a roll back's deploy row's (`app_deploys.port`) or a restore's
+  manifest's, then the running one; a move's target asks the staged one, then the running one. A
+  create asks the app's own port. A roll back of a stopped app, which no gate asks, stages its deploy
+  row's port for Start. An app
   created with mounts is made stopped. After a passing swap, `mounts/` folders no row names go, and
   a removed app container takes its anonymous volumes (an unkept VOLUME's) with it.
   The hook (`POST /api/hooks/app-deploy`, `X-WPL7-Deploy-Token`, sha256 only) answers a waiting

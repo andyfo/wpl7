@@ -1,16 +1,17 @@
 /**
  * A container app's deploys and recreates past their happy path, in the fake world: what Read only
  * reads of a failed one's log, the images that run after the app's reference has moved to another
- * repository, a new port or user, a port staged for the next image and the recreates that take it,
- * the order its folders change hands in, the images it leaves behind, the image VOLUMEs it keeps,
- * the ones it cannot and one a mount gave back, a step after the swap that fails, the gap, a hold
- * that cannot be written, an upload whose job was canceled before it ran, and one a create's job
- * names out of the uploads folder.
+ * repository, a new port or user, a port staged for the next container and the deploys, recreates,
+ * starts and restarts that try it (a restart in the time its job has left), a roll back across a
+ * port change (of a stopped app too, whose start asks), the order its folders change hands in, the
+ * images it leaves behind, the image VOLUMEs it keeps, the ones it cannot and one a mount gave
+ * back, a step after the swap that fails, the gap, a hold that cannot be written, an upload whose
+ * job was canceled before it ran, and one a create's job names out of the uploads folder.
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { siteCreateBody } from '../../shared/schemas.js';
 import { appDeploys, appSettings, jobLogs, jobs, sites, type SiteRow } from '../../src/db/schema.js';
 import type { ExecPort } from '../../src/lib/exec.js';
@@ -79,12 +80,12 @@ async function createShop(w: TestWorld, extra: Record<string, unknown> = {}) {
 }
 
 const deploy = async (w: TestWorld, body: { deployId?: number } = {}) => finish(w, (await w.deps.apps.deploy('shop', body)).id);
-/** A recreate no one asked for (a sweep's, a CPU cap's), or a settings change's with `appRunAs`. */
+/** A recreate a sweep or a CPU cap queues, or a settings change's with `appRunAs`. */
 const reconcile = (w: TestWorld, site: SiteRow, extra: { appRunAs?: string } = {}) =>
   finish(w, w.worker.enqueue('site.reconcile', { siteId: site.id, ...extra }, { id: site.id, slug: 'shop', serverId: 1 }).id);
-/** Recreate container on the app's page: someone asked for it. */
+/** Recreate container on the app's page. */
 const recreate = (w: TestWorld) => finish(w, w.deps.sites.reconcile('shop').id);
-/** What PATCH port does to an app whose container runs: the port waits on its row for the next deploy or recreate. */
+/** What PATCH port does to an app whose container runs: the port waits on its row for the next start, deploy or recreate. */
 const stage = (w: TestWorld, site: SiteRow, port: number) => w.db.update(appSettings).set({ nextPort: port }).where(eq(appSettings.siteId, site.id)).run();
 const creates = (w: TestWorld) => w.docker.calls.filter((c) => c.method === 'createSiteContainer').map((c) => c.args[0] as SiteContainerSpec);
 const pulls = (w: TestWorld) => w.docker.calls.filter((c) => c.method === 'pullImage').map((c) => c.args[0] as string);
@@ -241,7 +242,7 @@ describe('after the app’s reference names another repository', () => {
 });
 
 describe('a new port or user', () => {
-  it('a staged port goes into the new container of Recreate container, and into the app’s row once that has passed, routes and all', async () => {
+  it('a staged port goes into the new container of a recreate that it answers on, and into the app’s row once that has passed, routes and all', async () => {
     const w = await world();
     const site = await createShop(w);
     const asked: { port: number; row: number }[] = [];
@@ -270,7 +271,7 @@ describe('a new port or user', () => {
     expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:9000"');
   });
 
-  it('a user goes into the new container of the recreate its change queued, and into the row once that has passed; a staged port waits', async () => {
+  it('a user goes into the new container of the recreate its change queued, and into the row once that has passed; a staged port it does not answer on waits', async () => {
     const w = await world();
     const site = await createShop(w);
     w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
@@ -282,8 +283,10 @@ describe('a new port or user', () => {
     stage(w, site, 9000);
     const done = await reconcile(w, site, { appRunAs: '1000:1000' });
     expect(done.status, done.error ?? '').toBe('succeeded');
-    expect([...new Set(asked)]).toEqual([8000]);
+    // The staged port first, then the one it runs on, in the same round (the uptime check at the job's end asks 8000 again).
+    expect([...new Set(asked)]).toEqual([9000, 8000]);
     expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000, runAs: '1000:1000' });
+    expect(jobLog(w, done.id)).toContain('Port 9000 did not answer: the app runs on 8000, and the next start, deploy or recreate tries 9000 again.');
     expect(creates(w).at(-1)!.user).toBe('1000:1000');
     // The row's old user is what showed the folders had to change hands: once the old container stopped.
     expect(w.chowns).toEqual([{ owner: '1000:1000', old: 'exited' }]);
@@ -293,11 +296,12 @@ describe('a new port or user', () => {
     const w = await world();
     const site = await createShop(w);
     w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
-    w.docker.appHttp = (req) => (req.port === 8000 ? 200 : null);
+    // The old container answered on 8000; the new one answers on neither port it is asked on.
+    w.docker.appHttp = () => null;
     stage(w, site, 9000);
-    // Recreate container asks on 9000, which nothing answers.
     const done = await recreate(w);
     expect(done.status).toBe('failed');
+    expect(done.error).toMatch(/^\/ did not answer 2xx on port 9000 or 8000 within 1 s/);
     expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000 });
     expect(w.docker.containers.get('wp-shop')).toBe('running');
     expect(w.docker.containers.has('wp-shop.previous')).toBe(false);
@@ -323,21 +327,21 @@ describe('a new port or user', () => {
   });
 });
 
-describe('a port staged for the next container', () => {
-  /** Image 1 answers on 8000 and image 2 on 9000, nothing else; the ports asked are noted. */
-  function listen(w: TestWorld): number[] {
-    const on = new Map([
-      ['sha256:img1', 8000],
-      ['sha256:img2', 9000],
-    ]);
-    const asked: number[] = [];
-    w.docker.appHttp = (req) => {
-      asked.push(req.port);
-      return on.get(w.docker.imageByContainer.get(req.container) ?? '') === req.port ? 200 : null;
-    };
-    return asked;
-  }
+/** Image 1 answers on 8000 and image 2 on 9000, nothing else; the ports asked are noted. */
+function listen(w: TestWorld): number[] {
+  const on = new Map([
+    ['sha256:img1', 8000],
+    ['sha256:img2', 9000],
+  ]);
+  const asked: number[] = [];
+  w.docker.appHttp = (req) => {
+    asked.push(req.port);
+    return on.get(w.docker.imageByContainer.get(req.container) ?? '') === req.port ? 200 : null;
+  };
+  return asked;
+}
 
+describe('a port staged for the next container', () => {
   it('goes in with a new image that listens on it, behind the one gate of its deploy', async () => {
     const w = await world();
     const site = await createShop(w);
@@ -356,30 +360,136 @@ describe('a port staged for the next container', () => {
     expect([...new Set(asked)]).toEqual([9000]);
     expect(creates(w)).toHaveLength(made + 1);
     expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 0, digest: digest(2) });
+    // Each deploy that went in keeps the port it passed on: the create's, then this one's.
+    expect(deploysOf(w, site.id).map((d) => [d.origin, d.result, d.port])).toEqual([
+      ['create', 'ok', 8000],
+      ['user', 'failed', 0],
+      ['user', 'ok', 9000],
+    ]);
     await w.deps.appRoutes.idle();
     expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:9000"');
   });
 
-  it('fails Recreate container on an image that does not listen on it, and stays staged', async () => {
+  it('is tried by Recreate container on an image that does not listen on it: the app stays on the port it runs on, and the port stays staged', async () => {
     const w = await world();
     const site = await createShop(w);
     w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
-    listen(w);
+    const asked = listen(w);
     stage(w, site, 9000);
-    // Nothing new under the tag: nothing goes in, and the log says what the port waits for.
+    // Nothing new under the tag: nothing goes in, and the log says what tries the port.
     const same = await deploy(w);
     expect(JSON.parse(same.result!)).toMatchObject({ unchanged: true });
-    expect(jobLog(w, same.id)).toContain('Port 9000 goes in with the next new image, or with Recreate container.');
+    expect(jobLog(w, same.id)).toContain('The next start, deploy or recreate tries port 9000.');
+    asked.length = 0;
     const done = await recreate(w);
-    expect(done.status).toBe('failed');
-    expect(done.error).toMatch(/^\/ did not answer 2xx within 1 s/);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect([...new Set(asked)]).toEqual([9000, 8000]);
+    expect(jobLog(w, done.id)).toContain('Port 9000 did not answer: the app runs on 8000, and the next start, deploy or recreate tries 9000 again.');
     expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000 });
-    expect(w.docker.containers.get('wp-shop')).toBe('running');
     await w.deps.appRoutes.idle();
     expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:8000"');
   });
 
-  it('is taken by Recreate container alone: a new database password, a sweep’s recreate and a settings change’s keep the port that runs', async () => {
+  it('goes in with an environment change that moves the port the app listens on, saved apart from the port', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    // The app listens where its PORT says, 8000 without one.
+    const asked: number[] = [];
+    w.docker.appHttp = (req) => {
+      asked.push(req.port);
+      const made = creates(w).filter((c) => c.name === req.container).at(-1);
+      return Number(made?.env.PORT ?? 8000) === req.port ? 200 : null;
+    };
+    const { app, headers } = await authed(w);
+    const patch = (payload: Record<string, unknown>) => app.inject({ method: 'PATCH', url: '/api/sites/shop/app', headers, payload });
+    // How it runs: the port alone, staged.
+    const port = await patch({ port: 9000 });
+    expect([port.statusCode, port.json().job]).toEqual([200, null]);
+    // Environment, saved apart: its recreate tries 9000, where the new container listens.
+    const env = await patch({ env: [{ name: 'PORT', value: '9000' }] });
+    expect(env.statusCode).toBe(202);
+    const done = await finish(w, env.json().job.id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect([...new Set(asked)]).toEqual([9000]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 0 });
+    expect(jobLog(w, done.id)).toContain('Recreated: port 8000 -> 9000.');
+    await w.deps.appRoutes.idle();
+    expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:9000"');
+  });
+
+  it('waits through the deploy of an app that is stopped, which no gate asks, and Start tries it before the routes are written', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    const asked = listen(w);
+    stage(w, site, 9000);
+    expect((await finish(w, w.deps.sites.action('shop', 'stop').id)).status).toBe('succeeded');
+    push(w, 2);
+    const done = await deploy(w);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(w.docker.containers.get('wp-shop')).toBe('created');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000, digest: digest(2) });
+    expect(deploysOf(w, site.id).at(-1)).toMatchObject({ origin: 'user', result: 'ok', port: 8000 });
+    expect(jobLog(w, done.id)).toContain('Port 9000 is tried when the app starts.');
+    // Nor does a recreate of the stopped app ask it.
+    const recreated = await recreate(w);
+    expect(recreated.status, recreated.error ?? '').toBe('succeeded');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000 });
+    expect(jobLog(w, recreated.id)).toContain('Port 9000 is tried when the app starts.');
+
+    // Image 2 listens on 9000: Start keeps it, and the routes and the uptime check go there.
+    asked.length = 0;
+    const started = await finish(w, w.deps.sites.action('shop', 'start').id);
+    expect(started.status, started.error ?? '').toBe('succeeded');
+    expect([...new Set(asked)]).toEqual([9000]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 0 });
+    expect(jobLog(w, started.id)).toContain('The app runs on 9000 from now on, not 8000.');
+    // The deploy of image 2 says so too: a roll back to it asks 9000.
+    expect(deploysOf(w, site.id).at(-1)).toMatchObject({ origin: 'user', result: 'ok', port: 9000 });
+    await w.deps.appRoutes.idle();
+    expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:9000"');
+    await w.core.monitor.tickUptime();
+    expect(w.core.monitor.latestFor(site.id)).toMatchObject({ up: true, httpStatus: 200 });
+  });
+
+  it('stays staged through a Start it does not answer at, which warns and runs the app on its port; a Restart once it answers there takes it', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    stage(w, site, 9000);
+    expect((await finish(w, w.deps.sites.action('shop', 'stop').id)).status).toBe('succeeded');
+    const asked: number[] = [];
+    w.docker.appHttp = (req) => {
+      asked.push(req.port);
+      return null;
+    };
+    const started = await finish(w, w.deps.sites.action('shop', 'start').id);
+    expect(started.status, started.error ?? '').toBe('succeeded');
+    expect([w.docker.containers.get('wp-shop'), w.db.select().from(sites).where(eq(sites.id, site.id)).get()!.status]).toEqual(['running', 'running']);
+    expect([...new Set(asked)]).toEqual([9000, 8000]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000 });
+    const warned = w.db.select().from(jobLogs).where(eq(jobLogs.jobId, started.id)).all().filter((l) => l.level === 'warn');
+    expect(warned.map((l) => l.message)).toEqual([
+      expect.stringMatching(/^The app did not pass its health check \(\/ did not answer 2xx on port 9000 or 8000 within 1 s .*\): it runs on 8000, and the next start, deploy or recreate tries 9000 again\.$/),
+    ]);
+    await w.deps.appRoutes.idle();
+    expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:8000"');
+
+    // It answers on 9000 now (it was slow to come up): a Restart keeps that one.
+    w.docker.appHttp = (req) => (req.port === 9000 ? 200 : null);
+    const restarted = await finish(w, w.deps.sites.action('shop', 'restart').id);
+    expect(restarted.status, restarted.error ?? '').toBe('succeeded');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 0 });
+    await w.deps.appRoutes.idle();
+    expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:9000"');
+
+    // With nothing staged, a Restart asks nothing before its routes, as before.
+    const again = await finish(w, w.deps.sites.action('shop', 'restart').id);
+    expect(again.status).toBe('succeeded');
+    expect(jobLog(w, again.id)).toBe('Restarting wp-shop…');
+  });
+
+  it('stays staged for a future image through a new database password, a sweep’s recreate and a settings change’s, which pass on the port that runs', async () => {
     const w = await world();
     const withDb = { database: true, env: [{ name: 'DATABASE_URL', value: 'mysql://{{db.user}}:{{db.password}}@{{db.host}}/{{db.name}}' }] };
     const site = await createShop(w, withDb);
@@ -388,50 +498,260 @@ describe('a port staged for the next container', () => {
     const asked = listen(w);
     stage(w, site, 9000);
     const { app, headers } = await authed(w);
+    const passwordBefore = w.db.select().from(sites).where(eq(sites.id, site.id)).get()!.dbPassword;
     const queued = [
+      async () => w.worker.enqueue('database.password', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 }).id,
+      async () => w.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 }).id,
       async () => {
         const res = await app.inject({ method: 'PATCH', url: '/api/sites/shop/app', headers, payload: { env: [...withDb.env, { name: 'MODE', value: 'live' }] } });
         expect(res.statusCode).toBe(202);
         return res.json().job.id as number;
       },
-      async () => w.worker.enqueue('database.password', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 }).id,
-      async () => w.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 }).id,
     ];
     for (const queue of queued) {
       asked.length = 0;
       const id = await queue();
       const done = await finish(w, id);
       expect(done.status, done.error ?? '').toBe('succeeded');
-      expect([...new Set(asked)]).toEqual([8000]);
+      expect([...new Set(asked)]).toEqual([9000, 8000]);
       expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000 });
-      expect(jobLog(w, id)).toContain('Port 9000 goes in with the next new image, or with Recreate container.');
+      expect(jobLog(w, id)).toContain('Port 9000 did not answer: the app runs on 8000, and the next start, deploy or recreate tries 9000 again.');
     }
+    // The new password went in with its container.
+    expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()!.dbPassword).not.toBe(passwordBefore);
     expect(creates(w).at(-1)!.env).toMatchObject({ MODE: 'live' });
 
-    // Someone asks for it, once the app listens on 9000: in it goes.
-    w.docker.appHttp = (req) => (req.port === 9000 ? 200 : null);
-    const done = await recreate(w);
+    // The image that listens on 9000 is out: its deploy takes the port.
+    push(w, 2);
+    const done = await deploy(w);
     expect(done.status, done.error ?? '').toBe('succeeded');
-    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 0 });
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 0, digest: digest(2) });
     await w.deps.appRoutes.idle();
     expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:9000"');
   });
+});
 
-  it('is the next container’s when another one is staged while a deploy runs', async () => {
+describe('a Restart’s try of a staged port', () => {
+  /** finish, counting its waits rather than the clock: these tests move Date.now, which would end waitFor's at once. */
+  async function settle(w: TestWorld, jobId: number) {
+    const row = () => w.db.select().from(jobs).where(eq(jobs.id, jobId)).get()!;
+    w.worker.start();
+    for (let i = 0; i < 4000 && ['queued', 'running'].includes(row().status); i++) await new Promise((r) => setTimeout(r, 5));
+    await w.worker.stop();
+    return row();
+  }
+
+  /**
+   * A Restart of "shop" with 9000 staged, on a clock that moves only as the app takes `stopMs` to
+   * stop and each question to it 10 s; `answers` says whether a port answers that far in.
+   */
+  async function slowRestart(w: TestWorld, site: SiteRow, stopMs: number, answers: (port: number, at: number) => boolean) {
+    w.db.update(appSettings).set({ healthTimeoutSec: 600, stopGraceSec: 300 }).where(eq(appSettings.siteId, site.id)).run();
+    stage(w, site, 9000);
+    const from = Date.now();
+    let at = 0;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => from + at);
+    const restart = w.docker.restartContainer.bind(w.docker);
+    w.docker.restartContainer = async (name, grace) => {
+      at += stopMs;
+      return restart(name, grace);
+    };
+    w.docker.appHttp = (req) => {
+      at += 10_000;
+      return answers(req.port, at) ? 200 : null;
+    };
+    try {
+      return await settle(w, w.deps.sites.action('shop', 'restart').id);
+    } finally {
+      clock.mockRestore();
+    }
+  }
+  const warnings = (w: TestWorld, jobId: number) =>
+    w.db.select().from(jobLogs).where(eq(jobLogs.jobId, jobId)).all().filter((l) => l.level === 'warn').map((l) => l.message);
+
+  it('asks it for what is left of the job’s 5 minutes, less a margin, once the app has taken most of them to stop', async () => {
     const w = await world();
     const site = await createShop(w);
-    stage(w, site, 9000);
+    const done = await slowRestart(w, site, 200_000, () => false);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    // 300 s, less the 200 s its stop took, less 30 s for the routes and the rest after it.
+    expect(warnings(w, done.id)).toEqual([
+      expect.stringMatching(/^The app did not pass its health check \(\/ did not answer 2xx on port 9000 or 8000 within 70 s /),
+    ]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000 });
+  });
+
+  it('asks it for 30 s however little is left, and saves no port that answers once the job is out of time', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    // 9000 answers 305 s in: past the job's 5 minutes, which the worker fails it at.
+    const done = await slowRestart(w, site, 290_000, (port, at) => port === 9000 && at >= 305_000);
+    expect(jobLog(w, done.id)).toContain('/ answered 200 OK on port 9000.');
+    expect(warnings(w, done.id)).toEqual([
+      'Port 9000 answered once this job was out of time: the app runs on 8000, and the next start, deploy or recreate tries 9000 again.',
+    ]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000 });
+    expect(deploysOf(w, site.id).at(-1)).toMatchObject({ origin: 'create', port: 8000 });
+  });
+});
+
+describe('a roll back across a port change', () => {
+  it('asks the old image where it passed, and saves that port; a port staged for another image stays staged', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    const asked = listen(w);
+    // Image 2 moves the app to 9000.
     push(w, 2);
-    let again = false;
-    w.docker.appHttp = (req) => {
-      if (req.port === 9000 && !again) {
-        again = true;
-        stage(w, site, 9100);
-      }
-      return 200;
-    };
+    stage(w, site, 9000);
     expect((await deploy(w)).status).toBe('succeeded');
-    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 9100 });
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 0 });
+    // 9100 is staged for image 3, which is not out yet. Roll back to the create's image 1.
+    stage(w, site, 9100);
+    const first = deploysOf(w, site.id)[0]!;
+    expect([first.origin, first.port]).toEqual(['create', 8000]);
+    asked.length = 0;
+    const back = await deploy(w, { deployId: first.id });
+    expect(back.status, back.error ?? '').toBe('succeeded');
+    // The staged port, then where image 1 passed: there it answers.
+    expect([...new Set(asked)]).toEqual([9100, 8000]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9100, digest: digest(1) });
+    expect(deploysOf(w, site.id).at(-1)).toMatchObject({ origin: 'rollback', result: 'ok', port: 8000 });
+    await w.deps.appRoutes.idle();
+    expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:8000"');
+
+    // Forward again to the deploy of image 2: it passed on 9000.
+    const second = deploysOf(w, site.id)[1]!;
+    asked.length = 0;
+    expect((await deploy(w, { deployId: second.id })).status).toBe('succeeded');
+    expect([...new Set(asked)]).toEqual([9100, 9000]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 9100, digest: digest(2) });
+  });
+
+  it('of a deploy from before the port was kept asks the ports it has, as a deploy does', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    const asked = listen(w);
+    push(w, 2);
+    stage(w, site, 9000);
+    expect((await deploy(w)).status).toBe('succeeded');
+    const first = deploysOf(w, site.id)[0]!;
+    w.db.update(appDeploys).set({ port: 0 }).where(eq(appDeploys.id, first.id)).run();
+    asked.length = 0;
+    const back = await deploy(w, { deployId: first.id });
+    expect(back.status).toBe('failed');
+    expect(back.error).toMatch(/^\/ did not answer 2xx within 1 s/);
+    expect([...new Set(asked)]).toEqual([9000]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, digest: digest(2) });
+  });
+
+  it('of an app that is stopped keeps its port and stages the one the old image passed on, which Start asks first', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    const asked = listen(w);
+    push(w, 2);
+    stage(w, site, 9000);
+    expect((await deploy(w)).status).toBe('succeeded');
+    expect((await finish(w, w.deps.sites.action('shop', 'stop').id)).status).toBe('succeeded');
+    const back = await deploy(w, { deployId: deploysOf(w, site.id)[0]!.id });
+    expect(back.status, back.error ?? '').toBe('succeeded');
+    expect(w.docker.containers.get('wp-shop')).toBe('created');
+    // No gate asked image 1 anything: the app keeps 9000 until it answers on 8000.
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 8000, digest: digest(1) });
+    expect(deploysOf(w, site.id).at(-1)).toMatchObject({ origin: 'rollback', result: 'ok', port: 9000 });
+    expect(jobLog(w, back.id)).toContain('Port 8000 is tried when the app starts.');
+
+    // Image 1 answers on 8000: Start keeps it, and the roll back's deploy says so.
+    asked.length = 0;
+    const started = await finish(w, w.deps.sites.action('shop', 'start').id);
+    expect(started.status, started.error ?? '').toBe('succeeded');
+    expect([...new Set(asked)]).toEqual([8000]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 0 });
+    expect(deploysOf(w, site.id).at(-1)).toMatchObject({ origin: 'rollback', port: 8000 });
+    await w.deps.appRoutes.idle();
+    expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:8000"');
+  });
+
+  it('of an app that is stopped goes where its image answers at Start, when the app’s PORT has moved it since its deploy passed', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    // Both images listen where PORT says, 8000 without one.
+    const asked: number[] = [];
+    w.docker.appHttp = (req) => {
+      asked.push(req.port);
+      if (w.docker.containers.get(req.container) !== 'running') return null;
+      const made = creates(w).filter((c) => c.name === req.container).at(-1);
+      return Number(made?.env.PORT ?? 8000) === req.port ? 200 : null;
+    };
+    const { app, headers } = await authed(w);
+    const patch = (payload: Record<string, unknown>) => app.inject({ method: 'PATCH', url: '/api/sites/shop/app', headers, payload });
+    const action = (what: 'start' | 'stop') => finish(w, w.deps.sites.action('shop', what).id);
+    // Stopped, the app takes PORT=9000 (its recreate leaves it stopped) and the port 9000 as it is saved; image 2 goes in on them.
+    expect((await action('stop')).status).toBe('succeeded');
+    const env = await patch({ env: [{ name: 'PORT', value: '9000' }] });
+    expect(env.statusCode).toBe(202);
+    expect((await finish(w, env.json().job.id)).status).toBe('succeeded');
+    expect((await patch({ port: 9000 })).statusCode).toBe(200);
+    push(w, 2);
+    expect((await deploy(w)).status).toBe('succeeded');
+    expect((await action('start')).status).toBe('succeeded');
+    expect(deploysOf(w, site.id).map((d) => [d.origin, d.port])).toEqual([
+      ['create', 8000],
+      ['user', 9000],
+    ]);
+
+    // Stopped again, back to image 1, whose deploy passed on 8000 before PORT was set.
+    expect((await action('stop')).status).toBe('succeeded');
+    const back = await deploy(w, { deployId: deploysOf(w, site.id)[0]!.id });
+    expect(back.status, back.error ?? '').toBe('succeeded');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 8000, digest: digest(1) });
+    expect(jobLog(w, back.id)).toContain('Port 8000 is tried when the app starts.');
+
+    // Start asks both: image 1, given PORT=9000, answers on 9000, and the routes go there.
+    asked.length = 0;
+    const started = await action('start');
+    expect(started.status, started.error ?? '').toBe('succeeded');
+    expect([...new Set(asked)]).toEqual([8000, 9000]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 8000 });
+    await w.deps.appRoutes.idle();
+    expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:9000"');
+    // Recreate container passes there too: it asks 8000, then 9000.
+    const recreated = await recreate(w);
+    expect(recreated.status, recreated.error ?? '').toBe('succeeded');
+    expect(settingsOf(w, site.id).port).toBe(9000);
+  });
+
+  it('to an image a recreate moved to another port asks it where it went, not where its deploy passed', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    // Image 1 listens where its PORT says, 8000 without one; image 2 on 5000 whatever it says.
+    const asked: number[] = [];
+    w.docker.appHttp = (req) => {
+      asked.push(req.port);
+      const made = creates(w).filter((c) => c.name === req.container).at(-1);
+      const on = w.docker.imageByContainer.get(req.container) === 'sha256:img2' ? 5000 : Number(made?.env.PORT ?? 8000);
+      return on === req.port ? 200 : null;
+    };
+    const { app, headers } = await authed(w);
+    const patch = (payload: Record<string, unknown>) => app.inject({ method: 'PATCH', url: '/api/sites/shop/app', headers, payload });
+    expect((await patch({ port: 9000 })).statusCode).toBe(200);
+    const env = await patch({ env: [{ name: 'PORT', value: '9000' }] });
+    expect((await finish(w, env.json().job.id)).status).toBe('succeeded');
+    // The recreate moved image 1 to 9000: the deploy it runs from says so.
+    expect(deploysOf(w, site.id).map((d) => [d.origin, d.port])).toEqual([['create', 9000]]);
+
+    push(w, 2);
+    stage(w, site, 5000);
+    expect((await deploy(w)).status).toBe('succeeded');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 5000, digest: digest(2) });
+    asked.length = 0;
+    const back = await deploy(w, { deployId: deploysOf(w, site.id)[0]!.id });
+    expect(back.status, back.error ?? '').toBe('succeeded');
+    expect([...new Set(asked)]).toEqual([9000]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, digest: digest(1) });
   });
 });
 

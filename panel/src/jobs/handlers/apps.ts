@@ -14,7 +14,7 @@ import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { APP_MOUNT_NAME_RE, appDeployOrigins, type AppDeployOrigin } from '../../../shared/schemas.js';
+import { APP_MOUNT_NAME_RE, appDeployOrigins, type AppDeployOrigin, type JobType } from '../../../shared/schemas.js';
 import { UPLOAD_ID_RE } from '../../../shared/siteFilePath.js';
 import {
   appDeploys,
@@ -61,7 +61,7 @@ import {
   uploadRepository,
   type ResolvedImage,
 } from '../../services/appImages.js';
-import { healthGate } from '../../services/appProbe.js';
+import { healthGate, type GateResult } from '../../services/appProbe.js';
 import { TRAEFIK_CONTAINER } from '../../services/stack.js';
 import { importPathProblem } from '../../lib/archivePath.js';
 import { ensureSiteNetwork, removeSiteNetwork } from '../../services/siteNetwork.js';
@@ -189,12 +189,57 @@ function warnUnkeptVolumes(ctx: Pick<JobContext<unknown>, 'warn'>, volumes: stri
 }
 
 /**
- * What stays staged once a new container has passed on `port` (app_settings.next_port): nothing,
- * unless another port was staged while the job ran, which is the next container's.
+ * The port a new container goes in with, and what stays staged (app_settings.next_port). Its gate
+ * asks the staged port first, then the `known` ones: where its image listened, if that is known,
+ * then the one the app has. The port it passed on; with no answer (the check of a restore or a
+ * start only warns) the first known one, as a staged port is kept only once the app answers there.
+ * The staged port is no longer staged once it is the app's. With no gate at all: portUnasked.
+ *
+ * Both read from the row as the job started: a port change is refused while the job runs
+ * (services/apps.ts assertNotRecreating).
  */
-function nextPortAfter(s: Pick<CoreServices, 'db'>, siteId: number, port: number): number {
-  const staged = s.db.select({ nextPort: appSettings.nextPort }).from(appSettings).where(eq(appSettings.siteId, siteId)).get()?.nextPort ?? 0;
-  return staged === port ? 0 : staged;
+function portOutcome(staged: number, known: number[], passed: number | null): { port: number; nextPort: number } {
+  const port = passed ?? known.find((p) => p > 0) ?? staged;
+  return { port, nextPort: port === staged ? 0 : staged };
+}
+
+/**
+ * The same when no gate ran, the app being stopped: the app keeps its port, and the one the new
+ * container would have taken (a roll back's, where its image last listened) is staged instead,
+ * unless a port is staged already, for its start to ask first (tryStagedPort). Where an image
+ * listened once is no proof it listens there now: its environment may have moved it since.
+ */
+function portUnasked(app: Pick<AppSettingsRow, 'port' | 'nextPort'>, known: number[]): { port: number; nextPort: number } {
+  const outcome = portOutcome(app.nextPort, known, null);
+  if (app.port === 0 || outcome.port === app.port) return outcome;
+  return { port: app.port, nextPort: app.nextPort || outcome.port };
+}
+
+/** The log's word on a staged port the app did not answer on: it stays staged. */
+function stagedPortWaits(ctx: Pick<JobContext<unknown>, 'info'>, staged: number, port: number): void {
+  if (staged !== 0 && staged !== port) ctx.info(`Port ${staged} did not answer: the app runs on ${port}, and the next start, deploy or recreate tries ${staged} again.`);
+}
+
+/** The same of a staged port no gate asked, the app being stopped: its start tries it (tryStagedPort). */
+function stagedPortAtStart(ctx: Pick<JobContext<unknown>, 'info'>, nextPort: number): void {
+  if (nextPort !== 0) ctx.info(`Port ${nextPort} is tried when the app starts.`);
+}
+
+/**
+ * Where the image that runs answers, onto its newest ok deploy: a recreate, a start, a move or a
+ * restore onto it that moved the port. A roll back to that deploy asks it there (deploy). A
+ * registry image by its digest, an upload by its image id.
+ */
+function setDeployPort(s: Pick<CoreServices, 'db'>, siteId: number, image: Pick<AppSettingsRow, 'digest' | 'imageId'>, port: number): void {
+  const same = image.digest ? eq(appDeploys.digest, image.digest) : image.imageId ? eq(appDeploys.imageId, image.imageId) : null;
+  if (!same) return;
+  const row = s.db
+    .select({ id: appDeploys.id })
+    .from(appDeploys)
+    .where(and(eq(appDeploys.siteId, siteId), eq(appDeploys.result, 'ok'), same))
+    .orderBy(desc(appDeploys.id))
+    .get();
+  if (row) s.db.update(appDeploys).set({ port }).where(eq(appDeploys.id, row.id)).run();
 }
 
 /** Hand the app's folders to another owner, files and all: an image whose user changed. */
@@ -217,6 +262,8 @@ export interface NextApp {
 export interface ReplacedApp {
   /** When the new one passed its check. */
   passedAt: number;
+  /** The port it passed on; null when no check ran: the app is stopped. */
+  port: number | null;
 }
 
 /**
@@ -232,7 +279,7 @@ export async function replaceAppContainer(
   site: SiteRow,
   next: NextApp,
   run: boolean,
-  opts: { check?: () => Promise<string | null>; onFailure?: (logTail: string) => void } = {},
+  opts: { check?: () => Promise<GateResult>; onFailure?: (logTail: string) => void } = {},
 ): Promise<ReplacedApp> {
   const { docker } = server;
   const name = site.containerName;
@@ -246,6 +293,7 @@ export async function replaceAppContainer(
   const env = s.db.select().from(appEnv).where(eq(appEnv.siteId, site.id)).orderBy(appEnv.position).all();
   const spec = buildAppContainerSpec(s.config, { site, settings: next.settings, env, mounts: next.mounts, runtime: siteRuntimeFrom(s.settings, site), image: next.image });
   let made = false;
+  let port: number | null = null;
   try {
     // Folders for the same user are made first, which keeps the gap short. Another user's only
     // once the old container has stopped: until then it still writes there, for its whole grace.
@@ -264,8 +312,9 @@ export async function replaceAppContainer(
     if (run) {
       // Not startSiteContainer: that makes the folders from the rows, which still hold the old settings.
       await docker.startContainer(name);
-      const failed = opts.check ? await opts.check() : null;
-      if (failed) throw new Error(failed);
+      const gate = opts.check ? await opts.check() : null;
+      if (gate?.failed) throw new Error(gate.failed);
+      port = gate?.port ?? null;
     }
   } catch (err) {
     if (made && opts.onFailure) {
@@ -291,7 +340,7 @@ export async function replaceAppContainer(
   }
   const passedAt = Date.now();
   if (old) await dropAside(ctx, docker, name, APP_REMOVAL);
-  return { passedAt };
+  return { passedAt, port };
 }
 
 // ---------------------------------------------------------------------------
@@ -443,11 +492,16 @@ export async function createApp(ctx: JobContext<{ siteId: number; uploadId?: str
       updateSiteRow(s.db, site.id, { status: 'stopped' });
     } else {
       await server.docker.startContainer(site.containerName);
-      const failed = await healthGate(server, site, settings, { deployCheck: true, intervalMs: gateInterval(s), log: (l) => ctx.info(l), canceled: () => ctx.checkCanceled() });
-      if (failed) {
+      const gate = await healthGate(server, site, settings, [settings.port], {
+        deployCheck: true,
+        intervalMs: gateInterval(s),
+        log: (l) => ctx.info(l),
+        canceled: () => ctx.checkCanceled(),
+      });
+      if (gate.failed) {
         const tail = await server.docker.containerLogs(site.containerName, { tail: LOG_TAIL_LINES }).catch(() => '');
         if (tail.trim()) logLastLines(ctx, "The container's last lines", tail.trimEnd());
-        throw new Error(failed);
+        throw new Error(gate.failed);
       }
 
       // Its routes: written once the row says it runs (services/appRoutes.ts), and the file is there before the row says so to anyone else.
@@ -470,6 +524,7 @@ export async function createApp(ctx: JobContext<{ siteId: number; uploadId?: str
         origin: 'create',
         actor: actorOf(s, ctx.jobId, 'create'),
         jobId: ctx.jobId,
+        port: settings.port,
       })
       .run();
     await writeSiteJson(server, s, loadSite(s.db, site.id));
@@ -550,9 +605,8 @@ async function deploy(ctx: JobContext<z.infer<typeof appDeployPayload>>, s: Core
   const settings = s.apps.settingsOf(site.id);
   const { origin } = ctx.payload;
   const startedAt = Date.now();
-  // The new container is asked on a port staged for it, as a new image may listen on another one;
-  // the row takes that port once the container has passed.
-  const port = settings.nextPort || settings.port;
+  // Where the image a roll back runs again listened when it last went in; 0 = not known.
+  let rolledBackPort = 0;
 
   // 1. What to run.
   let want: WantedImage;
@@ -561,6 +615,7 @@ async function deploy(ctx: JobContext<z.infer<typeof appDeployPayload>>, s: Core
     if (!row || row.result !== 'ok') throw new Error(`Deploy #${ctx.payload.deployId} is not one to go back to.`);
     // By the reference that deploy came by: the app's own may name another repository since.
     want = row.digest ? { digest: row.digest, reference: row.reference || settings.reference } : { imageId: row.imageId };
+    rolledBackPort = row.port;
     ctx.info(`Rolling back to deploy #${row.id} (${row.digest ? row.digest.slice(0, 19) : row.imageId.slice(0, 19)}…).`);
   } else if (ctx.payload.uploadId) {
     want = { uploadId: ctx.payload.uploadId };
@@ -578,7 +633,7 @@ async function deploy(ctx: JobContext<z.infer<typeof appDeployPayload>>, s: Core
     if (digest === settings.digest && there && container !== 'missing' && sameRepository) {
       s.db.update(appSettings).set({ checkedAt: Date.now(), checkError: null, pendingDigest: '' }).where(eq(appSettings.siteId, site.id)).run();
       ctx.info(`${settings.reference} is still ${digest.slice(0, 19)}…, which runs already. Nothing to deploy.`);
-      if (settings.nextPort) ctx.info(`Port ${settings.nextPort} goes in with the next new image, or with Recreate container.`);
+      if (settings.nextPort) ctx.info(`The next start, deploy or recreate tries port ${settings.nextPort}.`);
       ctx.setResult({ slug: site.slug, unchanged: true, digest });
       return;
     }
@@ -612,9 +667,12 @@ async function deploy(ctx: JobContext<z.infer<typeof appDeployPayload>>, s: Core
     s.db.update(appDeploys).set({ digest: image.digest, imageId: image.imageId }).where(eq(appDeploys.id, deployId)).run();
     ctx.checkCanceled();
     const mounts = appRows(s.db, site.id)!.mounts;
-    const fromImage = await settingsFromImage(server, { ...settings, port }, mounts, image);
+    const fromImage = await settingsFromImage(server, settings, mounts, image);
     warnUnkeptVolumes(ctx, image.config.volumes, fromImage.dataPaths, mounts);
     const next: NextApp = { image: image.ref, settings: { ...settings, ...fromImage, digest: image.digest, imageId: image.imageId }, mounts };
+    // A new image may listen elsewhere: a port staged for it first, then where a rolled-back image
+    // listened, then the port the app runs on.
+    const known = [rolledBackPort, fromImage.port];
 
     // 3. A backup first, of what runs now.
     const hasContainer = (await server.docker.containerState(site.containerName)) !== 'missing';
@@ -642,23 +700,33 @@ async function deploy(ctx: JobContext<z.infer<typeof appDeployPayload>>, s: Core
       ctx.warn('The app is stopped: its new container is made, and stays stopped until it is started.');
     }
     const replaced = await replaceAppContainer(ctx, server, s, site, next, run, {
-      check: () => healthGate(server, site, next.settings, { deployCheck: true, intervalMs: gateInterval(s), log: (l) => ctx.info(l), canceled: () => ctx.checkCanceled() }),
+      check: () =>
+        healthGate(server, site, next.settings, [settings.nextPort, ...known], {
+          deployCheck: true,
+          intervalMs: gateInterval(s),
+          log: (l) => ctx.info(l),
+          canceled: () => ctx.checkCanceled(),
+        }),
       onFailure: (tail) => {
         logTail = tail.trim() ? tail.trimEnd().split('\n').slice(-LOG_TAIL_LINES).join('\n') : null;
         if (logTail) logLastLines(ctx, "The new container's last lines", logTail);
       },
     });
 
-    // 5. It is in, and its row says so, its port among the rest: nothing after this fails the
-    // deploy. The gap is the hold's, from when the routes began to answer 503 to the new
-    // container's pass; they are released next, onto the port it passed on.
+    // 5. It is in, and its row says so, the port it passed on among the rest: nothing after this
+    // fails the deploy. The gap is the hold's, from when the routes began to answer 503 to the new
+    // container's pass; they are released next, onto that port.
     const gapMs = heldAt !== null ? replaced.passedAt - heldAt : null;
+    const { port, nextPort } = replaced.port !== null ? portOutcome(settings.nextPort, known, replaced.port) : portUnasked(settings, known);
+    if (replaced.port !== null) stagedPortWaits(ctx, settings.nextPort, port);
+    else stagedPortAtStart(ctx, nextPort);
     s.db.transaction(() => {
       s.db
         .update(appSettings)
         .set({
           ...fromImage,
-          nextPort: nextPortAfter(s, site.id, fromImage.port),
+          port,
+          nextPort,
           digest: image.digest,
           imageId: image.imageId,
           ...(origin !== 'rollback' && settings.pendingDigest === image.digest ? { pendingDigest: '' } : {}),
@@ -667,7 +735,7 @@ async function deploy(ctx: JobContext<z.infer<typeof appDeployPayload>>, s: Core
         })
         .where(eq(appSettings.siteId, site.id))
         .run();
-      s.db.update(appDeploys).set({ result: 'ok', tookMs: Date.now() - startedAt, gapMs }).where(eq(appDeploys.id, deployId)).run();
+      s.db.update(appDeploys).set({ result: 'ok', tookMs: Date.now() - startedAt, gapMs, port }).where(eq(appDeploys.id, deployId)).run();
     });
     done = { image, gapMs, mounts };
   } catch (err) {
@@ -709,25 +777,103 @@ async function deploy(ctx: JobContext<z.infer<typeof appDeployPayload>>, s: Core
 // ---------------------------------------------------------------------------
 // The rest of a site's jobs, for an app
 
-/** What a recreate puts in force beyond the app's row (site.reconcile's appRunAs and retrySwitch). */
+/** What a recreate puts in force beyond the app's row (site.reconcile's appRunAs). */
 export interface AppChange {
   /** The user the new container runs as (services/apps.ts patch): the row's once that container has passed. */
   runAs?: string;
-  /**
-   * Recreate container, which someone asked for: the new container is asked on the port staged for
-   * it (app_settings.next_port). Every other recreate keeps the port the app answers on: the image it
-   * runs listens there, and a staged port waits for the next one deployed, or for this.
-   */
-  takeStagedPort?: boolean;
+}
+
+/** A fill's own folders beside the mount it fills (appMountUpload): `.<name>.new-<job>`, `.<name>.old-<job>`. */
+const FILL_FOLDER_RE = /^\.([a-z0-9][a-z0-9-]{0,31})\.(new|old)-(\d+)$/;
+const fillFolder = (mount: string, which: 'new' | 'old', jobId: number) => `.${mount}.${which}-${jobId}`;
+
+/**
+ * When the fill that left a cut-off pair ran: its fresh folder's time, which the unpack set and
+ * nothing touches after, so it outlasts the fill's job (housekeeping prunes old jobs); while that
+ * is kept, no earlier than the job's start. The folder's is the server's clock and filledAt the
+ * panel's: one behind the other would date the fill too early, and a fill from before it would
+ * count as one after. Null when neither says.
+ */
+async function cutOffAt(server: ServerHandle, fresh: string, fill: { startedAt: number | null; createdAt: number } | null): Promise<number | null> {
+  const folder = await server.files.stat(fresh).catch(() => null);
+  const times = [folder?.mtimeMs, fill ? (fill.startedAt ?? fill.createdAt) : undefined].filter((t): t is number => t !== undefined);
+  return times.length > 0 ? Math.max(...times) : null;
+}
+
+/**
+ * The folders a fill left behind: its job is neither queued nor running any more. Never one of a
+ * fill under way. A lone one goes: a fresh folder never swapped in, or what the mount held once the
+ * swap was done, which the fill keeps while the app may still run on it (appMountUpload). An old
+ * folder whose fresh one is still beside it was cut off between the swap's two renames: it holds
+ * what the mount had, and the two stay until the mount is filled again after that fill, which put
+ * new files in on purpose. The two of a mount `named` no longer has are its orphans, returned for
+ * removeOrphanMounts: that mount was taken off on purpose.
+ */
+async function removeStaleFills(
+  ctx: Pick<JobContext<unknown>, 'info' | 'warn'>,
+  s: CoreServices,
+  server: ServerHandle,
+  site: SiteRow,
+  names: string[],
+  named: ReadonlySet<string>,
+): Promise<string[]> {
+  const p = appPaths(s.config, site.slug);
+  const orphans: string[] = [];
+  // Whether each pair's mount was filled again since, by its fresh folder: judged once, before either of the two goes.
+  const refills = new Map<string, boolean>();
+  for (const name of names) {
+    const m = FILL_FOLDER_RE.exec(name);
+    if (!m) continue;
+    const mount = m[1]!;
+    const jobId = Number(m[3]);
+    const job = s.db
+      .select({ type: jobsTable.type, status: jobsTable.status, createdAt: jobsTable.createdAt, startedAt: jobsTable.startedAt })
+      .from(jobsTable)
+      .where(eq(jobsTable.id, jobId))
+      .get();
+    const fill = job?.type === 'app.mountUpload' ? job : null;
+    if (fill && (fill.status === 'queued' || fill.status === 'running')) continue;
+    const fresh = fillFolder(mount, 'new', jobId);
+    const aside = fillFolder(mount, 'old', jobId);
+    if (names.includes(fresh) && names.includes(aside)) {
+      if (!named.has(mount)) {
+        orphans.push(name);
+        continue;
+      }
+      let refilled = refills.get(fresh);
+      if (refilled === undefined) {
+        const filledAt = s.db.select({ at: appMounts.filledAt }).from(appMounts).where(and(eq(appMounts.siteId, site.id), eq(appMounts.name, mount))).get()?.at ?? null;
+        const cutAt = await cutOffAt(server, path.join(p.mounts, fresh), fill);
+        refilled = cutAt !== null && filledAt !== null && filledAt > cutAt;
+        refills.set(fresh, refilled);
+        if (!refilled) {
+          ctx.warn(
+            `A fill of ${mount} was cut off half-way: what the mount held is in ${path.join(p.mounts, aside)}, the archive's files in ${path.join(p.mounts, fresh)}. ` +
+              'They stay there: fill the mount again, which clears them, or move one back by hand.',
+          );
+        }
+      }
+      if (!refilled) continue;
+    }
+    try {
+      await server.files.rm(path.join(p.mounts, name));
+      ctx.info(`Removed ${name}, left by an earlier fill of ${mount}.`);
+    } catch (err) {
+      ctx.warn(`Could not remove ${path.join(p.mounts, name)}, left by an earlier fill of ${mount} (${errMsg(err)}).`);
+    }
+  }
+  return orphans;
 }
 
 /**
  * The folders under mounts/ that no mount names, once a new container is in and no old one is left
  * aside that has them: left there, their files are in no backup, and a mount given the name again
  * would get them back. By the names a mount can have only: a fill's own folders
- * (`.<name>.new-<id>`, `.<name>.old-<id>`) are never one. Every passing swap looks, so the folder of
- * a mount taken off goes with the next one after a recreate that failed or never ran, and on an app
- * that had no container to recreate. `binds`: the new container's mounts. Never a reason to fail.
+ * (`.<name>.new-<id>`, `.<name>.old-<id>`) are never one, and go only once their fill is over
+ * (removeStaleFills); the two a cut-off fill left of a mount taken off go with these. Every
+ * passing swap looks, so the folder of a mount taken off goes with the next one after a recreate
+ * that failed or never ran, and on an app that had no container to recreate. `binds`: the new
+ * container's mounts. Never a reason to fail.
  */
 async function removeOrphanMounts(ctx: Pick<JobContext<unknown>, 'info' | 'warn'>, s: CoreServices, server: ServerHandle, site: SiteRow, binds: AppMountRow[]): Promise<void> {
   const p = appPaths(s.config, site.slug);
@@ -735,7 +881,11 @@ async function removeOrphanMounts(ctx: Pick<JobContext<unknown>, 'info' | 'warn'
   const named = new Set([...binds, ...(appRows(s.db, site.id)?.mounts ?? [])].map((m) => m.name));
   let orphans: string[];
   try {
-    orphans = (await server.files.readdir(p.mounts)).filter((name) => APP_MOUNT_NAME_RE.test(name) && !named.has(name));
+    const found = await server.files.readdir(p.mounts);
+    // Once a swap has passed, no container runs on a fill's folders (the old one, which may have, is
+    // stopped): they go whatever is left aside. Those of a mount taken off wait as its folder does.
+    const fills = await removeStaleFills(ctx, s, server, site, found, named);
+    orphans = [...found.filter((name) => APP_MOUNT_NAME_RE.test(name) && !named.has(name)), ...fills];
     if (orphans.length === 0) return;
     // An old container the swap could not remove (dropAside) still has them: they stay for it.
     if ((await server.docker.containerState(asideContainerName(site.containerName))) !== 'missing') {
@@ -747,11 +897,14 @@ async function removeOrphanMounts(ctx: Pick<JobContext<unknown>, 'info' | 'warn'
     return;
   }
   for (const name of orphans) {
+    // A fill's folder is named by the mount it was for.
+    const fillOf = FILL_FOLDER_RE.exec(name)?.[1];
+    const what = fillOf ? `${name}, left by a fill of ${fillOf}` : `the files of ${name}`;
     try {
       await server.files.rm(p.mountDir(name));
-      ctx.info(`Removed the files of ${name}, which is no longer a mount.`);
+      ctx.info(`Removed ${what}, which is no longer a mount.`);
     } catch (err) {
-      ctx.warn(`Could not remove the files of ${name}, which is no longer a mount (${errMsg(err)}): they stay in ${p.mountDir(name)}.`);
+      ctx.warn(`Could not remove ${what}, which is no longer a mount (${errMsg(err)}): ${fillOf ? 'it stays' : 'they stay'} in ${p.mountDir(name)}.`);
     }
   }
 }
@@ -762,12 +915,15 @@ async function removeOrphanMounts(ctx: Pick<JobContext<unknown>, 'info' | 'warn'
  * Behind the health gate, with the routes held, as a deploy is; a registry image that is gone is
  * pulled again by its digest.
  *
- * A new user (`change`), the port staged for it when someone asked for this (`takeStagedPort`), and
- * the data paths the image's VOLUMEs need are the new container's, and the app's row takes them only
- * once that container has passed, before the routes are released: they then send to the port it
- * listens on. When it fails, nothing is saved, the port stays staged, and the old container is back.
- * Once it has passed, what is left only warns: the new container runs with what it was made with, a
- * new database password among it (handlers/databases.ts).
+ * The gate tries a port staged on the row first, then the one the app runs on, and the new
+ * container goes in on the first that answers: an environment change may move the port the app
+ * listens on, and the save that stages that port queues no job of its own. A new user (`change`)
+ * and the data paths the image's VOLUMEs need are the new container's too. The app's row takes
+ * them, and the port it passed on, only once that container has passed, before the routes are
+ * released: they then send to the port it listens on. When it fails, nothing is saved, a staged
+ * port stays staged, and the old container is back. Once it has passed, what is left only warns:
+ * the new container runs with what it was made with, a new database password among it
+ * (handlers/databases.ts).
  */
 export async function reconcileApp(ctx: JobContext<unknown>, s: CoreServices, site: SiteRow, change: AppChange = {}): Promise<void> {
   const server = s.servers.handleFor(site.serverId);
@@ -796,16 +952,15 @@ export async function reconcileApp(ctx: JobContext<unknown>, s: CoreServices, si
   const kept = config ? withImageVolumes(before, config.volumes, mounts.map((m) => m.containerPath)) : before;
   const dataPaths = config ? JSON.stringify(kept) : was.dataPaths;
   if (config) warnUnkeptVolumes(ctx, config.volumes, dataPaths, mounts);
-  const takesPort = change.takeStagedPort === true && was.nextPort !== 0;
-  const port = takesPort ? was.nextPort : was.port;
-  const changed: Partial<Pick<AppSettingsRow, 'port' | 'runAs' | 'dataPaths'>> = {
-    ...(port !== was.port ? { port } : {}),
+  const changed: Partial<Pick<AppSettingsRow, 'port' | 'nextPort' | 'runAs' | 'dataPaths'>> = {
     ...(change.runAs !== undefined ? { runAs: change.runAs } : {}),
     ...(dataPaths !== was.dataPaths ? { dataPaths } : {}),
   };
   // The row keeps the old ones until the new container has passed: replaceAppContainer sees from it
   // that the folders go to another owner.
   const settings: AppSettingsRow = { ...was, ...changed };
+  // Its image listens on the app's port, unless an environment change moved it to the staged one.
+  const known = [was.port];
   const run = await siteShouldRun(server.docker, site);
   // A hold that cannot be written fails the job here, before the recreate, with nothing held.
   let held = false;
@@ -815,19 +970,27 @@ export async function reconcileApp(ctx: JobContext<unknown>, s: CoreServices, si
   }
   try {
     ctx.info('Recreating the container…');
-    await replaceAppContainer(ctx, server, s, site, { image: ref, settings, mounts }, run, {
-      check: () => healthGate(server, site, settings, { deployCheck: false, intervalMs: gateInterval(s), log: (l) => ctx.info(l), canceled: () => ctx.checkCanceled() }),
+    const replaced = await replaceAppContainer(ctx, server, s, site, { image: ref, settings, mounts }, run, {
+      check: () =>
+        healthGate(server, site, settings, [was.nextPort, ...known], {
+          deployCheck: false,
+          intervalMs: gateInterval(s),
+          log: (l) => ctx.info(l),
+          canceled: () => ctx.checkCanceled(),
+        }),
       onFailure: (tail) => {
         if (tail.trim()) logLastLines(ctx, "The new container's last lines", tail.trimEnd().split('\n').slice(-LOG_TAIL_LINES).join('\n'));
       },
     });
-    if (Object.keys(changed).length > 0 || takesPort) {
+    const { port, nextPort } = replaced.port !== null ? portOutcome(was.nextPort, known, replaced.port) : portUnasked(was, known);
+    if (replaced.port !== null) stagedPortWaits(ctx, was.nextPort, port);
+    else stagedPortAtStart(ctx, nextPort);
+    if (port !== was.port) changed.port = port;
+    if (nextPort !== was.nextPort) changed.nextPort = nextPort;
+    if (Object.keys(changed).length > 0) {
       s.db.transaction(() => {
-        s.db
-          .update(appSettings)
-          .set({ ...changed, ...(takesPort ? { nextPort: nextPortAfter(s, site.id, port) } : {}), updatedAt: Date.now() })
-          .where(eq(appSettings.siteId, site.id))
-          .run();
+        s.db.update(appSettings).set({ ...changed, updatedAt: Date.now() }).where(eq(appSettings.siteId, site.id)).run();
+        if (changed.port !== undefined) setDeployPort(s, site.id, was, changed.port);
       });
     }
   } finally {
@@ -839,7 +1002,6 @@ export async function reconcileApp(ctx: JobContext<unknown>, s: CoreServices, si
 
   // The new container is in: what is left only warns, as a deploy's does.
   if (!run) ctx.warn('The app was stopped before this, so it has been left stopped. Use Start to bring it up.');
-  if (was.nextPort !== 0 && !takesPort) ctx.info(`Port ${was.nextPort} goes in with the next new image, or with Recreate container.`);
   await removeOrphanMounts(ctx, s, server, site, mounts);
   await writeSiteJson(server, s, loadSite(s.db, site.id)).catch((err: unknown) => ctx.warn(`Could not write the app's site.json (${errMsg(err)}).`));
   await s.appRoutes.kick(server.id).catch((err: unknown) => ctx.warn(`Could not write the app's routes (${errMsg(err)}); the minute tick writes them.`));
@@ -850,6 +1012,92 @@ export async function reconcileApp(ctx: JobContext<unknown>, s: CoreServices, si
   ];
   ctx.info(notes.length > 0 ? `Recreated: ${notes.join(', ')}.` : 'Recreated.');
   ctx.setResult({ slug: site.slug, changed: ['container', ...notes] });
+}
+
+/** A start's or a restart's wait for a staged port, at most: the app's own timeout may be ten minutes. */
+const START_GATE_MAX_SEC = 180;
+/** What a start or a restart keeps of its time once that wait is over, for its routes and its rules. */
+const START_GATE_MARGIN_SEC = 30;
+/** The least that wait gets, however little time the job has left. */
+const START_GATE_MIN_SEC = 30;
+
+/**
+ * When the worker gives up on the job that runs this: its type's deadline (jobs/registry.ts) from
+ * when it was claimed, a little before the worker's clock started. Null when its row does not say.
+ */
+async function jobEndsAt(s: Pick<CoreServices, 'db'>, ctx: Pick<JobContext<unknown>, 'jobId' | 'payload'>): Promise<number | null> {
+  const job = s.db.select({ type: jobsTable.type, startedAt: jobsTable.startedAt }).from(jobsTable).where(eq(jobsTable.id, ctx.jobId)).get();
+  if (!job?.startedAt) return null;
+  // Not imported at the top: the registry imports this file.
+  const { getRegistry, jobDeadline } = await import('../registry.js');
+  return job.startedAt + jobDeadline(getRegistry()[job.type as JobType], ctx.payload);
+}
+
+/** The port a start, a restart or a move found the app on, as its own: on the deploy of what runs too, which a roll back asks. */
+function keepPort(ctx: Pick<JobContext<unknown>, 'info'>, s: Pick<CoreServices, 'db'>, site: Pick<SiteRow, 'id'>, was: AppSettingsRow, port: number, nextPort: number): void {
+  s.db.transaction(() => {
+    s.db.update(appSettings).set({ port, nextPort, updatedAt: Date.now() }).where(eq(appSettings.siteId, site.id)).run();
+    setDeployPort(s, site.id, was, port);
+  });
+  ctx.info(`The app runs on ${port} from now on, not ${was.port}.`);
+}
+
+/**
+ * Start and Restart of an app with a port staged (site.start, site.restart), once its container
+ * runs and before its routes are written: the gate asks the staged port, then the one the app
+ * has, and the app keeps the first that answers, as at a recreate. A deploy or recreate of a
+ * stopped app asks no port, and leaves the staged one to this, a roll back's among them. When
+ * neither answers it only warns: the app runs on the port it has, as a start always did. Nothing
+ * without a staged port.
+ *
+ * The gate ends a margin before the job's deadline, which a restart's stop may have used most of
+ * (the app's stop grace), and one that ends past it all the same saves nothing: the worker has
+ * failed the job by then, and a port can be saved again (services/apps.ts patch).
+ */
+export async function tryStagedPort(ctx: JobContext<unknown>, s: CoreServices, server: ServerHandle, site: SiteRow): Promise<void> {
+  const was = appRows(s.db, site.id)?.settings;
+  if (!was || was.nextPort === 0) return;
+  const endsAt = await jobEndsAt(s, ctx);
+  const left = endsAt === null ? START_GATE_MAX_SEC : Math.floor((endsAt - Date.now()) / 1000) - START_GATE_MARGIN_SEC;
+  const known = [was.port];
+  const gate = await healthGate(
+    server,
+    site,
+    { ...was, healthTimeoutSec: Math.min(was.healthTimeoutSec, START_GATE_MAX_SEC, Math.max(START_GATE_MIN_SEC, left)) },
+    [was.nextPort, ...known],
+    { deployCheck: false, intervalMs: gateInterval(s), log: (l) => ctx.info(l) },
+  );
+  const { port, nextPort } = portOutcome(was.nextPort, known, gate.port);
+  if (gate.failed) ctx.warn(`The app did not pass its health check (${gate.failed}): it runs on ${port}, and the next start, deploy or recreate tries ${was.nextPort} again.`);
+  else stagedPortWaits(ctx, was.nextPort, port);
+  // Only the staged port answering changes anything.
+  if (port === was.port) return;
+  if (endsAt !== null && Date.now() >= endsAt) {
+    ctx.warn(`Port ${port} answered once this job was out of time: the app runs on ${was.port}, and the next start, deploy or recreate tries ${port} again.`);
+    return;
+  }
+  keepPort(ctx, s, site, was, port, nextPort);
+}
+
+/**
+ * A move's check of the app on its target (handlers/restoreSite.ts), once its container runs there
+ * and before its routes are written: the gate asks a staged port, then the one the app has, and the
+ * app keeps the first that answers, as at a start. A stopped app is started there for it, so an
+ * image deployed while it was stopped is asked where it listens. When neither answers the move
+ * rolls back, and one that fails later puts the port the app had back with the rest.
+ */
+export async function gateMovedApp(ctx: JobContext<unknown>, s: CoreServices, target: ServerHandle, site: SiteRow): Promise<void> {
+  const was = appRows(s.db, site.id)!.settings;
+  const known = [was.port];
+  const gate = await healthGate(target, site, was, [was.nextPort, ...known], { deployCheck: false, intervalMs: gateInterval(s), log: (l) => ctx.info(l) });
+  if (gate.failed) throw new Error(`The app did not pass its health check on the target - rolling back (source untouched): ${gate.failed}`);
+  const { port, nextPort } = portOutcome(was.nextPort, known, gate.port);
+  stagedPortWaits(ctx, was.nextPort, port);
+  if (port === was.port) return;
+  ctx.pushCompensation("put the app's port back", async () => {
+    s.db.update(appSettings).set({ port: was.port, nextPort: was.nextPort, updatedAt: Date.now() }).where(eq(appSettings.siteId, site.id)).run();
+  });
+  keepPort(ctx, s, site, was, port, nextPort);
 }
 
 /** An app's images and its uploads, as it is deleted: after its containers, before its row. */
@@ -870,6 +1118,8 @@ export interface PlacedImage {
   reference: string;
   digest: string;
   imageId: string;
+  /** Where it listened, as a backup's manifest says: what a restore onto it tries. 0 = not known. */
+  port: number;
 }
 
 /** What a backup's manifest says of an app's image (services/backup.ts createOn). */
@@ -878,7 +1128,11 @@ interface BackupContainer {
   reference?: string;
   digest?: string;
   imageId?: string;
+  port?: unknown;
 }
+
+/** The port a manifest names, when it names a valid one. */
+const manifestPort = (c: BackupContainer): number => (typeof c.port === 'number' && Number.isInteger(c.port) && c.port >= 1 && c.port <= 65535 ? c.port : 0);
 
 /**
  * The image a backup was taken with, on the app's server: kept there, or pulled again by its digest.
@@ -892,19 +1146,20 @@ export async function backupImage(ctx: JobContext<unknown>, s: CoreServices, ser
     const ref = currentImageRef(s.db, rows.settings);
     if (!ref) throw new Error('The backup names no image, and the app runs none yet. Nothing was changed.');
     ctx.warn('The backup names no image: the app keeps the one it runs.');
-    return { ref, reference: runningReference(s.db, rows.settings), digest: rows.settings.digest, imageId: rows.settings.imageId };
+    return { ref, reference: runningReference(s.db, rows.settings), digest: rows.settings.digest, imageId: rows.settings.imageId, port: rows.settings.port };
   }
+  const port = manifestPort(c);
   if (c.source === 'registry' && c.reference && c.digest) {
     const ref = pinned(c.reference, c.digest);
     if (await server.docker.imageExists(ref)) {
       ctx.info(`The backup's image, ${c.digest.slice(0, 19)}…, is on the server.`);
-      return { ref, reference: c.reference, digest: c.digest, imageId: c.imageId ?? '' };
+      return { ref, reference: c.reference, digest: c.digest, imageId: c.imageId ?? '', port };
     }
     ctx.info(`The backup's image, ${c.digest.slice(0, 19)}…, is no longer on the server: pulling it by its digest…`);
     const pulled = await pullPinned(server, c.reference, c.digest, pullAuthFor(rows.settings, c.reference), (line) => ctx.info(line));
-    return { ref: pulled.ref, reference: c.reference, digest: pulled.digest, imageId: pulled.imageId };
+    return { ref: pulled.ref, reference: c.reference, digest: pulled.digest, imageId: pulled.imageId, port };
   }
-  if (c.imageId && (await server.docker.imageExists(c.imageId))) return { ref: c.imageId, reference: '', digest: '', imageId: c.imageId };
+  if (c.imageId && (await server.docker.imageExists(c.imageId))) return { ref: c.imageId, reference: '', digest: '', imageId: c.imageId, port };
   throw new Error('The image this backup was taken with is no longer on the server, and an uploaded image cannot be pulled again. Upload it again, then restore. Nothing was changed.');
 }
 
@@ -916,11 +1171,20 @@ export async function backupImage(ctx: JobContext<unknown>, s: CoreServices, ser
  * Another image is read as a deploy reads one: its user above all, who gets the app's folders once
  * the files are back (they went to the user the app ran as, BackupService restoreFiles). The change
  * is a deploy row of its own, which the Deploys list shows and what runs takes its reference from.
+ *
+ * The check tries a port staged on the row first, then where the backup's image listened (its
+ * manifest's port) when that is another image, then the app's own, and the routes send to the
+ * first that answers. It only warns: with no answer the app keeps the backup's port for the
+ * backup's image, which listened there, or else the one it had.
  */
 export async function restoreAppContainer(ctx: JobContext<unknown>, s: CoreServices, server: ServerHandle, site: SiteRow, image: PlacedImage): Promise<void> {
   const rows = appRows(s.db, site.id)!;
-  const other = image.ref !== currentImageRef(s.db, rows.settings);
-  let settings = rows.settings;
+  const was = rows.settings;
+  const other = image.ref !== currentImageRef(s.db, was);
+  let settings = was;
+  // The backup's image listened where its manifest says; the one the app runs, on the app's port.
+  let known = [was.port];
+  let deployId: number | null = null;
   if (other || (await server.docker.containerState(site.containerName)) === 'missing') {
     const startedAt = Date.now();
     ctx.info(other ? 'The backup was taken on another image: making the container from it…' : 'Making the container again…');
@@ -929,13 +1193,16 @@ export async function restoreAppContainer(ctx: JobContext<unknown>, s: CoreServi
       const config = await server.docker.imageConfig(image.ref);
       if (!config) throw new Error(`The backup's image is not on "${server.name}" after all: restore again, which pulls it.`);
       const imageId = config.id || image.imageId;
-      fromImage = await settingsFromImage(server, rows.settings, rows.mounts, { ref: image.ref, digest: image.digest, imageId, config });
-      settings = { ...rows.settings, ...fromImage, digest: image.digest, imageId };
+      fromImage = await settingsFromImage(server, was, rows.mounts, { ref: image.ref, digest: image.digest, imageId, config });
+      known = [image.port, fromImage.port];
+      // Until it has answered: where that image listened.
+      fromImage = { ...fromImage, port: portOutcome(was.nextPort, known, null).port };
+      settings = { ...was, ...fromImage, digest: image.digest, imageId };
     }
     const env = s.db.select().from(appEnv).where(eq(appEnv.siteId, site.id)).orderBy(appEnv.position).all();
     await removeSiteContainers(server.docker, site.containerName, APP_REMOVAL);
     await ensureAppFolders(server.files, s.config, site, settings, rows.mounts);
-    const before = appOwner(rows.settings);
+    const before = appOwner(was);
     const after = appOwner(settings);
     if (before.uid !== after.uid || before.gid !== after.gid) {
       ctx.info(`The backup's image runs as ${after.uid}:${after.gid}, not ${before.uid}:${before.gid}: handing the app's folders over…`);
@@ -946,9 +1213,9 @@ export async function restoreAppContainer(ctx: JobContext<unknown>, s: CoreServi
     );
     if (fromImage) {
       const saved = fromImage;
-      s.db.transaction(() => {
+      deployId = s.db.transaction(() => {
         s.db.update(appSettings).set({ ...saved, digest: settings.digest, imageId: settings.imageId, updatedAt: Date.now() }).where(eq(appSettings.siteId, site.id)).run();
-        s.db
+        return s.db
           .insert(appDeploys)
           .values({
             siteId: site.id,
@@ -961,17 +1228,29 @@ export async function restoreAppContainer(ctx: JobContext<unknown>, s: CoreServi
             origin: 'restore',
             actor: actorOf(s, ctx.jobId, 'restore'),
             jobId: ctx.jobId,
+            port: saved.port,
           })
-          .run();
+          .returning({ id: appDeploys.id })
+          .get().id;
       });
     }
   }
   ctx.info('Starting the app…');
   await startSiteContainer(server, s, site, ctx);
   updateSiteRow(s.db, site.id, { status: 'running' });
+  const gate = await healthGate(server, site, settings, [was.nextPort, ...known], { deployCheck: false, intervalMs: gateInterval(s), log: (l) => ctx.info(l) });
+  const { port, nextPort } = portOutcome(was.nextPort, known, gate.port);
+  if (gate.port !== null) stagedPortWaits(ctx, was.nextPort, port);
+  s.db.transaction(() => {
+    if (port !== settings.port || nextPort !== was.nextPort) {
+      s.db.update(appSettings).set({ port, nextPort, updatedAt: Date.now() }).where(eq(appSettings.siteId, site.id)).run();
+    }
+    if (deployId !== null) s.db.update(appDeploys).set({ port }).where(eq(appDeploys.id, deployId)).run();
+    else if (port !== was.port) setDeployPort(s, site.id, was, port);
+  });
+  // Its routes once the port is known: they send to the one it answered on.
   await s.appRoutes.kick(server.id);
-  const failed = await healthGate(server, site, settings, { deployCheck: false, intervalMs: gateInterval(s), log: (l) => ctx.info(l) });
-  if (failed) ctx.warn(`The app did not pass its health check after the restore (${failed}): check its logs.`);
+  if (gate.failed) ctx.warn(`The app did not pass its health check after the restore (${gate.failed}): check its logs.`);
 }
 
 /**
@@ -996,7 +1275,7 @@ export async function carryAppImage(
     ctx.info(`Pulling the app's image on "${target.name}" by its digest…`);
     const pulled = await pullPinned(target, reference, settings.digest, pullAuthFor(settings, reference), (line) => ctx.info(line));
     ctx.pushCompensation("remove the app's image on the target", () => target.docker.removeImage(pulled.ref).catch(() => undefined));
-    return { ref: pulled.ref, reference, digest: pulled.digest, imageId: pulled.imageId };
+    return { ref: pulled.ref, reference, digest: pulled.digest, imageId: pulled.imageId, port: settings.port };
   }
   if (!settings.imageId || !(await source.docker.imageExists(settings.imageId))) {
     throw new Error(`The image "${site.slug}" runs is not on "${source.name}" any more: deploy it again before it moves.`);
@@ -1014,7 +1293,7 @@ export async function carryAppImage(
     const name = uploadImageName(site.slug, id);
     const loaded = await loadUploaded(target, file, name, (line) => ctx.info(line));
     ctx.pushCompensation("remove the app's image on the target", () => target.docker.removeImage(name).catch(() => undefined));
-    return { ref: loaded.ref, reference: '', digest: '', imageId: loaded.imageId };
+    return { ref: loaded.ref, reference: '', digest: '', imageId: loaded.imageId, port: settings.port };
   } finally {
     await rm(file, { force: true });
   }
@@ -1138,8 +1417,14 @@ export async function appMountUpload(ctx: JobContext<z.infer<typeof appMountUplo
   const server = s.servers.handleFor(site.serverId);
   const p = appPaths(s.config, site.slug);
   const upload = p.mountUpload(ctx.payload.uploadId);
-  const fresh = path.join(p.mounts, `.${ctx.payload.mount}.new-${ctx.jobId}`);
-  const aside = path.join(p.mounts, `.${ctx.payload.mount}.old-${ctx.jobId}`);
+  const fresh = path.join(p.mounts, fillFolder(ctx.payload.mount, 'new', ctx.jobId));
+  const aside = path.join(p.mounts, fillFolder(ctx.payload.mount, 'old', ctx.jobId));
+  // Set once the new files are in the mount's place, and what it held is aside.
+  let swapped = false;
+  // Set once no container runs on what the mount held: a bind follows the folder, not its path.
+  let oldUnused = false;
+  // A swap cut off with what the mount held aside: the fresh folder stays beside it.
+  let keepFresh = false;
   try {
     const rows = appRows(s.db, site.id);
     const mount = rows?.mounts.find((m) => m.name === ctx.payload.mount);
@@ -1186,13 +1471,29 @@ export async function appMountUpload(ctx: JobContext<z.infer<typeof appMountUplo
     // The swap: the old folder aside, the new one in its place, the old one back if that fails.
     const live = p.mountDir(mount.name);
     const had = await server.files.exists(live);
-    if (had) await server.files.rename(live, aside);
     try {
+      if (had) await server.files.rename(live, aside);
       await server.files.rename(fresh, live);
     } catch (err) {
-      if (had) await server.files.rename(aside, live).catch(() => undefined);
-      throw err;
+      if (!had) throw err;
+      // Either rename may have gone through all the same (a channel that dropped as mv finished):
+      // the old folder goes back. Where it was never set aside, the put-back fails and changes nothing.
+      const back = await server.files.rename(aside, live).then(
+        () => true,
+        () => false,
+      );
+      if (back || !(await server.files.exists(aside).catch(() => true))) throw err;
+      // What the mount held stays aside, and the fresh folder beside it: the pair the sweep keeps (removeStaleFills).
+      keepFresh = true;
+      if (!(await server.files.exists(fresh).catch(() => true))) {
+        throw new Error(`${errMsg(err)}. ${mount.name} holds the archive's files: restart the app onto them. What it held stays in ${aside} until the next deploy or recreate.`);
+      }
+      throw new Error(
+        `${errMsg(err)}. The swap was cut off: what ${mount.name} held is in ${aside}, the archive's files in ${fresh}. ` +
+          'Fill the mount again, which clears them, or move one back by hand.',
+      );
     }
+    swapped = had;
     s.db.update(appMounts).set({ filledAt: Date.now() }).where(eq(appMounts.id, mount.id)).run();
     if ((await server.docker.containerState(site.containerName)) === 'running') {
       ctx.info('Restarting the app onto its new files…');
@@ -1200,11 +1501,20 @@ export async function appMountUpload(ctx: JobContext<z.infer<typeof appMountUplo
     } else {
       ctx.info('The app is not running: it gets the new files when it starts.');
     }
-    if (had) await server.files.rm(aside);
+    oldUnused = true;
     ctx.info(`${mount.name} at ${mount.containerPath} now holds the archive's ${names.length} entr${names.length === 1 ? 'y' : 'ies'}.`);
     ctx.setResult({ slug: site.slug, mount: mount.name, entries: names.length });
   } finally {
-    await server.files.rm(fresh).catch(() => undefined);
+    // What the new files replaced is in no backup: it goes, unless a restart that failed may never
+    // have reached Docker, and the app still runs on it.
+    if (swapped && oldUnused) {
+      await server.files
+        .rm(aside)
+        .catch((err: unknown) => ctx.warn(`Could not remove the files ${ctx.payload.mount} held before (${errMsg(err)}): the next deploy or recreate removes them.`));
+    } else if (swapped) {
+      ctx.warn(`What ${ctx.payload.mount} held stays in ${aside}, as the app may still run on it: the next deploy or recreate removes it.`);
+    }
+    if (!keepFresh) await server.files.rm(fresh).catch(() => undefined);
     await server.files.rm(upload).catch(() => undefined);
     s.apps.releaseUpload(`mount:${ctx.payload.uploadId}`);
   }

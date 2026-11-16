@@ -18,8 +18,10 @@ import {
   emptyAppDraft,
   envBody,
   envEdits,
+  envSaveNote,
   healthPathProblem,
   portHint,
+  recreateNote,
   replaceSecret,
   routeErrorLines,
   routesOf,
@@ -122,6 +124,41 @@ describe("a stored secret in an app's environment", () => {
   });
 });
 
+describe("The Environment card's note", () => {
+  const env = [
+    { name: 'PORT', value: '8000', secret: false, set: true },
+    { name: 'MODE', value: 'live', secret: false, set: true },
+  ];
+  const LINE = 'PORT changes: give the new port under How it runs first.';
+  const edited = (a: AppDto, change: (rows: ReturnType<typeof envEdits>) => ReturnType<typeof envEdits>) => change(envEdits(a.env));
+
+  it('adds a line when PORT changes on an app that runs with no port staged: its recreate asks only the port it runs on', () => {
+    const a = app({ env });
+    const moved = edited(a, (rows) => rows.map((r) => (r.name === 'PORT' ? editEnv(r, { value: '9000' }) : r)));
+    expect(envSaveNote(a, moved, true)).toBe(`Saving recreates the container.\n${LINE}`);
+    // Any case, and one added or taken off.
+    const lower = app({ env: [{ name: 'port', value: '8000', secret: false, set: true }] });
+    expect(envSaveNote(lower, edited(lower, (rows) => rows.map((r) => editEnv(r, { value: '9000' }))), true)).toBe(`Saving recreates the container.\n${LINE}`);
+    expect(envSaveNote(app(), [{ key: 1, name: 'Port', value: '9000', secret: false, kept: false }], true)).toBe(`Saving recreates the container.\n${LINE}`);
+    expect(envSaveNote(a, edited(a, (rows) => rows.filter((r) => r.name !== 'PORT')), true)).toBe(`Saving recreates the container.\n${LINE}`);
+  });
+
+  it('says nothing more otherwise', () => {
+    const a = app({ env });
+    const moved = edited(a, (rows) => rows.map((r) => (r.name === 'PORT' ? editEnv(r, { value: '9000' }) : r)));
+    // Another variable, or PORT as it was.
+    expect(envSaveNote(a, edited(a, (rows) => rows.map((r) => (r.name === 'MODE' ? editEnv(r, { value: 'test' }) : r))), true)).toBe('Saving recreates the container.');
+    expect(envSaveNote(a, edited(a, (rows) => rows), true)).toBe('Saving recreates the container.');
+    // A port staged under How it runs: the recreate tries it.
+    expect(envSaveNote(app({ env, pending: { port: 9000 } }), moved, true)).toBe('Saving recreates the container, which tries 9000.');
+    // A stopped app: its recreate asks nothing.
+    expect(envSaveNote(a, moved, false)).toBe('Saving recreates the container.');
+    // A stored secret PORT kept as it is.
+    const secret = app({ env: [{ name: 'PORT', value: null, secret: true, set: true }] });
+    expect(envSaveNote(secret, envEdits(secret.env), true)).toBe('Saving recreates the container.');
+  });
+});
+
 describe('How it runs', () => {
   it('sends only what changed, and nothing while a field is not valid', () => {
     expect(runsPatch(app(), RUNS_UNEDITED)).toEqual({});
@@ -160,13 +197,12 @@ describe("How it runs: the app's data folders", () => {
 });
 
 describe('How it runs: the port', () => {
-  // 9000 is staged: the next image deployed, or Recreate container, gates on it, and the app runs on 8000 until one passes.
+  // 9000 is staged: the next start, deploy or recreate tries it, and the app runs on 8000 until it answers there.
   const staged = () => app({ port: 8000, pending: { port: 9000 } });
 
   it('shows the staged port, and what runs until it goes in', () => {
     expect(runsShown(staged(), RUNS_UNEDITED).port).toBe('9000');
-    // Not any deploy: a Deploy now that finds the same image deploys nothing, and a settings change's recreate keeps 8000.
-    expect(portHint(staged())).toBe('Runs on 8000. 9000 goes in with the next image deployed, or Recreate container.');
+    expect(portHint(staged())).toBe('Runs on 8000. The next start, deploy or recreate tries 9000.');
     expect(portHint(app())).toBe('Where the container listens.');
     expect(runsShown(app(), RUNS_UNEDITED).port).toBe('8000');
   });
@@ -183,12 +219,11 @@ describe('How it runs: the port', () => {
     expect(runsPatch(staged(), { ...RUNS_UNEDITED, port: '8000' })).toEqual({ port: 8000 });
   });
 
-  it('says a port starts no job, and that the rest recreates the container on the port that runs', () => {
-    expect(runsSaveNote(app(), { port: 9000 }, true)).toBe('A port alone goes in with the next image deployed, or Recreate container.');
-    // The recreate the rest starts gates on 8000 and leaves 9000 staged.
-    expect(runsSaveNote(app(), { port: 9000, hardening: { readOnlyRoot: true } }, true)).toBe(
-      'Saving recreates the container on 8000. 9000 goes in with the next image deployed, or Recreate container.',
-    );
+  it('says a port starts no job, and that the recreate the rest starts tries it', () => {
+    expect(runsSaveNote(app(), { port: 9000 }, true)).toBe('The next start, deploy or recreate tries 9000.');
+    expect(runsSaveNote(app(), { port: 9000, hardening: { readOnlyRoot: true } }, true)).toBe('Saving recreates the container, which tries 9000.');
+    // One staged before is tried too.
+    expect(runsSaveNote(staged(), { dataPaths: [] }, true)).toBe('Saving recreates the container, which tries 9000.');
     // The running port sent back takes the staged one back: nothing waits for a deploy.
     expect(runsSaveNote(staged(), { port: 8000 }, true)).toBe('It stays on 8000: nothing restarts.');
     expect(runsSaveNote(staged(), { port: 8000, dataPaths: [] }, true)).toBe('Saving recreates the container.');
@@ -196,6 +231,13 @@ describe('How it runs: the port', () => {
     expect(runsSaveNote(app(), { port: 9000 }, false)).toBe('A port alone goes in when the app starts.');
     expect(runsSaveNote(app(), { port: 9000, hardening: { readOnlyRoot: true } }, false)).toBe('Saving recreates the container.');
     expect(runsSaveNote(app(), { dataPaths: ['/data'] }, true)).toBe('Saving recreates the container.');
+  });
+
+  it('says beside the environment and the mounts that their recreate tries a staged port', () => {
+    expect(recreateNote(staged(), true)).toBe('Saving recreates the container, which tries 9000.');
+    expect(recreateNote(app(), true)).toBe('Saving recreates the container.');
+    // A stopped app's recreate makes the container without starting it: nothing is tried.
+    expect(recreateNote(staged(), false)).toBe('Saving recreates the container.');
   });
 
   it('says nothing beside Save while there is nothing to save, as once a port alone was saved', () => {

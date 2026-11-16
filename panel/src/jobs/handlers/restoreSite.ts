@@ -2,9 +2,8 @@
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { appEnv, type SiteRow } from '../../db/schema.js';
-import { healthGate } from '../../services/appProbe.js';
 import { appRows, buildAppContainerSpec } from '../../services/appSpec.js';
-import { chownAppFiles } from './apps.js';
+import { chownAppFiles, gateMovedApp } from './apps.js';
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
@@ -177,19 +176,23 @@ export async function restoreSiteOnServer(
     await migrateArrivedFiles(ctx, target, s, site, { inForce: source.kind === 'archive' && source.ranOnFpm });
   }
   await startSiteContainer(target, s, site, ctx);
-  if (app) await s.appRoutes.kick(target.id);
   await opts.afterStart?.();
 
-  if (opts.probe) {
+  if (app) {
+    // Its own health path, asked on its network through Docker (a test's world answers it too): its
+    // routes may answer nothing at / at all. A staged port first, then the app's: its routes there
+    // are written after, onto the one it answered on.
+    if (opts.probe) {
+      ctx.info(opts.probe.message);
+      await gateMovedApp(ctx, s, target, site);
+    }
+    await s.appRoutes.kick(target.id);
+  } else if (opts.probe) {
     ctx.info(opts.probe.message);
     if (s.config.nodeEnv === 'test') {
       // No live HTTP in unit tests; the container state is the gate there.
       const state = await target.docker.containerState(site.containerName);
       if (state !== 'running') throw new Error('Site container is not running on the target - rolling back');
-    } else if (app) {
-      // Its own health path, asked on its network: its routes may answer nothing at / at all.
-      const failed = await healthGate(target, site, appRows(s.db, site.id)!.settings, { deployCheck: false });
-      if (failed) throw new Error(`The app did not pass its health check on the target - rolling back (source untouched): ${failed}`);
     } else {
       const up = await probeSite(target, site.containerName, opts.probe.host, opts.probe.timeoutMs, probeOptsFor(site));
       if (!up) throw new Error('Site did not answer on the target - rolling back (source untouched)');

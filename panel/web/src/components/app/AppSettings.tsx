@@ -2,8 +2,8 @@
 /**
  * A container app's own cards on its Settings tab. A change to how its container runs (environment,
  * mounts, data paths, hardening) recreates it behind the health check, as a job the console shows;
- * routes, health and updates take effect as they are saved. A new port of an app that runs waits
- * for the next image deployed, or Recreate container.
+ * routes, health and updates take effect as they are saved. A new port of an app that runs is
+ * tried at the next start, deploy or recreate, and kept once the app answers there.
  */
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -21,11 +21,13 @@ import {
   editEnv,
   envBody,
   envEdits,
+  envSaveNote,
   healthPathProblem,
   mountEdits,
   mountsBody,
   newRowKey,
   portHint,
+  recreateNote,
   replaceSecret,
   routeEdits,
   routeErrorLines,
@@ -81,7 +83,7 @@ function SaveRow({ label, onClick, s, disabled, note }: { label: string; onClick
         {label}
       </Button>
       {s.saved && <span className="text-sm text-emerald-700">Saved.</span>}
-      {note && <span className="text-xs text-neutral-500">{note}</span>}
+      {note && <span className="whitespace-pre-line text-xs text-neutral-500">{note}</span>}
       <div className="w-full">
         <ErrorNote error={s.error} />
       </div>
@@ -382,7 +384,7 @@ export function EnvCard({ site }: { site: SiteDetail }) {
         label="Save environment"
         s={s}
         disabled={rows.some((r) => r.name === '')}
-        note="Saving recreates the container."
+        note={envSaveNote(app, rows, site.status === 'running')}
         onClick={() => s.save(() => patchApp(site.slug, { env: envBody(rows) }).then((res) => (setRows(envEdits(res.app.env)), res)))}
       />
     </Card>
@@ -431,7 +433,7 @@ export function MountsCard({ site }: { site: SiteDetail }) {
         label="Save mounts"
         s={s}
         disabled={rows.some((r) => r.name === '' || r.path === '')}
-        note="Saving recreates the container."
+        note={recreateNote(app, site.status === 'running')}
         onClick={() => s.save(() => patchApp(site.slug, { mounts: mountsBody(rows) }).then((res) => (setRows(mountEdits(res.app.mounts)), res)))}
       />
     </Card>

@@ -846,9 +846,11 @@ describe.skipIf(!ENABLED)('container apps against the real Traefik and Docker', 
       expect(await askApp(server(), app, { port: 80, path: '/health', host: 'gate.example.net', timeoutSec: 5 })).toEqual({ status: 200, detail: '200 OK' });
       fact('8. the panel’s way in, one question, ms', Date.now() - t0);
       expect((await askApp(server(), app, { port: 80, path: '/fail', host: 'gate.example.net', timeoutSec: 5 })).status).toBe(500);
-      const gate = { port: 80, healthPath: '/health', healthHost: '', healthTimeoutSec: 20, deployCheckPath: '/whatever' };
-      expect(await healthGate(server(), app, gate, { deployCheck: true })).toBeNull();
-      expect(await healthGate(server(), app, { ...gate, deployCheckPath: '/fail' }, { deployCheck: true })).toMatch(/^The deploy check \/fail answered 500/);
+      const gate = { healthPath: '/health', healthHost: '', healthTimeoutSec: 20, deployCheckPath: '/whatever' };
+      expect(await healthGate(server(), app, gate, [80], { deployCheck: true })).toEqual({ port: 80, failed: null });
+      expect((await healthGate(server(), app, { ...gate, deployCheckPath: '/fail' }, [80], { deployCheck: true })).failed).toMatch(/^The deploy check \/fail answered 500/);
+      // A port nothing listens on first, as a staged one the app does not take: refused at once, and the next one answers.
+      expect(await healthGate(server(), app, gate, [8080, 80], { deployCheck: true })).toEqual({ port: 80, failed: null });
       // It ran locked down: Docker removed it, and it left nothing behind.
       const left = await dockerCli('ps', '-aq', '--filter', `label=wpl7.probe=${GATE}`);
       expect(left.stdout.toString('utf8').trim()).toBe('');

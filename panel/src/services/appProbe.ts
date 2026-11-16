@@ -87,46 +87,73 @@ export async function hasShell(docker: Pick<ServerHandle['docker'], 'exec'>, con
 export interface GateOpts {
   /** Ask the deploy check path once after the health path answered: a deploy's, never a restart's. */
   deployCheck: boolean;
-  /** Between two questions; 2 s. */
+  /** Between two rounds of questions; 2 s. */
   intervalMs?: number;
   log?: (line: string) => void;
   canceled?: () => void;
 }
+
+/** What the gate came to: the port the app passed on, or why it did not pass. */
+export type GateResult = { port: number; failed: null } | { port: null; failed: string };
+
+/** `9000`, `9000 or 8000`, `9000, 7000 or 8000`. */
+const portList = (ports: number[]): string => (ports.length === 1 ? String(ports[0]) : `${ports.slice(0, -1).join(', ')} or ${ports.at(-1)}`);
 
 /**
  * The health gate: the health path, every 2 s, until it answers 2xx or the app's timeout passes,
  * each try waiting at most 10 s and never past that timeout; then the deploy check path once, when
  * there is one, with a wait of its own: the app's whole timeout. A check that does real work (a
  * database, a queue) may take longer than a health answer, and one asked after a late health
- * answer would otherwise get what little of the timeout was left. The reason it failed, or null.
+ * answer would otherwise get what little of the timeout was left.
+ *
+ * `ports`, in the order they are preferred: a port staged for the new container first, then the
+ * ones its image is known to listen on (services/apps.ts patch). Each round asks every one in that
+ * order, and the first that answers 2xx is the port the app passed on; the deploy check is asked
+ * there. The timeout is the whole gate's, not one per port.
  */
 export async function healthGate(
   server: Pick<ServerHandle, 'docker' | 'name'>,
   app: Pick<SiteRow, 'slug' | 'containerName' | 'domains'>,
-  settings: Pick<AppSettingsRow, 'port' | 'healthPath' | 'healthHost' | 'healthTimeoutSec' | 'deployCheckPath'>,
+  settings: Pick<AppSettingsRow, 'healthPath' | 'healthHost' | 'healthTimeoutSec' | 'deployCheckPath'>,
+  ports: number[],
   opts: GateOpts,
-): Promise<string | null> {
+): Promise<GateResult> {
+  const candidates = [...new Set(ports.filter((p) => p > 0))];
+  if (candidates.length === 0) return { port: null, failed: 'The app has no port to ask: give the port it listens on.' };
   const host = settings.healthHost || (JSON.parse(app.domains) as string[])[0] || app.slug;
   const deadline = Date.now() + settings.healthTimeoutSec * 1000;
-  const ask = (p: string, timeoutSec: number) => askApp(server, app, { port: settings.port, path: p, host, timeoutSec });
-  let last: AppAnswer;
-  let tries = 0;
+  const ask = (port: number, p: string, timeoutSec: number) => askApp(server, app, { port, path: p, host, timeoutSec });
+  const several = candidates.length > 1;
+  const where = several ? ` on port ${portList(candidates)}` : '';
+  // The last answer on each port, in the order asked.
+  const last = new Map<number, AppAnswer>();
+  const lastText = () => (several ? [...last].map(([port, a]) => `${port} ${a.detail}`).join('; ') : last.get(candidates[0]!)!.detail);
+  let rounds = 0;
+  let passed: { port: number; answer: AppAnswer } | null = null;
   for (;;) {
-    opts.canceled?.();
-    last = await ask(settings.healthPath, Math.min(10, Math.max(1, (deadline - Date.now()) / 1000)));
-    tries++;
-    if (isHealthy(last)) break;
-    if (Date.now() >= deadline) {
-      return `${settings.healthPath} did not answer 2xx within ${settings.healthTimeoutSec} s (${tries} ${tries === 1 ? 'try' : 'tries'}; last: ${last.detail}).`;
+    for (const port of candidates) {
+      opts.canceled?.();
+      const answer = await ask(port, settings.healthPath, Math.min(10, Math.max(1, (deadline - Date.now()) / 1000)));
+      last.set(port, answer);
+      if (isHealthy(answer)) {
+        passed = { port, answer };
+        break;
+      }
     }
-    if (tries === 1 || tries % 5 === 0) opts.log?.(`Waiting for ${settings.healthPath} (${last.detail})…`);
+    rounds++;
+    if (passed) break;
+    if (Date.now() >= deadline) {
+      const tries = several ? `${rounds} ${rounds === 1 ? 'try' : 'tries'} each` : `${rounds} ${rounds === 1 ? 'try' : 'tries'}`;
+      return { port: null, failed: `${settings.healthPath} did not answer 2xx${where} within ${settings.healthTimeoutSec} s (${tries}; last: ${lastText()}).` };
+    }
+    if (rounds === 1 || rounds % 5 === 0) opts.log?.(`Waiting for ${settings.healthPath}${where} (${lastText()})…`);
     await new Promise((r) => setTimeout(r, opts.intervalMs ?? 2000));
   }
-  opts.log?.(`${settings.healthPath} answered ${last.detail}.`);
+  opts.log?.(`${settings.healthPath} answered ${passed.answer.detail}${several ? ` on port ${passed.port}` : ''}.`);
   if (opts.deployCheck && settings.deployCheckPath) {
-    const check = await ask(settings.deployCheckPath, settings.healthTimeoutSec);
-    if (!isHealthy(check)) return `The deploy check ${settings.deployCheckPath} answered ${check.detail}.`;
+    const check = await ask(passed.port, settings.deployCheckPath, settings.healthTimeoutSec);
+    if (!isHealthy(check)) return { port: null, failed: `The deploy check ${settings.deployCheckPath} answered ${check.detail}.` };
     opts.log?.(`The deploy check ${settings.deployCheckPath} answered ${check.detail}.`);
   }
-  return null;
+  return { port: passed.port, failed: null };
 }

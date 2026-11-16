@@ -70,6 +70,11 @@ export const UPLOAD_KEEP_MS = 24 * 3600_000;
 /** At most this big an image archive. */
 export const MAX_IMAGE_UPLOAD_BYTES = 8 * 1024 ** 3;
 
+/** The jobs that make an app's container again behind its health gate, and save the port it passed on (jobs/handlers/apps.ts). */
+const RECREATING_JOBS: ReadonlySet<string> = new Set(['app.deploy', 'site.reconcile', 'database.password', 'backup.restore']);
+/** Those, and a start, a restart or a move, which try a staged port and save the one the app answers on (tryStagedPort, gateMovedApp). */
+const PORT_JOBS: ReadonlySet<string> = new Set([...RECREATING_JOBS, 'site.start', 'site.restart', 'site.move']);
+
 /** The route list as the rows are written: ids kept where the input names them. */
 interface PlannedRoute {
   id?: number;
@@ -189,9 +194,9 @@ export class AppsService {
   }
 
   /**
-   * What the page shows as going in: the port staged for the next image deployed or Recreate
-   * container, and a user the patch handed to the app's site.reconcile. Each is saved once a new
-   * container has passed.
+   * What the page shows as going in: a staged port, which the next start, deploy or recreate tries
+   * and keeps once the app answers there, and a user the patch handed to the app's site.reconcile,
+   * saved once its new container has passed.
    */
   private pendingOf(siteId: number, settings: Pick<AppSettingsRow, 'nextPort'>): AppDto['pending'] {
     const pending: NonNullable<AppDto['pending']> = {};
@@ -506,13 +511,14 @@ export class AppsService {
   }
 
   /**
-   * Refused while a deploy or a recreate of the app is queued or running, with the answer
-   * worker.enqueue gives: that job reads the row as it starts, and may write its port back over a
-   * change made meanwhile.
+   * Refused while a job that makes the app's container again is queued or running, with the answer
+   * worker.enqueue gives: a deploy, a recreate, a new database password's, a restore's. That job
+   * reads the row as it starts, and writes the port it passed on, and what stays staged, over a
+   * change made meanwhile. A port is refused during a start, a restart or a move too (PORT_JOBS).
    */
-  private assertNotRecreating(site: SiteRow): void {
+  private assertNotRecreating(site: SiteRow, types: ReadonlySet<string> = RECREATING_JOBS): void {
     const job = this.s.worker.activeSiteJob(site.id);
-    if (job?.type === 'app.deploy' || job?.type === 'site.reconcile') {
+    if (job && types.has(job.type)) {
       throw jobConflict(`Site "${site.slug}" already has an active job (#${job.id} ${job.type}); wait for it to finish`);
     }
   }
@@ -523,10 +529,11 @@ export class AppsService {
    * job is returned. The rest takes effect as it is saved.
    *
    * A new port of an app that runs is staged (`next_port`) and queues nothing by itself: the next
-   * image deployed, or Recreate container, gates on it and saves it once its container has passed.
-   * Saved now, the routes would send to a port nothing listens on yet. The running port sent back
-   * unstages it. An app that is stopped, or has no container, takes a port as it is saved. Either
-   * way, a port that changes is refused while a deploy or recreate of the app is queued or running
+   * start, deploy or recreate tries it, the recreate this save queues among them, and keeps it once
+   * the app answers there. Until then the app keeps the old one: saved now, the routes would send to
+   * a port nothing listens on yet. The running port sent back unstages it. An app that is stopped,
+   * or has no container, takes a port as it is saved. Either way, a port that changes is refused
+   * while a start, a move, or a job that makes the app's container again, is queued or running
    * (assertNotRecreating).
    *
    * A new user of an app that has a container goes to the recreate, which saves it once the new
@@ -556,12 +563,12 @@ export class AppsService {
       }
     }
     if (body.port !== undefined) {
-      // The routes and the checks keep the port that answers until a new container passes on this one.
+      // The routes and the checks keep the port that answers until the app answers on this one.
       const running = site.status === 'running';
       const port = running ? settings.port : body.port;
       const nextPort = running && body.port !== settings.port ? body.port : 0;
       if (port !== settings.port || nextPort !== settings.nextPort) {
-        this.assertNotRecreating(site);
+        this.assertNotRecreating(site, PORT_JOBS);
         set.port = port;
         set.nextPort = nextPort;
       }

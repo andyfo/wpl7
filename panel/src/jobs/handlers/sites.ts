@@ -669,6 +669,8 @@ export async function siteStart(ctx: JobContext<z.infer<typeof siteIdPayload>>, 
   const server = s.servers.handleFor(site.serverId);
   ctx.info(`Starting ${site.containerName}…`);
   await startSiteContainer(server, s, site, ctx);
+  // A container app's staged port is tried first: its routes then go to the one that answered.
+  if (isContainerApp(site)) await (await import('./apps.js')).tryStagedPort(ctx, s, server, site);
   updateSiteRow(s.db, site.id, { status: 'running' });
   await s.security.kick(server.id);
   // A container app's routes are written for a running app only.
@@ -692,6 +694,7 @@ export async function siteRestart(ctx: JobContext<z.infer<typeof siteIdPayload>>
   const server = s.servers.handleFor(site.serverId);
   ctx.info(`Restarting ${site.containerName}…`);
   await restartSiteContainer(server, s, site, ctx);
+  if (isContainerApp(site)) await (await import('./apps.js')).tryStagedPort(ctx, s, server, site);
   updateSiteRow(s.db, site.id, { status: 'running' });
   // A stopped app runs again: its routes come back with it, as at a start.
   if (isContainerApp(site)) await s.appRoutes.kick(server.id);
@@ -1103,14 +1106,13 @@ export const siteReconcilePayload = z.object({
   siteId: z.number().int(),
   /**
    * Someone asked for this (Recreate container, Retry): a site whose move to stack 2 failed tries
-   * again, on the same image, and a container app's new container takes the port staged for it
-   * (app_settings.next_port). No other recreate of an app does: they keep the port it runs on.
+   * again, on the same image. A container app's recreate is the same whoever asked.
    */
   retrySwitch: z.boolean().optional(),
   /**
    * A container app's new user (services/apps.ts patch): the new container's, and the app's row's
-   * only once it has passed (handlers/apps.ts reconcileApp). Checked as the patch is. A new port
-   * is staged on the row instead, for a deploy or Recreate container (retrySwitch).
+   * only once it has passed (handlers/apps.ts reconcileApp). Checked as the patch is. A new port is
+   * staged on the row instead (app_settings.next_port): the next start, deploy or recreate tries it.
    */
   appRunAs: appHardeningInput.shape.runAs,
 });
@@ -1139,7 +1141,7 @@ export const siteReconcilePayload = z.object({
 export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcilePayload>>, s: CoreServices): Promise<void> {
   let site = loadSite(s.db, ctx.payload.siteId);
   // Made from its own image, behind its health gate (handlers/apps.ts).
-  if (isContainerApp(site)) return (await import('./apps.js')).reconcileApp(ctx, s, site, { runAs: ctx.payload.appRunAs, takeStagedPort: ctx.payload.retrySwitch === true });
+  if (isContainerApp(site)) return (await import('./apps.js')).reconcileApp(ctx, s, site, { runAs: ctx.payload.appRunAs });
   if (ctx.payload.retrySwitch && site.stackSwitchImage !== null) {
     updateSiteRow(s.db, site.id, { stackSwitchImage: null });
     site = loadSite(s.db, site.id);

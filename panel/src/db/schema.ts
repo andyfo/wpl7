@@ -1927,8 +1927,8 @@ export const appSettings = sqliteTable('app_settings', {
   /** Where the container listens: the port it passed its health gate on, which the routes and checks ask. */
   port: integer('port').notNull(),
   /**
-   * A port staged for the next image deployed, or the user's Recreate container (services/apps.ts
-   * patch): that one gates on it, and saves it as `port` once its container has passed. 0 = none.
+   * A port staged on an app that runs (services/apps.ts patch): the next start, deploy or recreate
+   * tries it before `port`, and saves it as `port` once the app answers there. 0 = none.
    */
   nextPort: integer('next_port').notNull().default(0),
   /** How long a stop waits for the container to end by itself. */
@@ -2056,6 +2056,13 @@ export const appDeploys = sqliteTable(
     error: text('error'),
     /** The new container's last lines, kept when it failed. */
     logTail: text('log_tail'),
+    /**
+     * An ok deploy's port: the one its container passed the health gate on, or was made with when
+     * no gate ran (the app was stopped), or the one a later recreate, start or restore of its image
+     * moved the app to. What a roll back to it tries. 0 = not known, as for a deploy from before
+     * this was kept.
+     */
+    port: integer('port').notNull().default(0),
   },
   (t) => [index('app_deploys_site_idx').on(t.siteId, t.startedAt)],
 );

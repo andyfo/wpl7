@@ -314,10 +314,10 @@ export interface AppDto {
   updates: { mode: AppUpdateMode; checkMinutes: number; checkedAt: number | null; checkError: string | null };
   deployToken: { set: boolean; setAt: number | null };
   /**
-   * What is on its way in, and saved once a new container has passed: `port`, staged for the next
-   * image deployed or the user's Recreate container; `runAs`, for the recreate that is queued or
-   * running. `port` and
-   * `hardening.runAs` say what runs until then. Null when nothing is.
+   * What is on its way in: `port`, staged, which the next start, deploy or recreate tries and keeps
+   * once the app answers there; `runAs`, for the recreate that is queued or running, saved once its
+   * new container has passed. `port` and `hardening.runAs` say what runs until then. Null when
+   * nothing is.
    */
   pending: { port?: number; runAs?: string } | null;
   /** What Traefik is told: the routes are in force, held for a deploy, or there are none (stopped). */

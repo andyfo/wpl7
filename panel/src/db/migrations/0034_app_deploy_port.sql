@@ -1,0 +1,1 @@
+ALTER TABLE `app_deploys` ADD `port` integer DEFAULT 0 NOT NULL;

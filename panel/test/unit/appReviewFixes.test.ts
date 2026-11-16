@@ -3,13 +3,13 @@
  * by the rule a pull keeps, each new path of another site's domain asks Full, a failed deploy's
  * last lines are Manage's, a roll back or a restore is not undone by app-updates, an upload a
  * refused create or deploy took is let go and a mount's is cleared, a host another app routes on
- * stays, a new port is staged for the next image deployed or Recreate container and waits for a
- * deploy or recreate under way, a new user goes in with its container, the hook waits only for a
- * deploy of the tag, data paths keep clear of the mounts and the image's VOLUMEs stay, the
- * recreate is told nothing of a mount taken off, a move needs a Traefik that answers plain http
- * and the routes wait for it, an image copied to another repository is deployed from there, what
- * Traefik refused is on the app's page, a health path may carry a query, and the image's own user
- * is on the page beside the one the app runs as.
+ * stays, a new port is staged for the next start, deploy or recreate to try and waits for a start,
+ * a move or any job under way that makes the container again, a new user goes in with its
+ * container, the hook waits only for a deploy of the tag, data paths keep clear of the mounts and
+ * the image's VOLUMEs stay, the recreate is told nothing of a mount taken off, a move needs a
+ * Traefik that answers plain http and the routes wait for it, an image copied to another
+ * repository is deployed from there, what Traefik refused is on the app's page, a health path may
+ * carry a query, and the image's own user is on the page beside the one the app runs as.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -337,7 +337,7 @@ describe('a host of an app’s own', () => {
 });
 
 describe('a new port or user', () => {
-  it('a port of an app that runs is staged for the next image deployed or Recreate container, queues nothing, and the routes keep the port that answers', async () => {
+  it('a port of an app that runs is staged for the next start, deploy or recreate, queues nothing, and the routes keep the port that answers', async () => {
     const w = await world();
     const site = shop(w);
     const { app, manage, read } = await api(w);
@@ -350,7 +350,7 @@ describe('a new port or user', () => {
     await w.deps.appRoutes.idle();
     await w.deps.appRoutes.syncServer(1);
     expect(fs.readFileSync(routesFile(w), 'utf8')).toContain('url: "http://wp-shop:8000"');
-    // Another change's recreate carries no port, and the port stays staged.
+    // Another change's recreate carries no port: it tries the staged one, from the row, which stays staged until the app answers there.
     const env = await app.inject({ method: 'PATCH', url: '/api/sites/shop/app', headers: manage, payload: { env: [{ name: 'MODE', value: 'live' }] } });
     expect(env.statusCode).toBe(202);
     const job = w.db.select().from(jobs).where(eq(jobs.id, env.json().job.id)).get()!;
@@ -405,11 +405,19 @@ describe('a new port or user', () => {
   });
 
   /**
-   * Runs `check` while a deploy of "shop", then its Recreate container, is queued and then running.
-   * Each is over before the next is queued, as one job per site has it.
+   * Runs `check` while each job that makes the container of "shop" again is queued and then
+   * running: a deploy, Recreate container, a new database password, a restore. Each is over before
+   * the next is queued, as one job per site has it.
    */
   async function underWay(w: TestWorld, check: (job: { id: number; type: string }, status: string) => Promise<void>) {
-    for (const start of [() => w.deps.apps.deploy('shop', {}), async () => w.deps.sites.reconcile('shop')]) {
+    const site = w.db.select().from(sites).where(eq(sites.slug, 'shop')).get()!;
+    const of = { id: site.id, slug: 'shop', serverId: site.serverId };
+    for (const start of [
+      () => w.deps.apps.deploy('shop', {}),
+      async () => w.deps.sites.reconcile('shop'),
+      async () => w.worker.enqueue('database.password', { siteId: site.id }, of),
+      async () => w.worker.enqueue('backup.restore', { backupId: 1, skipPreRestoreBackup: true }, of),
+    ]) {
       const job = await start();
       for (const status of ['queued', 'running']) {
         w.db.update(jobs).set({ status }).where(eq(jobs.id, job.id)).run();
@@ -420,7 +428,7 @@ describe('a new port or user', () => {
   }
   const busy = (job: { id: number; type: string }) => ({ code: 'job_conflict', message: `Site "shop" already has an active job (#${job.id} ${job.type}); wait for it to finish` });
 
-  it('is refused on an app that does not run while a deploy or recreate is under way, which read the port as it started', async () => {
+  it('is refused on an app that does not run while a job that makes its container again is under way, which read the port as it started', async () => {
     for (const status of ['stopped', 'error']) {
       const w = await world();
       const site = shop(w, { status });
@@ -438,13 +446,15 @@ describe('a new port or user', () => {
     }
   });
 
-  it('is refused on an app that runs while a deploy or recreate is under way, a port taken back as well as a new one', async () => {
+  it('is refused on an app that runs while a job that makes its container again is under way, a port taken back as well as a new one', async () => {
     const w = await world();
     const site = shop(w, { settings: { nextPort: 9000 } });
     const { app, manage } = await api(w);
     const patch = (payload: Record<string, unknown>) => app.inject({ method: 'PATCH', url: '/api/sites/shop/app', headers: manage, payload });
+    const types: string[] = [];
     await underWay(w, async (job, jobStatus) => {
-      // The running port back would be undone by the job's save of the staged one.
+      types.push(job.type);
+      // The running port back, or another, would be undone by the job's save of what stays staged.
       for (const port of [8000, 9100]) {
         const res = await patch({ port });
         expect([res.statusCode, res.json().error], `${job.type} ${jobStatus}, port ${port}`).toEqual([409, busy(job)]);
@@ -453,11 +463,38 @@ describe('a new port or user', () => {
       expect((await patch({ port: 9000 })).statusCode).toBe(200);
       expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000 });
     });
+    expect([...new Set(types)]).toEqual(['app.deploy', 'site.reconcile', 'database.password', 'backup.restore']);
     const back = await patch({ port: 8000 });
     expect([back.statusCode, settingsOf(w, site.id).nextPort]).toEqual([200, 0]);
   });
 
-  it('refuses data folders and mounts of an app with no container while a deploy is under way, which would write its own over them', async () => {
+  it('is refused while a start, a restart or a move is under way, which tries a staged port and saves the one the app answers on', async () => {
+    for (const status of ['running', 'stopped']) {
+      const w = await world();
+      const site = shop(w, { status, settings: { nextPort: 9000 } });
+      const { app, manage } = await api(w);
+      const patch = (payload: Record<string, unknown>) => app.inject({ method: 'PATCH', url: '/api/sites/shop/app', headers: manage, payload });
+      const move = { siteId: site.id, sourceServerId: site.serverId, targetServerId: 2, quiesce: 'stop' };
+      for (const queue of [
+        () => w.deps.sites.action('shop', 'start'),
+        () => w.deps.sites.action('shop', 'restart'),
+        // Never run: the worker is not started here.
+        () => w.worker.enqueue('site.move', move, { id: site.id, slug: 'shop', serverId: site.serverId }),
+      ]) {
+        const job = queue();
+        for (const jobStatus of ['queued', 'running']) {
+          w.db.update(jobs).set({ status: jobStatus }).where(eq(jobs.id, job.id)).run();
+          const res = await patch({ port: 9100 });
+          expect([res.statusCode, res.json().error], `${status} app, ${job.type} ${jobStatus}`).toEqual([409, busy(job)]);
+        }
+        w.db.update(jobs).set({ status: 'succeeded' }).where(eq(jobs.id, job.id)).run();
+      }
+      expect(settingsOf(w, site.id), `${status} app`).toMatchObject({ port: 8000, nextPort: 9000 });
+      expect((await patch({ port: 9100 })).statusCode, `${status} app`).toBe(200);
+    }
+  });
+
+  it('refuses data folders and mounts of an app with no container while a job that makes its container is under way, which would write its own over them', async () => {
     const w = await world();
     const site = shop(w, { status: 'error' });
     const { app, manage } = await api(w);

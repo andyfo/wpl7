@@ -86,7 +86,9 @@ beside it and pick a `.tar.gz` or `.zip`. A job unpacks it in place of what the 
 app's user, and restarts the app. With **In backups** off, a mount stays out of every backup and
 still moves with the app.
 
-Taking a mount off removes its files once a new container without it has passed.
+Taking a mount off removes its files once a new container without it has passed. A fill that is
+cut off halfway keeps both the old files and the new ones on the server, and its job log says where.
+Filling the mount again clears them.
 
 **Data folders** under **How it runs** are kept across deploys and are in backups. Each `VOLUME` of
 the image is one, for as long as the image declares it. A `VOLUME` in the container's own system
@@ -135,9 +137,10 @@ then. Otherwise the old one comes back, and an email says why. If the routes can
 deploy stops before anything changes.
 
 A change under **How it runs**, **Environment** or **Mounts** recreates the container the same way,
-and a new user is saved only once the new container passes. A new port waits: it goes in with the
-next image deployed, or **Recreate container**, and the app keeps answering on the old one until
-then. So a new image that listens on another port goes in behind one health check.
+and a new user is saved only once the new container passes. A new port waits for the next start,
+deploy or recreate: the health check asks it first, then the port the app runs on, and keeps the one
+that answers. So a new image, or a new environment, that moves the app to another port goes in behind
+one health check. A **Roll back** also asks the port its deploy ran on, and a restore the backup's.
 
 The container runs as the image's user, with no published port and no new privileges. The panel
 asks it on its own network, so the health check and the uptime check work with every route off.

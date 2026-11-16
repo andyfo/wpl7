@@ -128,9 +128,8 @@ export interface RunsEdit {
 export const RUNS_UNEDITED: RunsEdit = { port: null, runAs: null, dropAllCaps: null, readOnlyRoot: null, stopGraceSec: null, dataPaths: null };
 
 /**
- * The port the field edits: the one staged for the next image deployed or Recreate container, or
- * else the one that runs. `app.port` stays the running one until a new container has passed on the
- * staged one.
+ * The port the field edits: the one staged, which the next start, deploy or recreate tries, or else
+ * the one that runs. `app.port` stays the running one until the app has answered on the staged one.
  */
 const portOf = (app: AppDto): number => app.pending?.port ?? app.port;
 /** The user going in with a recreate that has not passed its health check yet, or the app's. */
@@ -143,8 +142,9 @@ const imagePaths = (app: AppDto): string[] => app.dataPaths.filter((d) => d.from
  * What the card shows: what was typed in, or else what the app has. A user going in shows as it
  * is, whatever was typed: its recreate holds the site until it is done, so a change to it now
  * would be refused, and a save leaves it out. A staged port waits for no job, so it can be typed
- * over. While a deploy or recreate of the app is queued or running the panel refuses any port
- * (409): the card leaves that to the save's error, which shows as any other.
+ * over. While a start, a move, or a job that makes the app's container again, is queued or
+ * running the panel refuses any port (409): the card leaves that to the save's error, which shows
+ * as any other.
  */
 export function runsShown(app: AppDto, edit: RunsEdit) {
   return {
@@ -194,13 +194,41 @@ export function runsPatch(app: AppDto, edit: RunsEdit): RunsPatch | null {
 }
 
 /**
- * The Port field's hint: what runs, and the port staged while one is. Only the next image deployed
- * or Recreate container takes it: a Deploy now that finds the same image deploys nothing, and the
- * recreate a settings change starts keeps the port that runs.
+ * The Port field's hint: what runs, and the port staged while one is. Every start, deploy and
+ * recreate tries it first, a settings change's too, and keeps the one that runs while the app does
+ * not answer there.
  */
 export function portHint(app: AppDto): string {
   const next = app.pending?.port;
-  return next === undefined ? 'Where the container listens.' : `Runs on ${app.port}. ${next} goes in with the next image deployed, or Recreate container.`;
+  return next === undefined ? 'Where the container listens.' : `Runs on ${app.port}. The next start, deploy or recreate tries ${next}.`;
+}
+
+/** What a save that recreates the container says, and the port its new container tries when it tries a staged one. */
+const recreates = (tries: number | undefined): string => (tries !== undefined ? `Saving recreates the container, which tries ${tries}.` : 'Saving recreates the container.');
+
+/** Beside Save on a card whose save recreates the container (Environment, Mounts): the port staged on an app that runs is tried. */
+export function recreateNote(app: AppDto, running: boolean): string {
+  return recreates(running ? app.pending?.port : undefined);
+}
+
+/** The PORT variables, whatever their case, as a list to compare: a kept secret by its name alone. */
+const portVars = (rows: { name: string; value: string | null; kept: boolean }[]): string =>
+  rows
+    .filter((r) => r.name.toUpperCase() === 'PORT')
+    .map((r) => (r.kept ? `${r.name} kept` : `${r.name}=${r.value ?? ''}`))
+    .sort()
+    .join('\n');
+
+/**
+ * Beside Save on the Environment card. A PORT changed on an app that runs with no port staged may
+ * move where it listens, and its recreate asks only the port it runs on: it would fail, after the
+ * whole health wait. Staged first under How it runs, the new port is tried by that recreate.
+ */
+export function envSaveNote(app: AppDto, rows: EnvEdit[], running: boolean): string {
+  const note = recreateNote(app, running);
+  const before = portVars(app.env.map((v) => ({ name: v.name, value: v.value, kept: v.secret && v.set })));
+  if (!running || app.pending?.port !== undefined || portVars(rows) === before) return note;
+  return `${note}\nPORT changes: give the new port under How it runs first.`;
 }
 
 /** The Run as field's hint: the image's own user, which an empty field comes to, or the user going in. */
@@ -219,19 +247,18 @@ export function dataPathsHint(app: AppDto): string {
 /**
  * What a save does, beside Save. Null while there is nothing to save: after a save the card is
  * back to the app, and a note there would read as what that save did. A port starts no job. An
- * app that runs stages it for the next image deployed or Recreate container: the recreate anything
- * else starts keeps the port that runs. The running port sent back takes the staged one back. An
- * app that does not run takes a port as it is saved.
+ * app that runs stages it: the next start, deploy or recreate tries it, the one the rest of this
+ * save starts too. The running port sent back takes the staged one back. An app that does not run
+ * takes a port as it is saved.
  */
 export function runsSaveNote(app: AppDto, patch: RunsPatch | null, running: boolean): string | null {
   if (!patch || Object.keys(patch).length === 0) return null;
-  const recreates = Object.keys(patch).some((k) => k !== 'port');
-  if (running && patch.port !== undefined && patch.port !== app.port) {
-    const when = 'goes in with the next image deployed, or Recreate container.';
-    return recreates ? `Saving recreates the container on ${app.port}. ${patch.port} ${when}` : `A port alone ${when}`;
-  }
-  if (recreates) return 'Saving recreates the container.';
-  return running ? `It stays on ${app.port}: nothing restarts.` : 'A port alone goes in when the app starts.';
+  const recreating = Object.keys(patch).some((k) => k !== 'port');
+  if (!running) return recreating ? recreates(undefined) : 'A port alone goes in when the app starts.';
+  // The port the next container tries: the one this save stages, or one staged before; none once the running port is sent back.
+  const tries = patch.port === undefined ? app.pending?.port : patch.port !== app.port ? patch.port : undefined;
+  if (recreating) return recreates(tries);
+  return tries !== undefined ? `The next start, deploy or recreate tries ${tries}.` : `It stays on ${app.port}: nothing restarts.`;
 }
 
 // --------------------------------------------------------------- New site

@@ -1,7 +1,8 @@
 /**
- * A container app's files: what its backups hold, what a restore puts back (its image too), its
- * final backup, a mount filled from an archive (a new app's before it first runs), a mount taken
- * off, and a move to another server.
+ * A container app's files: what its backups hold, what a restore puts back (its image too, on the
+ * port it listened on), its final backup, a mount filled from an archive (a new app's before it
+ * first runs, one whose restart fails, one whose swap is cut off), a mount taken off, the folders
+ * a fill left behind, and a move to another server (asked there on a staged port too).
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -214,6 +215,71 @@ describe('a container app’s backups', () => {
     expect(creates(w.docker).at(-1)!.image).toBe(`ghcr.io/example/shop-legacy@${digest(8)}`);
   });
 
+  /**
+   * Shop as a backup of it was taken on image 1, which listens on 8000, then moved to 9000 by image
+   * 2: the backup, and a restore of it.
+   */
+  async function movedOn(w: Awaited<ReturnType<typeof world>>) {
+    const site = await createShop(w);
+    w.db.update(appSettings).set({ healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    const on = new Map([
+      ['sha256:img1', 8000],
+      ['sha256:img2', 9000],
+    ]);
+    const asked: number[] = [];
+    w.docker.appHttp = (req) => {
+      asked.push(req.port);
+      return on.get(w.docker.imageByContainer.get(req.container) ?? '') === req.port ? 200 : null;
+    };
+    const backup = await w.core.backup.create(site, 'manual');
+    push(w.docker, 2);
+    w.db.update(appSettings).set({ nextPort: 9000 }).where(eq(appSettings.siteId, site.id)).run();
+    expect((await finish(w, (await w.deps.apps.deploy('shop', {})).id)).status).toBe('succeeded');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 0, digest: digest(2) });
+    asked.length = 0;
+    const restore = () => finish(w, w.worker.enqueue('backup.restore', { backupId: backup.id, skipPreRestoreBackup: true }, { id: site.id, slug: 'shop', serverId: 1 }).id);
+    return { site, asked, restore };
+  }
+
+  it('a restore onto the backup’s image asks it on the port it listened on then, and the routes send there', async () => {
+    const w = await world();
+    const { site, asked, restore } = await movedOn(w);
+    const done = await restore();
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    // The manifest's port first: image 1 answers there.
+    expect([...new Set(asked)]).toEqual([8000]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, digest: digest(1) });
+    expect(w.db.select().from(appDeploys).where(eq(appDeploys.siteId, site.id)).orderBy(appDeploys.id).all().at(-1)).toMatchObject({ origin: 'restore', port: 8000 });
+    expect(jobLog(w, done.id)).not.toContain('did not pass its health check');
+    await w.deps.appRoutes.idle();
+    expect(fs.readFileSync(path.join(w.config.srvRoot, 'traefik', 'dynamic', appRoutesFileName('shop')), 'utf8')).toContain('url: "http://wp-shop:8000"');
+  });
+
+  it('a restore onto the backup’s image keeps the port it listened on then when nothing answers: the check only warns', async () => {
+    const w = await world();
+    const { site, restore } = await movedOn(w);
+    w.docker.appHttp = () => null;
+    const done = await restore();
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(jobLog(w, done.id)).toContain('The app did not pass its health check after the restore (/ did not answer 2xx on port 8000 or 9000 within 1 s');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, digest: digest(1) });
+    expect(w.db.select().from(appDeploys).where(eq(appDeploys.siteId, site.id)).orderBy(appDeploys.id).all().at(-1)).toMatchObject({ origin: 'restore', port: 8000 });
+  });
+
+  it('a restore onto the image the app runs keeps a staged port it answers on, and the deploy of that image says so', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    const backup = await w.core.backup.create(site, 'manual');
+    // The app answers on 9000 alone now, which is staged.
+    w.db.update(appSettings).set({ nextPort: 9000, healthTimeoutSec: 1 }).where(eq(appSettings.siteId, site.id)).run();
+    w.docker.appHttp = (req) => (req.port === 9000 ? 200 : null);
+    const done = await finish(w, w.worker.enqueue('backup.restore', { backupId: backup.id, skipPreRestoreBackup: true }, { id: site.id, slug: 'shop', serverId: 1 }).id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 0, digest: digest(1) });
+    // No deploy row of its own: the one of the image it runs takes the port, for a roll back to it.
+    expect(w.db.select().from(appDeploys).where(eq(appDeploys.siteId, site.id)).all().map((d) => [d.origin, d.port])).toEqual([['create', 9000]]);
+  });
+
   it('refuses to restore an uploaded image that is gone, before anything is touched', async () => {
     const w = await world();
     const site = await createShop(w);
@@ -320,6 +386,8 @@ describe('a mount filled from an archive', () => {
     const filled = await finish(w, (await upload(w, GZIP)).jobId);
     expect(filled.status, filled.error ?? '').toBe('succeeded');
     expect(jobLog(w, filled.id)).toContain('The app is not running: it gets the new files when it starts.');
+    // No container runs on what the mount held: it goes at once.
+    expect(fs.readdirSync(appPaths(w.config, 'shop').mounts).sort()).toEqual(['secrets', 'uploads']);
     expect((await finish(w, w.deps.sites.action('shop', 'start').id)).status).toBe('succeeded');
     expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()!.status).toBe('running');
     await w.deps.appRoutes.idle();
@@ -372,6 +440,120 @@ describe('a mount filled from an archive', () => {
     expect(fs.readdirSync(appPaths(w.config, 'shop').mounts).sort()).toEqual(['secrets', 'uploads']);
   });
 
+  it('keeps what the mount held aside when the restart after fails, as the app may still run on it, and the next swap removes it', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    fill(w);
+    unpacker(w, ['./logo.png'], { 'logo.png': 'new logo' });
+    // The server's connection drops as the app restarts onto its new files: the restart may never have reached Docker.
+    w.docker.failOn.set('restartContainer', 'the connection to the server dropped');
+    const { id, jobId } = await upload(w, GZIP);
+    const done = await finish(w, jobId);
+    expect(done.status).toBe('failed');
+    expect(done.error).toBe('the connection to the server dropped');
+    // The new files are in, what they replaced is aside, and nothing else of the fill is left.
+    const mounts = appPaths(w.config, 'shop').mounts;
+    expect(fs.readdirSync(path.join(mounts, 'uploads'))).toEqual(['logo.png']);
+    expect(fs.readFileSync(path.join(mounts, 'uploads', 'logo.png'), 'utf8')).toBe('new logo');
+    expect(fs.readdirSync(mounts).sort()).toEqual([`.uploads.old-${jobId}`, 'secrets', 'uploads']);
+    expect(fs.readFileSync(path.join(mounts, `.uploads.old-${jobId}`, 'logo.png'), 'utf8')).toBe('logo v1');
+    expect(jobLog(w, jobId)).toContain(`What uploads held stays in ${mounts}/.uploads.old-${jobId}, as the app may still run on it: the next deploy or recreate removes it.`);
+    expect(fs.existsSync(appPaths(w.config, 'shop').mountUpload(id))).toBe(false);
+
+    // The next swap that passes stops the container that may have run on it, then removes it.
+    w.docker.failOn.delete('restartContainer');
+    const recreated = await finish(w, w.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 }).id);
+    expect(recreated.status, recreated.error ?? '').toBe('succeeded');
+    expect(jobLog(w, recreated.id)).toContain(`Removed .uploads.old-${jobId}, left by an earlier fill of uploads.`);
+    expect(fs.readdirSync(mounts).sort()).toEqual(['secrets', 'uploads']);
+    expect(fs.readFileSync(path.join(mounts, 'uploads', 'logo.png'), 'utf8')).toBe('new logo');
+  });
+
+  /**
+   * The server's renames, as they go over SSH: `how` says of each whether it fails, before it
+   * moved anything or after (a channel that dropped as mv finished, which reads as a failure).
+   */
+  function renames(w: TestWorld, how: (from: string, to: string) => 'before' | 'after' | null) {
+    const files = w.servers.handleFor(1).files;
+    const rename = files.rename.bind(files);
+    files.rename = async (from, to) => {
+      const fails = how(from, to);
+      if (fails === 'before') throw new Error(`mv ${path.basename(from)} failed: the channel closed`);
+      await rename(from, to);
+      if (fails === 'after') throw new Error(`mv ${path.basename(from)} failed: the channel closed`);
+    };
+    return () => {
+      files.rename = rename;
+    };
+  }
+
+  it('puts what the mount held back when setting it aside went through but failed, and leaves nothing of the fill', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    fill(w);
+    unpacker(w, ['./logo.png'], { 'logo.png': 'new logo' });
+    const mounts = appPaths(w.config, 'shop').mounts;
+    const restore = renames(w, (from, to) => (from === path.join(mounts, 'uploads') && to.includes('.uploads.old-') ? 'after' : null));
+    const done = await finish(w, (await upload(w, GZIP)).jobId);
+    expect(done.status).toBe('failed');
+    expect(done.error).toBe('mv uploads failed: the channel closed');
+    expect(fs.readFileSync(path.join(mounts, 'uploads', 'logo.png'), 'utf8')).toBe('logo v1');
+    expect(fs.readdirSync(mounts).sort()).toEqual(['secrets', 'uploads']);
+    // A swap after that has nothing to sweep: what the mount held is where it was.
+    restore();
+    expect((await finish(w, w.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 }).id)).status).toBe('succeeded');
+    expect(fs.readFileSync(path.join(mounts, 'uploads', 'logo.png'), 'utf8')).toBe('logo v1');
+  });
+
+  it('names where what the mount held went when putting the new files in went through but failed', async () => {
+    const w = await world();
+    await createShop(w);
+    fill(w);
+    unpacker(w, ['./logo.png'], { 'logo.png': 'new logo' });
+    const mounts = appPaths(w.config, 'shop').mounts;
+    renames(w, (from) => (from.includes('.uploads.new-') ? 'after' : null));
+    const { jobId } = await upload(w, GZIP);
+    const done = await finish(w, jobId);
+    expect(done.status).toBe('failed');
+    // The put-back finds the mount holding the new files, and stops there.
+    expect(done.error).toBe(
+      `mv .uploads.new-${jobId} failed: the channel closed. uploads holds the archive's files: restart the app onto them. What it held stays in ${mounts}/.uploads.old-${jobId} until the next deploy or recreate.`,
+    );
+    expect(fs.readFileSync(path.join(mounts, 'uploads', 'logo.png'), 'utf8')).toBe('new logo');
+    expect(fs.readFileSync(path.join(mounts, `.uploads.old-${jobId}`, 'logo.png'), 'utf8')).toBe('logo v1');
+  });
+
+  it('keeps both folders, which the next swap leaves, when the swap was cut off and what the mount held could not be put back', async () => {
+    // Set aside, then a failure that moved it all the same; or a failure putting the new files in. Either way the put-back fails.
+    for (const cutAt of ['aside', 'in'] as const) {
+      const w = await world();
+      const site = await createShop(w);
+      fill(w);
+      unpacker(w, ['./logo.png'], { 'logo.png': 'new logo' });
+      const mounts = appPaths(w.config, 'shop').mounts;
+      const live = path.join(mounts, 'uploads');
+      const restore = renames(w, (from, to) => {
+        if (from === live) return cutAt === 'aside' ? 'after' : null;
+        if (from.includes('.uploads.new-')) return 'before';
+        return to === live ? 'before' : null;
+      });
+      const { jobId } = await upload(w, GZIP);
+      const done = await finish(w, jobId);
+      expect(done.status, cutAt).toBe('failed');
+      expect(done.error, cutAt).toBe(
+        `mv ${cutAt === 'aside' ? 'uploads' : `.uploads.new-${jobId}`} failed: the channel closed. The swap was cut off: what uploads held is in ${mounts}/.uploads.old-${jobId}, ` +
+          `the archive's files in ${mounts}/.uploads.new-${jobId}. Fill the mount again, which clears them, or move one back by hand.`,
+      );
+      expect(fs.readdirSync(mounts).sort(), cutAt).toEqual([`.uploads.new-${jobId}`, `.uploads.old-${jobId}`, 'secrets']);
+      restore();
+      const recreated = await finish(w, w.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 }).id);
+      expect(recreated.status, recreated.error ?? '').toBe('succeeded');
+      expect(fs.readFileSync(path.join(mounts, `.uploads.old-${jobId}`, 'logo.png'), 'utf8'), cutAt).toBe('logo v1');
+      expect(fs.readFileSync(path.join(mounts, `.uploads.new-${jobId}`, 'logo.png'), 'utf8'), cutAt).toBe('new logo');
+      expect(jobLog(w, recreated.id), cutAt).toContain('A fill of uploads was cut off half-way');
+    }
+  });
+
   it('lets go of the archive of a fill canceled before it ran, and removes it from the server', async () => {
     const w = await world();
     await createShop(w);
@@ -390,10 +572,15 @@ describe('a mount taken off the app', () => {
   }
   /** A recreate no one asked for: the hourly sweep's, a CPU cap's. */
   const sweep = (w: TestWorld, site: SiteRow) => finish(w, w.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 }).id);
-  /** Folders of a fill that is swapping one in, and one no mount could be called: never a mount's. */
+  /** A fill under way, as its job's row has it: in a lane of its own, so it holds up no job of the server's. */
+  const fillJob = (w: TestWorld, status = 'running') =>
+    w.db.insert(jobs).values({ type: 'app.mountUpload', payload: '{}', status, lane: 'a-fill', createdAt: Date.now() }).returning().get().id;
+  const folder = (w: TestWorld, name: string) => fs.mkdirSync(path.join(appPaths(w.config, 'shop').mounts, name), { recursive: true });
+  /** Folders of a fill under way, and one no mount could be called: never a mount's. */
   function notMounts(w: TestWorld): string[] {
-    const names = ['.secrets.new-7', '.uploads.old-8', 'Notes'];
-    for (const name of names) fs.mkdirSync(path.join(appPaths(w.config, 'shop').mounts, name), { recursive: true });
+    const fill = fillJob(w);
+    const names = [`.secrets.new-${fill}`, `.uploads.old-${fill}`, 'Notes'];
+    for (const name of names) folder(w, name);
     return names;
   }
   const mountFolders = (w: TestWorld) => fs.readdirSync(appPaths(w.config, 'shop').mounts).sort();
@@ -482,6 +669,125 @@ describe('a mount taken off the app', () => {
   });
 });
 
+describe('the folders a fill leaves', () => {
+  const fillJob = (w: TestWorld, status: string) =>
+    w.db.insert(jobs).values({ type: 'app.mountUpload', payload: '{}', status, lane: 'a-fill', createdAt: Date.now() }).returning().get().id;
+  const folder = (w: TestWorld, name: string) => fs.mkdirSync(path.join(appPaths(w.config, 'shop').mounts, name), { recursive: true });
+  const mountFolders = (w: TestWorld) => fs.readdirSync(appPaths(w.config, 'shop').mounts).sort();
+  /** A recreate a sweep queues: every swap that passes looks. */
+  const recreate = (w: TestWorld, site: SiteRow) => finish(w, w.worker.enqueue('site.reconcile', { siteId: site.id }, { id: site.id, slug: 'shop', serverId: 1 }).id);
+  /** When a fill's unpack last wrote its fresh folder. */
+  const unpackedAt = (w: TestWorld, name: string, at: number) => fs.utimesSync(path.join(appPaths(w.config, 'shop').mounts, name), new Date(at), new Date(at));
+  /** When a fill of secrets last went in. */
+  const filled = (w: TestWorld, site: SiteRow, at: number) =>
+    w.db.update(appMounts).set({ filledAt: at }).where(and(eq(appMounts.siteId, site.id), eq(appMounts.name, 'secrets'))).run();
+
+  it('go with the next swap once the panel stopped while their fill ran, and never while a fill is under way', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    fill(w);
+    // The panel stopped mid-fill: at its start that job was marked failed. Another's job is gone from the list.
+    const cut = fillJob(w, 'failed');
+    folder(w, `.uploads.new-${cut}`);
+    folder(w, `.uploads.old-${cut + 1000}`);
+    fs.writeFileSync(path.join(appPaths(w.config, 'shop').mounts, `.uploads.old-${cut + 1000}`, 'logo.png'), 'logo v0');
+    // Under way: its job still runs.
+    const running = fillJob(w, 'running');
+    folder(w, `.secrets.new-${running}`);
+    const done = await recreate(w, site);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(mountFolders(w)).toEqual([`.secrets.new-${running}`, 'secrets', 'uploads']);
+    expect(jobLog(w, done.id)).toContain(`Removed .uploads.new-${cut}, left by an earlier fill of uploads.`);
+    expect(jobLog(w, done.id)).toContain(`Removed .uploads.old-${cut + 1000}, left by an earlier fill of uploads.`);
+    // The mounts themselves are untouched.
+    expect(fs.readFileSync(path.join(appPaths(w.config, 'shop').mountDir('uploads'), 'logo.png'), 'utf8')).toBe('logo v1');
+
+    // Once that fill is over, its folder goes too.
+    w.db.update(jobs).set({ status: 'succeeded' }).where(eq(jobs.id, running)).run();
+    expect((await recreate(w, site)).status).toBe('succeeded');
+    expect(mountFolders(w)).toEqual(['secrets', 'uploads']);
+  });
+
+  it('stay, with a warning, when the fill was cut off between its two renames, until the mount is filled again after it', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    const cut = fillJob(w, 'failed');
+    const now = Date.now();
+    w.db.update(jobs).set({ createdAt: now - 120_000, startedAt: now - 60_000 }).where(eq(jobs.id, cut)).run();
+    folder(w, `.secrets.new-${cut}`);
+    folder(w, `.secrets.old-${cut}`);
+    fs.writeFileSync(path.join(appPaths(w.config, 'shop').mounts, `.secrets.old-${cut}`, 'key.pem'), 'the only key');
+    unpackedAt(w, `.secrets.new-${cut}`, now - 50_000);
+    // A fill that went in while that one waited, before it started: the old folder is still all the mount had.
+    filled(w, site, now - 90_000);
+    const done = await recreate(w, site);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(mountFolders(w)).toEqual([`.secrets.new-${cut}`, `.secrets.old-${cut}`, 'secrets', 'uploads']);
+    const mounts = appPaths(w.config, 'shop').mounts;
+    expect(jobLog(w, done.id)).toContain(
+      `A fill of secrets was cut off half-way: what the mount held is in ${mounts}/.secrets.old-${cut}, the archive's files in ${mounts}/.secrets.new-${cut}. They stay there: fill the mount again, which clears them, or move one back by hand.`,
+    );
+
+    // Filled again since: new files went in on purpose, and the two go with the next swap.
+    filled(w, site, now);
+    const again = await recreate(w, site);
+    expect(again.status, again.error ?? '').toBe('succeeded');
+    expect(mountFolders(w)).toEqual(['secrets', 'uploads']);
+    expect(jobLog(w, again.id)).toContain(`Removed .secrets.old-${cut}, left by an earlier fill of secrets.`);
+    expect(jobLog(w, again.id)).not.toContain('cut off half-way');
+  });
+
+  it('go once the mount is filled again after the fresh folder was written, though the fill’s job is gone from the list', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    // Pruned by housekeeping: only its fresh folder says when that fill ran.
+    const gone = fillJob(w, 'failed');
+    w.db.delete(jobs).where(eq(jobs.id, gone)).run();
+    folder(w, `.secrets.new-${gone}`);
+    folder(w, `.secrets.old-${gone}`);
+    const unpacked = Date.now() - 60_000;
+    unpackedAt(w, `.secrets.new-${gone}`, unpacked);
+    // A fill before it: the two stay.
+    filled(w, site, unpacked - 30_000);
+    const before = await recreate(w, site);
+    expect(before.status, before.error ?? '').toBe('succeeded');
+    expect(mountFolders(w)).toEqual([`.secrets.new-${gone}`, `.secrets.old-${gone}`, 'secrets', 'uploads']);
+    expect(jobLog(w, before.id)).toContain('A fill of secrets was cut off half-way');
+    // A fill after it: they go.
+    filled(w, site, unpacked + 30_000);
+    const after = await recreate(w, site);
+    expect(after.status, after.error ?? '').toBe('succeeded');
+    expect(mountFolders(w)).toEqual(['secrets', 'uploads']);
+    expect(jobLog(w, after.id)).toContain(`Removed .secrets.new-${gone}, left by an earlier fill of secrets.`);
+    expect(jobLog(w, after.id)).toContain(`Removed .secrets.old-${gone}, left by an earlier fill of secrets.`);
+  });
+
+  it('go with a mount taken off the app, as its own folder does, once no old container is left aside', async () => {
+    const w = await world();
+    const site = await createShop(w);
+    fill(w);
+    const cut = fillJob(w, 'failed');
+    folder(w, `.secrets.new-${cut}`);
+    folder(w, `.secrets.old-${cut}`);
+    const mounts = appPaths(w.config, 'shop').mounts;
+    // Taken off (PATCH mounts drops the row at once); the recreate cannot remove the old container.
+    w.db.delete(appMounts).where(and(eq(appMounts.siteId, site.id), eq(appMounts.name, 'secrets'))).run();
+    w.docker.failOn.set('removeContainer', 'the daemon did not answer');
+    const kept = await recreate(w, site);
+    expect(kept.status, kept.error ?? '').toBe('succeeded');
+    expect(mountFolders(w)).toEqual([`.secrets.new-${cut}`, `.secrets.old-${cut}`, 'secrets', 'uploads']);
+    expect(jobLog(w, kept.id)).toContain(`The files of secrets, .secrets.new-${cut}, .secrets.old-${cut} stay in ${mounts}: the old container, which has them, is still there.`);
+    expect(jobLog(w, kept.id)).not.toContain('cut off half-way');
+    // The next swap that passes removes the old container, and they go: no fill can clear them now.
+    w.docker.failOn.delete('removeContainer');
+    const done = await recreate(w, site);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(mountFolders(w)).toEqual(['uploads']);
+    expect(jobLog(w, done.id)).toContain('Removed the files of secrets, which is no longer a mount.');
+    expect(jobLog(w, done.id)).toContain(`Removed .secrets.old-${cut}, left by a fill of secrets, which is no longer a mount.`);
+  });
+});
+
 describe('moving a container app', () => {
   it('forwards its plain http routes on port 80 too', () => {
     const yaml = proxyConfigYaml({ slug: 'shop', hosts: ['shop.example.com'], httpHosts: ['shop.example.com'], targetIp: '203.0.113.9', tlsMode: 'letsencrypt', acmeResolver: 'letsencrypt' });
@@ -554,6 +860,62 @@ describe('moving a container app', () => {
     expect(done.error).toBe('the disk is full');
     expect(w.docker.containers.get('wp-shop')).toBe('running');
     expect(jobLog(w, done.id)).toContain('Target rolled back; the site keeps running on the source. Re-running the move is safe.');
+  });
+
+  /**
+   * "shop" stopped on image 2, which listens on 9000 where image 1 listened on 8000: 9000 was staged
+   * while image 1 ran, and no gate has asked it since. A second server to move it to, where the
+   * images listen as they do here; the ports it is asked there are noted.
+   */
+  async function stoppedOnNewPort(w: TestWorld) {
+    const site = await createShop(w);
+    const listen = (docker: TestWorld['docker']) => {
+      const asked: number[] = [];
+      docker.appHttp = (req) => {
+        asked.push(req.port);
+        if (docker.containers.get(req.container) !== 'running') return null;
+        return (docker.imageByContainer.get(req.container) === 'sha256:img2' ? 9000 : 8000) === req.port ? 200 : null;
+      };
+      return asked;
+    };
+    listen(w.docker);
+    w.db.update(appSettings).set({ nextPort: 9000 }).where(eq(appSettings.siteId, site.id)).run();
+    expect((await finish(w, w.deps.sites.action('shop', 'stop').id)).status).toBe('succeeded');
+    push(w.docker, 2);
+    const deployed = await finish(w, (await w.deps.apps.deploy('shop', {})).id);
+    expect(deployed.status, deployed.error ?? '').toBe('succeeded');
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000, digest: digest(2) });
+    const s2 = w.addSshServer('s2', { real: true, publicIp: '203.0.113.9' });
+    prepare(s2.docker);
+    push(s2.docker, 2);
+    return { site, s2, asked: listen(s2.docker) };
+  }
+
+  it('asks the app on the target on its staged port first, and keeps the one it answers on: an image deployed while it was stopped', async () => {
+    const w = await world();
+    const { site, s2, asked } = await stoppedOnNewPort(w);
+    const done = await finish(w, w.deps.sites.move('shop', { targetServerId: s2.id }).id);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect([...new Set(asked)]).toEqual([9000]);
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 9000, nextPort: 0 });
+    expect(jobLog(w, done.id)).toContain('The app runs on 9000 from now on, not 8000.');
+    // The deploy of image 2 says so too: a roll back to it asks 9000.
+    expect(w.db.select().from(appDeploys).where(eq(appDeploys.siteId, site.id)).orderBy(appDeploys.id).all().at(-1)).toMatchObject({ origin: 'user', digest: digest(2), port: 9000 });
+    // Stopped there, as it was here.
+    expect(s2.docker.containers.get('wp-shop')).toBe('exited');
+    expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()).toMatchObject({ serverId: s2.id, status: 'stopped' });
+  });
+
+  it('puts the app’s port back when the move fails after the target answered', async () => {
+    const w = await world();
+    const { site, s2 } = await stoppedOnNewPort(w);
+    // Stopping it again there fails, after its check: the move rolls back.
+    s2.docker.failOn.set('stopContainer', 'the daemon did not answer');
+    const done = await finish(w, w.deps.sites.move('shop', { targetServerId: s2.id }).id);
+    expect(done.error).toBe('the daemon did not answer');
+    expect(jobLog(w, done.id)).toContain("Rolling back: put the app's port back");
+    expect(settingsOf(w, site.id)).toMatchObject({ port: 8000, nextPort: 9000 });
+    expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()).toMatchObject({ serverId: 1, status: 'stopped' });
   });
 
   it('pulls its image on the target from the repository it came by, after the app’s reference has changed', async () => {
