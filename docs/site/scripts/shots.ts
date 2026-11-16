@@ -62,7 +62,7 @@ export const SHOTS: Shot[] = [
   },
   { name: 'reminders-domains', what: 'Domains and their registry dates', path: '/reminders?tab=domains', theme: 'light' },
   { name: 'overview', what: 'The Dashboard: the fleet at a glance', path: '/', theme: 'both', hero: true },
-  { name: 'sites-list', what: 'Sites → All sites: twelve sites on three servers, and two hosted elsewhere', path: '/sites', theme: 'both', hero: true },
+  { name: 'sites-list', what: 'Sites → All sites: thirteen sites on three servers, and two hosted elsewhere', path: '/sites', theme: 'both', hero: true },
   {
     name: 'site-new',
     what: 'The New site wizard, its first step filled in',
@@ -107,6 +107,33 @@ export const SHOTS: Shot[] = [
     theme: 'light',
     // The cron lines arrive after the tab's own data: wait for the demo's first one.
     prepare: steps(tab('Settings'), (page) => page.getByText('php artisan schedule:run').first().waitFor()),
+  },
+  {
+    name: 'site-new-container',
+    what: 'The New site wizard for a container app, on its Image step',
+    path: '/sites/new',
+    theme: 'light',
+    prepare: steps(
+      async (page) => page.getByRole('group', { name: 'Type', exact: true }).getByRole('button', { name: 'Container', exact: true }).click(),
+      async (page) => page.getByLabel('Site title').fill('Lantern Bookings'),
+      async (page) => page.getByRole('button', { name: 'Continue', exact: true }).click(),
+      async (page) => page.getByLabel('Image reference').fill('ghcr.io/lantern-example/bookings:stable'),
+    ),
+  },
+  { name: 'site-app', what: 'A container app’s Overview tab: the image it runs, how it is updated, and its routes', path: '/sites/orders-api', theme: 'light' },
+  {
+    name: 'site-app-routes',
+    what: 'A container app’s routes on its Settings tab: a host of its own, and three paths of a WordPress site’s domain',
+    path: '/sites/orders-api?tab=settings',
+    theme: 'light',
+    prepare: scrollTo('Routes'),
+  },
+  {
+    name: 'site-app-deploys',
+    what: 'A container app’s Deploys tab: five deploys, the failed one opened on its last log lines',
+    path: '/sites/orders-api?tab=deploys',
+    theme: 'light',
+    prepare: button('Failed'),
   },
   { name: 'sites-external', what: 'Sites → All sites: the sites hosted elsewhere, one whose plugin does not answer', path: '/sites', theme: 'light', prepare: scrollTo('External') },
   { name: 'site-wordpress', what: 'A site’s WordPress tab: updates and plugins', path: '/sites/northwind-bakery', theme: 'both', prepare: tab('WordPress') },

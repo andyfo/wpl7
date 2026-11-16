@@ -68,6 +68,9 @@ const PUBLIC_ROUTES = new Set([
   '/api/connect/enroll',
   '/api/connect/package',
   '/api/connect/catalog/:pluginId',
+  // A container app's deploy hook, called by its CI: the app's token, in X-WPL7-Deploy-Token, is
+  // checked by the route itself (routes/apps.ts).
+  '/api/hooks/app-deploy',
 ]);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 

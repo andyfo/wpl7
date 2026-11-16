@@ -25,12 +25,38 @@ import {
 } from '../../shared/schemas.js';
 import { moveCleanups } from '../db/schema.js';
 import { conflict, notFound } from '../lib/errors.js';
-import { jobToDto, viewerOf } from '../lib/dto.js';
+import { jobToDto, seesCommands, viewerOf } from '../lib/dto.js';
 import { requireAccess } from '../plugins/auth.js';
 import { checkSiteUrl, clearSiteCaches, siteContainerStack } from '../services/siteCaches.js';
 import type { AppDeps } from './deps.js';
 import { isPhpSite, phpNoPageCache } from '../lib/siteKind.js';
+import { resolveTargetServer } from '../services/sites.js';
 import { audit } from '../lib/audit.js';
+
+/**
+ * A domain becomes the sender domain of the site that claims it (services/mail.ts
+ * senderOwners), and its mail goes out signed with the DKIM key of that domain - or of the
+ * domain it is under: the signing policy gives every key its subdomains too
+ * (services/mailDkim.ts renderSigningPolicy), and signs for whatever the site owns. Where that key
+ * is not one of this site's own domains - kept after its site was deleted, made ahead of a
+ * migration, or another site's - claiming the domain would let this site sign mail as someone
+ * else. That is mail identity, Full's (docs/mcp.md), not work inside a site.
+ */
+export function holdSigningDomainsOf(deps: Pick<AppDeps, 'mail'>, req: FastifyRequest, domains: string[], held: string[] = []): void {
+  const own = new Set(held.map((d) => d.toLowerCase()));
+  const foreign = deps.mail
+    .listDkimKeys()
+    .map((key) => key.domain.toLowerCase())
+    .filter((k) => !own.has(k));
+  const claimed = domains.filter((d) => {
+    const name = d.toLowerCase();
+    return !own.has(name) && foreign.some((k) => name === k || name.endsWith(`.${k}`));
+  });
+  if (claimed.length > 0) {
+    const what = `a domain whose mail would be signed with a DKIM key this site does not hold (${claimed.join(', ')})`;
+    requireAccess(req, 'full', what);
+  }
+}
 
 // Addressing an existing site: no reserved-name check, see siteSlugParam.
 const slugParams = z.object({ slug: siteSlugParam });
@@ -39,42 +65,26 @@ const cronLineParams = z.object({ slug: siteSlugParam, id: z.coerce.number().int
 export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
   const r = app.withTypeProvider<ZodTypeProvider>();
 
-  /**
-   * A domain becomes the sender domain of the site that claims it (services/mail.ts
-   * senderOwners), and its mail goes out signed with the DKIM key of that domain - or of the
-   * domain it is under: the signing policy gives every key its subdomains too
-   * (services/mailDkim.ts renderSigningPolicy), and signs for whatever the site owns. Where that key is not one of this site's own domains - kept after
-   * its site was deleted, made ahead of a migration, or another site's - claiming the domain
-   * would let this site sign mail as someone else. That is mail identity, Full's (docs/mcp.md),
-   * not work inside a site.
-   */
-  const holdSigningDomains = (req: FastifyRequest, domains: string[], held: string[] = []) => {
-    const own = new Set(held.map((d) => d.toLowerCase()));
-    const foreign = deps.mail
-      .listDkimKeys()
-      .map((key) => key.domain.toLowerCase())
-      .filter((k) => !own.has(k));
-    const claimed = domains.filter((d) => {
-      const name = d.toLowerCase();
-      return !own.has(name) && foreign.some((k) => name === k || name.endsWith(`.${k}`));
-    });
-    if (claimed.length > 0) {
-      const what = `a domain whose mail would be signed with a DKIM key this site does not hold (${claimed.join(', ')})`;
-      requireAccess(req, 'full', what);
-    }
-  };
+  const holdSigningDomains = (req: FastifyRequest, domains: string[], held: string[] = []) => holdSigningDomainsOf(deps, req, domains, held);
 
   r.get('/api/sites', async () => ({ items: deps.sites.list() }));
 
   r.post('/api/sites', { schema: { body: siteCreateBody } }, async (req, reply) => {
     holdSigningDomains(req, req.body.domains ?? []);
+    if (req.body.app === 'container') {
+      // An app's hosts are its routes': the ones no site holds become its own, the others are borrowed.
+      const { own, borrowed } = deps.apps.hostsOfCreate(req.body, resolveTargetServer(deps, req.body.serverId));
+      holdSigningDomains(req, own);
+      if (borrowed.length > 0) requireAccess(req, 'full', `a route on another site's domain (${borrowed.join(', ')})`);
+    }
     await deps.sites.assertCanCreate(req.body);
     const { job } = deps.sites.create(req.body);
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });
 
+  // A container app's failed deploys come with their last lines only for whoever may read its log.
   r.get('/api/sites/:slug', { schema: { params: slugParams } }, async (req) =>
-    deps.sites.detail(req.params.slug),
+    deps.sites.detail(req.params.slug, { logTails: seesCommands(viewerOf(req)) }),
   );
 
   r.delete(
@@ -95,18 +105,18 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   // A PHP site's cron lines (services/siteCron.ts). They run commands, so they are Manage's, as the shell is.
   r.get('/api/sites/:slug/cron', { schema: { params: slugParams } }, async (req) => ({
-    lines: deps.siteCron.list(deps.sites.bySlug(req.params.slug)),
+    lines: deps.siteCron.list(deps.sites.bySlug(req.params.slug, { app: 'siteImage' })),
   }));
 
   r.put('/api/sites/:slug/cron', { schema: { params: slugParams, body: siteCronBody } }, async (req) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     const lines = deps.siteCron.save(site, req.body.lines);
     audit(req, 'cron', site.slug, 'save', { lines: lines.length });
     return { lines };
   });
 
   r.post('/api/sites/:slug/cron/:id/run', { schema: { params: cronLineParams } }, async (req) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     const line = deps.siteCron.runNow(site, req.params.id);
     audit(req, 'cron', site.slug, 'run now', { line: line.id });
     return { line };
@@ -124,7 +134,7 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
   );
 
   r.put('/api/sites/:slug/php', { schema: { params: slugParams, body: phpUpdateBody } }, async (req, reply) => {
-    const site = deps.sites.bySlug(req.params.slug);
+    const site = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     await deps.sites.assertPhpImageOn(site, site.serverId, req.body.phpVersion);
     const job = deps.sites.changePhp(req.params.slug, req.body.phpVersion);
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
@@ -223,7 +233,7 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   /** What the page cache and Redis hold needs a running container on stack 2 to be there at all. */
   const liveCacheOf = async (slug: string) => {
-    const site = deps.sites.bySlug(slug);
+    const site = deps.sites.bySlug(slug, { app: 'siteImage' });
     const server = deps.servers.handleFor(site.serverId);
     if ((await siteContainerStack(server.docker, site.containerName)) !== 2) throw conflict('This site still runs the old PHP setup, which has no page cache.');
     if ((await server.docker.containerState(site.containerName)) !== 'running') throw conflict('The site is not running.');
@@ -232,7 +242,7 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   r.post('/api/sites/:slug/cache/clear', { schema: { params: slugParams } }, async (req) => {
     // Whatever state it is in: a PHP site has nothing here to clear, and its Redis is its own.
-    const php = deps.sites.bySlug(req.params.slug);
+    const php = deps.sites.bySlug(req.params.slug, { app: 'siteImage' });
     if (isPhpSite(php)) throw conflict(phpNoPageCache(php.slug));
     const { site, server } = await liveCacheOf(req.params.slug);
     return { cleared: await clearSiteCaches(server, site) };
@@ -282,7 +292,9 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
   );
 
   r.post('/api/sites/:slug/move', { schema: { params: slugParams, body: siteMoveBody } }, async (req, reply) => {
-    await deps.sites.assertPhpImageOn(deps.sites.bySlug(req.params.slug), req.body.targetServerId);
+    const site = deps.sites.bySlug(req.params.slug);
+    await deps.sites.assertPhpImageOn(site, req.body.targetServerId);
+    await deps.sites.assertAppRoutesOn(site, req.body.targetServerId);
     const job = deps.sites.move(req.params.slug, req.body);
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });

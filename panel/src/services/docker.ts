@@ -8,6 +8,7 @@ import { collectDemuxed, demuxBuffer, demuxToStreams } from '../lib/demux.js';
 import { badGateway, timedOut } from '../lib/errors.js';
 import { phpReleaseOf } from '../lib/phpRelease.js';
 import type { SiteApp } from '../../shared/schemas.js';
+import { fileFromTar } from './imageArchive.js';
 import { appsFromLabels, stackFromLabels, type SiteStack } from './siteStack.js';
 
 export interface RunResult {
@@ -33,6 +34,21 @@ export interface SiteContainerSpec {
   nanoCpus?: number;
   /** Process/thread ceiling. Undefined = uncapped. */
   pidsLimit?: number;
+  /*
+   * A container app's own (services/appSpec.ts). Left out, a container is made as every site's
+   * is: the image's user, a writable root, SITE_CAP_DROP, no host aliases, Docker's 10 s stop.
+   */
+  /** `uid:gid`; left out, the image's own user. */
+  user?: string;
+  readOnlyRootfs?: boolean;
+  /** Path in the container -> tmpfs options, as Docker takes them. */
+  tmpfs?: Record<string, string>;
+  /** In place of SITE_CAP_DROP: `['ALL']` for an app that needs no capability at all. */
+  capDrop?: string[];
+  /** `host:address` entries for /etc/hosts. */
+  extraHosts?: string[];
+  /** Seconds a stop waits before it kills, when the stop itself names none (`docker stop` from a shell). */
+  stopTimeout?: number;
 }
 
 /**
@@ -231,6 +247,11 @@ export interface EphemeralLockdown {
   pidsLimit: number;
   /** Scratch space: path in the container -> size in MiB. Counts against `memoryBytes`. */
   tmpfs: Record<string, number>;
+  /**
+   * The one network the run is on; left out, none. The way in to a container app
+   * (services/appProbe.ts): its own network, where nothing but the app and the stack is.
+   */
+  network?: string;
 }
 
 /**
@@ -290,7 +311,61 @@ export interface ContainerLogsOpts {
   sinceSec?: number;
   /** Cap on the number of lines read back, newest first. */
   tail?: number;
+  /** Each line starts with when it was logged, RFC 3339 with nanoseconds, and a space. */
+  timestamps?: boolean;
 }
+
+/**
+ * A registry login, as the Engine API takes it in X-Registry-Auth: for a pull, and for asking the
+ * registry what a reference names (a container app's image, services/appImages.ts).
+ */
+export interface RegistryAuth {
+  username: string;
+  password: string;
+  /** The registry's host, `ghcr.io`. */
+  serveraddress: string;
+}
+
+/**
+ * What a registry says of a reference, asked through the daemon without a pull
+ * (`GET /distribution/<ref>/json`): one manifest request, with a login if one is given.
+ */
+export interface DistributionInfo {
+  /** The digest the reference names now: an image's manifest, or a list of them. */
+  digest: string;
+  mediaType: string;
+  /**
+   * What a list holds, attestations (`unknown/unknown`) left out. For a single image the classic
+   * store names its platform and containerd's names none (test/engine/containerImages.test.ts), so
+   * an empty list means "not known before the pull".
+   */
+  platforms: { os: string; architecture: string; variant?: string }[];
+}
+
+/** What the panel reads of an image's own config: a container app's defaults and its checks. */
+export interface ImageConfig {
+  id: string;
+  os: string;
+  architecture: string;
+  /** `USER`: a name, a uid, `user:group`, or '' for root. */
+  user: string;
+  /** `EXPOSE`, as `80/tcp`. */
+  exposedPorts: string[];
+  /** `VOLUME` paths. */
+  volumes: string[];
+  labels: Record<string, string>;
+  workingDir: string;
+}
+
+/** The server's own platform, in the names images use: `linux` / `amd64`. */
+export interface ServerPlatform {
+  os: string;
+  arch: string;
+}
+
+/** Docker's name for the host's architecture (`docker info`), in the one images use. */
+const ARCHITECTURES: Record<string, string> = { x86_64: 'amd64', amd64: 'amd64', aarch64: 'arm64', arm64: 'arm64' };
+export const normalArch = (arch: string): string => ARCHITECTURES[arch] ?? arch;
 
 /** An image as the nightly clean-up weighs it (services/dockerCleanup.ts). */
 export interface ImageSummary {
@@ -312,8 +387,13 @@ export interface DockerPort {
   startContainer(name: string): Promise<void>;
   /** Stop, after `graceSeconds` (20) for the container to stop by itself. A container that is not there is not an error. */
   stopContainer(name: string, graceSeconds?: number): Promise<void>;
-  restartContainer(name: string): Promise<void>;
-  removeContainer(name: string): Promise<void>;
+  /** `graceSeconds`: how long the stop half waits (20 s left out). */
+  restartContainer(name: string, graceSeconds?: number): Promise<void>;
+  /**
+   * A container that is not there is not an error. `volumes`: its anonymous volumes go with it, as
+   * `docker rm -v`: a container app's image may declare a VOLUME, and each container gets its own.
+   */
+  removeContainer(name: string, opts?: { volumes?: boolean }): Promise<void>;
   renameContainer(name: string, to: string): Promise<void>;
   containerState(name: string): Promise<ContainerState>;
   /** The image reference a container was created from; null when it does not exist. */
@@ -382,7 +462,23 @@ export interface DockerPort {
    * freshly pulled base image.
    */
   buildImage(tag: string, contextDir: string, buildArgs: Record<string, string>, onProgress?: (line: string) => void): Promise<void>;
-  pullImage(tag: string, onProgress?: (line: string) => void): Promise<void>;
+  /** `platform` asks for one platform of a list, `linux/amd64`; without it the daemon takes its own. */
+  pullImage(tag: string, onProgress?: (line: string) => void, opts?: { auth?: RegistryAuth; platform?: string }): Promise<void>;
+  /** What a registry says of a reference, without a pull (see DistributionInfo). */
+  distribution(ref: string, auth?: RegistryAuth): Promise<DistributionInfo>;
+  /** Load a `docker save` archive; what the daemon said it loaded, by name or id. */
+  loadImage(archive: Readable, onProgress?: (line: string) => void): Promise<{ loaded: string[] }>;
+  /** A `docker save` archive of one image, as a stream. */
+  saveImage(ref: string): Promise<Readable>;
+  /** An image's config; null when there is no such image. */
+  imageConfig(ref: string): Promise<ImageConfig | null>;
+  /**
+   * One file of an image, read from a container created for it and never started, which goes
+   * again with its anonymous volumes. Null when the image has no such file.
+   */
+  readImageFile(ref: string, file: string): Promise<Buffer | null>;
+  /** The daemon's OS and architecture. */
+  serverPlatform(): Promise<ServerPlatform>;
   /** Give an image a second name, `repo:tag`. */
   tagImage(source: string, target: string): Promise<void>;
   /** Untag, and remove if nothing else uses it. An image that does not exist is not an error. */
@@ -553,6 +649,8 @@ export class DockerService implements DockerPort {
       Image: spec.image,
       Env: Object.entries(spec.env).map(([k, v]) => `${k}=${v}`),
       Labels: spec.labels,
+      ...(spec.user ? { User: spec.user } : {}),
+      ...(spec.stopTimeout !== undefined ? { StopTimeout: spec.stopTimeout } : {}),
       HostConfig: {
         Mounts: spec.binds.map(bindToMount),
         RestartPolicy: { Name: 'unless-stopped' },
@@ -561,8 +659,11 @@ export class DockerService implements DockerPort {
         // other site on it. PidsLimit is the fork-bomb equivalent.
         ...(nanoCpus ? { NanoCpus: nanoCpus } : {}),
         ...(spec.pidsLimit ? { PidsLimit: spec.pidsLimit } : {}),
-        CapDrop: SITE_CAP_DROP,
+        CapDrop: spec.capDrop ?? SITE_CAP_DROP,
         SecurityOpt: SITE_SECURITY_OPT,
+        ...(spec.readOnlyRootfs ? { ReadonlyRootfs: true } : {}),
+        ...(spec.tmpfs ? { Tmpfs: spec.tmpfs } : {}),
+        ...(spec.extraHosts?.length ? { ExtraHosts: spec.extraHosts } : {}),
       },
       NetworkingConfig: {
         EndpointsConfig: { [networks[0]!]: {} },
@@ -592,13 +693,13 @@ export class DockerService implements DockerPort {
     }
   }
 
-  async restartContainer(name: string): Promise<void> {
-    await this.docker.getContainer(name).restart({ t: 20 });
+  async restartContainer(name: string, graceSeconds = 20): Promise<void> {
+    await this.docker.getContainer(name).restart({ t: graceSeconds });
   }
 
-  async removeContainer(name: string): Promise<void> {
+  async removeContainer(name: string, opts?: { volumes?: boolean }): Promise<void> {
     try {
-      await this.docker.getContainer(name).remove({ force: true });
+      await this.docker.getContainer(name).remove({ force: true, v: opts?.volumes === true });
     } catch (err) {
       if (isStatusError(err, 404)) return;
       throw err;
@@ -723,6 +824,7 @@ export class DockerService implements DockerPort {
         follow: false,
         ...(opts.sinceSec !== undefined ? { since: opts.sinceSec } : {}),
         ...(opts.tail !== undefined ? { tail: opts.tail } : {}),
+        ...(opts.timestamps ? { timestamps: true } : {}),
       })) as unknown as Buffer | string;
       const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw), 'utf8');
       const { stdout, stderr } = demuxBuffer(buf);
@@ -1011,7 +1113,7 @@ export class DockerService implements DockerPort {
 
   async runEphemeral(opts: EphemeralOpts): Promise<RunResult> {
     const lock = opts.lockdown;
-    const networks = lock ? [] : (opts.networks ?? [this.proxyNetwork, this.dbNetwork]);
+    const networks = lock ? (lock.network ? [lock.network] : []) : (opts.networks ?? [this.proxyNetwork, this.dbNetwork]);
     const container = await this.docker.createContainer({
       name: opts.name,
       Image: opts.image,
@@ -1023,7 +1125,7 @@ export class DockerService implements DockerPort {
       HostConfig: lock
         ? {
             Mounts: (opts.binds ?? []).map(bindToMount),
-            NetworkMode: 'none',
+            NetworkMode: lock.network ?? 'none',
             CapDrop: ['ALL'],
             SecurityOpt: ['no-new-privileges'],
             ReadonlyRootfs: true,
@@ -1200,12 +1302,122 @@ export class DockerService implements DockerPort {
     return result?.SpaceReclaimed ?? 0;
   }
 
-  async pullImage(tag: string, onProgress?: (line: string) => void): Promise<void> {
-    const stream = await this.docker.pull(tag);
+  async pullImage(tag: string, onProgress?: (line: string) => void, opts: { auth?: RegistryAuth; platform?: string } = {}): Promise<void> {
+    const stream = await this.docker.pull(tag, {
+      ...(opts.auth ? { authconfig: opts.auth } : {}),
+      ...(opts.platform ? { platform: opts.platform } : {}),
+    });
     await this.followProgress(stream, onProgress);
   }
 
-  private followProgress(stream: NodeJS.ReadableStream, onProgress?: (line: string) => void): Promise<void> {
+  async distribution(ref: string, auth?: RegistryAuth): Promise<DistributionInfo> {
+    const info = (await this.docker.getImage(ref).distribution(auth ? { authconfig: auth } : {})) as {
+      Descriptor?: { digest?: string; mediaType?: string };
+      Platforms?: { os?: string; architecture?: string; variant?: string }[] | null;
+    };
+    return {
+      digest: info.Descriptor?.digest ?? '',
+      mediaType: info.Descriptor?.mediaType ?? '',
+      platforms: (info.Platforms ?? [])
+        .filter((p) => p.os && p.architecture && p.os !== 'unknown' && p.architecture !== 'unknown')
+        .map((p) => ({ os: p.os!, architecture: p.architecture!, ...(p.variant ? { variant: p.variant } : {}) })),
+    };
+  }
+
+  async loadImage(archive: Readable, onProgress?: (line: string) => void): Promise<{ loaded: string[] }> {
+    const stream = (await this.docker.loadImage(archive)) as unknown as NodeJS.ReadableStream;
+    const loaded: string[] = [];
+    await this.followProgress(stream, (line) => {
+      // "Loaded image: x:1" for a named image, "Loaded image ID: sha256:…" for one without.
+      const m = /^Loaded image(?: ID)?: (\S+)/.exec(line);
+      if (m) loaded.push(m[1]!);
+      onProgress?.(line);
+    }, { every: true });
+    return { loaded };
+  }
+
+  async saveImage(ref: string): Promise<Readable> {
+    return (await this.docker.getImage(ref).get()) as unknown as Readable;
+  }
+
+  async imageConfig(ref: string): Promise<ImageConfig | null> {
+    try {
+      const info = (await this.docker.getImage(ref).inspect()) as {
+        Id: string;
+        Os?: string;
+        Architecture?: string;
+        Config?: {
+          User?: string;
+          ExposedPorts?: Record<string, unknown> | null;
+          Volumes?: Record<string, unknown> | null;
+          Labels?: Record<string, string> | null;
+          WorkingDir?: string;
+        } | null;
+      };
+      return {
+        id: info.Id,
+        os: info.Os ?? '',
+        architecture: info.Architecture ?? '',
+        user: info.Config?.User ?? '',
+        exposedPorts: Object.keys(info.Config?.ExposedPorts ?? {}),
+        volumes: Object.keys(info.Config?.Volumes ?? {}),
+        labels: info.Config?.Labels ?? {},
+        workingDir: info.Config?.WorkingDir ?? '',
+      };
+    } catch (err) {
+      if (isStatusError(err, 404)) return null;
+      throw err;
+    }
+  }
+
+  async readImageFile(ref: string, file: string): Promise<Buffer | null> {
+    // Never started, so it needs no command that exists, and no network.
+    const container = await this.docker.createContainer({
+      Image: ref,
+      Entrypoint: ['/wpl7-never-runs'],
+      Cmd: [],
+      Labels: { 'wpl7.managed': 'true', 'wpl7.role': 'probe' },
+      HostConfig: { NetworkMode: 'none' },
+    });
+    // A file of up to 1 MiB, and its header blocks: /etc/passwd and /etc/group are far smaller, and
+    // the rest of a bigger one is never read into memory.
+    const most = 1024 * 1024 + 16 * 512;
+    try {
+      for (let hops = 0, wanted = file; hops < 2; hops++) {
+        let tar: Buffer;
+        try {
+          const stream = (await container.getArchive({ path: wanted })) as unknown as NodeJS.ReadableStream;
+          const chunks: Buffer[] = [];
+          let bytes = 0;
+          for await (const chunk of stream) {
+            bytes += (chunk as Buffer).length;
+            if (bytes > most) throw new Error(`The image's ${file} is larger than 1 MiB, more than the panel reads: give the image's USER as numbers (uid:gid).`);
+            chunks.push(chunk as Buffer);
+          }
+          tar = Buffer.concat(chunks);
+        } catch (err) {
+          if (isStatusError(err, 404)) return null;
+          throw err;
+        }
+        const found = fileFromTar(tar, wanted);
+        if (!found) return null;
+        if ('data' in found) return found.data;
+        // A link, followed once: /etc/passwd is one in some images.
+        wanted = found.link.startsWith('/') ? found.link : `${wanted.slice(0, wanted.lastIndexOf('/'))}/${found.link}`;
+      }
+      return null;
+    } finally {
+      // `v`: creating it made an anonymous volume for each of the image's VOLUME paths.
+      await container.remove({ force: true, v: true }).catch(() => undefined);
+    }
+  }
+
+  async serverPlatform(): Promise<ServerPlatform> {
+    const info = (await this.docker.info()) as { OSType?: string; Architecture?: string };
+    return { os: info.OSType ?? 'linux', arch: normalArch(info.Architecture ?? '') };
+  }
+
+  private followProgress(stream: NodeJS.ReadableStream, onProgress?: (line: string) => void, opts: { every?: boolean } = {}): Promise<void> {
     let lastEmit = 0;
     return new Promise((resolve, reject) => {
       this.docker.modem.followProgress(
@@ -1219,7 +1431,7 @@ export class DockerService implements DockerPort {
         (event: { stream?: string; status?: string; progress?: string; error?: string }) => {
           if (!onProgress) return;
           const now = Date.now();
-          if (now - lastEmit < 5000 && !event.error) return; // throttle to ~1 line / 5s
+          if (!opts.every && now - lastEmit < 5000 && !event.error) return; // throttle to ~1 line / 5s
           const line = event.error ?? event.stream?.trim() ?? [event.status, event.progress].filter(Boolean).join(' ');
           if (line) {
             lastEmit = now;

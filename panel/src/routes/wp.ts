@@ -30,10 +30,11 @@ import type { RunResult } from '../services/docker.js';
 import { godmodeAnswer } from '../services/wp.js';
 import { clearAfterChange, wpCliOnlyReads } from '../services/siteCaches.js';
 import type { AppDeps } from './deps.js';
+import { hasShell } from '../services/appProbe.js';
 import type { SiteRow } from '../db/schema.js';
 import type { ServerHandle } from '../servers/registry.js';
 import { ContainerBackend, backendFor, type SiteBackend } from '../services/siteBackend.js';
-import { isExternal, type SiteApps } from '../lib/siteKind.js';
+import { isContainerApp, isExternal, type SiteApps } from '../lib/siteKind.js';
 
 // Addressing an existing site: no reserved-name check, see siteSlugParam.
 const slugParams = z.object({ slug: siteSlugParam });
@@ -549,8 +550,13 @@ export function registerWpRoutes(app: FastifyInstance, deps: AppDeps): void {
   );
 
   r.post('/api/sites/:slug/shell', { schema: { params: slugParams, body: siteShellBody } }, async (req, reply) => {
-    // Any site's: a command in its folder, which a PHP site has as much as a WordPress one.
-    const { site } = await requireRunningSite(req.params.slug, 'any');
+    // A command in the site's folder, which a PHP site has as much as a WordPress one. A container
+    // app's runs as its own user in its own working directory, when its image has a shell at all.
+    const { site, server } = await requireRunningSite(req.params.slug, 'any');
+    if (isContainerApp(site)) {
+      const shell = await hasShell(server.docker, site.containerName, deps.apps.settingsOf(site.id).runAs);
+      if (!shell) throw conflict("This app's image has no shell (sh and timeout) to run a command with.");
+    }
     const job = deps.worker.enqueue(
       'site.shell',
       { siteId: site.id, command: req.body.command, timeoutMin: req.body.timeoutMin },

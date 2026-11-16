@@ -7,6 +7,7 @@ import type { SiteLimits } from '../../shared/types.js';
 import type { ContainerLimits, DockerPort, SiteContainerSpec } from './docker.js';
 import type { DnsService } from './dns.js';
 import { conflict } from '../lib/errors.js';
+import { assertSiteImage } from '../lib/siteKind.js';
 import { traefikLabels } from './labels.js';
 import type { PanelSettings } from './settings.js';
 import { siteNetworkName, siteNetworksFor } from './siteNetwork.js';
@@ -307,6 +308,8 @@ export async function siteContainerSpec(
   runtime: SiteRuntime,
   opts: { routing?: boolean; from?: { imageId: string; stack: SiteStack } } = {},
 ): Promise<SiteContainerSpec> {
+  // A container app's container is made from its own image (services/appSpec.ts): never this one.
+  assertSiteImage(site);
   // The guard for a server that still has an image from before PHP sites, whichever job asked.
   if (site.app === 'php' && !(await imageRunsPhp(server.docker, opts.from?.imageId ?? siteImage(site.phpVersion)))) {
     throw phpImageRefusal(server.row.name);

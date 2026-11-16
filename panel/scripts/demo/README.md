@@ -1,10 +1,10 @@
 # The demo world
 
-A fictional, well-used WPL7 install: three servers, twelve sites and one deleted one, backups
-and an encrypted offsite destination, jobs in every state, mail traffic, security findings,
-admins, API keys and two AI apps connected over MCP. It is the real panel - its routes, services
-and web app - over the test suite's fakes (`test/helpers.ts` `makeWorld`): in-memory SQLite, fake
-Docker, fake servers, no network.
+A fictional, well-used WPL7 install: three servers, thirteen sites (one a container app) and one
+deleted one, backups and an encrypted offsite destination, jobs in every state, mail traffic,
+security findings, admins, API keys and two AI apps connected over MCP. It is the real panel - its
+routes, services and web app - over the test suite's fakes (`test/helpers.ts` `makeWorld`):
+in-memory SQLite, fake Docker, fake servers, no network.
 
 ```bash
 npm run build:web -- --outDir /tmp/wpl7-web --emptyOutDir   # any folder; not web/dist if a dev API serves it
@@ -47,6 +47,7 @@ The docs' screenshots are taken from it: `npm run shoot` in `docs/site`.
 | `accounts.ts` | admins, API keys and their activity, MCP connections, settings |
 | `recipes.ts`, `ftp.ts`, `terminal.ts` | license keys, an FTP login, the terminal's session |
 | `databases.ts` | each site's tables for the database browser, a database added to one site, one no site uses, and each server's sizes |
+| `apps.ts` | a container app: its routes (three on a WordPress site's domain), environment, mount, deploys and log |
 
 A page shows something wrong or empty: find the endpoint it calls (`web/src/api/hooks.ts`) and
 seed what that reads. `DEMO_DEBUG=1` logs every container command nothing answers.

@@ -109,8 +109,9 @@ addresses already stored. See [Visitor statistics](/docs/sites/visitors/).
 
 <Since v="0.3.0-beta.3" /> **Send alerts to** is where the panel emails you. Empty, alerts only go
 to the panel's log. Suspended mail, malware findings, failed offsite copies, a server low on disk
-and new releases are always sent there. A server is low on disk with less than 10% of it free, and
-fine again at 15%. Four switches, all on by default, add these:
+and new releases are always sent there, and so is a new image waiting for a container app that asks
+first. A server is low on disk with less than 10% of it free, and fine again at 15%. Five switches,
+all on by default, add these:
 
 | Switch | Emails when |
 |---|---|
@@ -118,6 +119,7 @@ fine again at 15%. Four switches, all on by default, add these:
 | **New vulnerabilities** | A scan finds a known vulnerability not emailed before |
 | **Failed backups** | A backup fails, at most once a day per site |
 | **External sites: WPL7 Connect not answering, certificate expiring** | The plugin of a [site hosted elsewhere](/docs/sites/external/) misses three hourly checks, and a week before that site's certificate expires |
+| **Container apps: a deploy that failed** | A [container app](/docs/sites/container/)'s new image does not go in, once per image |
 
 Each alert is sent once, and kept track of across restarts. One the mail relay does not take is
 tried again at the next check, ten minutes later at the earliest. A site that is back up, or a

@@ -5,39 +5,9 @@
  * with a DNS provider wrote no access log at all - no visitor statistics there, and nothing for
  * the attack detection to read. Its resolvers are in the base file now, on every server.
  */
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { TOKEN_FILE_IN_TRAEFIK, tokenFilePath } from '../../src/services/traefikDns.js';
-
-const DEPLOY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../deploy');
-
-/** One key of the `traefik` service (`command:`, `environment:`, `volumes:`), as written: quotes stripped, comments skipped. */
-function traefikList(file: string, key: string): string[] {
-  const lines = fs.readFileSync(path.join(DEPLOY, file), 'utf8').split('\n');
-  const items: string[] = [];
-  let inTraefik = false;
-  let inKey = false;
-  for (const line of lines) {
-    if (/^ {2}\S/.test(line)) {
-      inTraefik = /^ {2}traefik:\s*$/.test(line);
-      inKey = false;
-      continue;
-    }
-    if (!inTraefik) continue;
-    if (/^ {4}\S/.test(line)) {
-      inKey = new RegExp(`^ {4}${key}:\\s*$`).test(line);
-      continue;
-    }
-    if (!inKey || /^\s*#/.test(line)) continue;
-    const item = /^\s+-\s+"?(.*?)"?\s*$/.exec(line) ?? /^ {6}(\S.*?)\s*$/.exec(line);
-    if (item) items.push(item[1]!);
-  }
-  return items;
-}
-
-const traefikFlags = (file: string) => traefikList(file, 'command');
+import { traefikFlags, traefikList } from '../composeFile.js';
 
 /** What the dev overlay leaves out on purpose: it serves plain HTTP on :80, with no ACME at all. */
 const DEV_ONLY_HTTP = [/^--entrypoints\.web\.http\.redirections\./, /^--entrypoints\.websecure\./, /^--certificatesresolvers\./];
@@ -49,6 +19,12 @@ describe('Traefik flags in the compose files', () => {
     expect(base).toContain('--accesslog=true');
     expect(base).toContain('--providers.file.directory=/etc/traefik/dynamic');
     expect(base.length).toBeGreaterThan(15);
+  });
+
+  it('lets a container app answer plain http: the redirect yields to any router on web', () => {
+    // The panel reads this off a server's running Traefik before it takes an http route there
+    // (services/appRoutes.ts plainHttpRefusal).
+    expect(base).toContain('--entrypoints.web.http.redirections.entrypoint.priority=1');
   });
 
   it('keeps every base flag in the dev overlay except the TLS ones', () => {

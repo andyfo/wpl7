@@ -145,6 +145,8 @@ export interface ScheduleActionInfo {
 
 /** Why a PHP site is left out of a run of an action that needs WordPress. */
 export const PHP_SITE_SKIP = 'is a PHP site: it has no WordPress';
+/** The same for a container app, which runs an image of its own. */
+export const CONTAINER_APP_SKIP = 'is a container app: it has no WordPress';
 
 const SITE_TARGETS = ['sites', 'server', 'all'] as const;
 

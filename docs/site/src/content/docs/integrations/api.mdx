@@ -124,6 +124,13 @@ These steps need a Full key.
 The site keeps its hostnames. With a Cloudflare token, the panel updates their DNS records.
 Without one, the job log names the records to change, and the old server forwards traffic meanwhile.
 
+## Deploy a container app from CI
+
+A [container app](/docs/sites/container/)'s deploy hook needs no key. Its CI sends the app's own token
+in the `X-WPL7-Deploy-Token` header to `POST /api/hooks/app-deploy`, and the app deploys what its
+reference names. A key with Full access makes the token, which is shown once. An app that runs an
+uploaded image has no deploy hook.
+
 ## Limits
 
 - A key belongs to the panel, not to a person. Two-factor authentication does not apply to it, and
@@ -131,7 +138,7 @@ Without one, the job log names the records to change, and the old server forward
 - A Manage key can read whatever a site holds, license keys included. What it creates inside a site
   stays after you revoke it.
 - The activity log keeps at most the newest 100,000 requests.
-- There are no webhooks. Your tool polls jobs.
+- The panel sends no webhooks. Your tool polls jobs.
 
 ## Related
 

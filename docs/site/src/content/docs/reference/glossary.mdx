@@ -46,6 +46,10 @@ A file's fingerprint, which [malware scans](/docs/security/malware-scans/) compa
 
 The ten minutes after an admin chooses **Connect an app** on **Integrations → MCP**, the only time an AI app can sign in and be approved, as [AI apps over MCP](/docs/integrations/mcp/) explains.
 
+## Container app
+
+A site that runs one container from an image built elsewhere, with routes, a database, secrets and deploys behind a health check, as [Container apps](/docs/sites/container/) explains.
+
 ## Destination
 
 A place [offsite copies](/docs/backups/offsite/) go to: Amazon S3 or S3-compatible storage, an SFTP, FTP or WebDAV server, or another rclone remote.
@@ -184,7 +188,7 @@ A machine that runs the WPL7 stack, either the panel's own server or a worker, a
 
 ## Site
 
-One WordPress install or [PHP site](/docs/sites/php/) the panel manages, with its own container, database, network and files on one of the servers. A PHP site's database is optional. A WordPress install can also run on another host, as an [external site](#external-site). [The Sites list](/docs/sites/overview/) shows them all.
+One WordPress install, [PHP site](/docs/sites/php/) or [container app](#container-app) the panel manages, with its own container, database, network and files on one of the servers. A PHP site's database is optional. A WordPress install can also run on another host, as an [external site](#external-site). [The Sites list](/docs/sites/overview/) shows them all.
 
 ## Site protection
 

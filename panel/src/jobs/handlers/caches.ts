@@ -43,7 +43,7 @@ async function matchRedis(ctx: JobContext<unknown>, server: ServerHandle, s: Cor
  * install, and the panel never empties it (services/siteCaches.ts clearAfterChange).
  */
 export async function siteObjectCache(ctx: JobContext<z.infer<typeof siteObjectCachePayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
+  const site = loadSite(s.db, ctx.payload.siteId, { app: 'siteImage' });
   const server = s.servers.handleFor(site.serverId);
   if ((await siteContainerStack(server.docker, site.containerName)) !== 2) {
     throw new Error('This site still runs the old PHP setup, which has no object cache.');

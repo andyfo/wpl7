@@ -103,6 +103,7 @@ export async function seed(db: Db, config: Config): Promise<SeedResult> {
   s.seedRaw('alerts.siteDown', true);
   s.seedRaw('alerts.vulnerabilities', true);
   s.seedRaw('alerts.backups', true);
+  s.seedRaw('alerts.deployFailed', true);
   s.seedRaw('alerts.connector', true);
   s.seedRaw('reminders.domainLookups', true);
   s.seedRaw('site.cpuLimit', 2);

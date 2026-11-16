@@ -12,8 +12,8 @@ import type {
   DbWriteResultDto,
   SiteDatabaseDto,
 } from '../../../shared/types';
-import { api, ApiError } from './client';
-import { retryDelayMs } from '../lib/uploadPlan';
+import { api } from './client';
+import { uploadInChunks } from './chunkUpload';
 
 /** A site's databases: its own, the others it was given, and where code reaches them. */
 export const useSiteDatabases = (slug: string) =>
@@ -130,23 +130,9 @@ export async function prepareDump(file: File, onCompressing: () => void, signal?
   return blob;
 }
 
-const pause = (ms: number, signal?: AbortSignal) =>
-  new Promise<void>((resolve, reject) => {
-    const t = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(t);
-        reject(signal.reason);
-      },
-      { once: true },
-    );
-  });
-
 /**
- * Send a prepared dump to the site's server for an import, in chunks, as upload `id`. It carries on
- * from wherever the server says the upload is, so the same id sent again resumes. A chunk lost on
- * the network, or turned away for a moment (429, 5xx), is sent again after a pause.
+ * Send a prepared dump to the site's server for an import, in chunks, as upload `id` (resumable;
+ * see uploadInChunks).
  */
 export async function uploadDump(
   slug: string,
@@ -155,46 +141,7 @@ export async function uploadDump(
   onProgress: (sent: number, total: number) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const total = blob.size;
-  let offset = 0;
-  let attempt = 0;
-  onProgress(0, total);
-  while (offset < total) {
-    signal?.throwIfAborted();
-    const chunk = blob.slice(offset, offset + DB_LIMITS.chunkBytes);
-    let res: Response | null = null;
-    try {
-      res = await fetch(`/api/sites/${slug}/database-uploads/${id}?offset=${offset}&size=${total}`, {
-        method: 'PUT',
-        headers: { 'x-csrf': '1', 'content-type': 'application/octet-stream' },
-        body: chunk,
-        credentials: 'same-origin',
-        signal,
-      });
-    } catch (err) {
-      if (signal?.aborted || attempt >= 5) throw err;
-    }
-    if (res) {
-      const json = (await res.json().catch(() => null)) as
-        | { received?: number; error?: { code: string; message: string; details?: { received?: number } } }
-        | null;
-      if (res.status === 409 && typeof json?.error?.details?.received === 'number') {
-        offset = json.error.details.received;
-        onProgress(offset, total);
-        continue;
-      }
-      if (res.ok) {
-        attempt = 0;
-        offset = json?.received ?? offset + chunk.size;
-        onProgress(offset, total);
-        continue;
-      }
-      if ((res.status < 500 && res.status !== 429) || attempt >= 5) {
-        throw new ApiError(res.status, json?.error?.code ?? 'internal', json?.error?.message ?? `HTTP ${res.status}`);
-      }
-    }
-    await pause(retryDelayMs(attempt++), signal);
-  }
+  await uploadInChunks((offset, size) => `/api/sites/${slug}/database-uploads/${id}?offset=${offset}&size=${size}`, blob, DB_LIMITS.chunkBytes, onProgress, signal);
 }
 
 /** Throw away an upload that will not be imported (the dialog was closed half-way). */

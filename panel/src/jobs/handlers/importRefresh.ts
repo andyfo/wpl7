@@ -156,7 +156,7 @@ export async function siteImportRefresh(ctx: JobContext<z.infer<typeof siteImpor
   const report = s.imports.reportOf(row);
   const choices = row.choices ? (JSON.parse(row.choices) as ImportRunBody) : null;
   if (!report || !choices) throw new Error(`Import #${row.id} has no record of the old site`);
-  let site = loadSite(s.db, row.siteId);
+  let site = loadSite(s.db, row.siteId, { app: 'wordpress' });
   const server = s.servers.handleFor(site.serverId);
   const paths = sitePaths(s.config, site.slug);
   const url = siteUrl(s.config, siteDomains(site)[0]!);
@@ -287,7 +287,7 @@ export async function siteImportRefresh(ctx: JobContext<z.infer<typeof siteImpor
     s.imports.listings.carry(row.id, [...carried, ...unlisted]);
     s.imports.listings.promote(row.id);
     site = loadSite(s.db, site.id);
-    await writeSiteJson(server, s.config, site).catch(() => undefined);
+    await writeSiteJson(server, s, site).catch(() => undefined);
     try {
       await s.backup.create(site, 'import', {
         note: `refreshed from ${ctx.payload.sourceHost}`,

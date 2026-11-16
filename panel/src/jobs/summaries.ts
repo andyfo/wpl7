@@ -179,6 +179,24 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
         return str(p.sourceHost) ? `From ${str(p.sourceHost)}` : null;
       case 'site.shell':
         return str(p.command) ? maskShell(str(p.command)!) : null;
+      case 'app.mountUpload':
+        return str(p.mount) ? `Into ${str(p.mount)}` : null;
+      case 'app.deploy': {
+        const why =
+          p.origin === 'rollback'
+            ? `Roll back to deploy #${num(p.deployId) ?? '?'}`
+            : p.origin === 'auto'
+              ? 'A new image under its tag'
+              : p.origin === 'hook'
+                ? 'From its deploy hook'
+                : p.origin === 'upload'
+                  ? 'An uploaded image'
+                  : p.origin === 'user'
+                    ? 'Deploy now'
+                    : null;
+        if (!why) return null;
+        return p.backupFirst === true ? `${why}, after a backup` : why;
+      }
       case 'backup.create': {
         const kind = p.type === 'manual' ? 'Manual' : p.type === 'scheduled' ? 'Scheduled' : null;
         const note = str(p.note);

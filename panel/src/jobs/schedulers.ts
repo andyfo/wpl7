@@ -139,6 +139,8 @@ export class Schedulers {
   private readonly bootedAt = Date.now();
   /** When the site-networks task last looked for containers without the protection mounts. */
   private hardeningSweptAt = 0;
+  /** When app-updates last cleared old image and mount uploads. */
+  private uploadsSweptAt = 0;
   /** The intervals in force: read once, like the timers that use them. */
   private readonly uptimeMs: number;
   private readonly statsMs: number;
@@ -482,6 +484,8 @@ export class Schedulers {
             this.hardeningSweptAt = Date.now();
             await sweepHardening(s, this.worker);
             await sweepSiteImages(s, this.worker);
+            // A container app a stopped panel left without its container, or with its old one aside.
+            await s.apps.sweep(this.worker);
             // A release that renders a site's runtime files differently.
             sweepSiteRuntime(s, this.worker);
             await sweepPhpReleases(s);
@@ -489,6 +493,40 @@ export class Schedulers {
             await sweepWildcardSites(s, this.worker);
           }
           return result;
+        },
+      },
+      {
+        key: 'app-updates',
+        group: 'jobs',
+        name: 'Container app updates',
+        description:
+          "Asks each container app's registry, when its interval has passed, which image its tag names now. A new one is deployed (Automatic) or offered (Ask first). Also deploys an app whose deploy hook was called while it was busy, and clears image and mount uploads nobody used within a day.",
+        pausable: true,
+        pauseWarning: 'No container app is deployed by itself or by its hook until you resume. Deploy now still works.',
+        cadence: () => ({ everyMs: MIN, text: "Every minute, each app at its own interval" }),
+        tick: async () => {
+          if (Date.now() - this.uploadsSweptAt >= 60 * MIN) {
+            this.uploadsSweptAt = Date.now();
+            await s.apps.removeStaleUploads().catch(() => 0);
+            await s.apps.removeStaleMountUploads().catch(() => 0);
+          }
+          const { checked, queued } = await s.apps.updatesTick();
+          if (checked === 0 && queued === 0) return { idle: true };
+          return { message: `Checked ${plural(checked, 'app')}${queued > 0 ? `, queued ${plural(queued, 'deploy')}` : ''}` };
+        },
+      },
+      {
+        key: 'app-routes',
+        group: 'background',
+        name: 'Container app routes',
+        description:
+          "Keeps each server's routes files of container apps in line with their settings: writes what changed, and removes the files of apps that no longer run there.",
+        pausable: false,
+        lockedReason: 'It puts an app\'s routes back on a server that lost them, and takes a stopped app\'s away.',
+        cadence: () => ({ everyMs: MIN, text: 'Every minute, and right after each change' }),
+        tick: async () => {
+          const { servers } = await s.appRoutes.tick();
+          return servers > 0 ? { message: `Checked ${plural(servers, 'server')}` } : { idle: true };
         },
       },
       {
@@ -617,6 +655,9 @@ export class Schedulers {
       // Site protection: every change kicks its own server at once; the tick is for what the
       // panel did not do itself - a file deleted by hand, a server that was unreachable.
       every('site-protection', MIN),
+      // Container apps' routes files, the same way; and their registries, each app at its own interval.
+      every('app-routes', MIN),
+      every('app-updates', MIN),
       // Blocked addresses: blocks that ran out, and servers whose list changed or rebooted.
       every('blocked-addresses', MIN),
       // Traefik's copy of the Cloudflare token: a change kicks every server at once; the tick is

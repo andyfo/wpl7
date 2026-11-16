@@ -179,7 +179,7 @@ export function route(config: DynamicConfig | null, req: SimRequest, labelHosts:
   if (!found) throw new Error(`Nothing routes ${req.host}${req.path}`);
   const [name, router] = found;
   const mws = router.middlewares ?? [];
-  const defs = mws.map((m) => config?.http.middlewares[m]) as (TraefikMiddleware | undefined)[];
+  const defs = mws.map((m) => config?.http.middlewares?.[m]) as (TraefikMiddleware | undefined)[];
   if (defs.some((d) => d && 'ipAllowList' in d)) return { router: name, answer: 'refused', middlewares: mws };
   const limit = defs.find((d): d is Extract<TraefikMiddleware, { rateLimit: unknown }> => !!d && 'rateLimit' in d);
   if (limit) {

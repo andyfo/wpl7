@@ -20,9 +20,10 @@ import {
   siteUrl,
   startSiteContainer,
   updateSiteRow,
+  stopGraceOf,
 } from './shared.js';
 import { sites } from '../../db/schema.js';
-import { hasDatabase, isExternal, isPhpSite } from '../../lib/siteKind.js';
+import { hasDatabase, isContainerApp, isExternal, isPhpSite } from '../../lib/siteKind.js';
 import { imageRunsPhp, siteImage } from '../../services/siteSpec.js';
 import { assertOwnDatabaseFree, createOwnDatabase } from './databases.js';
 
@@ -105,6 +106,8 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
     // The site's own database is made below when the backup has one and the site has none: a name
     // taken on the server stops the restore here, with nothing changed.
     if (backup.hasDatabase === 1 && !hasDatabase(site)) await assertOwnDatabaseFree(server, site);
+    // A container app's image, as the backup names it: on the server, or pulled now, before anything changes.
+    const appImage = isContainerApp(site) ? await (await import('./apps.js')).backupImage(ctx, s, server, site, firstLook) : null;
 
     if (!ctx.payload.skipPreRestoreBackup) {
       ctx.info('Taking pre-restore safety backup…');
@@ -120,7 +123,7 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
 
     ctx.info('Stopping site…');
     touched = true;
-    await server.docker.stopContainer(site.containerName);
+    await server.docker.stopContainer(site.containerName, stopGraceOf(s.db, site));
 
     // A PHP site's database is optional, on either side. The database's owner is the row as it is
     // once that is settled: a site made without one has it from here on.
@@ -174,6 +177,13 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
     // then cost the site its container the next time one is created.
     await ensureSiteMountSources(server, s, loadSite(s.db, site.id), ctx);
     await attachSiteNetwork(ctx, server, site.slug);
+    // Its image, its routes and its health path: nothing of a PHP version, a table prefix or URLs.
+    if (appImage) {
+      await (await import('./apps.js')).restoreAppContainer(ctx, s, server, loadSite(s.db, site.id), appImage);
+      ctx.info('Restore complete.');
+      ctx.setResult({ backupId: backup.id });
+      return;
+    }
 
     // Optionally move back to the PHP version the backup was taken with.
     const manifest = await readManifest(s, backup.serverId, backup.path);
@@ -184,7 +194,7 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
     }
     const offered = s.settings.get('phpVersions') ?? [];
     const recreate: { phpVersion?: string; tablePrefix?: string } = {};
-    if (manifest?.phpVersion && manifest.phpVersion !== site.phpVersion) {
+    if (!isContainerApp(site) && manifest?.phpVersion && manifest.phpVersion !== site.phpVersion) {
       if (!offered.includes(manifest.phpVersion)) {
         ctx.warn(
           `Backup was taken on PHP ${manifest.phpVersion}, which is no longer offered; keeping PHP ${site.phpVersion}.`,
@@ -202,7 +212,7 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
     // site's prefix, unless the slug once belonged to a deleted site whose backups it now restores.
     // WordPress's tables only: a PHP site's app names its own.
     const backupPrefix = manifest?.tablePrefix;
-    if (!isPhpSite(site) && backupPrefix && TABLE_PREFIX_RE.test(backupPrefix) && backupPrefix !== site.tablePrefix) {
+    if (site.app === 'wordpress' && backupPrefix && TABLE_PREFIX_RE.test(backupPrefix) && backupPrefix !== site.tablePrefix) {
       ctx.info(`The backup's tables start with ${backupPrefix}, not ${site.tablePrefix}; recreating the container to match…`);
       recreate.tablePrefix = backupPrefix;
     }
@@ -223,7 +233,7 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
 
     // After that recreate: it can be what takes the site to stack 2. A backup can be older than that,
     // and then its .user.ini files never ran.
-    await migrateArrivedFiles(ctx, server, s, loadSite(s.db, site.id), { inForce: manifest?.stack === 2 });
+    if (!isContainerApp(site)) await migrateArrivedFiles(ctx, server, s, loadSite(s.db, site.id), { inForce: manifest?.stack === 2 });
 
     ctx.info('Starting site…');
     await startSiteContainer(server, s, site, ctx);
@@ -233,7 +243,7 @@ export async function backupRestore(ctx: JobContext<z.infer<typeof backupRestore
     // own config is its own to change.
     const currentPrimary = siteDomains(site)[0]!;
     const backupPrimary = manifest?.domains?.[0];
-    if (isPhpSite(site) && backupPrimary && backupPrimary !== currentPrimary) {
+    if (site.app !== 'wordpress' && backupPrimary && backupPrimary !== currentPrimary) {
       ctx.info(`The backup used ${backupPrimary}. If the site's own config names its address, change it there to ${currentPrimary}.`);
     } else if (backupPrimary && backupPrimary !== currentPrimary) {
       const oldUrl = siteUrl(s.config, backupPrimary);

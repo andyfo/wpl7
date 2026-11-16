@@ -2,7 +2,7 @@
 title: Panel, settings and keys
 description: What the pickers offer, what the schedules are, and the credentials this page manages.
 sidebar:
-  order: 2.22
+  order: 2.23
 sources:
   - panel/shared/apiDocs.ts
 ---

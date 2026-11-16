@@ -17,13 +17,15 @@ import type { ServerHandle } from '../../servers/registry.js';
 import { httpProbe, httpProbeAttempts, type ProbeAttempt, type ProbeOpts } from '../../lib/httpProbe.js';
 import type { RecipeHook } from '../../../shared/recipes.js';
 import type { HookVars, RecipeOutcome } from '../../services/licenses.js';
-import { hasDatabase, isExternal, isPhpSite, type SiteApps, type SiteKinds } from '../../lib/siteKind.js';
+import { hasDatabase, isContainerApp, isExternal, isPhpSite, type SiteApps, type SiteKinds } from '../../lib/siteKind.js';
+import { appRows, ensureAppFolders, runningReference } from '../../services/appSpec.js';
 
 /**
  * The site a job works on. An external site is refused unless the job is one that works for both
  * kinds and says so: a job written for hosted sites must never reach Docker with one. A PHP site
- * is refused by a job for WordPress only, which says so with `{ app: 'wordpress' }`: the second
- * line behind the routes' own refusal.
+ * or a container app is refused by a job for WordPress only, which says so with
+ * `{ app: 'wordpress' }`, and a container app by a job for the site image (`{ app: 'siteImage' }`):
+ * the second line behind the routes' own refusal.
  */
 export function loadSite(db: Db, siteId: number, opts: { kinds?: SiteKinds; app?: SiteApps } = {}): SiteRow {
   const site = db.select().from(sites).where(eq(sites.id, siteId)).get();
@@ -31,8 +33,14 @@ export function loadSite(db: Db, siteId: number, opts: { kinds?: SiteKinds; app?
   if ((opts.kinds ?? 'hosted') === 'hosted' && isExternal(site)) {
     throw new Error(`"${site.slug}" is an external site: this job works only for sites the panel hosts.`);
   }
-  if (opts.app === 'wordpress' && isPhpSite(site)) {
-    throw new Error(`"${site.slug}" is a PHP site: this job works only for WordPress sites.`);
+  if (opts.app === 'wordpress' && site.app !== 'wordpress') {
+    throw new Error(`"${site.slug}" is ${site.app === 'php' ? 'a PHP site' : 'a container app'}: this job works only for WordPress sites.`);
+  }
+  if (opts.app === 'siteImage' && isContainerApp(site)) {
+    throw new Error(`"${site.slug}" is a container app: this job works only for sites on the site image.`);
+  }
+  if (opts.app === 'container' && !isContainerApp(site)) {
+    throw new Error(`"${site.slug}" is not a container app.`);
   }
   return site;
 }
@@ -142,8 +150,14 @@ export function probeSiteAttempt(
 /** How a site's probe is to read its answer: a PHP site's own 4xx is an answer (lib/httpProbe.ts). */
 export const probeOptsFor = (site: Pick<SiteRow, 'app'>): ProbeOpts => (isPhpSite(site) ? { siteOwn4xx: true } : {});
 
-export async function writeSiteJson(server: ServerHandle, config: Config, site: SiteRow): Promise<void> {
+/**
+ * The site's own description of itself, beside its files. A container app's carries its settings
+ * too, without a secret: no registry token, no environment value (services/apps.ts).
+ */
+export async function writeSiteJson(server: ServerHandle, s: Pick<CoreServices, 'config' | 'db'>, site: SiteRow): Promise<void> {
+  const config = s.config;
   const p = sitePaths(config, site.slug);
+  const app = isContainerApp(site) ? appRows(s.db, site.id) : null;
   const manifest = {
     slug: site.slug,
     title: site.title,
@@ -160,6 +174,19 @@ export async function writeSiteJson(server: ServerHandle, config: Config, site: 
     tablePrefix: site.tablePrefix,
     containerName: site.containerName,
     serverId: site.serverId,
+    ...(app
+      ? {
+          container: {
+            source: app.settings.source,
+            // The one its digest came by, as the backup's manifest has it: the app's own may name another repository since.
+            reference: runningReference(s.db, app.settings),
+            digest: app.settings.digest,
+            imageId: app.settings.imageId,
+            port: app.settings.port,
+            mounts: app.mounts.map((m) => ({ name: m.name, path: m.containerPath, writable: m.writable === 1, inBackups: m.inBackups === 1 })),
+          },
+        }
+      : {}),
     updatedAt: new Date().toISOString(),
   };
   await server.files.mkdirp(p.root);
@@ -227,6 +254,12 @@ export async function ensureSiteMountSources(
   site: Pick<SiteRow, 'id' | 'slug' | 'mailPassword' | 'app' | 'webRoot'>,
   ctx?: Pick<JobContext<unknown>, 'warn'>,
 ): Promise<void> {
+  // A container app binds none of these, only its own folders, owned by the user it runs as.
+  if (isContainerApp(site)) {
+    const rows = appRows(s.db, site.id);
+    if (rows) await ensureAppFolders(server.files, s.config, site, rows.settings, rows.mounts);
+    return;
+  }
   const p = sitePaths(s.config, site.slug);
   await server.files.mkdirp(p.configDir);
 
@@ -286,11 +319,11 @@ export async function siteShouldRun(
  * Remove a site's container for good, with the old one a change may have left aside
  * (replaceContainer): for a site that leaves a server, or a leftover where one arrives. Left
  * behind, that old container would come back as the site's at its next change, and on a slug
- * used again, as another site's.
+ * used again, as another site's. `volumes` for a container app's (DockerPort removeContainer).
  */
-export async function removeSiteContainers(docker: Pick<DockerPort, 'removeContainer'>, containerName: string): Promise<void> {
-  await docker.removeContainer(asideContainerName(containerName));
-  await docker.removeContainer(containerName);
+export async function removeSiteContainers(docker: Pick<DockerPort, 'removeContainer'>, containerName: string, opts?: { volumes?: boolean }): Promise<void> {
+  await docker.removeContainer(asideContainerName(containerName), opts);
+  await docker.removeContainer(containerName, opts);
 }
 
 /** A site, as much of it as the mount helpers need. */
@@ -320,7 +353,16 @@ export async function restartSiteContainer(
   ctx?: Pick<JobContext<unknown>, 'warn'>,
 ): Promise<void> {
   await ensureSiteMountSources(server, s, site, ctx);
-  await server.docker.restartContainer(site.containerName);
+  await server.docker.restartContainer(site.containerName, stopGraceOf(s.db, site));
+}
+
+/**
+ * How long a stop of the site's container waits for it to end: a container app's own grace, so a
+ * worker in it can finish; undefined for every other site, which keeps Docker's call's default.
+ */
+export function stopGraceOf(db: Db, site: Pick<SiteRow, 'id' | 'app'>): number | undefined {
+  if (!isContainerApp(site)) return undefined;
+  return appRows(db, site.id)?.settings.stopGraceSec;
 }
 
 /** Create/repair the site's network and report infrastructure that could not be attached. */
@@ -379,8 +421,9 @@ export async function rewriteWordPressUrls(
   /** `skipExtensions`: the rewrite itself runs with the site's plugins and theme left out (WpService). */
   opts: { inside?: (container: string) => Promise<void>; skipExtensions?: boolean } = {},
 ): Promise<void> {
-  // A PHP site has no WordPress to rewrite; its callers skip it, and nothing is started for it.
-  if (isPhpSite(site)) return;
+  // A PHP site and a container app have no WordPress to rewrite; their callers skip them, and
+  // nothing is started for them.
+  if (site.app !== 'wordpress') return;
   // wp-cli runs via `docker exec`, so the container has to be up. Skipping the rewrite
   // for a stopped site left it flagged live while WordPress still redirected every
   // request to the old dev URL - visible only once someone started it again.
@@ -431,8 +474,8 @@ export async function runLicenseHook(
   vars: HookVars,
   opts: { only?: string } = {},
 ): Promise<RecipeOutcome[]> {
-  // Recipes are for WordPress plugins: a PHP site has none to activate. Its callers skip it too.
-  if (isPhpSite(site)) return [];
+  // Recipes are for WordPress plugins: a PHP site or a container app has none. Their callers skip them too.
+  if (site.app !== 'wordpress') return [];
   try {
     return await s.licenses.runHook(server, site, hook, vars, { info: (m) => ctx.info(m), warn: (m, w) => ctx.warn(m, w) }, opts);
   } catch (err) {

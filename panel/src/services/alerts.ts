@@ -102,7 +102,7 @@ export function duration(ms: number): string {
 export class AlertService {
   constructor(private readonly s: AlertDeps) {}
 
-  private enabled(key: 'alertsSiteDown' | 'alertsVulnerabilities' | 'alertsBackups' | 'alertsConnector'): boolean {
+  private enabled(key: 'alertsSiteDown' | 'alertsVulnerabilities' | 'alertsBackups' | 'alertsConnector' | 'alertsDeployFailed'): boolean {
     return this.s.settings.get(key) !== false;
   }
 
@@ -274,6 +274,46 @@ export class AlertService {
     ]);
     // One the relay did not take is tried again at the next failure.
     this.put({ key, siteId: site.id, since: row?.since ?? now, notifiedAt: outcome === 'failed' ? (row?.notifiedAt ?? null) : now, detail: clip(error) });
+  }
+
+  /**
+   * A container app's deploy that did not go through: once per image, so that a broken image under
+   * its tag, tried again, sends no second email. Its old container is back, or the email says it
+   * is not.
+   */
+  async deployFailed(site: SiteRow, deploy: { image: string; error: string; oldBack: boolean }): Promise<void> {
+    if (!this.enabled('alertsDeployFailed')) return;
+    const key = `deploy:${site.id}`;
+    const row = this.state(key);
+    if (row?.detail === deploy.image && row.notifiedAt !== null) return;
+    const outcome = await this.send(`The deploy of ${site.title} failed`, [
+      `A new image of ${this.addressOf(site)} did not go in at ${utc(Date.now())}:`,
+      deploy.image,
+      '',
+      clip(deploy.error),
+      '',
+      deploy.oldBack
+        ? 'The app goes on with the image it ran before. Its Deploys tab has the new container’s last log lines.'
+        : 'There was no container before it, so the app has none now. Its Deploys tab has the new container’s last log lines.',
+      '',
+      this.pageOf(site),
+    ]);
+    this.put({ key, siteId: site.id, since: row?.since ?? Date.now(), notifiedAt: outcome === 'failed' ? null : Date.now(), detail: deploy.image });
+  }
+
+  /** Ask first: a new image under a container app's tag, waiting for its Update. Once per image. */
+  async appUpdateWaiting(site: SiteRow, reference: string, digest: string): Promise<void> {
+    const key = `appUpdate:${site.id}`;
+    const row = this.state(key);
+    if (row?.detail === digest && row.notifiedAt !== null) return;
+    const outcome = await this.send(`A new image of ${site.title} is waiting`, [
+      `${reference} names a new image, ${digest.slice(0, 19)}…, and ${this.addressOf(site)} deploys only when asked.`,
+      '',
+      'Update on its page deploys it.',
+      '',
+      this.pageOf(site),
+    ]);
+    this.put({ key, siteId: site.id, since: row?.since ?? Date.now(), notifiedAt: outcome === 'failed' ? null : Date.now(), detail: digest });
   }
 
   /** The hourly check of WPL7 Connect on a site hosted elsewhere. */

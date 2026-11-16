@@ -1,7 +1,15 @@
 // @docs help/faq
 import { sql } from 'drizzle-orm';
 import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
-import type { SiteApp } from '../../shared/schemas.js';
+import type {
+  AppDeployOrigin,
+  AppDeployResult,
+  AppImageSource,
+  AppRouteMatch,
+  AppRouteScheme,
+  AppUpdateMode,
+  SiteApp,
+} from '../../shared/schemas.js';
 
 export const settings = sqliteTable('settings', {
   key: text('key').primaryKey(),
@@ -142,12 +150,14 @@ export const sites = sqliteTable(
      */
     kind: text('kind').notNull().default('hosted'),
     /**
-     * What a hosted site runs: 'wordpress' or 'php' (shared/schemas.ts siteApps). A PHP site has
-     * the same container with no WordPress in it: nothing is put into its folder but a placeholder
-     * page, and its database is optional. One without a database has '' in `db_name`, `db_user` and
-     * `db_password`, as an external row does (lib/siteKind.ts hasDatabase). An external site is
-     * 'wordpress'. SitesService.bySlug and the jobs' loadSite take either unless the caller asks for
-     * WordPress, and every WordPress path asks.
+     * What a hosted site runs: 'wordpress', 'php' or 'container' (shared/schemas.ts siteApps). A PHP
+     * site has the same container with no WordPress in it: nothing is put into its folder but a
+     * placeholder page, and its database is optional. One without a database has '' in `db_name`,
+     * `db_user` and `db_password`, as an external row does (lib/siteKind.ts hasDatabase). A
+     * container app runs an image of its own, with its settings in `app_settings`: its `php_version`
+     * is '' and it has no `wordpress/` folder. An external site is 'wordpress'. SitesService.bySlug
+     * and the jobs' loadSite take every app unless the caller asks for one, and every WordPress path
+     * asks for WordPress.
      */
     app: text('app').$type<SiteApp>().notNull().default('wordpress'),
     /**
@@ -1892,3 +1902,168 @@ export const siteCron = sqliteTable(
   (t) => [index('site_cron_site_idx').on(t.siteId)],
 );
 export type SiteCronRow = typeof siteCron.$inferSelect;
+
+/**
+ * A container app's own settings (sites.app = 'container'): its image, how its container runs, how
+ * it is checked and how it is kept current. One row per app. The registry token sits here in
+ * plaintext like every credential in panel.db (see backupDestinations), and the API never returns it.
+ */
+export const appSettings = sqliteTable('app_settings', {
+  siteId: integer('site_id')
+    .primaryKey()
+    .references(() => sites.id, { onDelete: 'cascade' }),
+  source: text('source').$type<AppImageSource>().notNull(),
+  /** A registry app's watched reference, `ghcr.io/example/app:stable`; '' for an uploaded one. */
+  reference: text('reference').notNull().default(''),
+  registryUser: text('registry_user').notNull().default(''),
+  /** Write-only. Read by the jobs from this row, never put into a job payload. */
+  registryToken: text('registry_token').notNull().default(''),
+  /** The registry digest of what runs, `sha256:…`; '' for an upload, or before the first deploy. */
+  digest: text('digest').notNull().default(''),
+  /** The local id of the image that runs: what an uploaded image's container is made from. */
+  imageId: text('image_id').notNull().default(''),
+  /** Ask first: the digest waiting for its Update; '' when none is. */
+  pendingDigest: text('pending_digest').notNull().default(''),
+  /** Where the container listens: the port it passed its health gate on, which the routes and checks ask. */
+  port: integer('port').notNull(),
+  /**
+   * A port staged on an app that runs (services/apps.ts patch): the next start, deploy or recreate
+   * tries it before `port`, and saves it as `port` once the app answers there. 0 = none.
+   */
+  nextPort: integer('next_port').notNull().default(0),
+  /** How long a stop waits for the container to end by itself. */
+  stopGraceSec: integer('stop_grace_sec').notNull().default(20),
+  /** '' = the image's own user; else `uid:gid`. */
+  runAs: text('run_as').notNull().default(''),
+  /** The uid and gid the image's user has, read at its deploy: who owns `data/` and `mounts/`. */
+  imageUid: integer('image_uid').notNull().default(0),
+  imageGid: integer('image_gid').notNull().default(0),
+  dropAllCaps: integer('drop_all_caps').notNull().default(0),
+  readOnlyRoot: integer('read_only_root').notNull().default(0),
+  /** JSON [{host, address}]: names the container resolves itself (ExtraHosts). */
+  extraHosts: text('extra_hosts').notNull().default('[]'),
+  /** JSON [{path, fromImage}]: the writable paths kept under `data/`, each image VOLUME among them. */
+  dataPaths: text('data_paths').notNull().default('[]'),
+  healthPath: text('health_path').notNull().default('/'),
+  /** '' = the app's primary host. */
+  healthHost: text('health_host').notNull().default(''),
+  /** Called once after the health path answers, at a deploy only; '' = none. */
+  deployCheckPath: text('deploy_check_path').notNull().default(''),
+  healthTimeoutSec: integer('health_timeout_sec').notNull().default(60),
+  updateMode: text('update_mode').$type<AppUpdateMode>().notNull().default('auto'),
+  checkMinutes: integer('check_minutes').notNull().default(15),
+  /** When the registry was last asked about the reference, and what went wrong if it failed. */
+  checkedAt: integer('checked_at'),
+  checkError: text('check_error'),
+  /** sha256 of the deploy hook's token, which is shown once (services/apps.ts). */
+  deployTokenHash: text('deploy_token_hash'),
+  deployTokenSetAt: integer('deploy_token_set_at'),
+  /** A hook call that came while the app was busy: app-updates deploys it once the app is free. */
+  deployWantedAt: integer('deploy_wanted_at'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+export type AppSettingsRow = typeof appSettings.$inferSelect;
+
+/**
+ * A container app's environment, in order. A secret value is write-only in the API. A value may hold
+ * placeholders resolved at every container create (services/appSpec.ts).
+ */
+export const appEnv = sqliteTable(
+  'app_env',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    siteId: integer('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    name: text('name').notNull(),
+    value: text('value').notNull(),
+    secret: integer('secret').notNull().default(0),
+  },
+  (t) => [uniqueIndex('app_env_site_name_idx').on(t.siteId, t.name)],
+);
+export type AppEnvRow = typeof appEnv.$inferSelect;
+
+/**
+ * A container app's routes, each its own router in the app's file in traefik/dynamic
+ * (services/appRoutes.ts), named by its id. A route on another site's domain borrows that path from
+ * it; the host is never in the app's `domains`.
+ */
+export const appRoutes = sqliteTable(
+  'app_routes',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    siteId: integer('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    host: text('host').notNull(),
+    match: text('match').$type<AppRouteMatch>().notNull(),
+    /** '' with match 'none'; starts with '/' otherwise. */
+    path: text('path').notNull().default(''),
+    scheme: text('scheme').$type<AppRouteScheme>().notNull(),
+    enabled: integer('enabled').notNull().default(1),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => [index('app_routes_site_idx').on(t.siteId), index('app_routes_host_idx').on(t.host)],
+);
+export type AppRouteRow = typeof appRoutes.$inferSelect;
+
+/**
+ * A folder of the app's, `/srv/sites/<slug>/mounts/<name>/`, mounted at a path in its container and
+ * filled from an uploaded archive. One with `in_backups` off never leaves its server in a backup.
+ */
+export const appMounts = sqliteTable(
+  'app_mounts',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    siteId: integer('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    containerPath: text('container_path').notNull(),
+    writable: integer('writable').notNull().default(0),
+    inBackups: integer('in_backups').notNull().default(1),
+    /** When its archive was last unpacked into it; NULL = empty. */
+    filledAt: integer('filled_at'),
+  },
+  (t) => [uniqueIndex('app_mounts_site_name_idx').on(t.siteId, t.name)],
+);
+export type AppMountRow = typeof appMounts.$inferSelect;
+
+/** Every deploy of a container app: what it ran, how it went, and what started it. */
+export const appDeploys = sqliteTable(
+  'app_deploys',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    siteId: integer('site_id')
+      .notNull()
+      .references(() => sites.id, { onDelete: 'cascade' }),
+    reference: text('reference').notNull().default(''),
+    digest: text('digest').notNull().default(''),
+    imageId: text('image_id').notNull().default(''),
+    startedAt: integer('started_at').notNull(),
+    tookMs: integer('took_ms'),
+    result: text('result').$type<AppDeployResult>().notNull(),
+    origin: text('origin').$type<AppDeployOrigin>().notNull(),
+    /** Who: a user's name, an API key's, `hook`, or null for the panel itself. */
+    actor: text('actor'),
+    jobId: integer('job_id'),
+    /** How long the app answered 503: from when its routes were held to the new container's pass. */
+    gapMs: integer('gap_ms'),
+    error: text('error'),
+    /** The new container's last lines, kept when it failed. */
+    logTail: text('log_tail'),
+    /**
+     * An ok deploy's port: the one its container passed the health gate on, or was made with when
+     * no gate ran (the app was stopped), or the one a later recreate, start or restore of its image
+     * moved the app to. What a roll back to it tries. 0 = not known, as for a deploy from before
+     * this was kept.
+     */
+    port: integer('port').notNull().default(0),
+  },
+  (t) => [index('app_deploys_site_idx').on(t.siteId, t.startedAt)],
+);
+export type AppDeployRow = typeof appDeploys.$inferSelect;

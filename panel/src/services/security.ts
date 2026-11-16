@@ -23,8 +23,10 @@ import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/index.js';
 import { securityNeverBlock, siteSecurity, sites, type ServerRow, type SiteRow, type SiteSecurityRow } from '../db/schema.js';
 import type { Config } from '../config.js';
+import { isContainerApp, siteImageOnly, siteImageSites } from '../lib/siteKind.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
 import { ServerUnreachableError } from '../servers/sshConnection.js';
+import { APP_ROUTER_PREFIX } from '../../shared/apps.js';
 import {
   customRulesSchema,
   effectivePolicy,
@@ -95,6 +97,32 @@ export interface SiteSecurityPatch {
 const digest = (text: string) => crypto.createHash('sha256').update(text).digest('hex');
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
+/**
+ * A line stamped this little before an app's file was written may still be about the new file:
+ * Traefik stamps its lines to the second, by its server's clock.
+ */
+const CLEAR_SLACK_MS = 2_000;
+/** A time as Traefik writes one: RFC 3339, in UTC or with an offset. */
+const RFC3339 = String.raw`\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)`;
+const COMMON_TIME_RE = new RegExp(`^(${RFC3339})\\s`);
+const JSON_TIME_RE = new RegExp(`"time"\\s*:\\s*"(${RFC3339})"`);
+/**
+ * Traefik colours its "common" log format unless told not to, in `docker logs` too: a level
+ * reads `\x1b[31mERR\x1b[0m`, which no word boundary finds, and the codes would show in a message.
+ */
+const ANSI_RE = /\x1b\[[0-9;]*m/g;
+
+/**
+ * When Traefik logged a line of its own (its colour codes taken out): its "common" format starts
+ * the line with the time, its JSON one has it as "time". Null when the line says none.
+ */
+function traefikLogTime(line: string): number | null {
+  const plain = line.trim();
+  const text = COMMON_TIME_RE.exec(plain)?.[1] ?? JSON_TIME_RE.exec(plain)?.[1];
+  if (!text) return null;
+  const ms = Date.parse(text);
+  return Number.isNaN(ms) ? null : ms;
+}
 
 /**
  * A graceful reload, asked for from inside the container. `docker kill --signal` is the obvious way,
@@ -118,6 +146,8 @@ export class SecurityService {
   private readonly pins = new Map<number, Map<number, number>>();
   /** Per site slug: what Traefik said about its routers since its file was last written. */
   private readonly rejected = new Map<string, { router: string; message: string; at: number }[]>();
+  /** Per container app slug: when its routes file was last written or removed (clearAppRouteRejections). */
+  private readonly appRoutesClearedAt = new Map<string, number>();
   /** Per site: why the protection inside its container is not what its policy says. */
   private readonly hardeningProblems = new Map<number, string>();
   /** `<serverId>:<file>` -> digest of an Apache file its check refused; not tried again as it is. */
@@ -216,7 +246,9 @@ export class SecurityService {
   /** The files a server should have: name -> content, or null to keep what is there. */
   private plan(row: ServerRow): Map<string, { siteId: number; content: string | null; problem: string | null }> {
     const pinned = this.pins.get(row.id) ?? new Map<number, number>();
-    const rows = this.db.select().from(sites).all();
+    // A container app gets no protection file: these rules are a site image's, and its routers would
+    // take every path of the app's hosts, switched-off routes included (services/appRoutes.ts).
+    const rows = this.db.select().from(sites).where(siteImageSites()).all();
     const here = rows.filter((s) => (s.serverId === row.id && s.status === 'running') || pinned.has(s.id));
     const out = new Map<string, { siteId: number; content: string | null; problem: string | null }>();
     if (here.length === 0) return out;
@@ -431,7 +463,8 @@ export class SecurityService {
     return this.db
       .select()
       .from(sites)
-      .where(and(eq(sites.serverId, serverId), eq(sites.status, 'running')))
+      // A container app has no Apache and no wp-config.php to put the protection into.
+      .where(and(eq(sites.serverId, serverId), eq(sites.status, 'running'), siteImageSites()))
       .all()
       .map((site) => {
         const { container } = effectivePolicy(fleetPolicy, this.siteInput(site.id), site.app);
@@ -445,6 +478,8 @@ export class SecurityService {
    * them, so there is nothing to reload.
    */
   async prepareHardening(handle: ServerHandle, site: Pick<SiteRow, 'id' | 'slug' | 'app' | 'webRoot'>): Promise<void> {
+    // The second line behind ensureSiteMountSources: an app has no Apache and no wp-config.php.
+    if (isContainerApp(site)) throw siteImageOnly(site.slug);
     const p = sitePaths(this.config, site.slug);
     // The web root as it is now: a job holds the row it began with, and a web root saved since must
     // not be put back by this start.
@@ -592,22 +627,51 @@ export class SecurityService {
    * exist" is a container being recreated, and not a rule's fault.
    */
   noteTraefikLog(chunk: string, now = Date.now()): void {
-    if (!chunk.includes('wpl7sec_')) return;
-    for (const line of chunk.split('\n')) {
-      if (!line.includes('wpl7sec_') || line.trimStart().startsWith('{"ClientAddr"')) continue;
+    if (!chunk.includes('wpl7sec_') && !chunk.includes('wpl7app_')) return;
+    for (const raw of chunk.split('\n')) {
+      if (!raw.includes('wpl7sec_') && !raw.includes('wpl7app_')) continue;
+      const line = raw.replace(ANSI_RE, '');
+      if (line.trimStart().startsWith('{"ClientAddr"')) continue;
       if (!/\b(ERR|ERROR|error)\b|"level":"error"/.test(line)) continue;
       if (/does not exist|not found|no such/i.test(line)) continue;
-      const match = /wpl7sec_([a-z0-9-]+)_([a-z0-9][a-z0-9-]{1,30}[a-z0-9])/.exec(line);
+      // The protection's routers, and a container app's (shared/apps.ts): both carry the slug.
+      const match = /wpl7(sec|app)_([a-z0-9-]+)_([a-z0-9][a-z0-9-]{1,30}[a-z0-9])/.exec(line);
       if (!match) continue;
-      const slug = match[2]!;
+      const slug = match[3]!;
+      let at = now;
+      if (match[1] === 'app') {
+        // The same lines come round again: the log is read from a little before its cursor, which
+        // stands still while nobody visits (services/traffic.ts). One stamped before the app's file
+        // was last written is about the file before.
+        const stamp = traefikLogTime(line);
+        const clearedAt = this.appRoutesClearedAt.get(slug);
+        if (stamp !== null && clearedAt !== undefined && stamp < clearedAt - CLEAR_SLACK_MS) continue;
+        at = stamp ?? now;
+      }
       const list = (this.rejected.get(slug) ?? []).filter((r) => r.router !== match[0]);
-      list.push({ router: match[0], message: line.trim().slice(0, 400), at: now });
+      list.push({ router: match[0], message: line.trim().slice(0, 400), at });
       this.rejected.set(slug, list.slice(-10));
     }
   }
 
   rejections(slug: string): { router: string; message: string; at: number }[] {
     return this.rejected.get(slug) ?? [];
+  }
+
+  /** What Traefik said about a container app's routers since its routes file was last written (services/appRoutes.ts). */
+  appRouteRejections(slug: string): { router: string; message: string; at: number }[] {
+    return this.rejections(slug).filter((r) => r.router.startsWith(`${APP_ROUTER_PREFIX}_`));
+  }
+
+  /**
+   * An app's routes file was written or removed: what Traefik said about the one before no longer
+   * applies, and nor does a line it logged before now, read again later (noteTraefikLog).
+   */
+  clearAppRouteRejections(slug: string, now = Date.now()): void {
+    this.appRoutesClearedAt.set(slug, now);
+    const kept = this.rejections(slug).filter((r) => !r.router.startsWith(`${APP_ROUTER_PREFIX}_`));
+    if (kept.length > 0) this.rejected.set(slug, kept);
+    else this.rejected.delete(slug);
   }
 
   // ------------------------------------------------------------------ views

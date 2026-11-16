@@ -1,7 +1,7 @@
 // @docs servers/overview, sites/overview
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { sites, type SiteRow } from '../db/schema.js';
-import { hostedSites, isExternal } from '../lib/siteKind.js';
+import { hostedSites, isContainerApp, isExternal, siteImageSites } from '../lib/siteKind.js';
 import { compareVersions } from '../lib/wpVersions.js';
 import type { DockerPort } from './docker.js';
 import type { CoreServices } from './index.js';
@@ -23,7 +23,8 @@ import { SITE_IMAGE_REPO } from './siteSpec.js';
 export async function readSitePhp(s: CoreServices, siteId: number): Promise<void> {
   const mark = s.monitor.changeMark();
   const site = s.db.select().from(sites).where(eq(sites.id, siteId)).get();
-  if (!site || isExternal(site)) return;
+  // A container app's image may carry a PHP_VERSION of its own: it has no PHP release of the panel's.
+  if (!site || isExternal(site) || isContainerApp(site)) return;
   const release = await read(s, s.servers.handleFor(site.serverId).docker, site);
   if (release === NO_ANSWER) {
     s.log.warn(`Site "${site.slug}": Docker did not say which PHP it runs in time. The hourly sweep reads it again.`);
@@ -39,7 +40,7 @@ export async function readSitePhp(s: CoreServices, siteId: number): Promise<void
 export async function sweepPhpReleases(s: CoreServices): Promise<void> {
   // Taken with the list, as the uptime check takes its own (MonitorService.tickUptime).
   const mark = s.monitor.changeMark();
-  const rows = s.db.select().from(sites).where(hostedSites()).all();
+  const rows = s.db.select().from(sites).where(and(hostedSites(), siteImageSites())).all();
   for (const server of s.servers.listRows()) {
     if (server.status === 'unreachable' || server.status === 'provisioning') continue;
     const mine = rows.filter((site) => site.serverId === server.id);

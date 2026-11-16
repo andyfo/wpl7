@@ -28,7 +28,15 @@ import type {
   ServiceOutcome,
   ServiceState,
   SiteContainerSpec,
+  RegistryAuth,
+  DistributionInfo,
+  ImageConfig,
+  ServerPlatform,
 } from '../src/services/docker.js';
+import { fileFromTar } from '../src/services/imageArchive.js';
+import { AppRoutesService } from '../src/services/appRoutes.js';
+import { AppsService } from '../src/services/apps.js';
+import { TarWriter } from '../src/lib/tarWriter.js';
 import { SPEC_LABEL, fitCpus, serviceSpecHash } from '../src/services/docker.js';
 import { APACHE_RELOAD_COMMAND } from '../src/services/security.js';
 import { CLEAR_PAGE_CACHE, FLUSH_REDIS } from '../src/services/siteCaches.js';
@@ -36,7 +44,7 @@ import { packetLimitFor, type DbAdminPort, type DbInventoryRow } from '../src/se
 import { FakeDbBrowser } from './dbBrowserFake.js';
 import { hostExec, type ExecPort, type ExecResult } from '../src/lib/exec.js';
 import { LocalFiles, type FilesPort } from '../src/lib/files.js';
-import { servers as serversTable, sites, type SiteRow } from '../src/db/schema.js';
+import { appRoutes, appSettings, servers as serversTable, sites, type SiteRow } from '../src/db/schema.js';
 import type { CoreServices } from '../src/services/index.js';
 import { ServerRegistry, type HandlePorts } from '../src/servers/registry.js';
 import { BackupService } from '../src/services/backup.js';
@@ -363,13 +371,14 @@ export class FakeDocker implements DockerPort {
     this.record('stopContainer', graceSeconds === undefined ? [name] : [name, graceSeconds]);
     if (this.containers.has(name)) this.containers.set(name, 'exited');
   }
-  async restartContainer(name: string): Promise<void> {
-    this.record('restartContainer', [name]);
+  async restartContainer(name: string, graceSeconds?: number): Promise<void> {
+    this.record('restartContainer', graceSeconds === undefined ? [name] : [name, graceSeconds]);
     if (this.enforceFileBinds) this.mountFileBinds(name);
     this.containers.set(name, 'running');
   }
-  async removeContainer(name: string): Promise<void> {
-    this.record('removeContainer', [name]);
+  /** Recorded with its options when given: whether it asked for the anonymous volumes. */
+  async removeContainer(name: string, opts?: { volumes?: boolean }): Promise<void> {
+    this.record('removeContainer', opts === undefined ? [name] : [name, opts]);
     this.containers.delete(name);
     this.bindsByContainer.delete(name);
     this.labelsByContainer.delete(name);
@@ -608,8 +617,23 @@ export class FakeDocker implements DockerPort {
     }
     throw new Error('FakeDocker has no relay: tests reach databases through a FakeDbBrowser');
   }
+  /**
+   * What a container app answers the way in (services/appProbe.ts): a status, or null for none at
+   * all. Unset, a running container answers 200 and any other none.
+   */
+  appHttp: ((req: { container: string; port: number; path: string; host: string }) => number | null) | null = null;
+  private answerProbe(opts: EphemeralOpts): RunResult {
+    const url = new URL(opts.cmd.at(-1)!);
+    const header = opts.cmd[opts.cmd.indexOf('--header') + 1] ?? '';
+    const req = { container: url.hostname, port: Number(url.port || 80), path: url.pathname, host: header.replace(/^Host:\s*/, '') };
+    const status = this.appHttp ? this.appHttp(req) : this.containers.get(req.container) === 'running' ? 200 : null;
+    if (status === null) return { stdout: '', stderr: `wget: bad address '${req.container}:${req.port}'\n`, exitCode: 1 };
+    const line = `  HTTP/1.1 ${status} ${status < 400 ? 'OK' : 'Error'}\n`;
+    return status < 400 ? { stdout: '', stderr: line, exitCode: 0 } : { stdout: '', stderr: `${line}wget: server returned error: HTTP/1.1 ${status} Error\n`, exitCode: 1 };
+  }
   async runEphemeral(opts: EphemeralOpts): Promise<RunResult> {
     this.record('runEphemeral', [opts]);
+    if (opts.labels?.['wpl7.probe']) return this.answerProbe(opts);
     // A refresh's changed files into the site's folder (importRefresh.ts), done on the fake's disk.
     if (opts.labels?.['wpl7.refresh'] && opts.entrypoint?.[0] === 'cp') {
       const from = (target: string) => opts.binds!.find((b) => b.split(':')[1] === target)!.split(':')[0]!;
@@ -684,9 +708,100 @@ export class FakeDocker implements DockerPort {
     this.record('buildImage', [tag, contextDir, buildArgs]);
     this.images.add(tag);
   }
-  async pullImage(tag: string): Promise<void> {
-    this.record('pullImage', [tag]);
+  async pullImage(tag: string, _onProgress?: (line: string) => void, opts: { auth?: RegistryAuth; platform?: string } = {}): Promise<void> {
+    this.record('pullImage', [tag, ...(opts.auth || opts.platform ? [{ ...(opts.auth ? { auth: opts.auth.username } : {}), ...(opts.platform ? { platform: opts.platform } : {}) }] : [])]);
+    const entry = this.registryEntry(tag);
+    if (entry) {
+      this.registryLogin(entry, opts.auth, tag);
+      if (!entry.platforms?.length || entry.platforms.some((p) => `${p.os}/${p.architecture}` === `${this.platform.os}/${this.platform.arch}`) || opts.platform) {
+        // A pull by digest names the image by its digest only; one by tag gives the tag the new image.
+        const id = entry.imageId ?? entry.digest;
+        this.imageIds.set(tag, id);
+        this.images.add(tag);
+        return;
+      }
+      throw Object.assign(new Error(`no matching manifest for ${this.platform.os}/${this.platform.arch} in the manifest list entries`), { statusCode: 404 });
+    }
     this.images.add(tag);
+  }
+  /**
+   * A registry, for container apps: reference (`ghcr.io/example/app:stable`, or `repo@sha256:…`)
+   * -> what it names now. An entry with a login answers only to it. `platforms` is what a list
+   * holds; empty or absent for a single image, as containerd's store answers. `imageId` is the id a
+   * pull gives the image here (the digest when absent).
+   */
+  registry = new Map<string, { digest: string; mediaType?: string; platforms?: { os: string; architecture: string }[]; login?: { username: string; password: string }; imageId?: string }>();
+  /** Put an image into the registry under a tag, and under its digest too. */
+  publish(reference: string, digest: string, entry: { platforms?: { os: string; architecture: string }[]; login?: { username: string; password: string }; imageId?: string; config?: Partial<ImageConfig> } = {}): void {
+    const repo = reference.slice(0, reference.lastIndexOf(':') > reference.lastIndexOf('/') ? reference.lastIndexOf(':') : reference.length);
+    const value = { digest, ...entry };
+    this.registry.set(reference, value);
+    this.registry.set(`${repo}@${digest}`, value);
+    if (entry.config) this.imageConfigs.set(entry.imageId ?? digest, entry.config);
+  }
+  private registryEntry(ref: string) {
+    return this.registry.get(ref) ?? null;
+  }
+  private registryLogin(entry: { login?: { username: string; password: string } }, auth: RegistryAuth | undefined, ref: string): void {
+    if (entry.login && (auth?.username !== entry.login.username || auth?.password !== entry.login.password)) {
+      throw Object.assign(new Error(`(HTTP code 500) server error - failed to resolve reference "${ref}": pull access denied, repository does not exist or may require authorization: authorization failed: no basic auth credentials`), { statusCode: 500 });
+    }
+  }
+  async distribution(ref: string, auth?: RegistryAuth): Promise<DistributionInfo> {
+    this.record('distribution', [ref, ...(auth ? [auth.username] : [])]);
+    const entry = this.registryEntry(ref);
+    if (!entry) throw Object.assign(new Error(`(HTTP code 500) server error - ${ref}: manifest unknown`), { statusCode: 500 });
+    this.registryLogin(entry, auth, ref);
+    return { digest: entry.digest, mediaType: entry.mediaType ?? 'application/vnd.oci.image.manifest.v1+json', platforms: entry.platforms ?? [] };
+  }
+  /** What each loaded archive's image gets for an id, in order; `sha256:loaded<n>` once they run out. */
+  loadIds: string[] = [];
+  private loads = 0;
+  async loadImage(archive: Readable): Promise<{ loaded: string[] }> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of archive) chunks.push(chunk as Buffer);
+    const tar = Buffer.concat(chunks);
+    this.record('loadImage', [tar.length]);
+    // As a daemon does: the archive's names go to its image, whatever had them.
+    const manifest = fileFromTar(tar, 'manifest.json');
+    const tags = manifest && 'data' in manifest ? ((JSON.parse(manifest.data.toString('utf8')) as { RepoTags?: string[] }[])[0]?.RepoTags ?? []) : [];
+    const id = this.loadIds.shift() ?? `sha256:loaded${++this.loads}`;
+    for (const tag of tags) {
+      this.imageIds.set(tag, id);
+      this.images.add(tag);
+    }
+    if (tags.length === 0) this.untaggedImages.push({ id, tags: [], digests: [], created: 0 });
+    return { loaded: tags.length > 0 ? tags : [id] };
+  }
+  async saveImage(ref: string): Promise<Readable> {
+    this.record('saveImage', [ref]);
+    if (!this.knownImage(ref)) throw Object.assign(new Error(`No such image: ${ref}`), { statusCode: 404 });
+    const tar = new TarWriter();
+    void (async () => {
+      await tar.addFile({ name: 'manifest.json', mode: 0o644, mtime: 0 }, Buffer.from(JSON.stringify([{ Config: 'blobs/sha256/c', RepoTags: ref.startsWith('sha256:') ? null : [ref], Layers: [] }])));
+      await tar.finish();
+    })();
+    return tar;
+  }
+  /** Image configs, by tag or id: what imageConfig answers. One not here is the server's platform, root, no port, no volume. */
+  imageConfigs = new Map<string, Partial<ImageConfig>>();
+  /** Files in images, by tag or id, then path: what readImageFile answers. */
+  imageFiles = new Map<string, Map<string, string>>();
+  platform: ServerPlatform = { os: 'linux', arch: 'amd64' };
+  async imageConfig(ref: string): Promise<ImageConfig | null> {
+    if (!this.knownImage(ref)) return null;
+    const id = ref.startsWith('sha256:') ? ref : ((await this.imageId(ref)) ?? ref);
+    const own = this.imageConfigs.get(ref) ?? this.imageConfigs.get(id) ?? {};
+    return { id, os: this.platform.os, architecture: this.platform.arch, user: '', exposedPorts: [], volumes: [], labels: {}, workingDir: '', ...own };
+  }
+  async readImageFile(ref: string, file: string): Promise<Buffer | null> {
+    this.record('readImageFile', [ref, file]);
+    const id = ref.startsWith('sha256:') ? ref : await this.imageId(ref);
+    const content = this.imageFiles.get(ref)?.get(file) ?? (id ? this.imageFiles.get(id)?.get(file) : undefined);
+    return content === undefined ? null : Buffer.from(content, 'utf8');
+  }
+  async serverPlatform(): Promise<ServerPlatform> {
+    return this.platform;
   }
   async tagImage(source: string, target: string): Promise<void> {
     this.record('tagImage', [source, target]);
@@ -1710,7 +1825,16 @@ export async function makeWorld(
     }
     return host;
   };
-  const firewall = new FirewallSyncService(config, servers, settings, blocklist, proxyRanges, (id) => firewallHost(id).port(), log, { debounceMs: 0 });
+  // Wired as src/index.ts wires them, without the debounce.
+  const firewall = new FirewallSyncService(config, servers, settings, blocklist, proxyRanges, (id) => firewallHost(id).port(), log, {
+    debounceMs: 0,
+    webHosts: (serverId) => appRoutes.webHosts(serverId),
+  });
+  const appRoutes = new AppRoutesService(db, config, servers, dns, log, {
+    debounceMs: 0,
+    onWebHostsChange: (serverId) => void firewall.kick(serverId),
+    onFileWritten: (slug) => security.clearAppRouteRejections(slug),
+  });
   blocklist.onChange = () => void firewall.kickAll();
   const securityEvents = new SecurityEventsService(db, settings, geoip, blocklist);
   const detector = new AttackDetector(settings, blocklist, proxyRanges, log, { reverse: async () => [], lookup: async () => [] });
@@ -1773,6 +1897,7 @@ export async function makeWorld(
     quarantine,
     imports: importsService,
     connections,
+    appRoutes,
     log,
   } as unknown as CoreServices;
   core.wpInventory = new WpInventoryService(core, vulnerabilities);
@@ -1784,6 +1909,7 @@ export async function makeWorld(
   const serverInfo = new SystemInfoService(servers, log, null, opts.resolver);
   core.reminders = new ReminderService(core, serverInfo);
   core.siteCron = new SiteCronService(core);
+  core.apps = new AppsService(core);
   // The hourly check of each external site and every uptime probe are what the alerts hear from.
   core.connections.attachEvents({ checked: (site, conn) => core.alerts.connectorChecked(site, conn) });
   core.monitor.attachExternal(core.connections, {
@@ -2050,6 +2176,61 @@ export function addPhpSite(
     })
     .returning()
     .get();
+  const docker = opts.serverId && opts.serverId !== 1 ? w.remote(opts.serverId).docker : w.docker;
+  if ((opts.status ?? 'running') === 'running') docker.containers.set(site.containerName, 'running');
+  return site;
+}
+
+/**
+ * A container app's row and settings, as site.create leaves them (services/apps.ts): its own hosts
+ * and its dev hostname in `domains`, no PHP, a database only with `database`, its routes in order.
+ * Its container is running unless the status says otherwise.
+ */
+export function addContainerApp(
+  w: TestWorld,
+  slug: string,
+  opts: {
+    serverId?: number;
+    status?: string;
+    database?: boolean;
+    domains?: string[];
+    routes?: { host: string; match?: 'none' | 'prefix' | 'exact'; path?: string; scheme?: 'https' | 'http' | 'both'; enabled?: boolean }[];
+    settings?: Partial<typeof appSettings.$inferInsert>;
+  } = {},
+): SiteRow {
+  const now = Date.now();
+  const db = opts.database ? `wp_${slug.replace(/-/g, '_')}` : '';
+  const devHostname = `${slug}.dev.example.test`;
+  const site = w.db
+    .insert(sites)
+    .values({
+      slug,
+      serverId: opts.serverId ?? 1,
+      title: slug,
+      domains: JSON.stringify(opts.domains ?? [`${slug}.example.test`, devHostname]),
+      devHostname,
+      phpVersion: '',
+      app: 'container',
+      status: opts.status ?? 'running',
+      dbName: db,
+      dbUser: db,
+      dbPassword: opts.database ? 'db-secret' : '',
+      containerName: `wp-${slug}`,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning()
+    .get();
+  w.db
+    .insert(appSettings)
+    .values({ siteId: site.id, source: 'registry', reference: `ghcr.io/example/${slug}:stable`, port: 8000, createdAt: now, updatedAt: now, ...opts.settings })
+    .run();
+  (opts.routes ?? [{ host: `${slug}.example.test` }]).forEach((r, i) => {
+    w.db
+      .insert(appRoutes)
+      .values({ siteId: site.id, position: i, host: r.host, match: r.match ?? 'none', path: r.path ?? '', scheme: r.scheme ?? 'https', enabled: r.enabled === false ? 0 : 1, createdAt: now, updatedAt: now })
+      .run();
+  });
   const docker = opts.serverId && opts.serverId !== 1 ? w.remote(opts.serverId).docker : w.docker;
   if ((opts.status ?? 'running') === 'running') docker.containers.set(site.containerName, 'running');
   return site;

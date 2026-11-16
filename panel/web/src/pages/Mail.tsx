@@ -41,6 +41,7 @@ import {
   useTabParam,
 } from '../components/ui';
 import { formatBytes, formatClock, formatDate, timeAgo } from '../lib/format';
+import { sendsTestMail } from '../lib/siteKind';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -177,7 +178,7 @@ function TestSendCard({ onSent }: { onSent: () => void }) {
   const [error, setError] = useState<unknown>(null);
 
   const effectiveServerId = serverId === '' ? (meta.data?.defaultServerId ?? 1) : serverId;
-  const runnableSites = (sites.data ?? []).filter((s) => s.status === 'running');
+  const runnableSites = (sites.data ?? []).filter(sendsTestMail);
 
   const send = async () => {
     setBusy(true);

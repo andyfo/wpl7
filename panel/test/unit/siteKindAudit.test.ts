@@ -145,6 +145,23 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   'services/siteCron.ts': { tick: hosted('hostedSites()'), runningOn: both('by its cron lines, which only a PHP site has, and PHP sites are hosted') },
   'services/wpInventory.ts': { fleetInventory: both('Bulk management shows both kinds') },
   'updates/hooks.ts': { run: hosted('hostedSites()') },
+  'services/appRoutes.ts': {
+    hostOwners: both("a host belongs to one site, hosted or elsewhere: a route may not take an external site's"),
+    appsRoutingOn: both('the apps that route on a site, by their routes: only a hosted app has any'),
+    appHttpHosts: both('container apps only (containerApps()), which are always hosted'),
+    state: both("one container app's status"),
+    plan: both('container apps only (containerApps()), which are always hosted'),
+    tick: both('which servers have a container app'),
+  },
+  'services/apps.ts': {
+    bySlug: both('refused unless it is a container app (isContainerApp), which is always hosted'),
+    planRoutes: both('the routes the container apps on the server take: only a hosted app has any'),
+    hook: both('the app a deploy token is for, refused unless it is a container app'),
+    updatesTick: hosted('hostedSites()'),
+    sweep: hosted('hostedSites()'),
+    keptImagesOn: both('container apps only (containerApps()), which are always hosted'),
+    removeStaleMountUploads: hosted('hostedSites()'),
+  },
 };
 
 /**
@@ -276,6 +293,247 @@ const SITE_APP_REVIEW: Record<string, Record<string, AppVerdict>> = {
   },
   'services/wpInventory.ts': { fleetInventory: wordpress('wordpressSites()') },
   'updates/hooks.ts': { run: ANY_SITE },
+  'services/appRoutes.ts': {
+    hostOwners: apps('a host belongs to one site, of any app'),
+    appsRoutingOn: apps('container apps only, by their routes'),
+    appHttpHosts: apps('container apps only (containerApps())'),
+    state: apps("one container app's status"),
+    plan: apps('container apps only (containerApps())'),
+    tick: apps('container apps only (containerApps())'),
+  },
+  'services/apps.ts': {
+    bySlug: apps('container apps only (isContainerApp)'),
+    planRoutes: apps('the routes container apps take'),
+    hook: apps('container apps only (isContainerApp)'),
+    updatesTick: apps('container apps only (containerApps())'),
+    sweep: apps('container apps only (containerApps())'),
+    keptImagesOn: apps('container apps only (containerApps())'),
+    removeStaleMountUploads: apps('container apps only (containerApps())'),
+  },
+};
+
+/**
+ * And reviewed for container apps (sites.app container): hosted, with nothing of the site image in
+ * them - no wordpress/ folder, no PHP, no Apache, no runtime files, no site image to rebuild from. A
+ * query whose rows go to the site image - a rebuild from it, its files, its PHP, a scan with it -
+ * must leave them out with `siteImageSites()` or `wordpressSites()`, or skip them with
+ * `isContainerApp(`, in the query's own text. The rest take apps, for a reason written next to them.
+ */
+type ImageVerdict = { images: string } | { siteImage: 'siteImageSites()' | 'wordpressSites()' | 'isContainerApp(' };
+
+/** The query takes container apps too, because... */
+const images = (reason: string): ImageVerdict => ({ images: reason });
+/** The site image's sites only: the query's text holds `token`. */
+const siteImage = (token: 'siteImageSites()' | 'wordpressSites()' | 'isContainerApp('): ImageVerdict => ({ siteImage: token });
+
+const SITE_IMAGE_REVIEW: Record<string, Record<string, ImageVerdict>> = {
+  'adminer/index.ts': {
+    siteOf: images('a container app\'s database is browsed like any other; the routes refuse one with none'),
+  },
+  'jobs/actions.ts': {
+    checkTarget: images('checks that named sites exist; ineligible() skips a container app where the action needs WordPress or the site folder'),
+    resolveSites: images('serves every action: backups, start, stop and restart reach container apps too; `all` and `server` add wordpressSites() for the WordPress ones, which leaves apps out'),
+  },
+  'jobs/handlers/backups.ts': {
+    backupRestore: images('restores every app; a container app\'s restore is a branch of its own'),
+  },
+  'jobs/handlers/import.ts': {
+    siteImportQueuedCancel: images('an import\'s own site, which an import makes as a WordPress site (services/imports.ts:385 sets no app)'),
+  },
+  'jobs/handlers/move.ts': {
+    finalizeCleanup: images('who owns a source copy, by slug: an app\'s container, database and folder go by the same names'),
+  },
+  'jobs/handlers/servers.ts': {
+    serverApplySiteLimits: images('container limits for every hosted site, a container app\'s too; the caches step is the site image\'s'),
+  },
+  'jobs/handlers/shared.ts': {
+    ensureSiteMountSources: siteImage('isContainerApp('),
+    loadSite: images('the guard itself: refuses a container app where the job asks for { app: \'siteImage\' } or { app: \'wordpress\' }'),
+  },
+  'jobs/handlers/sites.ts': {
+    siteCreateQueuedCancel: images('only the row that reserves the slug, of any app; an app\'s own rows go with it (on delete cascade)'),
+  },
+  'jobs/handlers/wp.ts': {
+    wpScanAll: siteImage('wordpressSites()'),
+  },
+  'jobs/schedulers.ts': {
+    backupTick: images('scheduled backups include container apps'),
+    dtoContext: images('reads names and ids only'),
+    siteLimitsTick: images('only asks whether a site lifts a CPU cap of its own, and whether a deferred site is free; a container app has limits too'),
+    wpCronTick: siteImage('wordpressSites()'),
+    wpScanIsDue: siteImage('wordpressSites()'),
+    wpScanNextDue: siteImage('wordpressSites()'),
+  },
+  'jobs/worker.ts': {
+    clearCaches: siteImage('isContainerApp('),
+    enqueue: images('reads the kind, for the lanes: a container app is hosted, so its jobs take its server\'s lanes'),
+    rereadDatabases: images('reads the server of a site whose job changed a database; a container app\'s database is on the shared MariaDB too'),
+  },
+  'routes/backups.ts': {
+    'GET /api/backups': images('backups of every app'),
+    'GET /api/backups/ids': images('backups of every app'),
+    'POST /api/backups/:id/fetch': images('a fetch lands where the site is now; backups of every app'),
+  },
+  'routes/security.ts': {
+    'POST /api/security/scans': siteImage('siteImageSites()'),
+  },
+  'servers/registry.ts': {
+    externalCountFor: images('external sites, which are never container apps'),
+    sitesCountFor: images('counts the sites a server hosts, container apps among them: a server with one is not removed'),
+  },
+  'services/alerts.ts': {
+    vulnerabilities: images('the WordPress inventory, which has no rows for a container app'),
+  },
+  'services/backup.ts': {
+    daysFor: images('backups of every app'),
+    expire: images('backups of every app'),
+  },
+  'services/blocklist.ts': {
+    block: images('reads names and ids only'),
+    toDto: images('reads names and ids only'),
+  },
+  'services/connections.ts': {
+    enroll: images('the site a reconnect is for, which is external (reconnect refuses a hosted one)'),
+    heartbeat: images('external sites only (externalSites)'),
+    slugTaken: images('a slug is taken by a site of any app'),
+    toSummary: images('reads names and ids only'),
+    update: images('an external site: forSite refuses a hosted one'),
+  },
+  'services/databases.ts': {
+    assertNameFree: images('a container app\'s added databases take names too'),
+    claims: images('a database is claimed by whether the site has one (hasDatabase), not by its app'),
+    pruneUploads: images('a container app\'s database imports are staged in db-uploads too'),
+    userClaimed: images('a container app\'s database user is claimed too'),
+  },
+  'services/dockerCleanup.ts': {
+    needsOn: siteImage('siteImageSites()'),
+  },
+  'services/domainGuard.ts': {
+    assertDomainsFree: images('a domain belongs to one site, of any app'),
+  },
+  'services/externalBackup.ts': {
+    pruneOrphans: images('external sites only (externalSites)'),
+  },
+  'services/ftp.ts': {
+    expireDue: images('keyed by FTP logins, which a container app never has'),
+    plan: siteImage('siteImageSites()'),
+    serverView: images('keyed by FTP logins, which a container app never has'),
+    serversWanting: images('keyed by FTP logins, which a container app never has'),
+    suspendSite: images('keyed by FTP logins: a container app has none, so its pause is only counted'),
+  },
+  'services/imports.ts': {
+    refresh: images('an import\'s own site, which an import makes as a WordPress site'),
+    releaseSiteRow: images('an import\'s own site, which an import makes as a WordPress site'),
+    retry: images('an import\'s own site, which an import makes as a WordPress site'),
+    siteUrlOf: images('an import\'s own site, which an import makes as a WordPress site'),
+    toSummary: images('an import\'s own site, which an import makes as a WordPress site'),
+  },
+  'services/legacyRename.ts': {
+    sweepLegacyRename: siteImage('siteImageSites()'),
+  },
+  'services/mail.ts': {
+    blockedLogins: images('suspended mail: an app with the relay login sends through it too'),
+    enforceVolumeLimits: images('by the slugs in the relay\'s log, an app\'s among them'),
+    senderOwners: images('an app sends as its own domains, and no other site may'),
+    sendingDomains: images('an app with the relay login sends as its own domain'),
+    setSiteMailSuspended: images('by the id of a site the relay knows, an app among them'),
+    stats: images('reads names only'),
+    syncMailAuthTo: images('an app logs in to the relay when it has a password; one without is skipped (if (!site.mailPassword) continue)'),
+  },
+  'services/malwareScan.ts': {
+    finish: images('a scan\'s own site, and scan refuses an app'),
+    followUp: images('a scan\'s own site: an app\'s scan is refused before it, so nothing reaches quarantine'),
+    overtaken: images('a scan\'s own site, and scan refuses an app'),
+    scan: siteImage('isContainerApp('),
+    schedulePass: siteImage('siteImageSites()'),
+  },
+  'services/monitor.ts': {
+    activeSites: images('an app has an uptime check, container stats and disk use too'),
+    recheck: images('an app is checked at a job\'s end too'),
+    tickUptime: images('external sites only (externalSites), which are never container apps'),
+  },
+  'services/offsite.ts': {
+    fetchBackup: images('backups of every app'),
+    reconcileDestination: images('backups of every app: an app\'s go offsite too'),
+  },
+  'services/phpReleases.ts': {
+    readSitePhp: siteImage('isContainerApp('),
+    sweepPhpReleases: siteImage('siteImageSites()'),
+  },
+  'services/quarantine.ts': {
+    prune: images('quarantined files, which an app never has: it is never scanned'),
+  },
+  'services/reminders.ts': {
+    siteRows: images('domain and server reminders are for apps too; an empty php_version matches no PHP reminder'),
+  },
+  'services/security.ts': {
+    hardeningPlan: siteImage('siteImageSites()'),
+    plan: siteImage('siteImageSites()'),
+    policyFor: images('reads the app the policy depends on; nothing is written from it for an app'),
+    prepareHardening: siteImage('isContainerApp('),
+  },
+  'services/securityEvents.ts': {
+    fold: images('reads names, slugs and domains only, to say whose a blocked request was'),
+    recent: images('reads names only'),
+  },
+  'services/securityViews.ts': {
+    fleetScans: siteImage('siteImageSites()'),
+    securityOverview: siteImage('siteImageSites()'),
+  },
+  'services/siteCaches.ts': {
+    sweepSiteRuntime: siteImage('siteImageSites()'),
+  },
+  'services/siteCron.ts': {
+    runningOn: images('by its cron lines, which only a PHP site has'),
+    tick: images('PHP sites\' own cron lines: the query asks for app php itself'),
+  },
+  'services/siteHardening.ts': {
+    sweepHardening: images('rebuilds only containers labelled wpl7.role=wordpress, and an app\'s is labelled wpl7.role=app'),
+  },
+  'services/siteImages.ts': {
+    sweepSiteImages: siteImage('siteImageSites()'),
+  },
+  'services/sites.ts': {
+    applyLimits: images('an app has limits too'),
+    bySlug: images('the guard itself: refuses an app where the caller asks for { app: \'siteImage\' } or { app: \'wordpress\' }'),
+    list: images('the site list shows every app'),
+    ownBackupBeforeUpdates: images('reads names only'),
+    ownBackupKeepDays: images('reads names only'),
+    ownSiteLimits: images('reads names and limits only; an app has limits of its own too'),
+    reconcileAll: siteImage('siteImageSites()'),
+  },
+  'services/traffic.ts': {
+    apply: images('an app has visitor statistics too'),
+  },
+  'services/wildcardSites.ts': {
+    sweepWildcardSites: images('rebuilds only containers labelled wpl7.role=wordpress, by their router labels, and an app\'s container has neither'),
+  },
+  'services/wpBulk.ts': {
+    createBatch: siteImage('isContainerApp('),
+  },
+  'services/wpInventory.ts': {
+    fleetInventory: siteImage('wordpressSites()'),
+  },
+  'updates/hooks.ts': {
+    run: siteImage('siteImageSites()'),
+  },
+  'services/appRoutes.ts': {
+    hostOwners: images("a host belongs to one site, of any app: a route may borrow any hosted site's"),
+    appsRoutingOn: images('the container apps that route on a site'),
+    appHttpHosts: images("container apps' own http routes"),
+    state: images("one container app's status"),
+    plan: images("the routes files are container apps' own"),
+    tick: images('the servers that have a container app'),
+  },
+  'services/apps.ts': {
+    bySlug: { siteImage: 'isContainerApp(' },
+    planRoutes: images("the routes other container apps on the server take"),
+    hook: { siteImage: 'isContainerApp(' },
+    updatesTick: images("container apps' own registries"),
+    sweep: images("container apps' own containers"),
+    keptImagesOn: images("container apps' own images"),
+    removeStaleMountUploads: images("container apps' own mount uploads"),
+  },
 };
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src');
@@ -370,6 +628,22 @@ describe('queries on the sites table, and sites hosted elsewhere', () => {
       .map((f) => ({ f, verdict: SITE_APP_REVIEW[f.file]?.[f.scope] }))
       .filter(({ f, verdict }) => verdict && 'wordpress' in verdict && !f.text.includes(verdict.wordpress))
       .map(({ f, verdict }) => `${f.file}:${f.line} (${f.scope}) does not say ${(verdict as { wordpress: string }).wordpress}`);
+    expect(missing).toEqual([]);
+  });
+
+  it('knows every one of them for container apps too', () => {
+    const unknown = found.filter((f) => SITE_IMAGE_REVIEW[f.file]?.[f.scope] === undefined).map((f) => `${f.file}:${f.line} (${f.scope})`);
+    expect(unknown).toEqual([]);
+    const present = new Set(found.map((f) => `${f.file}#${f.scope}`));
+    const stale = Object.entries(SITE_IMAGE_REVIEW).flatMap(([file, scopes]) => Object.keys(scopes).map((scope) => `${file}#${scope}`)).filter((key) => !present.has(key));
+    expect(stale).toEqual([]);
+  });
+
+  it('leaves container apps out of every query for the site image', () => {
+    const missing = found
+      .map((f) => ({ f, verdict: SITE_IMAGE_REVIEW[f.file]?.[f.scope] }))
+      .filter(({ f, verdict }) => verdict && 'siteImage' in verdict && !f.text.includes(verdict.siteImage))
+      .map(({ f, verdict }) => `${f.file}:${f.line} (${f.scope}) does not say ${(verdict as { siteImage: string }).siteImage}`);
     expect(missing).toEqual([]);
   });
 

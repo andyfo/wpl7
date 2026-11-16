@@ -1,0 +1,44 @@
+# Container apps against real Docker and the compose file's own Traefik: plain http beside the
+# redirect, routes in a file, image labels, a registry with a login, image users, platforms, archive
+# names, the way in and the mount unpacker. On GitHub's runners: amd64, and Docker's classic image
+# store, where a file keeps the owner a container gave it. The SSH e2e (test/e2e) stays local.
+name: Container apps
+
+on:
+  pull_request:
+    paths:
+      - deploy/docker-compose.yml
+      - panel/shared/apps.ts
+      - panel/src/jobs/handlers/apps.ts
+      - panel/src/services/appImages.ts
+      - panel/src/services/appProbe.ts
+      - panel/src/services/appRoutes.ts
+      - panel/src/services/appSpec.ts
+      - panel/src/services/docker.ts
+      - panel/src/services/firewallRender.ts
+      - panel/src/services/imageArchive.ts
+      - panel/src/services/securityConfig.ts
+      - panel/test/composeFile.ts
+      - panel/test/containerAppChecks.ts
+      - panel/test/engine/containerApps.test.ts
+      - panel/test/engine/containerImages.test.ts
+      - panel/test/fixtures/container-app/**
+      - .github/workflows/container-apps.yml
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    name: Container apps on real Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/panel-deps
+      # One file at a time: each starts a Traefik, a registry or Pebble of its own.
+      - name: Routes, the way in and the unpacker; images, users, platforms and archives
+        run: npx vitest run --no-file-parallelism test/engine/containerApps.test.ts test/engine/containerImages.test.ts
+        working-directory: panel
+        env:
+          WPL7_ENGINE_TESTS: '1'

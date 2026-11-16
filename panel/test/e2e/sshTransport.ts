@@ -4,11 +4,15 @@
  * pooled ssh2 channels, docker-API-over-SSH, streamed host commands, sudo,
  * host-key pinning. Driven by test/e2e/ssh-transport.sh.
  *
- * Env: E2E_SSH_HOST, E2E_SSH_PORT, E2E_SSH_KEY (private key path).
+ * Env: E2E_SSH_HOST, E2E_SSH_PORT, E2E_SSH_KEY (private key path). The container-app checks
+ * (containerApps below) take the rest from the script: the image store the worker was started
+ * with, a 400 MB archive and its contents' sha256, busybox's digest per architecture.
  */
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import { PassThrough, Readable, Writable } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import Docker from 'dockerode';
 import { SshConnection, ServerUnreachableError, sshFingerprint } from '../../src/servers/sshConnection.js';
 import { SshDockerAgent } from '../../src/servers/sshDockerAgent.js';
@@ -16,6 +20,11 @@ import { SshExec } from '../../src/servers/sshExec.js';
 import { rootKeyInstallScript, sshShellConnect } from '../../src/servers/terminal.js';
 import { ExecFiles } from '../../src/lib/files.js';
 import { DockerService } from '../../src/services/docker.js';
+import { siteNetworkName } from '../../src/services/siteNetwork.js';
+import { askApp } from '../../src/services/appProbe.js';
+import { imageUserIds, platformRefusal } from '../../src/services/appImages.js';
+import { inspectArchive, renamedArchive } from '../../src/services/imageArchive.js';
+import { ARCH, disagreeingArchive, imageStore, namesOf, unpackArchive } from '../containerAppChecks.js';
 
 const HOST = process.env.E2E_SSH_HOST ?? '127.0.0.1';
 const PORT = Number(process.env.E2E_SSH_PORT ?? 39222);
@@ -239,6 +248,8 @@ async function main(): Promise<void> {
 
   await docker.removeContainer('e2e-sleeper');
 
+  await containerApps(raw, docker, files);
+
   conn.close();
 
   // --- Host-key pinning: a wrong pin must fail loudly
@@ -335,6 +346,199 @@ async function main(): Promise<void> {
 
   console.log(`\nAll ${passed} SSH transport checks passed.`);
   process.exit(0);
+}
+
+// ---------------------------------------------------------------------------
+// Container apps, over SSH: what the plan's settle-first items 4, 5, 6, 8 and 9 need of a worker,
+// on the image store the script started it with (item 10).
+
+/** Something seen, for E2E_FACTS. */
+function fact(key: string, value: unknown): void {
+  const file = process.env.E2E_FACTS;
+  if (file) fs.appendFileSync(file, `${JSON.stringify({ test: 'sshTransport', store: process.env.E2E_IMAGE_STORE ?? 'classic', key, value })}\n`);
+}
+
+/** Every message of a pull, a push or a load, and the error one ends with, if it does. */
+function follow(raw: Docker, stream: NodeJS.ReadableStream): Promise<{ messages: string[]; error: string | null }> {
+  return new Promise((resolve, reject) => {
+    raw.modem.followProgress(stream, (err: Error | null, output: { stream?: string; status?: string; error?: string; errorDetail?: { message?: string } }[]) => {
+      if (err) return reject(err);
+      const failed = output.find((o) => o.error);
+      resolve({
+        messages: output.map((o) => (o.stream ?? o.status ?? o.error ?? '').trim()).filter(Boolean),
+        error: failed ? (failed.errorDetail?.message ?? failed.error ?? 'error') : null,
+      });
+    });
+  });
+}
+
+async function pullVia(raw: Docker, ref: string, opts: { authconfig?: object; platform?: string } = {}) {
+  try {
+    return await follow(raw, (await raw.pull(ref, { ...opts })) as unknown as NodeJS.ReadableStream);
+  } catch (err) {
+    return { messages: [], error: (err as Error).message };
+  }
+}
+
+const streamToFile = (stream: NodeJS.ReadableStream, file: string) =>
+  new Promise<void>((resolve, reject) => stream.pipe(fs.createWriteStream(file)).on('finish', resolve).on('error', reject));
+
+
+async function containerApps(raw: Docker, docker: DockerService, files: ExecFiles): Promise<void> {
+  const work = fs.mkdtempSync(path.join(process.env.E2E_WORK ?? '/tmp', 'apps-'));
+  const info = await raw.info();
+  const store = imageStore(info);
+  ok(`container apps: the worker runs the ${process.env.E2E_IMAGE_STORE ?? 'classic'} image store`, store === (process.env.E2E_IMAGE_STORE ?? 'classic'), store);
+  fact('10. the worker', { version: info.ServerVersion, driver: info.Driver, store, architecture: info.Architecture });
+  const server = { os: info.OSType as string, arch: ARCH[info.Architecture as string] ?? (info.Architecture as string) };
+  const imageId = async (ref: string) => (await raw.getImage(ref).inspect().catch(() => null))?.Id ?? null;
+
+  // --- 4. A registry with a login on the worker's own localhost, the one place its daemon takes
+  // plain http from; pulled from and asked through the Engine API over SSH, as the panel would.
+  const LOGIN = { username: 'engine', password: 'engine-registry-password', serveraddress: '127.0.0.1:5050' };
+  for (const image of ['registry:2', 'httpd:2-alpine', 'busybox:1.37']) await docker.pullImage(image, () => undefined);
+  const htpasswd = await docker.runEphemeral({ image: 'httpd:2-alpine', entrypoint: ['htpasswd'], cmd: ['-Bbn', LOGIN.username, LOGIN.password], networks: [], timeoutMs: 60_000 });
+  await files.mkdirp('/srv/e2e/auth');
+  await files.writeFile('/srv/e2e/auth/htpasswd', `${htpasswd.stdout.trim()}\n`);
+  const registry = await raw.createContainer({
+    name: 'e2e-registry',
+    Image: 'registry:2',
+    Env: ['REGISTRY_HTTP_ADDR=127.0.0.1:5050', 'REGISTRY_AUTH=htpasswd', 'REGISTRY_AUTH_HTPASSWD_REALM=engine', 'REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd'],
+    HostConfig: { NetworkMode: 'host', Binds: ['/srv/e2e/auth:/auth:ro'] },
+  });
+  await registry.start();
+  for (let i = 0; i < 50 && !(await docker.containerLogs('e2e-registry')).includes('listening on'); i++) await new Promise((r) => setTimeout(r, 200));
+  const REPO = '127.0.0.1:5050/engine/app';
+  await raw.getImage('busybox:1.37').tag({ repo: REPO, tag: 'stable' });
+  const pushed = await follow(raw, (await raw.getImage(`${REPO}:stable`).push({ authconfig: LOGIN } as never)) as unknown as NodeJS.ReadableStream);
+  ok('container apps: a push with authconfig over ssh', pushed.error === null, String(pushed.error));
+  await raw.getImage(`${REPO}:stable`).remove();
+
+  const refused = await pullVia(raw, `${REPO}:stable`);
+  ok('container apps: a pull without the login is refused', refused.error !== null && (await imageId(`${REPO}:stable`)) === null, String(refused.error));
+  fact('4. pull without the login', refused.error);
+  const dist = (await raw.getImage(`${REPO}:stable`).distribution({ authconfig: LOGIN })) as { Descriptor: { mediaType: string; digest: string }; Platforms: { os: string; architecture: string }[] | null };
+  ok('container apps: the registry answers a digest with the login, over ssh, and nothing is pulled', /^sha256:[0-9a-f]{64}$/.test(dist.Descriptor.digest) && (await imageId(`${REPO}:stable`)) === null, JSON.stringify(dist));
+  fact('4. distribution inspect with the login', dist);
+  const noLogin = await raw.getImage(`${REPO}:stable`).distribution().then(() => 'answered', (err: Error) => err.message);
+  ok('container apps: ...and not without it', noLogin !== 'answered', noLogin);
+  const byDigest = `${REPO}@${dist.Descriptor.digest}`;
+  const pulled = await pullVia(raw, byDigest, { authconfig: LOGIN });
+  ok('container apps: a pull by digest with authconfig over ssh', pulled.error === null && (await imageId(byDigest)) !== null, String(pulled.error));
+  const pulledImage = await raw.getImage(byDigest).inspect();
+  fact('4. pulled by digest', { id: pulledImage.Id, tags: pulledImage.RepoTags, digests: pulledImage.RepoDigests });
+
+  // --- 4. A 400 MB archive, streamed to POST /images/load through the SSH agent.
+  const big = process.env.E2E_BIG_ARCHIVE;
+  if (big) {
+    const t0 = Date.now();
+    const loaded = await follow(raw, (await raw.loadImage(fs.createReadStream(big))) as unknown as NodeJS.ReadableStream);
+    const took = Date.now() - t0;
+    const sum = await docker.runEphemeral({ image: 'wpl7-e2e-big:1', cmd: ['sha256sum', '/big.bin'], networks: [], timeoutMs: 120_000 });
+    ok('container apps: a 400 MB docker load over ssh arrives whole', loaded.error === null && sum.stdout.startsWith(process.env.E2E_BIG_SHA ?? '-'), `${loaded.error} ${sum.stdout}`);
+    fact('4. a 400 MB load over ssh', { ms: took, bytes: fs.statSync(big).size, messages: loaded.messages });
+    await raw.getImage('wpl7-e2e-big:1').remove();
+  }
+
+  // --- 5. The app's uid, from its image's /etc/passwd, through a container created and never started.
+  const fixture = fileURLToPath(new URL('../fixtures/container-app', import.meta.url));
+  await docker.buildImage('wpl7-e2e-app:1', fixture, {}, () => undefined);
+  const user = (await docker.imageConfig('wpl7-e2e-app:1'))!.user;
+  const ids = await imageUserIds({ docker }, 'wpl7-e2e-app:1', user);
+  ok('container apps: the uid of USER app, from a container never started, over ssh', ids.uid === 10001 && ids.gid === 10001, JSON.stringify({ user, ids }));
+  ok('container apps: ...and that container is gone again', (await raw.listContainers({ all: true, filters: { label: ['wpl7.role=probe'] } })).length === 0);
+
+  // --- 6. The platform fields on this store.
+  const native = await raw.getImage('busybox:1.37').inspect();
+  ok('container apps: a multi-platform image pulled here reads as the worker’s platform', platformRefusal((await docker.imageConfig('busybox:1.37'))!, await docker.serverPlatform()) === null, `${native.Os}/${native.Architecture}`);
+  fact('6. a multi-platform image, as inspect has it', { Id: native.Id, Os: native.Os, Architecture: native.Architecture, Variant: (native as { Variant?: string }).Variant, RepoDigests: native.RepoDigests });
+  const other = server.arch === 'amd64' ? 'arm64' : 'amd64';
+  const otherDigest = other === 'amd64' ? process.env.E2E_DIGEST_AMD64 : process.env.E2E_DIGEST_ARM64;
+  if (otherDigest) {
+    const ref = `busybox@${otherDigest}`;
+    const plain = await pullVia(raw, ref);
+    fact('6. a pull of the other platform’s manifest, no platform asked', plain.error ?? 'pulled');
+    if (plain.error) await pullVia(raw, ref, { platform: `linux/${other}` });
+    const image = (await docker.imageConfig(ref))!;
+    ok(
+      'container apps: the other platform’s image is refused, naming both',
+      platformRefusal(image, server) === `The image is for linux/${other}, and this server is linux/${server.arch}. Build it for linux/${server.arch}.`,
+      `${image.os}/${image.architecture}`,
+    );
+  }
+
+  // --- 8. The health gate's way in: with every route off, from inside Traefik on the site's
+  // network, and from a short-lived container of Traefik's image on that network alone.
+  await docker.pullImage('traefik:v3.7', () => undefined);
+  const net = siteNetworkName('e2egate');
+  await docker.ensureNetwork({ name: net, internal: true, labels: { 'wpl7.role': 'site-network', 'wpl7.site': 'e2egate' } });
+  const edge = await raw.createContainer({ name: 'e2e-traefik', Image: 'traefik:v3.7', Cmd: ['--entrypoints.web.address=:80'], HostConfig: { NetworkMode: net } });
+  await edge.start();
+  const app = await raw.createContainer({ name: 'wp-e2egate', Image: 'wpl7-e2e-app:1', Labels: { 'traefik.enable': 'false' }, HostConfig: { NetworkMode: net } });
+  await app.start();
+  const wget = ['wget', '-q', '-S', '-T', '5', '-O', '-', '--header', 'Host: gate.example.net', 'http://wp-e2egate:80/health'];
+  let viaExec = { exitCode: 1, stdout: '', stderr: '' };
+  for (let i = 0; i < 50 && viaExec.exitCode !== 0; i++) {
+    viaExec = await docker.exec('e2e-traefik', wget);
+    if (viaExec.exitCode !== 0) await new Promise((r) => setTimeout(r, 200));
+  }
+  ok('container apps: the health check reaches the app from inside Traefik, over ssh', viaExec.exitCode === 0 && viaExec.stdout === 'ok', JSON.stringify(viaExec));
+  const times = { exec: [] as number[], helper: [] as number[] };
+  for (let i = 0; i < 3; i++) {
+    let t0 = Date.now();
+    await docker.exec('e2e-traefik', wget);
+    times.exec.push(Date.now() - t0);
+    t0 = Date.now();
+    const helper = await docker.runEphemeral({ image: 'traefik:v3.7', entrypoint: ['wget'], cmd: wget.slice(1), networks: [net], timeoutMs: 30_000 });
+    times.helper.push(Date.now() - t0);
+    if (i === 0) ok('container apps: ...and from a short-lived container on the site’s network, over ssh', helper.exitCode === 0 && helper.stdout === 'ok', JSON.stringify(helper));
+  }
+  fact('8. checks over ssh, ms', times);
+  // The panel's own way in (services/appProbe.ts): locked down, on the app's network alone, as a
+  // worker's apps are asked over ssh.
+  const way = { name: 'e2e', docker: Object.assign(Object.create(docker) as DockerService, { containerImage: async () => 'traefik:v3.7' }) };
+  const t0 = Date.now();
+  const answer = await askApp(way, { slug: 'e2egate', containerName: 'wp-e2egate' }, { port: 80, path: '/health', host: 'gate.example.net', timeoutSec: 5 });
+  ok('container apps: the panel’s way in, locked down, answers 200 over ssh', answer.status === 200, JSON.stringify(answer));
+  fact('8. the panel’s way in over ssh, ms', Date.now() - t0);
+
+  // --- 9. The names an archive carries, on this store: a load takes an existing name, the check
+  // sees it first, and a rename inside the archive keeps the server's names where they are.
+  const VICTIM = 'wpl7-e2e-victim:1';
+  await raw.getImage('busybox:1.37').tag({ repo: 'wpl7-e2e-victim', tag: '1' });
+  const victimId = (await imageId(VICTIM))!;
+  const uploadId = (await imageId('wpl7-e2e-app:1'))!;
+  await raw.getImage('wpl7-e2e-app:1').tag({ repo: 'wpl7-e2e-victim', tag: '1' });
+  const named = path.join(work, 'named.tar');
+  await streamToFile((await raw.getImage(VICTIM).get()) as unknown as NodeJS.ReadableStream, named);
+  await raw.getImage(victimId).tag({ repo: 'wpl7-e2e-victim', tag: '1' });
+  const u = await unpackArchive(named);
+  fact('9. an archive’s files', u.files);
+  fact('9. the names in it', { manifest: u.manifest?.map((m) => m.RepoTags), index: u.index?.manifests.map((m) => m.annotations), repositories: u.repositories });
+  const taken = namesOf(await raw.listImages());
+  const archiveInfo = await inspectArchive(named);
+  ok('container apps: the check sees the clash before the load, over ssh', archiveInfo.names.filter((n) => taken.has(n)).join() === VICTIM, JSON.stringify(archiveInfo.names));
+  const took = await follow(raw, (await raw.loadImage(fs.createReadStream(named))) as unknown as NodeJS.ReadableStream);
+  ok('container apps: docker load over ssh gives the name away', took.error === null && (await imageId(VICTIM)) === uploadId, JSON.stringify(took));
+  fact('9. what a load says when it takes a name', took.messages);
+  fact('9. the image that lost its name', { id: victimId, tags: (await raw.getImage(victimId).inspect().catch(() => null))?.RepoTags ?? null });
+  await raw.getImage(victimId).tag({ repo: 'wpl7-e2e-victim', tag: '1' });
+  // The panel's own rename, streamed into the panel's own load, over SSH.
+  const loadedRenamed = await docker.loadImage(renamedArchive(named, archiveInfo, 'wpl7-app-e2e:upload-1'));
+  ok(
+    'container apps: renamed in the archive, only the panel’s name lands',
+    loadedRenamed.loaded.join() === 'wpl7-app-e2e:upload-1' && (await imageId(VICTIM)) === victimId && (await imageId('wpl7-app-e2e:upload-1')) === uploadId,
+    JSON.stringify(loadedRenamed),
+  );
+  fact('9. what a load of the renamed archive says', loadedRenamed.loaded);
+  const mixed = path.join(work, 'mixed.tar');
+  await disagreeingArchive(await unpackArchive(named), 'wpl7-e2e-manifest:1', 'wpl7-e2e-index:1', mixed);
+  const loadedMixed = await follow(raw, (await raw.loadImage(fs.createReadStream(mixed))) as unknown as NodeJS.ReadableStream);
+  fact('9. two places that disagree', { messages: loadedMixed.messages, error: loadedMixed.error, byManifest: (await imageId('wpl7-e2e-manifest:1')) !== null, byIndex: (await imageId('wpl7-e2e-index:1')) !== null });
+
+  for (const name of ['wp-e2egate', 'e2e-traefik', 'e2e-registry']) await docker.removeContainer(name);
+  await docker.removeNetwork(net);
+  fs.rmSync(work, { recursive: true, force: true });
 }
 
 main().catch((err) => {

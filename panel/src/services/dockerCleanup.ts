@@ -1,7 +1,7 @@
 // @docs servers/resources
 import { and, eq } from 'drizzle-orm';
 import { sites } from '../db/schema.js';
-import { hostedSites } from '../lib/siteKind.js';
+import { hostedSites, siteImageSites } from '../lib/siteKind.js';
 import type { ServerHandle } from '../servers/registry.js';
 import { formatBytes } from '../../shared/bytes.js';
 import type { ImageSummary } from './docker.js';
@@ -79,7 +79,8 @@ async function needsOn(s: CoreServices, handle: ServerHandle): Promise<{ needed:
   const running = s.db
     .select({ phpVersion: sites.phpVersion })
     .from(sites)
-    .where(and(hostedSites(), eq(sites.serverId, handle.id)))
+    // A container app runs no site image: its '' would name `wpl7-wordpress:php`.
+    .where(and(hostedSites(), siteImageSites(), eq(sites.serverId, handle.id)))
     .all()
     .map((site) => site.phpVersion);
   const wordpressRepos = [
@@ -108,6 +109,9 @@ async function needsOn(s: CoreServices, handle: ServerHandle): Promise<{ needed:
     SCANNER_IMAGE,
     config.rcloneImage,
     config.mariadb.clientImage,
+    // What each container app runs and the two deploys before it, by id: a roll back's images. Their
+    // repositories are not WPL7's, so this only matters for an app that runs one of the stack's.
+    ...s.apps.keptImagesOn(handle.id),
   ];
   const repos = [
     SITE_IMAGE_REPO,

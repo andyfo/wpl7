@@ -80,7 +80,7 @@ import type {
   SiteFtpDto,
   SiteFtpUserDto,
 } from '../../shared/types.js';
-import { hostedSites } from '../lib/siteKind.js';
+import { hostedSites, siteImageSites } from '../lib/siteKind.js';
 
 const GATEWAY_OWNER = { uid: FTP_GATEWAY_UID, gid: FTP_GATEWAY_UID };
 const SITE_OWNER = { uid: SITE_UID, gid: SITE_UID };
@@ -528,7 +528,8 @@ export class FtpService {
     const onServer = this.db
       .select()
       .from(sites)
-      .where(and(eq(sites.serverId, row.id), notInArray(sites.status, NO_FILES), hostedSites()))
+      // A file server serves a site's wordpress/ folder: a container app has none, and no FTP.
+      .where(and(eq(sites.serverId, row.id), notInArray(sites.status, NO_FILES), hostedSites(), siteImageSites()))
       .all();
     const siteIds = onServer.map((s) => s.id);
     const users = siteIds.length

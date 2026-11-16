@@ -1,4 +1,4 @@
-// @docs get-started/first-site, get-started/quick-start, sites/create, sites/php
+// @docs get-started/first-site, get-started/quick-start, sites/container, sites/create, sites/php
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -9,27 +9,34 @@ import { Button, Card, ErrorNote, Field, OutLink, Segmented, Toggle, inputClass 
 import { WporgPluginSearch } from '../components/WporgPluginSearch';
 import { LocaleSelect } from '../components/LocaleSelect';
 import { localeName } from '../lib/format';
-import { draftOf, keepDraft, type NewSiteDraft } from '../lib/siteCreation';
+import { draftOf, keepDraft, type NewAppDraft, type NewSiteDraft } from '../lib/siteCreation';
+import { AppImageStep, AppRoutesStep, AppSettingsStep, appReviewRows } from '../components/app/NewAppSteps';
+import { appBody, appStepOk, createdStoppedNote, emptyAppDraft } from '../lib/appForm';
 
-type StepId = 'name' | 'wordpress' | 'plugins' | 'php' | 'review';
+type StepId = 'name' | 'wordpress' | 'plugins' | 'php' | 'image' | 'settings' | 'routes' | 'review';
 
 const STEP_LABELS: Record<StepId, string> = {
   name: 'Name & domain',
   wordpress: 'WordPress',
   plugins: 'Plugins',
   php: 'PHP',
+  image: 'Image',
+  settings: 'Settings',
+  routes: 'Routes',
   review: 'Review',
 };
 
-/** Each type's steps. The first and the last are the same for both, so the type can change on the first. */
+/** Each type's steps. The first and the last are the same for every type, so the type can change on the first. */
 const STEPS: Record<SiteApp, StepId[]> = {
   wordpress: ['name', 'wordpress', 'plugins', 'review'],
   php: ['name', 'php', 'review'],
+  container: ['name', 'image', 'settings', 'routes', 'review'],
 };
 
 const APP_OPTIONS = [
   { id: 'wordpress', label: 'WordPress' },
   { id: 'php', label: 'PHP' },
+  { id: 'container', label: 'Container' },
 ] as const;
 
 /** A web root as the API takes it: a slash typed at either end is no folder. */
@@ -85,6 +92,7 @@ export function NewSite() {
   const [extraPlugins, setExtraPlugins] = useState<WporgPluginDto[]>(draft?.extraPlugins ?? []);
   const [database, setDatabase] = useState(draft?.database ?? false);
   const [webRoot, setWebRoot] = useState(draft?.webRoot ?? '');
+  const [container, setContainer] = useState<NewAppDraft>(draft?.container ?? emptyAppDraft());
 
   const steps = STEPS[app];
   const step = Math.max(0, steps.indexOf(stepId));
@@ -117,10 +125,13 @@ export function NewSite() {
   const siteRecipes = (recipes.data ?? []).filter((r) => r.enabled && pluginDirs.has(r.plugin));
 
   const canNext: Record<StepId, boolean> = {
-    name: title.trim().length > 0 && SLUG_RE.test(slug) && (!customDomain || domains.length > 0),
+    name: title.trim().length > 0 && SLUG_RE.test(slug) && (app === 'container' || !customDomain || domains.length > 0),
     wordpress: adminUser.length > 0 && /.+@.+\..+/.test(effAdminEmail) && (generatePw || adminPassword.length >= 10),
     plugins: true,
     php: webRootOk,
+    image: appStepOk('image', container, devHostname),
+    settings: appStepOk('settings', container, devHostname),
+    routes: appStepOk('routes', container, devHostname),
     review: true,
   };
 
@@ -132,8 +143,13 @@ export function NewSite() {
     domains: customDomain ? domains : undefined,
     phpVersion: effPhp,
   };
+  // A container app's is null while it has no archive to send: none chosen yet, or one still going up.
+  const appPart = app === 'container' ? appBody(container, devHostname) : null;
+  const appStopped = createdStoppedNote(container);
   const body =
-    app === 'php'
+    app === 'container'
+      ? appPart && { title: common.title, slug: common.slug, serverId: common.serverId, ...appPart }
+      : app === 'php'
       ? { ...common, app, database, ...(webRootValue ? { webRoot: webRootValue } : {}) }
       : {
           ...common,
@@ -149,6 +165,7 @@ export function NewSite() {
         };
 
   const create = () => {
+    if (!body) return;
     const sent: NewSiteDraft = {
       app,
       title,
@@ -167,6 +184,7 @@ export function NewSite() {
       extraPlugins,
       database,
       webRoot,
+      container,
     };
     run.mutate(
       { path: '/api/sites', body },
@@ -205,6 +223,7 @@ export function NewSite() {
               <div className="mb-1 text-sm font-medium text-neutral-700">Type</div>
               <Segmented options={APP_OPTIONS} value={app} onChange={setApp} label="Type" />
               {app === 'php' && <p className="measure mt-1 text-xs text-neutral-500">An empty site for your own PHP or HTML files.</p>}
+              {app === 'container' && <p className="measure mt-1 text-xs text-neutral-500">Your own image, built elsewhere.</p>}
             </div>
             <Field label="Site title">
               <input className={inputClass} value={title} onChange={(e) => setTitle(e.target.value)} autoFocus placeholder="My Customer's Site" />
@@ -235,8 +254,15 @@ export function NewSite() {
                 </select>
               </Field>
             )}
-            <Toggle checked={customDomain} onChange={setCustomDomain} label="Use my own domain instead of a dev subdomain" />
-            {customDomain ? (
+            {app === 'container' ? (
+              <div className="rounded-lg bg-neutral-50 px-4 py-3 text-sm">
+                Answers at <code className="font-semibold">{devHostname}</code>
+                <div className="mt-1 text-xs text-neutral-500">Its own domains come from its routes, a step further on.</div>
+              </div>
+            ) : (
+              <Toggle checked={customDomain} onChange={setCustomDomain} label="Use my own domain instead of a dev subdomain" />
+            )}
+            {app === 'container' ? null : customDomain ? (
               <Field
                 label="Domains (first = primary)"
                 hint="Space or comma separated. DNS must point at this server for HTTPS."
@@ -369,6 +395,22 @@ export function NewSite() {
           </div>
         )}
 
+        {stepId === 'image' && <AppImageStep draft={container} onChange={setContainer} />}
+        {stepId === 'settings' && <AppSettingsStep draft={container} onChange={setContainer} />}
+        {stepId === 'routes' && <AppRoutesStep draft={container} onChange={setContainer} devHostname={devHostname} />}
+
+        {stepId === 'review' && app === 'container' && (
+          <div className="space-y-3 text-sm">
+            <ReviewRow label="Title" value={title} />
+            {multiServer && <ReviewRow label="Server" value={selectedServer?.name ?? `#${effServerId}`} />}
+            {appReviewRows(container, devHostname, `wp_${slug.replace(/-/g, '_')}`).map(([label, value]) => (
+              <ReviewRow key={label} label={label} value={value} />
+            ))}
+            {appStopped && <p className="text-neutral-600">{appStopped}</p>}
+            <ErrorNote error={run.error} />
+          </div>
+        )}
+
         {stepId === 'review' && app === 'php' && (
           <div className="space-y-3 text-sm">
             <ReviewRow label="Type" value="PHP" />
@@ -412,7 +454,7 @@ export function NewSite() {
               Continue
             </Button>
           ) : (
-            <Button onClick={create} busy={run.active}>
+            <Button onClick={create} busy={run.active} disabled={!body} title={body ? undefined : 'Choose the image archive first.'}>
               Create site
             </Button>
           )}

@@ -2,7 +2,7 @@
 title: Plugin catalog
 description: "The set offered in the new-site wizard: wordpress.org slugs and uploaded zips."
 sidebar:
-  order: 2.18
+  order: 2.19
 sources:
   - panel/shared/apiDocs.ts
 ---

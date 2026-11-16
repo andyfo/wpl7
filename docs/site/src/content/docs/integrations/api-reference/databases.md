@@ -2,7 +2,7 @@
 title: Databases
 description: "A site's databases - its own and the others it was given - and every server's. The browser's reads and writes run as the site's own database user, so they reach that site's databases and nothing else. A PHP site may have no database: then name and user are null, and everything but its creation answers 409."
 sidebar:
-  order: 2.09
+  order: 2.1
 sources:
   - panel/shared/apiDocs.ts
 ---

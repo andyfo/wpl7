@@ -20,11 +20,11 @@ for a reason; remove one once there is nothing left to watch.
 | [RDAP: registry endpoints and bootstrap](#rdap-registry-endpoints-and-bootstrap) | Medium | 2026-11-13 13:08 UTC | .co, .io, .me and .us still absent from IANA; all four supplement endpoints publish `expiration`; RFC 8056 and ICANN's profile unchanged |
 | [Reminders: PHP and OS support dates](#reminders-php-and-os-support-dates) | Medium | 2026-11-13 13:02 UTC | All dates match; PHP 8.6 not out (GA due 2026-11-19); the interim Ubuntu 26.10 is not in the map |
 | [Reminders: Cloudflare token lifetime](#reminders-cloudflare-token-lifetime) | Medium | 2026-11-13 13:15 UTC | Contracts unchanged; neither verify endpoint is documented to take `cfoat_` OAuth tokens, so one would get no date |
-| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-11-15 18:59 UTC | Open upstream, fix #13958 awaiting review; not in v3.7.19; worked around |
-| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-11-15 18:59 UTC | 0.21.20 is out as a tag and an image, with no release yet; same definitions as the pinned 0.21.12; its Lite mode skips more signatures |
+| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-11-15 19:04 UTC | Open upstream, fix #13958 awaiting review; not in v3.7.19; worked around |
+| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-11-15 19:04 UTC | 0.21.20 is out as a tag and an image, with no release yet; same definitions as the pinned 0.21.12; its Lite mode skips more signatures and no longer errors on oversized scripts |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-11-01 09:08 UTC | Both overrides still match in 0.21.15, the latest; `@preg_replace` is still 22c684e7; engine test not run at this check |
-| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-11-15 18:59 UTC | 2.7.6 is the latest; patch still needed |
-| [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-11-15 18:59 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12, still the latest; CVE-2026-115560 unfixed, mitigated by upload progress off |
+| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-11-15 19:04 UTC | 2.7.6 is the latest; patch still needed |
+| [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-11-15 19:04 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12, still the latest; CVE-2026-115560 unfixed, mitigated by upload progress off |
 | [phpredis: the pinned 6.3.0](#phpredis-the-pinned-630) | Medium | 2026-11-01 09:08 UTC | 6.3.0 is the latest on PECL and GitHub |
 | [Redis in the site image](#redis-in-the-site-image) | Medium | 2026-11-01 09:08 UTC | Debian's 5:8.0.2-3+deb13u3; three open issues on trixie, none reachable here; `LICENSE.txt` still offers AGPLv3 |
 | [The Redis Object Cache plugin: its constants and `wp redis`](#the-redis-object-cache-plugin-its-constants-and-wp-redis) | Medium | 2026-11-01 09:08 UTC | 3.0.0 is the latest; all seven constants and `status`, `enable`, `disable` are in its code |
@@ -40,6 +40,12 @@ for a reason; remove one once there is nothing left to watch.
 | [Docker: the build cache and image names, as the nightly clean-up reads them](#docker-the-build-cache-and-image-names-as-the-nightly-clean-up-reads-them) | Medium | 2026-10-27 17:47 UTC | Docker 29.9.2: both prune parameters trim, `all` would remove shared layers first |
 | [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
 | [Docker: a signal counts as stopping a container by hand](#docker-a-signal-counts-as-stopping-a-container-by-hand) | Medium | 2026-11-01 06:30 UTC | Docker 28.1.1: after `docker kill --signal USR1`, a container with `unless-stopped` that exits stays down |
+| [Traefik: a router on web beside the HTTPS redirect](#traefik-a-router-on-web-beside-the-https-redirect) | High | 2026-11-14 20:51 UTC | Traefik 3.7.19: with the redirect at priority 1, an app's http router answers, everything else still redirects, the ACME router stays above |
+| [Docker: an image's labels on its container](#docker-an-images-labels-on-its-container) | High | 2026-11-14 20:51 UTC | Docker 28.1.1, Traefik 3.7.19: labels are inherited; `traefik.enable=false` on the container wins; the default router answers on 80 and 443 |
+| [Docker: the names in an image archive](#docker-the-names-in-an-image-archive) | Medium | 2026-11-14 20:51 UTC | Docker 28.1.1 and 27.5.1: the classic store reads `manifest.json`, containerd's `index.json`; renamed in both, only the panel's name lands |
+| [Docker: the registry's distribution answer and pulls with a login](#docker-the-registrys-distribution-answer-and-pulls-with-a-login) | Medium | 2026-11-14 20:51 UTC | Docker 28.1.1 and 27.5.1: a digest without a pull, with the login; platforms for a list only on containerd's store |
+| [Docker: unprivileged ports from 0](#docker-unprivileged-ports-from-0) | Low | 2026-11-14 20:51 UTC | Docker 28.1.1 sets `ip_unprivileged_port_start=0` in a container's namespace |
+| [Traefik's image: busybox wget, tar and unzip](#traefiks-image-busybox-wget-tar-and-unzip) | Medium | 2026-11-14 20:51 UTC | traefik:v3.7 (3.7.19): all three answer as the way in and the mount unpacker use them |
 | [Docker: a container whose image a build deleted](#docker-a-container-whose-image-a-build-deleted) | Low | 2026-11-03 09:08 UTC | Docker 29.9.2: a build deletes the image on the containerd store, and keeps it on overlay2; the container still stops, renames and starts |
 | [boky/postfix: how the relay picks its hostname](#bokypostfix-how-the-relay-picks-its-hostname) | Medium | 2026-11-08 17:26 UTC | `latest` is v5.2.1; hostname logic as relied on; rspamd idle without keys |
 | [wordpress.org's checksum lists](#wordpressorgs-checksum-lists) | Medium | 2026-11-03 08:38 UTC | Both answer as expected for WordPress 7.1.4 and Akismet 5.7.2; no scan failed to fetch them |
@@ -65,7 +71,7 @@ for a reason; remove one once there is nothing left to watch.
 | [msmtp: one envelope sender, as `wpl7-sendmail` relies on it](#msmtp-one-envelope-sender-as-wpl7-sendmail-relies-on-it) | Low | 2026-11-11 23:04 UTC | msmtp 1.8.28 in the image, 1.8.34 upstream; nothing since changes the four behaviours; the engine mail tests pass |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
 | [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 22:05 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
-| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-11-15 18:59 UTC | 6.3.0 (2026-11-03) is out, 6.2.0 still pinned; its sign-in answers 303, which the panel refuses; no new advisory; base is PHP 8.4.27 |
+| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-11-15 19:04 UTC | 6.3.0 (2026-11-03) is the latest, 6.2.0 still pinned; its sign-in answers 303, which the panel refuses; no new advisory; base is PHP 8.4.27 |
 | [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-10-20 12:22 UTC | The feed calls five listed bbPress plugins closed and misses `captcha`; the directory answers as `wporgListing` reads them |
 | [Google's crawler address lists](#googles-crawler-address-lists) | Medium | 2026-11-03 09:35 UTC | Both answer: 589 prefixes, none wider than a /27 or a /64 |
 | [ssh2: how a channel closes, as the panel's SSH channels rely on it](#ssh2-how-a-channel-closes-as-the-panels-ssh-channels-rely-on-it) | Low | 2026-11-15 10:57 UTC | 1.17.0 is the latest; channels half-open by default, `destroy()` never marks one destroyed, `'close'` waits for `'end'` or an unreadable stream |
@@ -73,7 +79,7 @@ for a reason; remove one once there is nothing left to watch.
 ## Traefik: an idle visitor's rate limit refills
 
 - **Priority:** High
-- **Last checked:** 2026-11-15 18:59 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
+- **Last checked:** 2026-11-15 19:04 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
   is open, with nothing since the Traefik team said on 2026-09-28 they would reproduce it. Its
   fix, [traefik#13958](https://github.com/traefik/traefik/pull/13958) (against `v3.7`, milestone
   3.7), still waits for review, with nothing since a user's comment of 2026-10-29 asking for a
@@ -87,7 +93,7 @@ for a reason; remove one once there is nothing left to watch.
   leaves `/..;x/` in the path a router matches, which bypasses a rule only in front of a backend
   that strips path parameters, such as a servlet container; Apache and nginx, in front of PHP,
   take `..;x` for a folder's name. Nothing under `pkg/middlewares/ratelimiter` has changed on `v3.7`, `v3.8` or
-  `master` since 2026-09-24.
+  `master` since 2026-09-24. A server gets the five when it next pulls `traefik:v3.7`.
 - **The problem:** Traefik drops a visitor's rate-limit bucket after `1 + 1/rate` seconds without
   a request - 2 seconds for limits of one a second or more, 4 for 20 a minute - and starts the
   next request on a full burst. With logins at 20 a minute in bursts of 30, a guesser who paused
@@ -107,19 +113,23 @@ for a reason; remove one once there is nothing left to watch.
 ## AMWScan: the pinned image and its signatures
 
 - **Priority:** High
-- **Last checked:** 2026-11-15 18:59 UTC. Upstream moved on the day of this check: 0.21.16 to
-  0.21.20 were tagged within half an hour, and of the five only 0.21.20 has a Docker Hub image.
-  None has a GitHub release yet, so v0.21.15 (2026-10-03) is still the latest there. We pin
-  0.21.12, whose definitions are 2026.09.08.1, and 0.21.20 bundles the same: its
-  `signatures.json`, `exploits.json` and `hashes.json` are those of 0.21.15 byte for byte,
-  `functions.json` has the same content, and the manifest differs in `createdAt` only. What
-  changed is the engine and the image. `--lite`, which WPL7 passes, now skips four more
-  signatures (`0f53abf5`, `85310fdd`, `8c60fbdb`, `e6300ec0`) and any signature match that
-  contains `ls-la` or a schema.org product snippet. There is a new `--memory-limit` (the default
-  stays 1G), a patched Symfony Filesystem, and libxml2 and musl from Alpine edge in the image. The
-  pin stays for now: the signatures are the same, and a release that took five tags in half an
-  hour may not have settled. Moving it comes up again once 0.21.20, or what follows it, has a
-  release: it would report fewer Lite-mode false positives, and check every catalog zip again.
+- **Last checked:** 2026-11-15 19:04 UTC. Upstream moved on the day of this check: 0.21.16 to
+  0.21.20 were tagged within half an hour, after a 0.22.0 it took back, and of the five only
+  0.21.20 has a Docker Hub image. None has a GitHub release yet, so v0.21.15 (2026-10-03) is still
+  the latest there. We pin 0.21.12, whose definitions are 2026.09.08.1, and 0.21.20 bundles the
+  same: its `signatures.json`, `exploits.json` and `hashes.json` are those of 0.21.15 byte for
+  byte, `functions.json` has the same content, and the manifest differs in `createdAt` only. What
+  changed is the engine and the image. `--lite`, which WPL7 passes, now skips four more signatures
+  (`0f53abf5`, `85310fdd`, `8c60fbdb`, `e6300ec0`) and any signature match that contains `ls-la`
+  or a schema.org product snippet. It also defines `LITE_SIGNATURE_MATCH_EXCLUSIONS`, which
+  0.21.12 to 0.21.15 read without defining: in Lite mode, a signature found in the first or last
+  32 KiB of an oversized script raises a PHP error there (`Undefined constant`) instead of a
+  finding. What the pinned scanner then reports for that file was not traced. There is a new
+  `--memory-limit` (the default stays 1G), a patched Symfony Filesystem, and libxml2 and musl from
+  Alpine edge in the image. The pin stays for now: the signatures are the same, and a release that
+  took five tags in half an hour may not have settled. Moving it comes up again once 0.21.20, or
+  what follows it, has a release: it would report fewer Lite-mode false positives, end the
+  oversized-script error, and check every catalog zip again.
 - **The problem:** the scanner image is pinned by digest (`SCANNER_IMAGE` in
   `panel/src/services/scanEngines.ts`) and runs with `--disable-definitions-update`. Its
   signatures are the ones bundled in that image, and they age until the pin moves. Upstream
@@ -168,7 +178,7 @@ for a reason; remove one once there is nothing left to watch.
 ## SFTPGo: our build and its overwrite patch
 
 - **Priority:** High
-- **Last checked:** 2026-11-15 18:59 UTC. We build v2.7.6 (commit 62ae9ba3) with
+- **Last checked:** 2026-11-15 19:04 UTC. We build v2.7.6 (commit 62ae9ba3) with
   `deploy/sftpgo-image/staged-overwrite.patch`; v2.7.6 (2026-09-19) is still the latest release,
   and no advisory has been published since the four of that day, which 2.7.6 fixes (one high:
   stored XSS through directory names in the WebClient). The `2.7.x` branch has not moved since
@@ -179,7 +189,7 @@ for a reason; remove one once there is nothing left to watch.
   handlers the patch changes, and the rename that completes an atomic upload
   (`BaseTransfer.Close`, `internal/common/transfer.go`) is unchanged since 2026-10-17. The
   patch's code still applies to `main`; one test hunk, in `internal/sftpd/sftpd_test.go`, does
-  not.
+  not. `main` now needs Go 1.27, so the builder image moves with the next release.
 - **The problem:** SFTPGo is on the internet (FTP and SFTP). Upstream's `upload_mode: 1` renames
   an existing file to a temporary name before an overwrite, so the file is missing for the whole
   transfer - WordPress without its `wp-config.php` shows the installer - and is deleted if the
@@ -198,7 +208,7 @@ for a reason; remove one once there is nothing left to watch.
 ## PHP security releases and the site image's floor
 
 - **Priority:** High
-- **Last checked:** 2026-11-15 18:59 UTC. No PHP release and no GitHub advisory since the last
+- **Last checked:** 2026-11-15 19:04 UTC. No PHP release and no GitHub advisory since the last
   check. PHP 8.5.12, 8.4.27, 8.3.36 and 8.2.35 (2026-10-21) are still the latest; they fix two
   critical remote code execution bugs, CVE-2026-109618 and CVE-2026-109619 (GHSA-w8hw-w9fx-j79w,
   GHSA-6wmf-4rv5-p3rp), and the floor is set to them. The official `php` images carry the same
@@ -565,6 +575,119 @@ for a reason; remove one once there is nothing left to watch.
   lifts the cap. Then `updateContainerLimits` can send it, `limitsChange` loses `recreate`, and
   the "restarts each site once" sentences go from Settings, the site's Container limits card and
   `docs/site/src/content/docs/sites/settings.mdx`.
+
+## Traefik: a router on web beside the HTTPS redirect
+
+- **Priority:** High
+- **Last checked:** 2026-11-14 20:51 UTC. On Traefik 3.7.19, with `deploy/docker-compose.yml`'s own
+  flags plus `--entrypoints.web.http.redirections.entrypoint.priority=1`, a container app's router on
+  `web` answers plain http, and every other request on port 80 still redirects: a WordPress and a PHP
+  site under the panel's labels and protection files, and a host nobody has. The ACME challenge router
+  (`acme-http@internal`, MaxInt) stays above every app route, and Pebble issued certificates over
+  HTTP-01 for the app's host and the sites'. Without the flag, the redirect beats every router on `web`.
+- **The problem:** a container app may answer plain http (a payment provider's webhook, an old client).
+  Traefik's entry point redirect is a router of its own; its default priority is the highest there is,
+  so a router on `web` never answers. Set to 1, any router there wins over it.
+- **What we do about it:** the flag in `deploy/docker-compose.yml`. Only app http routers and the block
+  list's `-web` twin are on `web` (`panel/src/services/appRoutes.ts`, `firewallRender.ts`).
+  `plainHttpRefusal` refuses an http route on a server whose running Traefik lacks the flag.
+  `test/engine/containerApps.test.ts` item 1 and `composeFlags.test.ts` pin it.
+- **Check:** the Traefik release notes since the last check for entry point redirections, router
+  priorities and the ACME HTTP challenge. To measure: `WPL7_ENGINE_TESTS=1 npx vitest run
+  test/engine/containerApps.test.ts -t "1. plain http"` in `panel/`, with the compose file's Traefik.
+- **When it changes:** if the option goes or changes meaning, plain http routes stop answering, or the
+  redirect stops for everyone: move the redirect to a router of the panel's own at priority 1 instead.
+  If the ACME router can lose to a router on `web`, give app routes a rule that leaves
+  `/.well-known/acme-challenge/` out.
+
+## Docker: an image's labels on its container
+
+- **Priority:** High
+- **Last checked:** 2026-11-14 20:51 UTC. On Docker 28.1.1 with Traefik 3.7.19, an image's `traefik.*`
+  and `wpl7.*` labels land on a container made without labels: Traefik routed another site's domain to
+  it at once, and `listManaged(['wpl7.role=wordpress'])` counted it as that site's. `traefik.enable=false`
+  on the container wins over the image's. A container with `traefik.enable=true` and only a service label
+  gets a default router, `Host(<container name>)` with no TLS, on ports 80 and 443.
+- **The problem:** a container app's image is the user's, built elsewhere. Its labels would claim
+  domains in Traefik and pass for a site's container in the panel's sweeps.
+- **What we do about it:** an image with a `traefik.*` or `wpl7.*` label is refused after its pull or
+  load (`labelRefusal` in `panel/src/services/appImages.ts`). The app's container carries
+  `traefik.enable=false` and no other Traefik label (`appLabels` in `appSpec.ts`); its routes are a
+  file. `test/engine/containerApps.test.ts` items 3 and 7.
+- **Check:** the Docker Engine and Traefik release notes since the last check for label inheritance,
+  `exposedByDefault` and the Docker provider's default rule. To measure: items 3 and 7 of the engine
+  test above.
+- **When it changes:** if Traefik stops honouring `traefik.enable=false` over an image's label, the
+  container needs `--providers.docker.exposedbydefault=false` on the stack, with every site's router
+  opted in. If Docker stops passing labels on, nothing has to change.
+
+## Docker: the names in an image archive
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-14 20:51 UTC. `docker save` writes `manifest.json` (`RepoTags`), `index.json`
+  (`io.containerd.image.name`) and, on the classic store, `repositories`. A load of an archive that
+  carries a name the server has gives the name away. When the places disagree, the classic store goes
+  by `manifest.json` and containerd's by `index.json`. Renamed in all three places, only the new name
+  lands. The classic store refuses an archive whose entries carry extended attributes. Measured on
+  Docker 28.1.1 (containerd) and 27.5.1 (both stores).
+- **The problem:** an uploaded archive could plant a name the server uses: a site image, or a name it
+  takes later.
+- **What we do about it:** `panel/src/services/imageArchive.ts` reads every entry, refuses more than one
+  image, and rewrites every name to `wpl7-app-<slug>:u<id>` in all three files before the load, as a
+  plain tar. `test/engine/containerImages.test.ts` item 9 and the e2e on both stores.
+- **Check:** the Docker Engine release notes for `docker load`, the image stores and the OCI layout. To
+  measure: item 9 of the image engine test, and `test/e2e/ssh-transport.sh` with both stores.
+- **When it changes:** a new place a load reads a name from has to be rewritten too, in
+  `renamedArchive`.
+
+## Docker: the registry's distribution answer and pulls with a login
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-14 20:51 UTC. With a login (`registry:2`, bcrypt), the Engine API's
+  distribution endpoint gives a tag's digest without a pull, locally and over the SSH agent, on both
+  stores. A pull by digest leaves a local tag where it was. Before a pull, the answer lists a list's
+  platforms (with `unknown/unknown` attestation entries); for a single image it gives the platform on
+  the classic store and nothing on containerd's. A list without the server's platform fails the pull.
+  Docker 28.1.1 and 27.5.1.
+- **The problem:** app-updates asks the registry every interval instead of pulling, and the platform
+  check rests on what the answer says.
+- **What we do about it:** `resolveDigest` and `pullPinned` in `panel/src/services/appImages.ts`. A single
+  image's platform is checked after the pull. `test/engine/containerImages.test.ts` items 4 and 6.
+- **Check:** the Engine API changelog for `/distribution/{name}/json` and image pulls with
+  `X-Registry-Auth`. To measure: items 4 and 6 of the image engine test.
+- **When it changes:** if the answer stops giving a digest, app-updates has to pull to compare. If it
+  gives a single image's platform on every store, the check can move before the pull.
+
+## Docker: unprivileged ports from 0
+
+- **Priority:** Low
+- **Last checked:** 2026-11-14 20:51 UTC. Docker 28.1.1 sets `net.ipv4.ip_unprivileged_port_start=0` in
+  a container's network namespace: an app running as uid 10001 with every capability dropped listened on
+  port 80. Set to 1024, it can't.
+- **The problem:** a container app's image may listen on a port below 1024 as a user that is not root.
+- **What we do about it:** nothing: there is no switch for it (`test/engine/containerImages.test.ts`
+  item 5 measures it).
+- **Check:** the Docker Engine release notes for the default sysctls of a container's network
+  namespace. To measure: item 5 of the image engine test.
+- **When it changes:** set `Sysctls: { 'net.ipv4.ip_unprivileged_port_start': '0' }` in
+  `createSiteContainer` for an app.
+
+## Traefik's image: busybox wget, tar and unzip
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-14 20:51 UTC. In `traefik:v3.7` (3.7.19), busybox `wget -S` prints each
+  answer's status line, a stopped app fails in about 200 ms ("bad address"), and `tar -xzf`, `tar -tzf`,
+  `unzip -l` and `unzip -q -o` work as a uid with no capability, no network and a read-only root.
+- **The problem:** the way in to a container app (its health check and uptime check) and the mount
+  unpacker run in a short-lived container of the image the server's Traefik runs, because every server
+  has it.
+- **What we do about it:** `askApp` in `panel/src/services/appProbe.ts`, and `mountListScript` and
+  `mountUnpackScript` in `panel/src/jobs/handlers/apps.ts`. `test/engine/containerApps.test.ts` items 8
+  and 11.
+- **Check:** the Traefik image's Dockerfile and its base image since the last check. To measure: items
+  8 and 11 of the engine test.
+- **When it changes:** if the image loses busybox or one of its applets, use the MariaDB client image,
+  which every server has too, or a small image of the panel's own.
 
 ## Docker: a container whose image a build deleted
 
@@ -1262,8 +1385,9 @@ for a reason; remove one once there is nothing left to watch.
 ## Adminer: the pinned build and its advisories
 
 - **Priority:** High
-- **Last checked:** 2026-11-15 18:59 UTC. Adminer 6.3.0 (2026-11-03) is the latest release; the
-  image still pins 6.2.0. 6.3.0 fixes a CSRF regression from 6.0.1 that has no advisory: a POST
+- **Last checked:** 2026-11-15 19:04 UTC. No release and no advisory since the last check.
+  Adminer 6.3.0 (2026-11-03) is the latest release; the image still pins 6.2.0. 6.3.0 fixes a
+  CSRF regression from 6.0.1 that has no advisory: a POST
   with any `auth[]` field and a wrong token had the token replaced by a valid one, and ran its
   action in the existing session (vrana/adminer#1375). It does not reach our build: `router.php`
   refuses a POST with `auth` that lacks the panel's login key, and the panel's own sign-in posts
@@ -1275,8 +1399,8 @@ for a reason; remove one once there is nothing left to watch.
   too, the tests that expect 302 changed, and the engine test run on 6.3.0, which this check did
   not do. There are still 22 advisories, the newest
   GHSA-r9r5-j5q8-8c59 (2026-09-25), in the SQLite driver, which the MySQL-only build leaves out.
-  The image's base, `php:8.4-cli-alpine`, is PHP 8.4.27 (rebuilt 2026-11-05). The engine test was
-  not run at this check.
+  The image's base, `php:8.4-cli-alpine`, is still PHP 8.4.27 (built 2026-11-05). The engine test
+  was not run at this check.
 - **The problem:** "Open in Adminer" runs Adminer's MySQL-only English build on every server
   that uses it, pinned in `deploy/adminer-image/Dockerfile` by `ADMINER_VERSION` and
   `ADMINER_SHA256`. It sits behind the panel's front door, signs in as a site's own database

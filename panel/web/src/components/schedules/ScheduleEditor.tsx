@@ -24,9 +24,12 @@ import { cliArgsProblem, formatCliArgs, tokenizeCli } from '../../lib/cliArgs';
 import { cronPatternError, formatRunTime } from '../../lib/cron';
 import {
   cronScheduleProblem,
+  leftOutText,
   parseRestBody,
   restRouteProblem,
+  skipReason,
   suggestName,
+  takesSite,
   targetText,
   type ServerName,
 } from '../../lib/schedules';
@@ -224,21 +227,6 @@ const sameTarget = (a: ScheduleTarget | null, b: ScheduleTarget | null): boolean
   if (a.kind === 'server' && b.kind === 'server') return a.serverId === b.serverId;
   return true;
 };
-
-/** Why a site would be left out of a run of this action, or null. Mirrors ineligible() in src/jobs/actions.ts. */
-function skipReason(action: ScheduleAction, site: SiteSummary): string | null {
-  if (site.status === 'provisioning' || site.status === 'deleting') return site.status;
-  // Read in the checklist and in "<slug> is <reason>: a run skips it…".
-  if (site.app === 'php' && (SCHEDULE_ACTION_INFO[action] as { wordpress?: boolean }).wordpress) return 'a PHP site, with no WordPress';
-  if (site.kind === 'external') {
-    const info: { external: boolean; externalRefusal?: string } = SCHEDULE_ACTION_INFO[action];
-    if (!info.external) return `external: ${info.externalRefusal ?? 'cannot take this'}`;
-    return site.status === 'connected' ? null : site.status;
-  }
-  if (action === 'backup') return null;
-  if (action === 'site.start') return site.status === 'running' ? 'already running' : null;
-  return site.status === 'running' ? null : site.status;
-}
 
 const FIELD_NAMES: Record<string, string> = {
   name: 'Name',
@@ -547,12 +535,11 @@ export function ScheduleEditor({
     .filter(Boolean)
     .join(' · ');
 
-  // An action that needs WordPress leaves PHP sites out of All sites and Server.
-  const wordpressOnly = (info as { wordpress?: boolean }).wordpress === true;
-  const takes = (s: SiteSummary) => !(wordpressOnly && s.app === 'php');
+  // An action that needs WordPress leaves PHP sites and container apps out of All sites and Server.
+  const takes = (s: SiteSummary) => takesSite(d.action, s);
   const runningCount = sites.filter((s) => s.status === 'running' && takes(s)).length;
   const externalCount = sites.filter((s) => s.kind === 'external' && s.status === 'connected').length;
-  const phpLeftOut = sites.some((s) => !takes(s));
+  const leftOut = leftOutText(d.action, sites);
   const serverSites = (id: number | null) =>
     sites.filter((s) => s.serverId === id && takes(s) && (d.action === 'site.start' ? s.status === 'stopped' : s.status === 'running')).length;
   const chosenSite = siteBySlug.get(d.site);
@@ -660,7 +647,7 @@ export function ScheduleEditor({
                 (info.external
                   ? ` Connected external sites are included too (${externalCount} now).`
                   : ' External sites are left out.')}
-              {phpLeftOut && ' PHP sites are left out.'}
+              {leftOut && ` ${leftOut}`}
             </p>
           )}
           {d.mode === 'server' && (

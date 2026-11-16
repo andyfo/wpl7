@@ -1,6 +1,10 @@
 // @docs backups/delete, get-started/first-site, integrations/cloudflare, integrations/dns, panel/updating, sites/create, sites/domains, sites/php, sites/settings
+import { rmSync } from 'node:fs';
+import path from 'node:path';
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
+import { appHardeningInput } from '../../../shared/schemas.js';
+import { UPLOAD_ID_RE } from '../../../shared/siteFilePath.js';
 import { siteConnections, backups, moveCleanups, sites, type SiteRow } from '../../db/schema.js';
 import { BACKUP_DELETE_LANE } from '../../services/backup.js';
 import type { CoreServices } from '../../services/index.js';
@@ -46,13 +50,14 @@ import {
   siteShouldRun,
   siteUrl,
   startSiteContainer,
+  stopGraceOf,
   syncRelayAuth,
   updateSiteRow,
   waitForWordPressFiles,
   writeSiteJson,
 } from './shared.js';
 import { requireRunning } from './wp.js';
-import { hasDatabase, isExternal, isPhpSite } from '../../lib/siteKind.js';
+import { hasDatabase, isContainerApp, isExternal, isPhpSite } from '../../lib/siteKind.js';
 import { PLACEHOLDER_FILE, renderPlaceholderPage } from '../../services/phpSite.js';
 import { writeMailFrom } from '../../services/siteCaches.js';
 import { parseSiteCacheRules } from '../../../shared/cacheRules.js';
@@ -70,6 +75,8 @@ export const siteCreatePayload = z.object({
   pluginZipPaths: z.array(z.string()).default([]),
   /** Default for jobs enqueued before the option existed - same answer the form gives. */
   discourageSearchEngines: z.boolean().default(true),
+  /** A container app's uploaded image, when it was made from one (services/apps.ts): checked as a deploy's is. */
+  uploadId: z.string().regex(UPLOAD_ID_RE).optional(),
 });
 
 /**
@@ -88,6 +95,8 @@ async function preparePhpSiteFolder(ctx: JobContext<unknown>, server: ServerHand
 
 export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayload>>, s: CoreServices): Promise<void> {
   const site = loadSite(s.db, ctx.payload.siteId);
+  // Its own image, folders and checks: none of the site image's steps (handlers/apps.ts).
+  if (isContainerApp(site)) return (await import('./apps.js')).createApp(ctx, s);
   const server = s.servers.handleFor(site.serverId);
   const domains = siteDomains(site);
   const primary = domains[0]!;
@@ -121,7 +130,7 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
     await server.files.mkdirp(p.wordpress);
     if (php) await preparePhpSiteFolder(ctx, server, site, p.wordpress);
     await ensureSiteMountSources(server, s, site, ctx);
-    await writeSiteJson(server, s.config, site);
+    await writeSiteJson(server, s, site);
 
     // The container is only ever a member of its own network plus the shared egress one, so
     // the network has to exist before it is created. Traefik, the relay and MariaDB are
@@ -175,7 +184,7 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
 
     updateSiteRow(s.db, site.id, { status: 'running' });
     releaseProtection?.();
-    await writeSiteJson(server, s.config, loadSite(s.db, site.id));
+    await writeSiteJson(server, s, loadSite(s.db, site.id));
     const result: Record<string, unknown> = { url, slug: site.slug };
     if (!php && ctx.payload.passwordGenerated) result.adminPassword = ctx.payload.adminPassword;
     ctx.setResult(result);
@@ -325,10 +334,23 @@ async function publishWordPress(ctx: JobContext<unknown>, s: CoreServices, serve
 
 /**
  * A create that was canceled while still queued never ran: nothing exists yet except the
- * row that reserves the slug. Without this the site stayed `provisioning` for ever - the
- * slug taken, start/stop refused - until someone worked out that Delete was the way out.
+ * row that reserves the slug, and a container app's upload the create took. Without this the
+ * site stayed `provisioning` for ever - the slug taken, start/stop refused - until someone
+ * worked out that Delete was the way out; and the upload stayed taken, which no clean-up
+ * removes, until the panel restarted.
  */
 export function siteCreateQueuedCancel(payload: z.infer<typeof siteCreatePayload>, s: CoreServices): void {
+  // Let go of and removed, as a canceled deploy's is (handlers/apps.ts appDeployQueuedCancel).
+  // Synchronous: it runs inside the worker's cancel.
+  const { uploadId } = payload;
+  if (uploadId) {
+    s.apps.releaseUpload(uploadId);
+    try {
+      if (UPLOAD_ID_RE.test(uploadId)) rmSync(s.apps.uploadPath(uploadId), { force: true });
+    } catch (err) {
+      s.log.warn(`The uploaded image of a canceled create was not removed: ${errMsg(err)}`);
+    }
+  }
   const site = s.db.select().from(sites).where(eq(sites.id, payload.siteId)).get();
   if (!site || site.status !== 'provisioning') return;
   s.db.delete(sites).where(eq(sites.id, site.id)).run();
@@ -417,8 +439,9 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   const server = s.servers.handleFor(site.serverId);
   updateSiteRow(s.db, site.id, { status: 'deleting' });
   // A site being deleted has no rules file: its routers would only point at a container
-  // that is about to go.
+  // that is about to go. A container app's routes file goes the same way, first.
   await s.security.kick(server.id);
+  if (isContainerApp(site)) await s.appRoutes.kick(server.id);
 
   // A recently-moved site may still have its old copy parked on the source server.
   const { pendingCleanupFor, finalizeCleanup } = await import('./move.js');
@@ -453,9 +476,10 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   let finalBackupId: number | null = null;
   // Not there means nothing to back up. A check that failed means nothing at all: taken for
   // "not there", it would delete the site without the backup that was asked for.
+  // A container app keeps its files in data/ (services/appSpec.ts), a site in wordpress/.
   const hasFiles =
     ctx.payload.finalBackup &&
-    (await server.files.exists(p.wordpress).catch((err: unknown) => {
+    (await server.files.exists(isContainerApp(site) ? path.join(p.root, 'data') : p.wordpress).catch((err: unknown) => {
       updateSiteRow(s.db, site.id, { status: 'error' });
       throw new Error(`Could not check the site's files for its final backup - site NOT deleted: ${errMsg(err)}`);
     }));
@@ -475,7 +499,7 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   // What the site's plugins want done before it goes: release their activations (Breakdance
   // counts sites, ACF PRO counts production URLs). Best effort - a vendor that cannot be
   // reached must not keep a site from being deleted. A PHP site has no plugins.
-  if (!isPhpSite(site)) await releaseLicenses(ctx, s, server, site);
+  if (site.app === 'wordpress') await releaseLicenses(ctx, s, server, site);
 
   // Teardown is absence-tolerant and safe to repeat, but any of these can still fail
   // (server unreachable mid-delete). Leaving the row on 'deleting' would then wedge the
@@ -484,7 +508,8 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   const hadFtp = s.ftp.hasLogins(site.id);
   try {
     ctx.info('Removing container…');
-    await removeSiteContainers(server.docker, site.containerName);
+    await removeSiteContainers(server.docker, site.containerName, isContainerApp(site) ? { volumes: true } : undefined);
+    if (isContainerApp(site)) await (await import('./apps.js')).removeAppImages(ctx, s, server, site);
     if (hadFtp) {
       // Before the files go: its FTP file server has them mounted.
       ctx.info('Removing FTP/SFTP access…');
@@ -644,17 +669,24 @@ export async function siteStart(ctx: JobContext<z.infer<typeof siteIdPayload>>, 
   const server = s.servers.handleFor(site.serverId);
   ctx.info(`Starting ${site.containerName}…`);
   await startSiteContainer(server, s, site, ctx);
+  // A container app's staged port is tried first: its routes then go to the one that answered.
+  if (isContainerApp(site)) await (await import('./apps.js')).tryStagedPort(ctx, s, server, site);
   updateSiteRow(s.db, site.id, { status: 'running' });
   await s.security.kick(server.id);
+  // A container app's routes are written for a running app only.
+  if (isContainerApp(site)) await s.appRoutes.kick(server.id);
 }
 
 export async function siteStop(ctx: JobContext<z.infer<typeof siteIdPayload>>, s: CoreServices): Promise<void> {
   const site = loadSite(s.db, ctx.payload.siteId);
   const server = s.servers.handleFor(site.serverId);
-  ctx.info(`Stopping ${site.containerName}…`);
-  await server.docker.stopContainer(site.containerName);
+  const grace = stopGraceOf(s.db, site);
+  ctx.info(`Stopping ${site.containerName}${grace !== undefined ? ` (up to ${grace} s for it to finish)` : ''}…`);
+  await server.docker.stopContainer(site.containerName, grace);
   updateSiteRow(s.db, site.id, { status: 'stopped' });
   await s.security.kick(server.id);
+  // Its routes go: a path it took on another site's domain is that site's again.
+  if (isContainerApp(site)) await s.appRoutes.kick(server.id);
 }
 
 export async function siteRestart(ctx: JobContext<z.infer<typeof siteIdPayload>>, s: CoreServices): Promise<void> {
@@ -662,7 +694,10 @@ export async function siteRestart(ctx: JobContext<z.infer<typeof siteIdPayload>>
   const server = s.servers.handleFor(site.serverId);
   ctx.info(`Restarting ${site.containerName}…`);
   await restartSiteContainer(server, s, site, ctx);
+  if (isContainerApp(site)) await (await import('./apps.js')).tryStagedPort(ctx, s, server, site);
   updateSiteRow(s.db, site.id, { status: 'running' });
+  // A stopped app runs again: its routes come back with it, as at a start.
+  if (isContainerApp(site)) await s.appRoutes.kick(server.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -705,6 +740,8 @@ export async function replaceContainer(
   run: boolean,
   opts: { check?: () => Promise<string | null> } = {},
 ): Promise<ReplacedContainer> {
+  // A container app's container is replaced from its own image (jobs/handlers/apps.ts): never this way.
+  if (isContainerApp(row)) throw new Error(`"${row.slug}" is a container app: this works only for sites on the site image.`);
   const { docker } = server;
   const name = next.site.containerName;
   await takeBackAside(ctx, server, s, row, name, run);
@@ -766,21 +803,24 @@ export async function replaceContainer(
 }
 
 /**
- * Give a site's container the name of its way back, then stop it at once, as removing it did. In
- * that order: a panel that stops in between leaves a site that still serves, not one that looks
- * stopped on purpose.
+ * Give a site's container the name of its way back, then stop it - at once, as removing it did, or
+ * after a container app's grace, so that a worker in it can finish. In that order: a panel that
+ * stops in between leaves a site that still serves, not one that looks stopped on purpose.
  */
-async function setAside(docker: ServerHandle['docker'], name: string): Promise<void> {
+export async function setAside(docker: ServerHandle['docker'], name: string, graceSeconds = 0): Promise<void> {
   await docker.renameContainer(name, asideContainerName(name));
-  await docker.stopContainer(asideContainerName(name), 0);
+  await docker.stopContainer(asideContainerName(name), graceSeconds);
 }
 
-/** The new container goes, if it got that far, and the old one takes its name back, not started. */
-async function putBack(docker: ServerHandle['docker'], name: string): Promise<void> {
+/**
+ * The new container goes, if it got that far, and the old one takes its name back, not started.
+ * `removal`: how the new one is removed (a container app's with its anonymous volumes).
+ */
+export async function putBack(docker: ServerHandle['docker'], name: string, removal?: { volumes?: boolean }): Promise<void> {
   const aside = asideContainerName(name);
   // Never renamed: the name is still the old container's, and nothing else has it.
   if ((await docker.containerState(aside)) === 'missing') return;
-  await docker.removeContainer(name);
+  await docker.removeContainer(name, removal);
   await docker.renameContainer(aside, name);
 }
 
@@ -794,10 +834,10 @@ async function putBack(docker: ServerHandle['docker'], name: string): Promise<vo
  * stack 2 would take it for a site that wasn't answering, keep a new container that doesn't answer
  * either, and delete this one.
  */
-async function takeBackAside(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, row: SiteRow, name: string, run: boolean): Promise<void> {
+export async function takeBackAside(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, row: SiteRow, name: string, run: boolean): Promise<void> {
   if ((await server.docker.containerState(asideContainerName(name))) === 'missing') return;
   ctx.warn(`${asideContainerName(name)} is the container from before a change that did not finish. It comes back first.`);
-  await putBack(server.docker, name);
+  await putBack(server.docker, name, isContainerApp(row) ? { volumes: true } : undefined);
   if (!run) return;
   try {
     await startSiteContainer(server, s, row, ctx);
@@ -806,10 +846,13 @@ async function takeBackAside(ctx: JobContext<unknown>, server: ServerHandle, s: 
   }
 }
 
-/** The old container, once the new one is in place. Never a reason to fail: the next change, or the image sweep, deals with it. */
-async function dropAside(ctx: JobContext<unknown>, docker: ServerHandle['docker'], name: string): Promise<void> {
+/**
+ * The old container, once the new one is in place. Never a reason to fail: the next change, or the
+ * image sweep, deals with it. `removal` as for putBack.
+ */
+export async function dropAside(ctx: JobContext<unknown>, docker: ServerHandle['docker'], name: string, removal?: { volumes?: boolean }): Promise<void> {
   try {
-    await docker.removeContainer(asideContainerName(name));
+    await docker.removeContainer(asideContainerName(name), removal);
   } catch (err) {
     ctx.warn(`Could not remove the old container, ${asideContainerName(name)} (${errMsg(err)}).`);
   }
@@ -850,7 +893,7 @@ export const GEOLOCATE_OFF_REASON = "WooCommerce's Geolocate setting changes pri
 async function keepGeolocateStoreOff(ctx: JobContext<unknown>, server: ServerHandle, s: CoreServices, row: SiteRow): Promise<void> {
   const current = loadSite(s.db, row.id);
   // A PHP site has no page cache, and no WooCommerce of the panel's to ask.
-  if (current.pageCache !== null || isPhpSite(current)) return;
+  if (current.pageCache !== null || current.app !== 'wordpress') return;
   try {
     const skip = ['--skip-plugins', '--skip-themes'];
     const active = await server.wp.run(row.containerName, ['plugin', 'is-active', 'woocommerce', ...skip], 30_000);
@@ -1007,7 +1050,7 @@ export const siteChangePhpPayload = z.object({
 });
 
 export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhpPayload>>, s: CoreServices): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
+  const site = loadSite(s.db, ctx.payload.siteId, { app: 'siteImage' });
   const server = s.servers.handleFor(site.serverId);
   const oldVersion = site.phpVersion;
   const newVersion = ctx.payload.phpVersion;
@@ -1052,7 +1095,7 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
     throw err;
   }
   updateSiteRow(s.db, site.id, { phpVersion: newVersion });
-  await writeSiteJson(server, s.config, loadSite(s.db, site.id));
+  await writeSiteJson(server, s, loadSite(s.db, site.id));
   ctx.info(`Site now runs PHP ${newVersion}.`);
   ctx.setResult({ phpVersion: newVersion });
 }
@@ -1061,8 +1104,17 @@ export async function siteChangePhp(ctx: JobContext<z.infer<typeof siteChangePhp
 
 export const siteReconcilePayload = z.object({
   siteId: z.number().int(),
-  /** Someone asked for this: a site whose move to stack 2 failed tries again, on the same image. */
+  /**
+   * Someone asked for this (Recreate container, Retry): a site whose move to stack 2 failed tries
+   * again, on the same image. A container app's recreate is the same whoever asked.
+   */
   retrySwitch: z.boolean().optional(),
+  /**
+   * A container app's new user (services/apps.ts patch): the new container's, and the app's row's
+   * only once it has passed (handlers/apps.ts reconcileApp). Checked as the patch is. A new port is
+   * staged on the row instead (app_settings.next_port): the next start, deploy or recreate tries it.
+   */
+  appRunAs: appHardeningInput.shape.runAs,
 });
 
 /**
@@ -1088,6 +1140,8 @@ export const siteReconcilePayload = z.object({
  */
 export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcilePayload>>, s: CoreServices): Promise<void> {
   let site = loadSite(s.db, ctx.payload.siteId);
+  // Made from its own image, behind its health gate (handlers/apps.ts).
+  if (isContainerApp(site)) return (await import('./apps.js')).reconcileApp(ctx, s, site, { runAs: ctx.payload.appRunAs });
   if (ctx.payload.retrySwitch && site.stackSwitchImage !== null) {
     updateSiteRow(s.db, site.id, { stackSwitchImage: null });
     site = loadSite(s.db, site.id);
@@ -1153,7 +1207,7 @@ export async function siteReconcile(ctx: JobContext<z.infer<typeof siteReconcile
     // success while leaving the site down is how a 404 goes unexplained.
     ctx.warn('The site was stopped before reconciling, so it has been left stopped. Use Start to bring it up.');
   }
-  await writeSiteJson(server, s.config, loadSite(s.db, site.id));
+  await writeSiteJson(server, s, loadSite(s.db, site.id));
   await s.security.kick(server.id);
   ctx.info(changed.length > 0 ? `Reconciled: ${changed.join('; ')}.` : 'Reconciled (already current).');
   ctx.setResult({ slug: site.slug, changed });
@@ -1181,7 +1235,7 @@ export async function siteUpdateDomains(
   ctx: JobContext<z.infer<typeof siteUpdateDomainsPayload>>,
   s: CoreServices,
 ): Promise<void> {
-  const site = loadSite(s.db, ctx.payload.siteId);
+  const site = loadSite(s.db, ctx.payload.siteId, { app: 'siteImage' });
   const server = s.servers.handleFor(site.serverId);
   const oldDomains = siteDomains(site);
   const oldPrimary = oldDomains[0]!;
@@ -1302,7 +1356,7 @@ export async function siteUpdateDomains(
   // they were given is the old one. Read for each message: a site that went live sends as its new
   // domain from here on.
   await writeMailFrom(server, s.config, loadSite(s.db, site.id));
-  await writeSiteJson(server, s.config, loadSite(s.db, site.id));
+  await writeSiteJson(server, s, loadSite(s.db, site.id));
   // Row is authoritative again: re-sync so domains dropped from the site stop being owned by it.
   await syncRelayAuth(ctx, s);
   // Its rules name its hosts, so they follow the new list.

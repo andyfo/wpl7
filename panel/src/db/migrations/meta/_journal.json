@@ -225,6 +225,27 @@
       "when": 1794431544473,
       "tag": "0031_php_sites",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1794681198796,
+      "tag": "0032_container_apps",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1794771705377,
+      "tag": "0033_app_next_port",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1794783123081,
+      "tag": "0034_app_deploy_port",
+      "breakpoints": true
     }
   ]
 }

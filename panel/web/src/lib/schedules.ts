@@ -1,6 +1,6 @@
 // @docs automations/custom-jobs, automations/schedules
-import type { ScheduleDto } from '../../../shared/types';
-import { MIN_SCHEDULE_GAP_MS, type ScheduleAction, type ScheduleTarget } from '../../../shared/scheduleActions';
+import type { ScheduleDto, SiteSummary } from '../../../shared/types';
+import { MIN_SCHEDULE_GAP_MS, SCHEDULE_ACTION_INFO, type ScheduleAction, type ScheduleTarget } from '../../../shared/scheduleActions';
 import { splitRestRoute, WP_REST_MAX_BODY, wpRestRoute } from '../../../shared/schemas';
 import { cronError } from '../../../shared/cron';
 import { cronPatternError, formatRunTime, nextCronRuns } from './cron';
@@ -231,4 +231,35 @@ export function backgroundSummary(items: readonly ScheduleDto[]): string {
   if (paused.length > 0) parts.push(`${paused.length} paused: ${nameList(paused)}`);
   if (failing.length === 0 && paused.length === 0) parts.push('all ok');
   return parts.join(' · ');
+}
+
+type ScheduledSite = Pick<SiteSummary, 'status' | 'kind' | 'app'>;
+
+/** It runs WordPress's tools: All sites and Server leave out a site without WordPress, and a run skips one named. */
+const needsWordPress = (action: ScheduleAction): boolean => (SCHEDULE_ACTION_INFO[action] as { wordpress?: boolean }).wordpress === true;
+
+/** Whether All sites and Server take the site for this action. Mirrors resolveSites() in src/jobs/actions.ts. */
+export const takesSite = (action: ScheduleAction, site: Pick<SiteSummary, 'app'>): boolean => !needsWordPress(action) || site.app === 'wordpress';
+
+/** Why a site would be left out of a run of this action, or null. Mirrors ineligible() in src/jobs/actions.ts. */
+export function skipReason(action: ScheduleAction, site: ScheduledSite): string | null {
+  if (site.status === 'provisioning' || site.status === 'deleting') return site.status;
+  // Read in the checklist and in "<slug> is <reason>: a run skips it…".
+  if (!takesSite(action, site)) return site.app === 'php' ? 'a PHP site, with no WordPress' : 'a container app, with no WordPress';
+  if (site.kind === 'external') {
+    const info: { external: boolean; externalRefusal?: string } = SCHEDULE_ACTION_INFO[action];
+    if (!info.external) return `external: ${info.externalRefusal ?? 'cannot take this'}`;
+    return site.status === 'connected' ? null : site.status;
+  }
+  if (action === 'backup') return null;
+  if (action === 'site.start') return site.status === 'running' ? 'already running' : null;
+  return site.status === 'running' ? null : site.status;
+}
+
+/** What All sites says it leaves out of this action among `sites`: '' for nothing. */
+export function leftOutText(action: ScheduleAction, sites: readonly Pick<SiteSummary, 'app'>[]): string {
+  const out = new Set(sites.filter((s) => !takesSite(action, s)).map((s) => s.app));
+  if (out.has('php') && out.has('container')) return 'PHP sites and container apps are left out.';
+  if (out.has('php')) return 'PHP sites are left out.';
+  return out.has('container') ? 'Container apps are left out.' : '';
 }

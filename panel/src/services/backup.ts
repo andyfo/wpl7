@@ -15,13 +15,14 @@ import {
   type SiteRow,
 } from '../db/schema.js';
 import type { Config } from '../config.js';
-import type { BackupType } from '../../shared/schemas.js';
+import type { BackupType, SiteApp } from '../../shared/schemas.js';
 import { backupRootProblem } from '../../shared/backupRoot.js';
 import { conflict } from '../lib/errors.js';
 import { safeJoin } from '../lib/slug.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
 import { sitePaths } from './siteSpec.js';
-import { hasDatabase, isPhpSite } from '../lib/siteKind.js';
+import { hasDatabase, isContainerApp } from '../lib/siteKind.js';
+import { appOwner, appPaths, appRows, runningReference } from './appSpec.js';
 
 export type LogFn = (level: 'info' | 'warn' | 'error', message: string) => void;
 const noopLog: LogFn = () => undefined;
@@ -96,7 +97,8 @@ export const tsStamp = (d: Date) =>
 
 
 /** What a backup's site ran: one from before PHP sites names nothing, and is a WordPress site's. */
-export const backupApp = (manifest: { app?: unknown } | null): 'wordpress' | 'php' => (manifest?.app === 'php' ? 'php' : 'wordpress');
+export const backupApp = (manifest: { app?: unknown } | null): SiteApp =>
+  manifest?.app === 'php' ? 'php' : manifest?.app === 'container' ? 'container' : 'wordpress';
 
 /**
  * Why a backup can't go into a site, when it is of the other app; null when it can. With no
@@ -106,8 +108,9 @@ export const backupApp = (manifest: { app?: unknown } | null): 'wordpress' | 'ph
 export function otherAppRefusal(site: Pick<SiteRow, 'slug' | 'app'>, manifest: { app?: unknown } | null): string | null {
   const app = backupApp(manifest);
   if (app === site.app) return null;
-  if (manifest === null) return `The backup's manifest.json can't be read, so it can't be told whose backup it is: it isn't restored into the PHP site "${site.slug}". Nothing was changed.`;
-  const name = (a: string) => (a === 'php' ? 'a PHP site' : 'a WordPress site');
+  const name = (a: string) => (a === 'php' ? 'a PHP site' : a === 'container' ? 'a container app' : 'a WordPress site');
+  const the = site.app === 'php' ? 'the PHP site' : site.app === 'container' ? 'the container app' : 'the WordPress site';
+  if (manifest === null) return `The backup's manifest.json can't be read, so it can't be told whose backup it is: it isn't restored into ${the} "${site.slug}". Nothing was changed.`;
   return `This is a backup of ${name(app)}, and "${site.slug}" is ${name(site.app)}: it can't be restored into it. Nothing was changed.`;
 }
 
@@ -269,7 +272,10 @@ export class BackupService {
       }
 
       const p = sitePaths(this.config, site.slug);
-      const candidates = ['wordpress', 'config', 'site.json'];
+      // A container app's: its data, the mounts kept in backups, and site.json (services/appSpec.ts).
+      const app = isContainerApp(site) ? appRows(this.db, site.id) : null;
+      const backedUpMounts = app ? app.mounts.filter((m) => m.inBackups === 1).map((m) => m.name) : [];
+      const candidates = app ? ['data', ...backedUpMounts.map((name) => `mounts/${name}`), 'site.json'] : ['wordpress', 'config', 'site.json'];
       // A check that fails fails the backup: taken for "not there", it would leave the site's
       // files out of an archive that still says complete.
       const entries: string[] = [];
@@ -285,9 +291,9 @@ export class BackupService {
       if (tar.exitCode !== 0) throw new Error(`tar failed (exit ${tar.exitCode}): ${tar.stderr.slice(0, 500)}`);
 
       // A PHP site's folder may hold a WordPress of its own, which is not the site's.
-      const wpVersion = isPhpSite(site) ? null : await readWpVersion(h, p.wordpress);
+      const wpVersion = site.app === 'wordpress' ? await readWpVersion(h, p.wordpress) : null;
       // Only a note for a restore: not knowing it is no reason to fail the backup.
-      const container = await h.docker.containerStack(site.containerName).catch(() => null);
+      const container = app ? null : await h.docker.containerStack(site.containerName).catch(() => null);
       const manifest = {
         format: 1,
         slug: site.slug,
@@ -316,6 +322,23 @@ export class BackupService {
          * archive are what the site ran with. None from before there was a choice, or with no container.
          */
         stack: container?.stack ?? null,
+        /**
+         * A container app's image, which a restore puts back (handlers/backups.ts), and the mounts in
+         * this archive. Never a secret: no registry token, no environment value. The reference is the
+         * one its digest came by, which the app's own may no longer be.
+         */
+        ...(app
+          ? {
+              container: {
+                source: app.settings.source,
+                reference: runningReference(this.db, app.settings),
+                digest: app.settings.digest,
+                imageId: app.settings.imageId,
+                port: app.settings.port,
+                mounts: backedUpMounts,
+              },
+            }
+          : {}),
       };
       await h.files.writeFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
 
@@ -420,6 +443,7 @@ export class BackupService {
       { timeoutMs: 60 * 60_000 },
     );
     if (untar.exitCode !== 0) throw new Error(`tar extract failed: ${untar.stderr.slice(0, 500)}`);
+    if (isContainerApp(site)) return this.swapAppFiles(h, site, tmp, log);
     if (!(await h.files.exists(path.join(tmp, 'wordpress')))) {
       throw new Error('Backup archive does not contain a wordpress/ directory');
     }
@@ -446,6 +470,58 @@ export class BackupService {
     }
     await h.files.rm(tmp);
     await this.chownWordpress(h, site.slug, log);
+    return safety;
+  }
+
+  /**
+   * A container app's half of restoreFiles: `data/` and each mount the archive holds are swapped
+   * in, the old ones kept in one safety folder (`app.pre-restore-<ts>`) that is put back if a swap
+   * fails. A mount the archive does not hold stays as it is. Everything is handed to the user the
+   * app runs as.
+   */
+  private async swapAppFiles(h: ServerHandle, site: SiteRow, tmp: string, log: LogFn): Promise<string> {
+    const p = appPaths(this.config, site.slug);
+    if (!(await h.files.exists(path.join(tmp, 'data')))) throw new Error('Backup archive does not contain a data/ directory');
+    const rows = appRows(this.db, site.id);
+    const mounts = rows?.mounts ?? [];
+    const archived = (await h.files.exists(path.join(tmp, 'mounts'))) ? await h.files.readdir(path.join(tmp, 'mounts')) : [];
+    const safety = path.join(p.root, `app.pre-restore-${tsStamp(new Date())}`);
+    await h.files.mkdirp(path.join(safety, 'mounts'));
+    const swaps: { live: string; aside: string; from: string }[] = [{ live: p.data, aside: path.join(safety, 'data'), from: path.join(tmp, 'data') }];
+    for (const m of mounts) {
+      if (!archived.includes(m.name)) {
+        log('info', `${m.name} is not in this backup: it stays as it is.`);
+        continue;
+      }
+      swaps.push({ live: p.mountDir(m.name), aside: path.join(safety, 'mounts', m.name), from: path.join(tmp, 'mounts', m.name) });
+    }
+    for (const name of archived.filter((n) => !mounts.some((m) => m.name === n))) {
+      log('info', `The backup holds a mount ${name} the app no longer has: it is left out.`);
+    }
+    await h.files.mkdirp(p.mounts);
+    const done: typeof swaps = [];
+    try {
+      for (const swap of swaps) {
+        const had = await h.files.exists(swap.live);
+        if (had) await h.files.rename(swap.live, swap.aside);
+        done.push(had ? swap : { ...swap, aside: '' });
+        await h.files.rename(swap.from, swap.live);
+      }
+    } catch (err) {
+      // Back as it was: what came in goes, what went aside comes back.
+      for (const swap of done.reverse()) {
+        await h.files.rm(swap.live).catch(() => undefined);
+        if (swap.aside) await h.files.rename(swap.aside, swap.live).catch(() => undefined);
+      }
+      log('error', 'File swap failed; previous files were moved back.');
+      throw err;
+    }
+    await h.files.rm(tmp);
+    if (rows) {
+      const owner = appOwner(rows.settings);
+      const res = await h.exec.run('chown', ['-R', `${owner.uid}:${owner.gid}`, '--', p.data, p.mounts], { timeoutMs: 10 * 60_000 });
+      if (res.exitCode !== 0) log('warn', `chown -R ${owner.uid}:${owner.gid} failed (${res.stderr.trim().slice(0, 200)}) - file ownership may be wrong`);
+    }
     return safety;
   }
 
@@ -906,7 +982,7 @@ export class BackupService {
     this.db.delete(backups).where(eq(backups.id, row.id)).run();
   }
 
-  /** GC wordpress.pre-restore-* safety copies older than 24h, on every reachable server. */
+  /** GC wordpress.pre-restore-* (and a container app's app.pre-restore-*) safety copies older than 24h, on every reachable server. */
   async gcSafetyCopies(): Promise<void> {
     const cutoff = Date.now() - 24 * 3600_000;
     for (const server of this.servers.listRows()) {
@@ -920,7 +996,7 @@ export class BackupService {
       for (const slug of slugs) {
         const entries = await h.files.readdir(path.join(this.config.paths.sites, slug)).catch(() => [] as string[]);
         for (const entry of entries) {
-          if (!entry.startsWith('wordpress.pre-restore-')) continue;
+          if (!entry.startsWith('wordpress.pre-restore-') && !entry.startsWith('app.pre-restore-')) continue;
           const full = safeJoin(this.config.paths.sites, slug, entry);
           try {
             const stat = await h.files.stat(full);

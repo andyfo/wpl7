@@ -122,7 +122,8 @@ signs, its own or one above it. It names those domains, and their mail still goe
 
 **Send a test message** sends one **From the relay**, skipping the sites, or **From a site**, the way
 a contact form sends: through `wp_mail()`, or PHP's `mail()` on a PHP site. A PHP site's test names no
-sender, so its default sender is what is tested. When the relay's message arrives and the site's does
+sender, so its default sender is what is tested. A [container app](/docs/sites/container/) sends mail its own
+way, so it is not on the list. When the relay's message arrives and the site's does
 not, the problem is in that site, such as a plugin that replaces `wp_mail()`.
 
 ## Limits

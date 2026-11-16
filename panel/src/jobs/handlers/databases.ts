@@ -2,18 +2,20 @@
 import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { siteDatabases, type SiteRow } from '../../db/schema.js';
+import { appEnv, siteDatabases, type SiteRow } from '../../db/schema.js';
 import { extraDbNameSchema, DB_LIMITS, DB_OBJECT_NAME_RE } from '../../../shared/databases.js';
 import { generateSecret } from '../../lib/crypto.js';
 import { AppError, JobCanceledError } from '../../lib/errors.js';
-import { hasDatabase, isPhpSite } from '../../lib/siteKind.js';
+import { hasDatabase, isContainerApp } from '../../lib/siteKind.js';
+import { placeholdersIn } from '../../services/appSpec.js';
+import { reconcileApp } from './apps.js';
 import { dbIdentifier } from '../../lib/slug.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { DbTarget } from '../../services/dbBrowser.js';
 import type { CoreServices } from '../../services/index.js';
 import { sitePaths, siteRuntimeFrom } from '../../services/siteSpec.js';
 import type { JobContext } from '../context.js';
-import { loadSite, probeSite, siteDomains, siteShouldRun, startSiteContainer, updateSiteRow, writeSiteJson } from './shared.js';
+import { loadSite, probeSite, siteDomains, siteShouldRun, startSiteContainer, stopGraceOf, updateSiteRow, writeSiteJson } from './shared.js';
 import { replaceContainer } from './sites.js';
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -86,7 +88,7 @@ export async function createOwnDatabase(ctx: JobContext<unknown>, s: CoreService
     s.databases.kick(site.serverId);
   }
   const made = loadSite(s.db, site.id);
-  await writeSiteJson(server, s.config, made);
+  await writeSiteJson(server, s, made);
   return made;
 }
 
@@ -148,7 +150,9 @@ export async function databasePassword(ctx: JobContext<z.infer<typeof databasePa
   const site = loadSite(s.db, ctx.payload.siteId);
   const server = s.servers.handleFor(site.serverId);
   if (!hasDatabase(site)) throw new Error(`"${site.slug}" has no database.`);
-  if (isPhpSite(site)) return phpDatabasePassword(ctx, s, server, site);
+  // A container app takes its password from its environment (services/appSpec.ts): a new container.
+  if (isContainerApp(site)) return appDatabasePassword(ctx, s, server, site);
+  if (site.app !== 'wordpress') return phpDatabasePassword(ctx, s, server, site);
   const wpConfig = path.join(sitePaths(s.config, site.slug).wordpress, 'wp-config.php');
   const text = await server.files.readUntrusted(wpConfig, 512 * 1024);
   if (text === null && (await server.files.stat(wpConfig))) {
@@ -274,6 +278,43 @@ async function phpDatabasePassword(ctx: JobContext<unknown>, s: CoreServices, se
   ctx.info(`${site.dbUser} has a new password. The site's own config still has the old one: put the new one there, or the site loses its database.`);
 }
 
+/**
+ * A container app's: its environment hands it the password through `{{db.password}}`, filled in
+ * when its container is made, so the container is made again with the new one, behind its health
+ * check. When that fails, the old container is back, and so is the old password. An app whose
+ * environment does not name the placeholder has the password in its own config, as a PHP site has.
+ */
+async function appDatabasePassword(ctx: JobContext<unknown>, s: CoreServices, server: ServerHandle, site: SiteRow): Promise<void> {
+  const env = s.db.select().from(appEnv).where(eq(appEnv.siteId, site.id)).all();
+  if (!env.some((v) => placeholdersIn(v.value).includes('db.password'))) return phpDatabasePassword(ctx, s, server, site);
+  const oldPassword = site.dbPassword;
+  const newPassword = generateSecret(24);
+  ctx.info(`Setting a new password for ${site.dbUser}…`);
+  try {
+    await server.dbAdmin.setUserPassword(site.dbUser, newPassword);
+  } catch (err) {
+    await server.dbAdmin.setUserPassword(site.dbUser, oldPassword).catch((undoErr: unknown) => {
+      ctx.error(`Could not make sure the old password holds: ${errMsg(undoErr)}. If the app cannot reach its database, change the password again.`);
+    });
+    throw err;
+  }
+  updateSiteRow(s.db, site.id, { dbPassword: newPassword });
+  try {
+    ctx.info('Making the container again with it, behind its health check…');
+    await reconcileApp(ctx, s, loadSite(s.db, site.id));
+  } catch (err) {
+    ctx.error(`The new container did not go in (${errMsg(err)}); putting the old password back…`);
+    await server.dbAdmin.setUserPassword(site.dbUser, oldPassword).then(
+      () => updateSiteRow(s.db, site.id, { dbPassword: oldPassword }),
+      (undoErr: unknown) => ctx.error(`Could not put the old password back either: ${errMsg(undoErr)}. "Recreate container" on the app's page gives the new one to the app.`),
+    );
+    throw err;
+  } finally {
+    server.dbBrowser.closeIdle();
+  }
+  ctx.info(`${site.dbUser} has a new password, and the app has it.`);
+}
+
 // ------------------------------------------------------------------ import
 
 export const databaseImportPayload = z.object({
@@ -356,7 +397,7 @@ export async function databaseImport(ctx: JobContext<z.infer<typeof databaseImpo
         'Export it without CREATE DATABASE and USE statements, then import it again.',
     );
   }
-  if (ownDb && p.empty && hasOptions !== '1' && !isPhpSite(site)) {
+  if (ownDb && p.empty && hasOptions !== '1' && site.app === 'wordpress') {
     throw new Error(
       `The dump has no ${site.tablePrefix}options table. With every table deleted first, WordPress would find no installation. ` +
         'Import a dump of the whole database, or keep the tables.',
@@ -391,7 +432,7 @@ export async function databaseImport(ctx: JobContext<z.infer<typeof databaseImpo
   try {
     if (stopped) {
       ctx.info('Stopping the site for the import…');
-      await server.docker.stopContainer(site.containerName);
+      await server.docker.stopContainer(site.containerName, stopGraceOf(s.db, site));
     }
     let failure: unknown = null;
     try {
@@ -411,7 +452,7 @@ export async function databaseImport(ctx: JobContext<z.infer<typeof databaseImpo
     }
     // Failed or not: a failed import may have emptied the database as surely as a wrong dump. A PHP
     // site has no installer to hand to whoever asks, so it starts again whatever the dump held.
-    if (stopped && isPhpSite(site)) await startAgain(ctx, s, site);
+    if (stopped && site.app !== 'wordpress') await startAgain(ctx, s, site);
     else if (stopped) await restartIfInstalled(ctx, s, site, target, { failed: failure !== null, backedUp: p.backupFirst });
     if (failure !== null) throw failure;
   } finally {

@@ -59,6 +59,18 @@ created with its router from the start, after the protection is pinned: the unro
 hide WordPress's installer, and a PHP site has none. No password is returned: `job.result` is
 `{url, slug}`. Rollback is the same.
 
+### A container app
+
+`app: "container"` (docs/api.md) has its own branch, `createApp` in `jobs/handlers/apps.ts`: the dev
+record, `site.json`, the network, the database when asked; the image resolved to a digest and pulled
+(or the upload loaded under the panel's name) and checked; the port, the user and the data paths read
+off the image; the relay login; the container from `buildAppContainerSpec`, started; the health
+gate; then the routes file is pinned and written and the row set running. The first deploy is
+recorded as `create`. Rollback removes the image too. Start and stop kick the routes file (only a
+running app has one), stop and restart wait the app's grace, delete removes the routes file first and
+the app's images after the container. `site.reconcile` for an app is `reconcileApp`: the same
+replace as a deploy, from the image it runs, behind the gate.
+
 ## One-click WordPress login
 
 **Log in to WordPress** on the site page (`POST /api/sites/:slug/wp/admin-login`) opens `wp-admin`

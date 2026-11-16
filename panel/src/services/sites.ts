@@ -4,7 +4,7 @@ import type { BackupBeforeUpdates, JobType, SiteCacheBody, SiteCreateBody, SiteL
 import { CACHE_RULE_GROUPS, cacheGroupInUse, cacheOffProblem, parseSiteCacheRules, withCacheRuleIds } from '../../shared/cacheRules.js';
 import { isBackupBeforeUpdates } from '../../shared/updateBackups.js';
 import type { SiteCacheDto, SiteDetail, SiteLimits, SiteSummary, SiteWpSummary } from '../../shared/types.js';
-import { jobs as jobsTable, moveCleanups, plugins, sites, type JobRow, type ServerRow, type SiteRow } from '../db/schema.js';
+import { appRoutes, jobs as jobsTable, moveCleanups, plugins, sites, type JobRow, type ServerRow, type SiteRow } from '../db/schema.js';
 import { badRequest, conflict, notFound } from '../lib/errors.js';
 import { generatePassword, generateSecret } from '../lib/crypto.js';
 import { containerName, dbIdentifier, isValidSlug, slugify } from '../lib/slug.js';
@@ -12,7 +12,23 @@ import type { CoreServices } from './index.js';
 import type { JobWorker } from '../jobs/worker.js';
 import { siteScheme } from './labels.js';
 import { assertDomainsFree } from './domainGuard.js';
-import { PHP_NO_MAINTENANCE, assertApp, assertKind, hasDatabase, hostedSites, isExternal, isPhpSite, phpNoPageCache, type SiteApps, type SiteKinds } from '../lib/siteKind.js';
+import { appsRoutingOn, routedOnRefusal } from './appRoutes.js';
+import {
+  APP_HOSTS_FROM_ROUTES,
+  APP_MOVES_STOPPED,
+  PHP_NO_MAINTENANCE,
+  assertApp,
+  assertKind,
+  hasDatabase,
+  hostedSites,
+  isExternal,
+  isContainerApp,
+  isPhpSite,
+  phpNoPageCache,
+  siteImageSites,
+  type SiteApps,
+  type SiteKinds,
+} from '../lib/siteKind.js';
 import type { DockerPort } from './docker.js';
 import { SITE_ROOT_IN_CONTAINER } from './siteHardening.js';
 import { asSiteUser } from './wp.js';
@@ -86,6 +102,7 @@ export class SitesService {
    * version, which can run one.
    */
   async assertCanCreate(body: SiteCreateBody): Promise<void> {
+    if (body.app === 'container') return this.s.apps.assertCanCreate(body, resolveTargetServer(this.s, body.serverId));
     if (body.app !== 'php') return;
     const server = resolveTargetServer(this.s, body.serverId);
     const phpVersion = body.phpVersion ?? this.s.settings.get('defaultPhpVersion');
@@ -102,7 +119,21 @@ export class SitesService {
     await assertPhpImage(this.s.servers.handleFor(serverId), siteImage(phpVersion), { missingIsFine: true });
   }
 
+  /**
+   * The early check for a container app that is to move to `serverId`: its plain http routes need a
+   * Traefik there that can answer them, or they would turn into redirects to https. Refused before
+   * anything is queued, as a route saved there would be (services/apps.ts assertHttpRoutesOn). A
+   * target move() refuses anyway is left to it, in its own words.
+   */
+  async assertAppRoutesOn(site: SiteRow, serverId: number): Promise<void> {
+    if (!isContainerApp(site) || serverId === site.serverId || this.s.servers.rowById(serverId)?.status !== 'ok') return;
+    const enabled = this.db.select({ scheme: appRoutes.scheme }).from(appRoutes).where(and(eq(appRoutes.siteId, site.id), eq(appRoutes.enabled, 1))).all();
+    await this.s.apps.assertHttpRoutesOn(serverId, enabled);
+  }
+
   create(body: SiteCreateBody): { site: SiteRow; job: JobRow } {
+    // Its own rows and checks: no PHP version, no administrator, hosts from its routes (services/apps.ts).
+    if (body.app === 'container') return this.s.apps.create(body, resolveTargetServer(this.s, body.serverId));
     // Left out by callers inside the panel that predate PHP sites.
     const php = (body.app ?? 'wordpress') === 'php';
     const offered = this.s.settings.get('phpVersions') ?? [];
@@ -234,6 +265,9 @@ export class SitesService {
     if (this.s.imports.activeForSite(site.id)) {
       throw conflict('This site is being imported. Delete the import under Sites → Import site first.');
     }
+    // A path of one of its domains is a container app's: that app would answer for a host nobody holds.
+    const routedOn = routedOnRefusal(site.slug, appsRoutingOn(this.db, site));
+    if (routedOn) throw conflict(routedOn);
     // A recently-moved site still has a parked copy on its old server, and site.delete
     // tears that down too. Claim the source lane as well, or that teardown races whatever
     // else the source server is doing.
@@ -262,7 +296,7 @@ export class SitesService {
   }
 
   changePhp(slug: string, phpVersion: string): JobRow {
-    const site = this.bySlug(slug);
+    const site = this.bySlug(slug, { app: 'siteImage' });
     const offered = this.s.settings.get('phpVersions') ?? [];
     if (!offered.includes(phpVersion)) {
       throw badRequest(`PHP ${phpVersion} is not offered (available: ${offered.join(', ')})`);
@@ -289,7 +323,8 @@ export class SitesService {
 
   /** Reconcile every site, newest last so a fleet-wide pass is predictable in the job list. */
   reconcileAll(): JobRow[] {
-    const rows = this.s.db.select().from(sites).where(hostedSites()).orderBy(asc(sites.id)).all();
+    // A container app is put right by a deploy of what it runs, not by the site image's policy.
+    const rows = this.s.db.select().from(sites).where(and(hostedSites(), siteImageSites())).orderBy(asc(sites.id)).all();
     const jobs: JobRow[] = [];
     for (const site of rows) {
       if (site.status === 'provisioning' || site.status === 'deleting') continue;
@@ -364,11 +399,22 @@ export class SitesService {
     if (pending) {
       throw conflict('A previous move is still awaiting cleanup; finalize it first (site page banner)');
     }
+    // A route borrows a path of a site on the same server only, both ways.
+    const routedOn = routedOnRefusal(site.slug, appsRoutingOn(this.db, site));
+    if (routedOn) throw conflict(routedOn);
+    if (isContainerApp(site)) {
+      const borrowed = this.s.apps.detail(site).routes.filter((r) => r.borrowedFrom !== null);
+      if (borrowed.length > 0) {
+        throw conflict(`"${site.slug}" has routes on ${[...new Set(borrowed.map((r) => r.host))].join(', ')}, which another site on this server holds: take them off first.`);
+      }
+    }
     const isLive = site.isLive === 1;
     // Maintenance mode is WordPress's. A live PHP site is stopped while it is copied: a short
-    // outage, and nothing written meanwhile is lost.
-    if (body.quiesce === 'maintenance' && isPhpSite(site)) throw conflict(PHP_NO_MAINTENANCE(site.slug));
-    const quiesce = body.quiesce ?? (isLive ? (isPhpSite(site) ? 'stop' : 'maintenance') : 'none');
+    // outage, and nothing written meanwhile is lost. A container app is always stopped: kept
+    // serving, its copy would start on the target beside it, and a worker in it would run twice.
+    if (body.quiesce === 'maintenance' && site.app !== 'wordpress') throw conflict(isPhpSite(site) ? PHP_NO_MAINTENANCE(site.slug) : APP_MOVES_STOPPED(site.slug));
+    if (body.quiesce === 'none' && isContainerApp(site)) throw conflict(APP_MOVES_STOPPED(site.slug));
+    const quiesce = body.quiesce ?? (isContainerApp(site) ? 'stop' : isLive ? (isPhpSite(site) ? 'stop' : 'maintenance') : 'none');
     // The old copy is never torn down inside the move itself - see siteMovePayload.decommission.
     const decommission = 'deferred';
     return this.worker.enqueue(
@@ -514,8 +560,13 @@ export class SitesService {
     opts: { manageDns?: boolean; allowSearchEngines?: boolean } = {},
   ): JobRow {
     const site = this.bySlug(slug);
+    // An app's hosts are its routes': they change with them, and nothing is recreated for it.
+    if (isContainerApp(site)) throw conflict(APP_HOSTS_FROM_ROUTES(site.slug));
     const unique = [...new Set(domains)];
     this.assertDomainsFree(unique, site.id, site.devHostname);
+    const dropped = (JSON.parse(site.domains) as string[]).filter((d) => !unique.includes(d));
+    const routedOn = routedOnRefusal(site.slug, appsRoutingOn(this.db, site, dropped));
+    if (routedOn) throw conflict(routedOn);
     return this.worker.enqueue(
       'site.updateDomains',
       {
@@ -582,7 +633,8 @@ export class SitesService {
     return this.db.select().from(sites).all().map((s) => this.toSummary(s, names, traffic, wp));
   }
 
-  async detail(slug: string): Promise<SiteDetail> {
+  /** `logTails`: a container app's failed deploys with their last lines (AppsService.detail); left out, without. */
+  async detail(slug: string, opts: { logTails?: boolean } = {}): Promise<SiteDetail> {
     const site = this.bySlug(slug, { kinds: 'any' });
     const summary = this.toSummary(site);
     if (isExternal(site)) return this.externalDetail(site, summary);
@@ -592,7 +644,8 @@ export class SitesService {
     try {
       const { docker } = this.s.servers.handleFor(site.serverId);
       containerState = await docker.containerState(site.containerName);
-      stack = await siteContainerStack(docker, site.containerName);
+      // A container app's has no stack: none of its labels would read as the old PHP setup.
+      if (!isContainerApp(site)) stack = await siteContainerStack(docker, site.containerName);
       if (site.webRoot !== '' && containerState === 'running') webRootMissing = await webRootMissingIn(docker, site);
     } catch (err) {
       // The registry still answers when the hosting server cannot be reached: the metadata,
@@ -645,8 +698,9 @@ export class SitesService {
       stack,
       // A restore or a move can put it on stack 2 by another way than the switch, which is the only
       // thing that clears this. A container on stack 2 has nothing left to report.
-      stackSwitchError: stack === 2 ? null : site.stackSwitchError,
-      cache: this.cacheDto(site, stack, containerState),
+      stackSwitchError: stack === 2 || isContainerApp(site) ? null : site.stackSwitchError,
+      cache: isContainerApp(site) ? null : this.cacheDto(site, stack, containerState),
+      container: isContainerApp(site) ? this.s.apps.detail(site, opts) : null,
     };
   }
 
@@ -684,11 +738,11 @@ export class SitesService {
     const problem = body.off ? cacheOffProblem(body.off) : null;
     if (problem) throw badRequest(problem, [{ path: 'off', message: problem }]);
     // One save at a time, each reading the row the one before it left.
-    return this.worker.inRuntimeTurn(this.bySlug(slug).id, () => this.saveCache(slug, body));
+    return this.worker.inRuntimeTurn(this.bySlug(slug, { app: 'siteImage' }).id, () => this.saveCache(slug, body));
   }
 
   private async saveCache(slug: string, body: SiteCacheBody): Promise<{ job: JobRow | null }> {
-    const site = this.bySlug(slug);
+    const site = this.bySlug(slug, { app: 'siteImage' });
     if (site.status === 'provisioning' || site.status === 'deleting') {
       throw conflict(`Site is ${site.status}; wait for it to finish`);
     }
@@ -737,7 +791,7 @@ export class SitesService {
    * answer is what Apache said. A stopped site gets it at its next start.
    */
   async setWebRoot(slug: string, webRoot: string): Promise<void> {
-    const site = this.bySlug(slug);
+    const site = this.bySlug(slug, { app: 'siteImage' });
     if (!isPhpSite(site)) throw conflict(`"${site.slug}" is a WordPress site: a web root is for PHP sites.`);
     if (site.status === 'provisioning' || site.status === 'deleting') throw conflict(`Site is ${site.status}; wait for it to finish`);
     if (webRoot === site.webRoot) return;
@@ -757,7 +811,7 @@ export class SitesService {
    * log's to tell.
    */
   async testMail(slug: string, to: string): Promise<{ accepted: boolean; detail: string }> {
-    const site = this.bySlug(slug);
+    const site = this.bySlug(slug, { app: 'siteImage' });
     const server = this.s.servers.handleFor(site.serverId);
     const state = await server.docker.containerState(site.containerName);
     if (state !== 'running') throw conflict(`Site container is ${state}; start the site first`);
@@ -817,6 +871,7 @@ export class SitesService {
       stack: null,
       stackSwitchError: null,
       cache: null,
+      container: null,
     };
   }
 }

@@ -83,7 +83,8 @@ the panel is back within half an interval, and an hour at most.
 A [PHP site](/docs/sites/php/) takes **Back up**, **Restart sites**, **Start sites**, **Stop sites** and
 **Shell command**. **All running sites** and **Server** leave it out of the other actions, and a run
 skips a PHP site picked for one. Its own cron lines run outside these schedules, as often as every
-minute.
+minute. A [container app](/docs/sites/container/) takes the same actions and is left out the same way.
+Its shell command runs as the app's own user.
 
 ## From the API
 

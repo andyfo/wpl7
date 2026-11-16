@@ -32,6 +32,9 @@ const EXCEPTIONS: Record<string, string> = {
   'POST /api/backups/bulk-delete': 'full',
   // A site's share of its server: what one site is given, the others on it go without.
   'PUT /api/sites/:slug/limits': 'full',
+  // A container app's deploy hook token: a credential that outlives the key that made it.
+  'POST /api/sites/:slug/app/deploy-token': 'full',
+  'DELETE /api/sites/:slug/app/deploy-token': 'full',
   // Reads that are more than Read only: what a file or a backup holds, a WP Godmode chat (a
   // command's output, quoting whatever the site holds), and a root shell.
   'GET /api/sites/:slug/files/content': 'manage',
@@ -43,6 +46,8 @@ const EXCEPTIONS: Record<string, string> = {
   'GET /api/backups/:id/download': 'manage',
   // A PHP site's cron lines: commands, and what their last runs printed.
   'GET /api/sites/:slug/cron': 'manage',
+  // What a container app prints.
+  'GET /api/sites/:slug/app/logs': 'manage',
   // What a database holds: its rows, one row whole, a dump of it.
   'GET /api/sites/:slug/databases/:db/tables/:table/rows': 'manage',
   'GET /api/sites/:slug/databases/:db/tables/:table/row': 'manage',
@@ -92,6 +97,7 @@ const DESTRUCTIVE = [
   'DELETE /api/security/never-block/:id',
   'DELETE /api/servers/:id',
   'DELETE /api/sites/:slug',
+  'DELETE /api/sites/:slug/app/deploy-token',
   'DELETE /api/sites/:slug/databases/:db',
   'DELETE /api/sites/:slug/databases/:db/tables/:table',
   'DELETE /api/sites/:slug/ftp/users/:id',
@@ -105,6 +111,7 @@ const DESTRUCTIVE = [
   'PATCH /api/backup-destinations/:id',
   'PATCH /api/schedules/:id',
   'PATCH /api/servers/:id',
+  'PATCH /api/sites/:slug/app',
   'PATCH /api/sites/:slug/databases/:db/tables/:table/rows',
   'POST /api/auth/logout-all',
   'POST /api/backup-destinations/:id/passphrase',
@@ -123,6 +130,9 @@ const DESTRUCTIVE = [
   'POST /api/servers',
   'POST /api/servers/:id/backups/relocate',
   'POST /api/servers/:id/update',
+  'POST /api/sites/:slug/app/deploy',
+  'POST /api/sites/:slug/app/deploy-token',
+  'POST /api/sites/:slug/app/image',
   'POST /api/sites/:slug/connection/disconnect',
   'POST /api/sites/:slug/cron/:id/run',
   'POST /api/sites/:slug/database-password',
@@ -159,6 +169,9 @@ const DESTRUCTIVE = [
   'PUT /api/dns/token',
   'PUT /api/recipes/:id/inputs/:input',
   'PUT /api/settings',
+  'PUT /api/sites/:slug/app/mounts/:name',
+  'PUT /api/sites/:slug/app/registry-auth',
+  'PUT /api/sites/:slug/app/routes',
   'PUT /api/sites/:slug/backup-before-updates',
   'PUT /api/sites/:slug/backups-enabled',
   'PUT /api/sites/:slug/backups-keep-days',
@@ -227,6 +240,14 @@ const NOT_THROUGH_MCP = [
   'POST /api/connect/enroll',
   'GET /api/connect/package',
   'GET /api/connect/catalog/:pluginId',
+  // A container app's hook token; its image upload, raw bytes; the hook itself, which its token lets in.
+  'POST /api/sites/:slug/app/deploy-token',
+  'DELETE /api/sites/:slug/app/deploy-token',
+  'PUT /api/app-uploads/:id',
+  'DELETE /api/app-uploads/:id',
+  'PUT /api/sites/:slug/app/mount-uploads/:id',
+  'DELETE /api/sites/:slug/app/mount-uploads/:id',
+  'POST /api/hooks/app-deploy',
   // The Cloudflare token: a credential, and checking one sends it to Cloudflare.
   'POST /api/dns/check',
   'PUT /api/dns/token',
@@ -253,6 +274,7 @@ describe('access levels in the API catalog', () => {
       reminders: 'full',
       domains: 'full',
       sites: 'manage',
+      apps: 'manage',
       imports: 'manage',
       connections: 'manage',
       wp: 'manage',

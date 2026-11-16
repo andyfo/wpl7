@@ -58,6 +58,11 @@ services:
       - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
       - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      # The redirect is a router of Traefik's own, on every host, at the top priority by default:
+      # nothing else on port 80 could answer. At 1, a container app's plain http routes win over it,
+      # and everything else still redirects: the panel puts no other router on web, and the ACME
+      # challenge's router stays above (panel/test/engine/containerApps.test.ts, item 1).
+      - "--entrypoints.web.http.redirections.entrypoint.priority=1"
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.websecure.http3=true"
       - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"

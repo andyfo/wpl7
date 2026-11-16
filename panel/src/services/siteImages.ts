@@ -1,9 +1,9 @@
 // @docs panel/updating, reference/architecture, security/overview
-import { asc } from 'drizzle-orm';
+import { and, asc } from 'drizzle-orm';
 import { sites, type SiteRow } from '../db/schema.js';
 import type { JobWorker } from '../jobs/worker.js';
 import type { CoreServices } from './index.js';
-import { hostedSites, isPhpSite } from '../lib/siteKind.js';
+import { hostedSites, isPhpSite, siteImageSites } from '../lib/siteKind.js';
 import type { SiteApp } from '../../shared/schemas.js';
 import { queueReconcile, type HardeningSweep } from './siteHardening.js';
 import { containerOfAside, siteImage } from './siteSpec.js';
@@ -35,7 +35,8 @@ export async function sweepSiteImages(
   worker: Pick<JobWorker, 'enqueue' | 'activeSiteJob'>,
 ): Promise<HardeningSweep> {
   const sweep: HardeningSweep = { queued: [], busy: [] };
-  const rows = s.db.select().from(sites).where(hostedSites()).orderBy(asc(sites.id)).all();
+  // Onto the site image: a container app has its own image and its own sweep (services/apps.ts).
+  const rows = s.db.select().from(sites).where(and(hostedSites(), siteImageSites())).orderBy(asc(sites.id)).all();
   for (const server of s.servers.listRows()) {
     if (server.status === 'unreachable' || server.status === 'provisioning') continue;
     const docker = s.servers.handleFor(server.id).docker;

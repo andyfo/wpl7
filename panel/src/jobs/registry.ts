@@ -85,6 +85,7 @@ import {
 import { siteShell, siteShellPayload, wpCli, wpCliPayload, wpRest, wpRestPayload } from './handlers/exec.js';
 import { housekeepingPayload, systemHousekeeping } from './handlers/housekeeping.js';
 import { pluginZipCheck, pluginZipCheckPayload, siteMalwareScan, siteMalwareScanPayload, wpReinstall, wpReinstallPayload } from './handlers/security.js';
+import { appDeploy, appDeployPayload, appDeployQueuedCancel, appMountUpload, appMountUploadPayload, appMountUploadQueuedCancel } from './handlers/apps.js';
 
 export interface RegistryEntry<TSchema extends z.ZodType = z.ZodType> {
   payloadSchema: TSchema;
@@ -214,6 +215,12 @@ const registry: Partial<Record<JobType, RegistryEntry>> = {
   'plugin.zipCheck': entry(pluginZipCheckPayload, pluginZipCheck, 2 * 3600_000) as RegistryEntry,
   // A download of WordPress or one plugin; WP-CLI's own call has a ten-minute deadline.
   'wp.reinstall': entry(wpReinstallPayload, wpReinstall, 15 * 60_000) as RegistryEntry,
+  // A pull of a big image over a slow link, or an 8 GB upload streamed to a worker; its health
+  // gate has its own limit (ten minutes at most). A backup first gets its time on top.
+  // A deploy canceled while it waits lets go of its upload, which is used up all the same.
+  'app.deploy': entry(appDeployPayload, appDeploy, plusBackup(60 * 60_000), appDeployQueuedCancel) as RegistryEntry,
+  // Two runs of half an hour at most each (list, unpack), and a restart.
+  'app.mountUpload': entry(appMountUploadPayload, appMountUpload, 65 * 60_000, appMountUploadQueuedCancel) as RegistryEntry,
 };
 
 export function getRegistry(): Partial<Record<JobType, RegistryEntry>> {
@@ -260,4 +267,8 @@ export const SITE_INTERRUPTING_JOBS: ReadonlySet<JobType> = new Set<JobType>([
   'wp.pluginTask',
   'wp.themeTask',
   'wp.bulkTask',
+  // Its routes are held, then its container replaced.
+  'app.deploy',
+  // The app restarts onto its new files.
+  'app.mountUpload',
 ]);

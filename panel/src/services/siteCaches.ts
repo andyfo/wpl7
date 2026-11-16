@@ -8,7 +8,7 @@ import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
 import { jobs, sites, type ServerRow, type SiteRow } from '../db/schema.js';
 import type { JobWorker } from '../jobs/worker.js';
-import { hostedSites, isExternal, isPhpSite } from '../lib/siteKind.js';
+import { hostedSites, isContainerApp, isExternal, isPhpSite, siteImageSites } from '../lib/siteKind.js';
 import type { ServerHandle } from '../servers/registry.js';
 import { fitCpus, type DockerPort } from './docker.js';
 import { siteScheme } from './labels.js';
@@ -49,8 +49,8 @@ export type SiteCacheRow = Pick<SiteRow, 'slug' | 'app' | 'domains' | 'pageCache
 /** Whether the site keeps a page cache: what it says for itself, or what Settings says. */
 export function effectivePageCache(settings: CacheSettingsReader, site: Pick<SiteRow, 'pageCache' | 'app'>): boolean {
   // nginx stores only what wp-cache.php marks, which a PHP site never loads: its nginx gets the
-  // pass-through, whatever the setting says.
-  if (isPhpSite(site)) return false;
+  // pass-through, whatever the setting says. A container app has no nginx of the panel's.
+  if (site.app === 'php' || site.app === 'container') return false;
   if (site.pageCache === 'on') return true;
   if (site.pageCache === 'off') return false;
   return settings.get('sitePageCache') ?? true;
@@ -91,6 +91,8 @@ export function runtimeFilePaths(config: Config, slug: string) {
  * none. Nothing reloads it. An image from before the wrapper doesn't read it, and is none the worse.
  */
 export function writeMailFrom(server: Pick<ServerHandle, 'files'>, config: Config, site: Pick<SiteRow, 'slug' | 'app' | 'domains'>): Promise<void> {
+  // No wpl7-sendmail in a container app to read it.
+  if (isContainerApp(site)) return Promise.resolve();
   const [primary] = JSON.parse(site.domains) as string[];
   return writeRuntimeFile(server, runtimeFilePaths(config, site.slug).mailFrom, `${defaultMailFrom(site.app, primary ?? '')}\n`);
 }
@@ -222,6 +224,8 @@ export async function applySiteCaches(
   site: SiteRow,
   ctx?: { warn(message: string): void },
 ): Promise<{ reloaded: string[]; cleared: boolean }> {
+  // A container app has none of these files, and its image may carry a wpl7.stack label of its own.
+  if (isContainerApp(site)) return { reloaded: [], cleared: false };
   const live = (await siteContainerStack(server.docker, site.containerName)) === 2 && (await server.docker.containerState(site.containerName)) === 'running';
   // Nothing reads them until the next start, which is what they are for.
   if (!live) {
@@ -337,8 +341,8 @@ const CLEAR_PATIENCE_MS = 90_000;
  */
 export async function clearAfterChange(s: { servers: { handleFor(id: number): Pick<ServerHandle, 'docker'> }; log: { warn(message: string): void } }, site: SiteRow): Promise<void> {
   // A PHP site has no page cache, and its Redis is its app's own: sessions, queues, whatever it
-  // keeps there. The panel never empties it.
-  if (isExternal(site) || isPhpSite(site)) return;
+  // keeps there. The panel never empties it. A container app has neither.
+  if (isExternal(site) || site.app !== 'wordpress') return;
   let timer: NodeJS.Timeout | undefined;
   const patience = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error('its server did not answer in time')), CLEAR_PATIENCE_MS);
@@ -461,7 +465,10 @@ export function sweepSiteRuntime(
   worker: { enqueue: JobWorker['enqueue'] },
 ): number[] {
   const digest = runtimeDigest();
-  const hosting = new Set(s.db.selectDistinct({ serverId: sites.serverId }).from(sites).where(hostedSites()).all().map((row) => row.serverId));
+  // Runtime files are the site image's: a server with only container apps on it has none to rewrite.
+  const hosting = new Set(
+    s.db.selectDistinct({ serverId: sites.serverId }).from(sites).where(and(hostedSites(), siteImageSites())).all().map((row) => row.serverId),
+  );
   const queued: number[] = [];
   for (const server of s.servers.listRows()) {
     if (!hosting.has(server.id) || server.status === 'unreachable' || server.status === 'provisioning') continue;

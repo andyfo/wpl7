@@ -2,19 +2,21 @@
 import path from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { backups, moveCleanups, sites, type MoveCleanupRow } from '../../db/schema.js';
+import { appRoutes, appSettings, backups, moveCleanups, sites, type MoveCleanupRow } from '../../db/schema.js';
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
 import { assertPhpImage, sitePaths, siteImage } from '../../services/siteSpec.js';
-import { PHP_NO_MAINTENANCE, hasDatabase, isPhpSite } from '../../lib/siteKind.js';
+import { APP_MOVES_STOPPED, PHP_NO_MAINTENANCE, hasDatabase, isContainerApp, isPhpSite } from '../../lib/siteKind.js';
 import { removeSiteNetwork } from '../../services/siteNetwork.js';
-import { loadSite, removeSiteContainers, siteDomains, siteUrl, startSiteContainer, updateSiteRow, writeSiteJson } from './shared.js';
+import { loadSite, removeSiteContainers, siteDomains, siteUrl, startSiteContainer, stopGraceOf, updateSiteRow, writeSiteJson } from './shared.js';
 import { ensureSiteImage, wildcardCovers } from './sites.js';
 import { pipeBetweenServers, proxyConfigPathFor, proxyConfigYaml, rmOn } from './moveHelpers.js';
 import { extraDbFile } from '../../services/backup.js';
 import { parseNames } from '../../services/databases.js';
 import { restoreSiteOnServer, type ProtectionHold } from './restoreSite.js';
+import { appHttpHostsOf, carryAppImage, cleanAppImages, mountsOutOfBackups } from './apps.js';
+import { appRows } from '../../services/appSpec.js';
 
 export const siteMovePayload = z.object({
   siteId: z.number().int(),
@@ -55,7 +57,8 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
   const source = s.servers.handleFor(p.sourceServerId);
   const target = s.servers.handleFor(p.targetServerId);
   // Maintenance mode is WordPress's: a PHP site freezes by stopping, or not at all.
-  if (p.quiesce === 'maintenance' && isPhpSite(site)) throw new Error(PHP_NO_MAINTENANCE(site.slug));
+  if (p.quiesce === 'maintenance' && site.app !== 'wordpress') throw new Error(isPhpSite(site) ? PHP_NO_MAINTENANCE(site.slug) : APP_MOVES_STOPPED(site.slug));
+  if (p.quiesce === 'none' && isContainerApp(site)) throw new Error(APP_MOVES_STOPPED(site.slug));
   // Its drop-in would stay behind with no Redis to talk to, and no wp-cache.php to say what to do then.
   if (site.objectCache === 1 && (await target.docker.imageStack(siteImage(site.phpVersion))) === 1) {
     throw new Error(`"${target.name}" has no object cache yet, because it still has the old site image. Update that server first, or switch this site's object cache off.`);
@@ -90,12 +93,19 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     if ((await target.docker.containerState('wpl7-mariadb')) !== 'running') {
       throw new Error(`MariaDB is not running on "${target.name}"`);
     }
+    // The request asked the target's Traefik too, but a route saved while it waited for the
+    // answer was not among the ones it asked about. Routes are frozen from here (AppsService
+    // setRoutes refuses an app that is moving), so this is the last word.
+    if (isContainerApp(site)) {
+      const enabled = s.db.select({ scheme: appRoutes.scheme }).from(appRoutes).where(and(eq(appRoutes.siteId, site.id), eq(appRoutes.enabled, 1))).all();
+      await s.apps.assertHttpRoutesOn(p.targetServerId, enabled);
+    }
 
     // Leftovers from a previous failed attempt are provably garbage (slugs are unique).
     if ((await target.docker.containerState(site.containerName)) !== 'missing') {
       ctx.warn(`Removing leftover container ${site.containerName} on "${target.name}" (previous attempt)`);
     }
-    await removeSiteContainers(target.docker, site.containerName);
+    await removeSiteContainers(target.docker, site.containerName, isContainerApp(site) ? { volumes: true } : undefined);
     if (await target.files.exists(paths.root)) {
       ctx.warn(`Removing leftover files on "${target.name}" (previous attempt)`);
       await rmOn(target, s.config.paths.sites, site.slug);
@@ -137,7 +147,9 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     }
     if (!disk) ctx.warn('Could not determine free disk space on the target; continuing.');
 
-    await ensureSiteImage(ctx, target, s.config, site.phpVersion);
+    // A container app's own image goes to the target first, while the source still serves.
+    if (!isContainerApp(site)) await ensureSiteImage(ctx, target, s.config, site.phpVersion);
+    const appImage = isContainerApp(site) ? await carryAppImage(ctx, s, source, target, site) : null;
     // Before anything is copied: the target's image may be from before PHP sites.
     if (isPhpSite(site)) await assertPhpImage(target, siteImage(site.phpVersion));
     await target.files.mkdirp(s.config.paths.plugins);
@@ -181,11 +193,14 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
       }
     } else if (p.quiesce === 'stop') {
       ctx.info('Stopping the source site…');
-      await source.docker.stopContainer(site.containerName);
+      await source.docker.stopContainer(site.containerName, stopGraceOf(s.db, site));
       quiesced = true;
-      ctx.pushCompensation('restart source container', async () => {
-        await startSiteContainer(source, s, site, ctx);
-      });
+      // Only a site that ran starts again: a stopped one stays as its row says, with no routes.
+      if (!wasStopped) {
+        ctx.pushCompensation('restart source container', async () => {
+          await startSiteContainer(source, s, site, ctx);
+        });
+      }
     } else {
       ctx.info('Copying while the source keeps serving (writes made during the copy will not transfer).');
     }
@@ -260,11 +275,23 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
       },
       {
         routing: true,
-        requireWpConfig: !isPhpSite(site),
+        requireWpConfig: site.app === 'wordpress',
         protection,
         // Quarantined files travel with the site: they are restorable, and evidence. Not in the
         // snapshot - a backup restores a site's files, and must never put these back among them.
         afterFiles: async () => {
+          // A container app's mounts kept out of its backups are not in the snapshot either.
+          const unbacked = isContainerApp(site) ? mountsOutOfBackups(s, site) : [];
+          if (unbacked.length > 0) {
+            ctx.info(`Copying the mounts kept out of backups to the target (${unbacked.join(', ')})…`);
+            await pipeBetweenServers({
+              source,
+              sourceCmd: ['tar', ['-C', paths.root, '-cf', '-', ...unbacked.map((name) => `mounts/${name}`)]],
+              target,
+              targetCmd: ['tar', ['-xpf', '-', '-C', paths.root]],
+              timeoutMs: 60 * 60_000,
+            });
+          }
           if (!(await source.files.exists(paths.quarantine))) return;
           ctx.info('Copying the quarantined files to the target…');
           await pipeBetweenServers({
@@ -290,13 +317,14 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
             ? 'Probing the site on the target (it is started briefly for this)…'
             : 'Probing the site on the target…',
         },
+        ...(appImage ? { appImage: appImage.ref } : {}),
       },
     );
     // That was the last cancel point - beyond here the move commits.
 
     if (wasStopped) {
       ctx.info('Site was stopped before the move; stopping it again on the target…');
-      await target.docker.stopContainer(site.containerName);
+      await target.docker.stopContainer(site.containerName, stopGraceOf(s.db, site));
     }
 
     // ------------------------------------------------------------ 5: cutover
@@ -306,6 +334,8 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     let cleanupId = 0;
     s.db.transaction(() => {
       updateSiteRow(s.db, site.id, { serverId: p.targetServerId });
+      // An uploaded image has the id the target gave it; a registry one is the same digest there.
+      if (appImage) s.db.update(appSettings).set({ imageId: appImage.imageId, updatedAt: Date.now() }).where(eq(appSettings.siteId, site.id)).run();
       // serverId is the only field that moves; status must survive (a stopped site that
       // came back stopped above would otherwise be listed as running for ever).
       cleanupId = s.db
@@ -335,11 +365,16 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     committed = true;
     ctx.info(`Cutover committed - "${site.slug}" now lives on "${target.name}".`);
     site = loadSite(s.db, site.id);
-    await writeSiteJson(target, s.config, site);
+    await writeSiteJson(target, s, site);
     // The row points at the target now: the pin is redundant there, and the source's file goes.
     protection.release?.();
     protection.release = null;
     await s.security.kick(p.sourceServerId);
+    // An app's routes go with it: written on the target by its row now, taken off the source.
+    if (isContainerApp(site)) {
+      await s.appRoutes.kick(p.targetServerId);
+      await s.appRoutes.kick(p.sourceServerId);
+    }
 
     const dns = { updated: [] as string[], manual: [] as { host: string; ip: string }[] };
     // The source and the target are different servers, so the wildcard covers the site on one of
@@ -419,6 +454,8 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
           acmeResolver: s.config.acmeResolver,
           devDomain: source.row.devDomain,
           dnsProvider: s.dns.wildcardProvider(source.row.dnsProvider),
+          // A container app's plain http routes are forwarded on port 80 too.
+          httpHosts: isContainerApp(site) ? appHttpHostsOf(s, site) : [],
         }),
       );
     } catch (err) {
@@ -429,7 +466,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     }
     stopKeepalive();
     try {
-      await removeSiteContainers(source.docker, site.containerName);
+      await removeSiteContainers(source.docker, site.containerName, isContainerApp(site) ? { volumes: true } : undefined);
       ctx.info('Source container removed.');
     } catch (err) {
       ctx.warn(`Could not remove the source container (${errMsg(err)}); finalize will retry.`);
@@ -465,7 +502,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
       throw err;
     }
     await ctx.runCompensations();
-    ctx.info('Target rolled back; the site keeps running on the source. Re-running the move is safe.');
+    ctx.info(`Target rolled back; the site ${wasStopped ? 'stays stopped' : 'keeps running'} on the source. Re-running the move is safe.`);
     throw err;
   } finally {
     stopKeepalive();
@@ -475,6 +512,7 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
     if (protection.release) {
       protection.release();
       await s.security.kick(p.targetServerId);
+      if (isContainerApp(site)) await s.appRoutes.kick(p.targetServerId);
     }
   }
 }
@@ -552,7 +590,8 @@ export async function finalizeCleanup(ctx: JobContext<unknown>, s: CoreServices,
   }
   const source = s.servers.handleFor(cleanup.sourceServerId);
   ctx.info(`Removing the old copy of "${cleanup.siteSlug}" from "${source.name}"…`);
-  await removeSiteContainers(source.docker, cleanup.containerName);
+  // A container app's anonymous volumes (an image VOLUME the panel does not keep) go with it.
+  await removeSiteContainers(source.docker, cleanup.containerName, owner && isContainerApp(owner) ? { volumes: true } : undefined);
   // '' for a site that has no database of its own.
   if (cleanup.dbName !== '') await source.dbAdmin.dropSiteDb(cleanup.dbName, cleanup.dbUser);
   for (const name of parseNames(cleanup.extraDbs)) {
@@ -563,6 +602,11 @@ export async function finalizeCleanup(ctx: JobContext<unknown>, s: CoreServices,
       continue;
     }
     await source.dbAdmin.dropDb(name);
+  }
+  // A container app's images there, now that it runs on the other server.
+  if (owner && isContainerApp(owner)) {
+    const rows = appRows(s.db, owner.id);
+    if (rows) await cleanAppImages(ctx, s, source, owner, rows.settings, { all: true }).catch((err: unknown) => ctx.warn(`Could not remove the app's images there: ${errMsg(err)}`));
   }
   await rmOn(source, s.config.paths.sites, cleanup.siteSlug);
   // The network outlives the container it was made for; left behind, every stack redeploy
@@ -579,6 +623,9 @@ export async function finalizeCleanup(ctx: JobContext<unknown>, s: CoreServices,
     .set({ status: 'done', finalizedAt: Date.now() })
     .where(eq(moveCleanups.id, cleanup.id))
     .run();
+  // After the row says done: until then the source counts the hosts it forwarded (appHttpHosts),
+  // and the block list keeps their twins there.
+  if (owner && isContainerApp(owner)) void s.appRoutes.kick(cleanup.sourceServerId);
   ctx.info('Source cleanup done.');
 }
 

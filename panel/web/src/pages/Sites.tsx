@@ -9,6 +9,7 @@ import { formatBytes, sitePhp, timeAgo } from '../lib/format';
 import { siteHealth } from '../lib/siteHealth';
 import { layoutFrom, sitesView, type SitesLayout } from './sitesLayout';
 import { PhpLabel } from '../components/php/PhpLabel';
+import { AppLabel } from '../components/app/AppParts';
 
 const LAYOUTS = [
   { id: 'split', label: 'Split', title: 'Sites hosted elsewhere in a list of their own' },
@@ -188,6 +189,11 @@ function SiteCell({ site, href }: { site: SiteSummary; href?: string }) {
           <PhpLabel />
         </span>
       )}
+      {site.app === 'container' && (
+        <span className="ml-2 align-middle">
+          <AppLabel />
+        </span>
+      )}
       <div className="text-xs text-neutral-500">
         <a
           href={href ?? site.external?.home ?? `https://${site.primaryDomain}`}
@@ -254,9 +260,9 @@ function ExternalSitesCard({ sites }: { sites: SiteSummary[] }) {
 /** Updates the last scan found, and the worst known vulnerability. */
 function UpdatesCell({ site }: { site: SiteSummary }) {
   // No WordPress to update.
-  if (site.app === 'php') {
+  if (site.app !== 'wordpress') {
     return (
-      <span className="text-neutral-300" title="A PHP site has no WordPress updates">
+      <span className="text-neutral-300" title={site.app === 'php' ? 'A PHP site has no WordPress updates' : 'A container app deploys its own image'}>
         –
       </span>
     );

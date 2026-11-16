@@ -8,7 +8,9 @@ import type { Config } from '../config.js';
 import type { ServerMonitorDto, ServerStatsDto, SiteMonitorDto } from '../../shared/types.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
 import { httpProbeOnce, type ExternalProbe } from '../lib/httpProbe.js';
-import { externalSites, isExternal, isPhpSite } from '../lib/siteKind.js';
+import { externalSites, isContainerApp, isExternal, isPhpSite } from '../lib/siteKind.js';
+import { askApp } from './appProbe.js';
+import { appRows } from './appSpec.js';
 import { sitePaths } from './siteSpec.js';
 
 /** The site states the monitor looks at; mid-create and mid-delete are a job's to report. */
@@ -255,10 +257,13 @@ export class MonitorService {
     const deadline = Date.now() + settleMs;
     // A PHP site's own 404 is an answer: an app may have no page at its address (lib/httpProbe.ts).
     const opts = isPhpSite(site) ? { siteOwn4xx: true } : {};
-    let attempt = await httpProbeOnce(url, primary, 5000, opts);
+    // A container app is asked its own health path, on its own network: it may answer nothing at /,
+    // and its routes may all be off (services/appProbe.ts).
+    const probe = isContainerApp(site) ? () => this.askAppOnce(site, handle) : () => httpProbeOnce(url, primary, 5000, opts);
+    let attempt = await probe();
     while (!attempt.ok && Date.now() < deadline && !stale()) {
       await new Promise((r) => setTimeout(r, 1000));
-      attempt = await httpProbeOnce(url, primary, 5000, opts);
+      attempt = await probe();
     }
     // A job that began on the site while the request was out may be what it answered.
     if (stale()) return;
@@ -275,6 +280,16 @@ export class MonitorService {
       .values({ siteId: site.id, ts: Date.now(), up: up ? 1 : 0, httpMs: entry.httpMs })
       .run();
     await this.tell(site, attempt);
+  }
+
+  /** One question of a container app's health path: up for an answer below 400, as a site's. */
+  private async askAppOnce(site: SiteRow, handle: ServerHandle): Promise<{ ok: boolean; status: number | null; ms: number; error?: string }> {
+    const rows = appRows(this.db, site.id);
+    if (!rows) return { ok: false, status: null, ms: 0, error: 'no settings' };
+    const host = rows.settings.healthHost || ((JSON.parse(site.domains) as string[])[0] ?? site.slug);
+    const t0 = Date.now();
+    const answer = await askApp(handle, site, { port: rows.settings.port, path: rows.settings.healthPath, host, timeoutSec: 5 });
+    return { ok: answer.status !== null && answer.status < 400, status: answer.status, ms: Date.now() - t0, ...(answer.status === null ? { error: answer.detail } : {}) };
   }
 
   async tickContainerStats(): Promise<void> {

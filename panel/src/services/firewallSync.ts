@@ -57,6 +57,8 @@ interface ServerState {
 export interface FirewallSyncOpts {
   /** Coalescing window for kicks; 0 in tests. */
   debounceMs?: number;
+  /** The hosts container apps answer plain http on, per server: the block list's twins on web cover them. */
+  webHosts?: (serverId: number) => string[];
 }
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -83,7 +85,11 @@ export class FirewallSyncService {
     opts: FirewallSyncOpts = {},
   ) {
     this.debounceMs = opts.debounceMs ?? 3000;
+    this.webHosts = opts.webHosts ?? (() => []);
   }
+
+  /** The hosts container apps answer plain http on, per server, pinned ones too (services/appRoutes.ts AppRoutesService.webHosts). */
+  private readonly webHosts: (serverId: number) => string[];
 
   private dir(): string {
     return path.join(this.config.srvRoot, 'wpl7-firewall');
@@ -270,6 +276,7 @@ export class FirewallSyncService {
       direct,
       panelHost: this.config.panelDomain || null,
       tlsMode: this.config.tlsMode,
+      webHosts: this.webHosts(serverId),
     });
     const target = path.join(this.config.srvRoot, 'traefik', 'dynamic', BLOCKED_FILE);
     if (!file.config) {
