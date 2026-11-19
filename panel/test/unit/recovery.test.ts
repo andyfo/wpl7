@@ -379,6 +379,33 @@ describe('recovery', () => {
     expect(() => queueDeletedSiteRestore(w.core, backup.id, 1)).toThrow(/is a site already/);
   });
 
+  it("gives a deleted site a dev address of its own when another site took all of the backup's", async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const backup = await w.core.backup.create(site, 'final', {});
+    w.db.delete(sites).where(eq(sites.id, site.id)).run();
+    w.dbAdmin.databases.delete(site.dbName);
+    w.dbAdmin.users.delete(site.dbUser);
+    w.docker.containers.delete(site.containerName);
+    fs.rmSync(sitePaths(w.config, site.slug).root, { recursive: true, force: true });
+    // Another site holds the old dev address now.
+    w.db
+      .insert(sites)
+      .values({ ...site, id: undefined, slug: 'thief', containerName: 'wp-thief', dbName: 'wp_thief', dbUser: 'wp_thief', createdAt: Date.now(), updatedAt: Date.now() })
+      .run();
+    const { siteRowFromManifest } = await import('../../src/services/recovery.js');
+    const manifest = JSON.parse(fs.readFileSync(path.join(backup.path, 'manifest.json'), 'utf8'));
+    const warnings: string[] = [];
+    // Its old address taken, and the same name under the same dev domain with it: nothing to come back on.
+    expect(() => siteRowFromManifest(w.core, site.slug, manifest, w.servers.rowById(1)!, () => undefined)).toThrow(/another site's now/);
+    // On a server with a dev domain of its own, it gets an address there.
+    const s2 = w.addSshServer('s2', { devDomain: 'dev2.example.test' });
+    const row = siteRowFromManifest(w.core, site.slug, manifest, w.servers.rowById(s2.id)!, (m) => warnings.push(m));
+    expect(JSON.parse(row.domains)).toEqual([`${site.slug}.dev2.example.test`]);
+    expect(row.devHostname).toBe(`${site.slug}.dev2.example.test`);
+    expect(warnings.join('\n')).toMatch(/another site's now/);
+  });
+
   it('reads backups whose folder is gone as remote only, unless their whole backup root is', async () => {
     const w = await makeWorld({ exec: hostExec });
     const site = await makeSite(w);

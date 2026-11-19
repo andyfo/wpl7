@@ -469,9 +469,10 @@ export function siteRowFromManifest(
   }
 
   const dev = str(manifest.devHostname) || null;
-  const free = (domain: string): boolean => {
+  // A name under a dev domain is only ever the site's own dev hostname: the one it had, or the one it gets.
+  const free = (domain: string, ownDev: string | null = dev): boolean => {
     try {
-      assertDomainsFree(s, [domain], { allowDevHostname: dev });
+      assertDomainsFree(s, [domain], { allowDevHostname: ownDev });
       return true;
     } catch {
       return false;
@@ -483,7 +484,7 @@ export function siteRowFromManifest(
   let devHostname = dev && domains.includes(dev) ? dev : null;
   if (domains.length === 0) {
     devHostname = `${slug}.${target.devDomain || s.config.devDomain}`;
-    if (!free(devHostname)) throw new Error(`${devHostname} is another site's now, and the backup's domains are too. Nothing was changed.`);
+    if (!free(devHostname, devHostname)) throw new Error(`${devHostname} is another site's now, and the backup's domains are too. Nothing was changed.`);
     domains.push(devHostname);
     warn(`It comes back on ${devHostname}.`);
   }
