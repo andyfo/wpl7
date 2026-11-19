@@ -388,6 +388,26 @@ describe('what the Overview and the emails say', () => {
     expect(status.images).toBe('registry');
   });
 
+  it("names the job that brought each server its image, and each site's move", async () => {
+    const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
+    const site = await createSite(w);
+    w.docker.recordDigests = true;
+    w.docker.publish(w.core.phpUpdates.publishedImage('8.3'), DIGEST('a'), { imageId: 'sha256:patched' });
+    w.docker.imagePhp.set('sha256:patched', '8.3.37');
+    await w.core.phpUpdates.tick();
+    const refresh = refreshJobs(w)[0]!;
+    expect(await runJob(w, refresh.id)).toBe('succeeded');
+    // Its move did not take: the old container came back.
+    const move = reconciles(w)[0]!;
+    w.db.update(jobs).set({ status: 'failed', error: 'cannot allocate memory' }).where(eq(jobs.id, move.id)).run();
+    w.db.update(sites).set({ phpRelease: '8.3.36' }).where(eq(sites.id, site.id)).run();
+    const b83 = w.core.phpUpdates.status().branches.find((b) => b.branch === '8.3')!;
+    expect(b83.images).toEqual([{ serverId: 1, serverName: 'local', release: '8.3.37', refresh: { id: refresh.id, status: 'succeeded', error: null } }]);
+    expect(b83.behind).toEqual([
+      { slug: site.slug, title: 'Demo Site', release: '8.3.36', serverId: 1, move: { id: move.id, status: 'failed', error: 'cannot allocate memory' } },
+    ]);
+  });
+
   it('emails a new security release of a branch sites run, once', async () => {
     const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
     const sent = capture(w);

@@ -37,6 +37,76 @@ const SOON_MS = 7 * 24 * 3600_000;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+export type PhpTone = 'waiting' | 'updating' | 'behind' | 'done';
+
+/** The dot beside a line, by how things stand. */
+export const PHP_TONES: Record<PhpTone, string> = {
+  waiting: 'bg-amber-500',
+  updating: 'bg-sky-500',
+  behind: 'bg-red-500',
+  done: 'bg-emerald-500',
+};
+
+const hasRelease = (release: string | null, version: string) => release !== null && compareRelease(release, version) >= 0;
+const running = (job: { status: string } | null) => job !== null && (job.status === 'queued' || job.status === 'running');
+
+/** php.net's release notes of a release: 8.4.28 is on ChangeLog-8.php. */
+export const phpChangelogUrl = (version: string) => `https://www.php.net/ChangeLog-${version.split('.')[0]}.php#${version}`;
+
+/** Where one server's image of a branch stands against its newest release, for the PHP details. */
+export function phpImageState(image: PhpBranchDto['images'][number], version: string, data: PhpUpdatesDto): { tone: PhpTone; text: string } {
+  if (hasRelease(image.release, version)) return { tone: 'done', text: `Has ${version}` };
+  if (running(image.refresh)) return { tone: 'updating', text: data.images === 'build' ? 'Building the new image' : 'Pulling the new image' };
+  if (image.refresh?.status === 'failed') return { tone: 'behind', text: 'Could not get the new image. It tries again within the hour.' };
+  if (data.updateNeeded) return { tone: 'waiting', text: 'Needs a WPL7 update' };
+  return { tone: 'waiting', text: data.images === 'build' ? "Waiting for Docker's image" : 'Waiting for the published image' };
+}
+
+/** Where one site still on an older release stands, for the PHP details. `retry`: its move can be tried again. */
+export function phpSiteState(site: PhpBranchDto['behind'][number], branch: PhpBranchDto): { tone: PhpTone; text: string; retry: boolean } {
+  const version = branch.latest?.version ?? '';
+  if (running(site.move)) return { tone: 'updating', text: 'Moving now', retry: false };
+  if (!branch.images.some((i) => i.serverId === site.serverId && hasRelease(i.release, version))) {
+    return { tone: 'waiting', text: "Waits for its server's image", retry: false };
+  }
+  if (site.move?.status === 'failed') return { tone: 'behind', text: 'Its move failed', retry: true };
+  if (site.move?.status === 'canceled') return { tone: 'behind', text: 'Its move was stopped', retry: true };
+  return { tone: 'waiting', text: 'Moves at the next hourly check', retry: false };
+}
+
+/**
+ * What is happening with a branch's newest release, and what comes next, for the top of the PHP
+ * details. `update`: a WPL7 update is the way to it.
+ */
+export function phpSummary(b: PhpBranchDto, data: PhpUpdatesDto): { text: string; update: boolean } {
+  const version = b.latest?.version ?? '';
+  if (b.sites === 0) return { text: `No site runs PHP ${b.branch}.`, update: false };
+  if (b.behindCount === 0) {
+    return {
+      text:
+        b.current === b.sites
+          ? `${b.sites === 1 ? 'The site runs' : `All ${b.sites} sites run`} PHP ${version}.`
+          : `${b.current} of ${plural(b.sites, 'site')} run PHP ${version}. The others' PHP is read at their next check.`,
+      update: false,
+    };
+  }
+  if (!b.images.some((i) => hasRelease(i.release, version))) {
+    if (b.images.some((i) => running(i.refresh))) {
+      return { text: `${data.images === 'build' ? 'Building' : 'Pulling'} the site image with PHP ${version}. Then the sites move onto it.`, update: false };
+    }
+    if (data.updateNeeded) return { text: `This install's WPL7 release gets no new site images. A WPL7 update brings PHP ${version}.`, update: true };
+    return {
+      text:
+        data.images === 'build'
+          ? `Waiting for Docker's WordPress image with PHP ${version}, usually a few hours after the release. Each server then builds its own image, and the sites move onto it.`
+          : `Waiting for the site image with PHP ${version}, usually a few hours after the release. Each server then pulls it, and the sites move onto it.`,
+      update: false,
+    };
+  }
+  if (b.updating) return { text: `Moving the sites onto PHP ${version}: ${b.current} of ${b.sites} done. Each one restarts for a second or two.`, update: false };
+  return { text: `${b.behindCount} of ${plural(b.sites, 'site')} still on an older PHP than ${version}.`, update: false };
+}
+
 /** What the Overview's PHP card says: nothing at all when nothing is happening. */
 export function phpLines(data: PhpUpdatesDto, now: number): PhpLine[] {
   const lines: PhpLine[] = [];

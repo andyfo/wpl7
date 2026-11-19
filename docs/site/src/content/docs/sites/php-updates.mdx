@@ -8,6 +8,7 @@ sources:
   - panel/src/services/phpUpdates.ts
   - panel/src/services/phpUpstream.ts
   - panel/web/src/components/PhpCard.tsx
+  - panel/web/src/components/PhpDetails.tsx
   - panel/web/src/components/PhpRelease.tsx
   - panel/web/src/lib/php.ts
   - panel/shared/php.ts
@@ -33,9 +34,15 @@ The **PHP** card on the **Overview** is there only while something is happening.
 | PHP security release on Wed 21 Oct, 14:00 UTC | php.net has announced a security release ahead of time |
 | PHP 8.4.28 is out. Waiting for its image. | The release is out, and no server has its image yet |
 | Updating sites to PHP 8.4.28: 5 of 12 | Sites are moving onto it |
-| 2 of 12 sites still on an older PHP than 8.4.28 | Those sites did not move. Each one's page says why. |
+| 2 of 12 sites still on an older PHP than 8.4.28 | Those sites did not move. The line's details say why. |
 | All sites run PHP 8.4.28 | For a day after the last site moved |
 | Next: PHP 8.4.28 and 8.5.13, expected Thu 19 Nov | A release candidate is out, and its release is due within a week |
+
+A line opens the details of its PHP version: each server's image, the sites still on an older PHP
+and why, and what the release fixes. A site whose move failed has **Try again** there. The
+advance notice opens php.net's announcement.
+
+<Screenshot name="php-details" alt="The details of PHP 8.4: each server has 8.4.26, one site's move failed and offers Try again, and what the release fixed" />
 
 A security release also says what it fixes, such as 2 critical and 1 high. A site on an older
 release than the newest of its branch has its PHP in amber in the site lists, on its **Overview**

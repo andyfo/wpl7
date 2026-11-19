@@ -87,6 +87,12 @@ export const SHOTS: Shot[] = [
     theme: 'light',
     prepare: scrollTo('PHP'),
   },
+  {
+    name: 'php-details',
+    what: "The details of a PHP version: each server's image, a site whose move failed, and what the release fixed",
+    path: '/?php=8.4',
+    theme: 'light',
+  },
   { name: 'sites-list', what: 'Sites → All sites: thirteen sites on three servers, and two hosted elsewhere', path: '/sites', theme: 'both', hero: true },
   {
     name: 'site-new',

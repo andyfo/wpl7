@@ -1,5 +1,6 @@
 import { ReminderCard } from '../components/ReminderCard';
 import { PhpCard } from '../components/PhpCard';
+import { PhpDetails } from '../components/PhpDetails';
 import { PhpRelease } from '../components/PhpRelease';
 // @docs servers/overview
 import { Link } from 'react-router';
@@ -47,7 +48,6 @@ export function Dashboard() {
       </div>
 
       <ReminderCard />
-      <PhpCard />
       <ErrorNote error={monitor.error || sites.error} />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <StatTile
@@ -96,7 +96,11 @@ export function Dashboard() {
 
       <ResourceCharts servers={serverRows} />
 
-      <WordPressTile sites={sites.data ?? []} />
+      {/* Side by side when both have something to say; either one alone takes the row. */}
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,24rem),1fr))] gap-4 empty:hidden lg:gap-6">
+        <WordPressTile sites={sites.data ?? []} />
+        <PhpCard />
+      </div>
 
       {offsite.data && offsite.data.destinations.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border border-neutral-200 bg-surface px-4 py-2.5 text-sm shadow-sm">
@@ -269,6 +273,7 @@ export function Dashboard() {
           </table>
         )}
       </Card>
+      <PhpDetails />
     </div>
   );
 }
