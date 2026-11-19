@@ -6,6 +6,7 @@ import type { BackupIdsDto, BackupListItemDto } from '../../../shared/types';
 import { MAX_BULK_BACKUP_DELETE, type BackupType } from '../../../shared/schemas';
 import { api } from '../api/client';
 import { useAllBackups, useMeta, useRunJob, useSites } from '../api/hooks';
+import { RestoreDeletedSiteDialog } from '../components/RecoveryDialogs';
 import {
   BackupActions,
   BulkDeleteBackupsDialog,
@@ -57,6 +58,7 @@ export function Backups() {
   const qc = useQueryClient();
   const [restoreFor, setRestoreFor] = useState<BackupListItemDto | null>(null);
   const [fetchFor, setFetchFor] = useState<BackupListItemDto | null>(null);
+  const [restoreSiteFor, setRestoreSiteFor] = useState<BackupListItemDto | null>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [actionError, setActionError] = useState<unknown>(null);
   /** Backups ticked: on this page, or - after "Select all" - on every page. */
@@ -448,7 +450,11 @@ export function Backups() {
                     </td>
                     <td className="hidden py-2 pr-3 sm:table-cell">
                       <StatusBadge status={b.status} />
-                      {!b.filesPresent && <div className="mt-0.5 text-[10px] text-neutral-400">remote only</div>}
+                      {!b.filesPresent && (
+                        <div className="mt-0.5 text-[10px] text-neutral-400">
+                          {b.copies.some((c) => c.status === 'complete') ? 'remote only' : 'files missing'}
+                        </div>
+                      )}
                     </td>
                     {offsiteConfigured && (
                       <td className="hidden py-2 pr-3 md:table-cell">
@@ -464,6 +470,7 @@ export function Backups() {
                         canRestore={!b.siteDeleted && b.type !== 'panel' && b.siteKind !== 'external'}
                         busy={(action) => run.busy(`${action}:${b.id}`)}
                         onRestore={() => setRestoreFor(b)}
+                        onRestoreSite={b.siteDeleted && b.type !== 'panel' && b.siteKind !== 'external' ? () => setRestoreSiteFor(b) : undefined}
                         onFetch={() => setFetchFor(b)}
                         onDelete={() => setDeleteId(b.id)}
                       />
@@ -526,6 +533,7 @@ export function Backups() {
           onClose={() => setRestoreFor(null)}
         />
       )}
+      {restoreSiteFor && <RestoreDeletedSiteDialog backup={restoreSiteFor} onClose={() => setRestoreSiteFor(null)} />}
       {fetchFor && (
         <FetchBackDialog
           backup={fetchFor}

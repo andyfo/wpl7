@@ -61,6 +61,7 @@ import { SiteSecurityTab } from '../components/security/SiteSecurityTab';
 import { AppDeploysTab, AppImageCard, AppLabel, AppLogsTab } from '../components/app/AppParts';
 import { AppImageSettings, DeployHookCard, EnvCard, HealthCard, MountsCard, RoutesCard, RunsCard } from '../components/app/AppSettings';
 import { BlockDialog } from '../components/security/BlockDialog';
+import { RecoverSiteDialog } from '../components/RecoveryDialogs';
 import {
   SiteCreatedNote,
   SiteCreationCard,
@@ -263,8 +264,12 @@ function OverviewTab({ slug }: { slug: string }) {
   const [mailError, setMailError] = useState<unknown>(null);
   const [goLiveOpen, setGoLiveOpen] = useState(false);
   const [moveOpen, setMoveOpen] = useState(false);
+  const [recoverOpen, setRecoverOpen] = useState(false);
+  const servers = useServers();
   const s = site.data;
   if (!s) return <Spinner />;
+  // Its server does not answer: the site may have to come back from a backup elsewhere.
+  const serverDown = s.containerState === 'unknown' && servers.data?.find((srv) => srv.id === s.serverId)?.status === 'unreachable';
 
   const samples = history.data ?? [];
   const multiServer = meta.data?.multiServer ?? false;
@@ -290,12 +295,27 @@ function OverviewTab({ slug }: { slug: string }) {
                 small
                 disabled={run.isPending}
                 busy={run.busy('health')}
-                onClick={() => run.mutate({ path: `/api/sites/${slug}/${health.action!.path}`, action: 'health' })}
+                onClick={() =>
+                  health.action!.path === 'recover'
+                    ? setRecoverOpen(true)
+                    : run.mutate({ path: `/api/sites/${slug}/${health.action!.path}`, action: 'health' })
+                }
               >
                 {health.action.label}
               </Button>
             </div>
           )}
+        </div>
+      )}
+      {serverDown && (
+        <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
+          <div className="font-medium">Its server does not answer</div>
+          <p className="mt-1">If {s.serverName} is gone, the site can come back from a backup on another server.</p>
+          <div className="mt-2">
+            <Button small onClick={() => setRecoverOpen(true)}>
+              Recover
+            </Button>
+          </div>
         </div>
       )}
       {mailSuspended && (
@@ -327,7 +347,15 @@ function OverviewTab({ slug }: { slug: string }) {
           </div>
         </div>
       )}
-      {cleanup && (
+      {cleanup?.handoverPending && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <div className="font-medium">Old copy on {cleanup.sourceServerName}</div>
+          <p className="mt-1">
+            {cleanup.sourceServerName} does not answer. If it answers again, the panel stops that copy and removes it a day later.
+          </p>
+        </div>
+      )}
+      {cleanup && !cleanup.handoverPending && (
         <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
           <div className="font-medium">Move cleanup pending</div>
           <p className="mt-1">
@@ -435,6 +463,7 @@ function OverviewTab({ slug }: { slug: string }) {
 
       {goLiveOpen && <GoLiveModal slug={slug} php={s.app === 'php'} onClose={() => setGoLiveOpen(false)} />}
       {moveOpen && <MoveModal slug={slug} onClose={() => setMoveOpen(false)} />}
+      {recoverOpen && <RecoverSiteDialog slug={slug} serverName={s.serverName} onClose={() => setRecoverOpen(false)} />}
     </div>
   );
 }
