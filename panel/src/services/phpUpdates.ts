@@ -87,8 +87,11 @@ interface ServerImages {
   /** By branch: the PHP release in the server's site image, as last read. */
   releases: Record<string, string | null>;
   readAt: number;
-  /** When the last weekly rebuild was started, or when the server was first seen. */
-  weeklyAt?: number;
+  /**
+   * By branch: when its last build here finished, kept or not, or when the branch was first seen.
+   * A weekly rebuild is due for a branch whose last one is from before this week's Monday 03:00 UTC.
+   */
+  weeklyDone?: Record<string, number>;
   /** By branch: when the base image was last asked about. */
   baseCheckedAt?: Record<string, number>;
   /** By branch: the digest of the base the last finished build was made on. */
@@ -242,7 +245,14 @@ export class PhpUpdatesService {
     const versions = (await docker.imageTags(SITE_IMAGE_REPO)).map(branchOfTag).filter((v): v is string => v !== null);
     const releases: Record<string, string | null> = {};
     for (const v of versions) releases[v] = await docker.imagePhpVersion(siteImage(v));
-    this.saveServer(server.id, (row) => ({ ...row, releases, readAt: Date.now(), weeklyAt: row.weeklyAt ?? Date.now() }));
+    const now = Date.now();
+    // A branch seen for the first time waits for next week's rebuild: it was just built or pulled.
+    this.saveServer(server.id, (row) => ({
+      ...row,
+      releases,
+      readAt: now,
+      weeklyDone: { ...Object.fromEntries(versions.map((v) => [v, now])), ...row.weeklyDone },
+    }));
     if (versions.length === 0 || this.refreshBlocked(server.id)) return { queued: false, problem: null };
     const plan = this.builds ? await this.staleBuilds(server, docker, versions, releases) : await this.stalePulls(docker, versions);
     if (plan.versions.length > 0) {
@@ -273,10 +283,11 @@ export class PhpUpdatesService {
   }
 
   /**
-   * Branches worth a build: all of them once a week, and at once one whose image is behind
-   * php.net's newest release while Docker's base differs from the one the server last built on.
-   * The base may have changed for another reason and still have the old PHP: the build is then
-   * kept only if a package changed, and tried again once the base changes once more.
+   * Branches worth a build: each once a week, until its build there finishes, and at once one
+   * whose image is behind php.net's newest release while Docker's base differs from the one the
+   * server last built on. The base may have changed for another reason and still have the old PHP:
+   * the build is then kept only if a package changed, and tried again once the base changes once
+   * more. A failed build is tried again an hour later (refreshBlocked), weekly or not.
    */
   private async staleBuilds(
     server: ServerRow,
@@ -286,7 +297,7 @@ export class PhpUpdatesService {
   ): Promise<{ versions: string[]; reason: 'php' | 'weekly'; problems: string[] }> {
     const now = Date.now();
     const row = this.state().servers[server.id];
-    if ((row?.weeklyAt ?? now) < weekStart(now)) return { versions, reason: 'weekly', problems: [] };
+    const weekly = versions.filter((v) => (row?.weeklyDone?.[v] ?? now) < weekStart(now));
     const facts = this.upstream.facts();
     const checked = { ...row?.baseCheckedAt };
     // The base each branch was last built on. Until a build here records one, the base the server
@@ -302,7 +313,7 @@ export class PhpUpdatesService {
     }
     const stale: string[] = [];
     const problems: string[] = [];
-    for (const v of versions) {
+    for (const v of versions.filter((b) => !weekly.includes(b))) {
       const latest = facts.releases[v]?.version;
       const have = releases[v];
       if (!latest || !have || compareVersions(have, latest) >= 0) continue;
@@ -318,7 +329,7 @@ export class PhpUpdatesService {
       if (built[v] !== digest) stale.push(v);
     }
     this.saveServer(server.id, (r) => ({ ...r, baseCheckedAt: checked, builtBase: { ...built, ...r.builtBase } }));
-    return { versions: stale, reason: 'php', problems };
+    return { versions: [...weekly, ...stale], reason: weekly.length > 0 ? 'weekly' : 'php', problems };
   }
 
   /** A refresh queued or running on the server, or one that failed within the last RETRY_AFTER_MS. */
@@ -341,7 +352,6 @@ export class PhpUpdatesService {
   async refreshImages(ctx: JobContext<RefreshPayload>): Promise<void> {
     const handle = this.s.servers.handleFor(ctx.payload.serverId);
     const docker = handle.docker;
-    if (this.builds && ctx.payload.reason === 'weekly') this.saveServer(handle.id, (row) => ({ ...row, weeklyAt: Date.now() }));
     const moved: string[] = [];
     const failed: string[] = [];
     try {
@@ -350,6 +360,8 @@ export class PhpUpdatesService {
         try {
           const before = await docker.imagePhpVersion(siteImage(v));
           const changed = this.builds ? await this.build(ctx, docker, handle.id, v) : await this.pull(ctx, docker, v);
+          // This week's rebuild of the branch is done once a build finished, whatever came of it.
+          if (this.builds) this.saveServer(handle.id, (row) => ({ ...row, weeklyDone: { ...row.weeklyDone, [v]: Date.now() } }));
           if (!changed) continue;
           moved.push(v);
           const after = await docker.imagePhpVersion(siteImage(v));
@@ -501,6 +513,8 @@ export class PhpUpdatesService {
       const everywhere = branch.images.length > 0 && branch.images.every((i) => has(i.release));
       if (!everywhere && now - latest.seenAt < SETTLE_ANYWAY_MS) continue;
       if (branch.behindCount === 0) {
+        // A site whose release is not known yet is not done: it waits, and so does the email.
+        if (branch.current < branch.sites) continue;
         if (!state.doneAt[latest.version]) {
           this.change((s) => {
             s.doneAt[latest.version] = now;
@@ -571,7 +585,7 @@ export class PhpUpdatesService {
             .filter((server) => where.has(server.id) && state.servers[server.id]?.releases[branch] !== undefined)
             .map((server) => ({ serverId: server.id, serverName: server.name, release: state.servers[server.id]!.releases[branch] ?? null })),
           updating: behind.length > 0 && (refreshing.has(branch) || behind.some((r) => reconciling.has(r.id))),
-          doneRecently: doneAt !== null && behind.length === 0 && now - doneAt < DONE_SHOWN_MS,
+          doneRecently: doneAt !== null && behind.length === 0 && current === mine.length && now - doneAt < DONE_SHOWN_MS,
         };
       });
     const notice = facts.notice;

@@ -15,8 +15,6 @@
 set -euo pipefail
 
 ARCH=amd64
-# A published image this old is rebuilt as on Mondays, should a Monday's run have been dropped.
-WEEKLY_AFTER_DAYS=8
 # What changing a site image can change: every package and every PHP extension, with versions. The
 # panel's own builds compare the same list (panel/src/services/phpUpdates.ts).
 FINGERPRINT="dpkg-query -W -f '\${Package}=\${Version}\n' | LC_ALL=C sort; php -r 'foreach (get_loaded_extensions() as \$e) { echo \$e, \"=\", phpversion(\$e), \"\n\"; }' | LC_ALL=C sort"
@@ -32,12 +30,12 @@ newer() {
 }
 
 # What the registry says of an image's linux/amd64 build, without a pull: its manifest's digest
-# (of the list, when it is one; with `digest` only), PHP release and creation time, on one line.
+# (of the list, when it is one; `-` unless asked with `digest`) and its PHP release, on one line.
 # The list, then that one image: two manifest requests, which is what Docker Hub counts, and a
 # third for the digest. Nothing when it cannot tell, whatever the reason: the callers skip it
 # rather than guess.
 facts_of() {
-  local ref=$1 want=${2:-} raw digest=- config php created
+  local ref=$1 want=${2:-} raw digest=- config php
   raw="$(docker buildx imagetools inspect --raw "$ref" 2>/dev/null)" || return 0
   if [ "$want" = digest ]; then
     digest="$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$ref" 2>/dev/null | jq -r '.digest // empty' 2>/dev/null)" || return 0
@@ -51,9 +49,8 @@ facts_of() {
   fi
   config="$(docker buildx imagetools inspect --format '{{json .Image}}' "$ref" 2>/dev/null)" || return 0
   php="$(jq -r '.config.Env // [] | map(select(startswith("PHP_VERSION="))) | first // "" | sub("^PHP_VERSION="; "")' <<<"$config" 2>/dev/null)" || return 0
-  created="$(jq -r '.created // empty' <<<"$config" 2>/dev/null)" || return 0
   [ -n "$php" ] || return 0
-  echo "$digest $php ${created:-unknown}"
+  echo "$digest $php"
 }
 
 php_of() {
@@ -73,7 +70,7 @@ manifest_of() {
 }
 
 plan() {
-  local stable entries='[]' manifest sha php ref also facts digest ours created base reason push target
+  local stable entries='[]' manifest sha php ref also facts digest ours base reason push target
   # Docker's base images as read: "<php> <release>" lines, so each is asked about once.
   local bases=''
   : "${REPOSITORY:?}" "${MODE:?}"
@@ -104,7 +101,7 @@ plan() {
       facts="$(facts_of "$ref" digest)"
       # Not "absent" but "could not tell": a rebuild now would replace an image nobody looked at.
       [ -n "$facts" ] || { echo "::warning::Could not read $ref; skipped"; continue; }
-      read -r digest ours created <<<"$facts"
+      read -r digest ours <<<"$facts"
       # Edge's images also carry their commit's own tag, which edge installs follow.
       also=''
       [ "$target" = edge ] && also="${ref%-edge}-sha-${sha:0:7}"
@@ -117,8 +114,6 @@ plan() {
       elif newer "$base" "$ours"; then
         reason=php
       elif [ "$MODE" = weekly ]; then
-        reason=weekly
-      elif [ "$created" != unknown ] && [ "$(($(date +%s) - $(date -d "$created" +%s 2>/dev/null || echo "$(date +%s)")))" -gt $((WEEKLY_AFTER_DAYS * 86400)) ]; then
         reason=weekly
       fi
       echo "$target, PHP $php: published $ours, Docker's base $base${reason:+ -> rebuild ($reason)}"

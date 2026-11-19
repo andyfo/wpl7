@@ -40,7 +40,15 @@ export function seedPhp(w: TestWorld): void {
   });
   w.core.settings.setRaw('php.images', {
     servers: Object.fromEntries(
-      SERVERS.map((server) => [server.id, { releases: { ...PHP_RELEASES }, readAt: DEMO_NOW - 6 * MINUTE, weeklyAt: DEMO_NOW - 30 * HOUR, error: null }]),
+      SERVERS.map((server) => [
+        server.id,
+        {
+          releases: { ...PHP_RELEASES },
+          readAt: DEMO_NOW - 6 * MINUTE,
+          weeklyDone: Object.fromEntries(Object.keys(PHP_RELEASES).map((v) => [v, DEMO_NOW - 30 * HOUR])),
+          error: null,
+        },
+      ]),
     ),
     doneAt: {},
     movedAt: { '8.4': SEEN + 5 * HOUR },

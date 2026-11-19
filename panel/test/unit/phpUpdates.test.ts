@@ -296,6 +296,29 @@ describe('an install that builds its own site images', () => {
     expect(JSON.parse(job!.payload)).toMatchObject({ reason: 'weekly', versions: ['8.3'] });
   });
 
+  it('tries a weekly rebuild that failed again an hour later, though PHP is current', async () => {
+    const { w } = await building({ remoteBase: DIGEST('a'), localBase: DIGEST('a') });
+    w.docker.phpOf(siteImage('8.3'), '8.3.37');
+    await w.core.phpUpdates.tick();
+    expect(refreshJobs(w)).toHaveLength(0);
+    vi.useFakeTimers({ toFake: ['Date'], now: weekStart(Date.now()) + 7 * 24 * 3600_000 + 60_000 });
+    w.docker.buildFails = 'E: Failed to fetch http://deb.debian.org/debian/pool/main/n/nginx/nginx_1.26.3.deb';
+    await w.core.phpUpdates.tick();
+    const [first] = refreshJobs(w);
+    expect(JSON.parse(first!.payload)).toMatchObject({ reason: 'weekly', versions: ['8.3'] });
+    expect(await runJob(w, first!.id)).toBe('failed');
+    w.docker.buildFails = null;
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61 * 60_000 });
+    await w.core.phpUpdates.tick();
+    const second = refreshJobs(w)[1];
+    expect(JSON.parse(second!.payload)).toMatchObject({ reason: 'weekly', versions: ['8.3'] });
+    expect(await runJob(w, second!.id)).toBe('succeeded');
+    // Done for the week now.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61 * 60_000 });
+    await w.core.phpUpdates.tick();
+    expect(refreshJobs(w)).toHaveLength(2);
+  });
+
   it('counts its weeks from Monday 03:00 UTC', () => {
     // Thursday 19 November 2026, 08:00 UTC.
     expect(new Date(weekStart(Date.parse('2026-11-19T08:00:00Z'))).toISOString()).toBe('2026-11-16T03:00:00.000Z');
@@ -387,6 +410,19 @@ describe('what the Overview and the emails say', () => {
     ]);
     expect(sent[1]!.body).toContain('1 of 1 site on PHP 8.3 still runs an older release:');
     expect(sent[1]!.body).toContain('Demo Site: PHP 8.3.36, http://panel.example.test/sites/demo-site');
+  });
+
+  it("does not call a rollout done while a site's PHP is not known", async () => {
+    const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
+    const sent = capture(w);
+    const site = siteRow(w, 'blog', null);
+    w.docker.phpOf(siteImage('8.3'), '8.3.37');
+    await w.core.phpUpdates.tick();
+    expect(w.core.phpUpdates.status().branches.find((b) => b.branch === '8.3')).toMatchObject({ current: 0, behindCount: 0, doneRecently: false });
+    expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes']);
+    w.db.update(sites).set({ phpRelease: '8.3.37' }).where(eq(sites.id, site.id)).run();
+    await w.core.phpUpdates.tick();
+    expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes', 'All sites run PHP 8.3.37']);
   });
 
   it('says when every site is on the newest release, for a day', async () => {
