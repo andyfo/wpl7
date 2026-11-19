@@ -220,6 +220,24 @@ describe('an install that pulls its site images', () => {
     });
     expect(w.core.phpUpdates.status().updateNeeded).toBe(true);
   });
+
+  it('tells an edge install behind the newest edge build that a WPL7 update brings the new PHP', async () => {
+    const w = await makeWorld({ env: { WPL7_CHANNEL: 'edge', WPL7_IMAGE_TAG: 'edge' }, phpFetch: phpNet(php83('8.3.37', today())).fetch });
+    expect(w.core.phpUpdates.status().updateNeeded).toBe(false);
+    // CI refreshes the images of the commit the edge release names, which is not this one.
+    w.core.settings.setRaw('updates.latest', {
+      manifest: {
+        version: '99.0.0-edge.abcdef1',
+        channel: 'edge',
+        gitSha: 'abcdef1234567890abcdef1234567890abcdef12',
+        publishedAt: '',
+        notesUrl: '',
+        images: { panel: '', wordpress: {} },
+      },
+      checkedAt: Date.now(),
+    });
+    expect(w.core.phpUpdates.status().updateNeeded).toBe(true);
+  });
 });
 
 describe('an install that builds its own site images', () => {
@@ -452,6 +470,23 @@ describe('what the Overview and the emails say', () => {
     vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 25 * 3600_000 });
     await w.core.phpUpdates.tick();
     expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes']);
+  });
+
+  it('gives the sites time to move when their image came with a WPL7 update, not with a refresh', async () => {
+    const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
+    const sent = capture(w);
+    siteRow(w, 'blog', '8.3.36');
+    w.docker.phpOf(siteImage('8.3'), '8.3.36');
+    await w.core.phpUpdates.tick();
+    // Hours later an update puts the image on the server. The sweep at boot, or its hourly pass, moves the site.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 3 * 3600_000 });
+    w.docker.phpOf(siteImage('8.3'), '8.3.37');
+    await w.core.phpUpdates.tick();
+    expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes']);
+    // Still on the old release once the sweep had its chance: that site did not move.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 91 * 60_000 });
+    await w.core.phpUpdates.tick();
+    expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes', '1 site still runs an older PHP than 8.3.37']);
   });
 
   it('tells the sites waiting for an image on their server apart from those that did not move', async () => {

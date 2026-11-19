@@ -1905,7 +1905,10 @@ export interface PhpUpdatesDto {
   branches: PhpBranchDto[];
   /** Where new site images come from: the registry, or a build on each server. */
   images: 'registry' | 'build';
-  /** A new PHP reaches this install with a WPL7 update: it pulls an older release's images. */
+  /**
+   * A new PHP reaches this install with a WPL7 update: it pulls the images of an older release, or
+   * on edge of an older build.
+   */
   updateNeeded: boolean;
   /** Servers whose images could not be checked at the last pass. */
   serverErrors: { serverId: number; serverName: string; error: string }[];

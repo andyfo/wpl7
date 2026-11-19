@@ -51,7 +51,6 @@ export function seedPhp(w: TestWorld): void {
       ]),
     ),
     doneAt: {},
-    movedAt: { '8.4': SEEN + 5 * HOUR },
   });
   w.db.update(sites).set({ phpRelease: PHP_BEHIND.release }).where(eq(sites.slug, PHP_BEHIND.slug)).run();
 }

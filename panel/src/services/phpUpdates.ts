@@ -59,8 +59,9 @@ const BEHIND_LISTED = 10;
 /** A release dated this close to today is news: an email when it is a security one. */
 const NEWS_MS = 3 * 24 * HOUR;
 /**
- * How long after a branch's new image its sites that have not moved count as stuck: a site busy
- * with a job of its own moves at the sweep's next hourly pass.
+ * How long after a server's image of a branch has the new release, however it came, its sites
+ * that have not moved count as stuck: the sweep moves them at boot or at its hourly pass, and a
+ * site busy with a job of its own at the pass after.
  */
 const STUCK_AFTER_MS = 90 * MIN;
 /** A release that some server never gets an image of is told as it stands after this long. */
@@ -86,6 +87,11 @@ const FINGERPRINT_SCRIPT =
 interface ServerImages {
   /** By branch: the PHP release in the server's site image, as last read. */
   releases: Record<string, string | null>;
+  /**
+   * By branch: when that release was first read there. It dates the image however it came: a
+   * refresh, a WPL7 update, or a rebuild from the checkout.
+   */
+  releaseSince?: Record<string, number>;
   readAt: number;
   /**
    * By branch: when its last build here finished, kept or not, or when the branch was first seen.
@@ -113,8 +119,6 @@ interface ImagesState {
   behindAt: Record<string, number>;
   /** By release version: when the last site moved onto it, for the Overview. */
   doneAt: Record<string, number>;
-  /** By branch: when a refresh last gave a server a new image of it. */
-  movedAt: Record<string, number>;
 }
 
 type RefreshPayload = { serverId: number; versions: string[]; reason: 'published' | 'php' | 'weekly' };
@@ -150,6 +154,16 @@ const unpublished = (err: unknown) =>
 /** A site on an older release than `version`. One whose release is not known yet is not. */
 const behindOf = (release: string | null, version: string) => !!release && compareVersions(release, version) < 0;
 
+/** A server's row with the releases just read in its images, each dated from when it was first read there. */
+function withReleases(row: ServerImages, releases: Record<string, string | null>, now: number): ServerImages {
+  const since: Record<string, number> = {};
+  for (const [v, release] of Object.entries(releases)) {
+    const known = row.releaseSince?.[v];
+    since[v] = known !== undefined && v in row.releases && row.releases[v] === release ? known : now;
+  }
+  return { ...row, releases, releaseSince: since, readAt: now };
+}
+
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -184,7 +198,7 @@ export class PhpUpdatesService {
 
   private state(): ImagesState {
     const raw = this.s.settings.getRaw(STATE_KEY) as Partial<ImagesState> | undefined;
-    return { servers: { ...raw?.servers }, behindAt: { ...raw?.behindAt }, doneAt: { ...raw?.doneAt }, movedAt: { ...raw?.movedAt } };
+    return { servers: { ...raw?.servers }, behindAt: { ...raw?.behindAt }, doneAt: { ...raw?.doneAt } };
   }
 
   private change(fn: (state: ImagesState) => void): void {
@@ -273,9 +287,7 @@ export class PhpUpdatesService {
     const now = Date.now();
     // A branch seen for the first time waits for next week's rebuild: it was just built or pulled.
     this.saveServer(server.id, (row) => ({
-      ...row,
-      releases,
-      readAt: now,
+      ...withReleases(row, releases, now),
       weeklyDone: { ...Object.fromEntries(versions.map((v) => [v, now])), ...row.weeklyDone },
     }));
     if (versions.length === 0 || this.refreshBlocked(server.id)) return { queued: false, problem: null };
@@ -407,14 +419,13 @@ export class PhpUpdatesService {
 
   /** Read the server's images again, and move its sites onto those that changed. */
   private async afterRefresh(ctx: JobContext<RefreshPayload>, serverId: number, docker: DockerPort, moved: string[]): Promise<void> {
-    if (moved.length > 0) this.change((state) => moved.forEach((v) => (state.movedAt[v] = Date.now())));
     try {
       const releases: Record<string, string | null> = {};
       for (const tag of await docker.imageTags(SITE_IMAGE_REPO)) {
         const v = branchOfTag(tag);
         if (v) releases[v] = await docker.imagePhpVersion(tag);
       }
-      this.saveServer(serverId, (row) => ({ ...row, releases, readAt: Date.now() }));
+      this.saveServer(serverId, (row) => withReleases(row, releases, Date.now()));
     } catch (err) {
       ctx.warn(`Could not read the site images again: ${errorText(err)}. The next check does.`);
     }
@@ -515,11 +526,11 @@ export class PhpUpdatesService {
   }
 
   /**
-   * An install on an older release of the stable channel: CI refreshes the newest release's
-   * images only, so a new PHP reaches it with an update of WPL7.
+   * An install behind the newest release of its channel, or on edge behind the newest edge build:
+   * CI refreshes only the images of those, so a new PHP reaches it with an update of WPL7.
    */
   private updateNeeded(): boolean {
-    return !this.builds && this.s.config.channel !== 'edge' && this.s.updates.status().updateAvailable;
+    return !this.builds && this.s.updates.status().updateAvailable;
   }
 
   /**
@@ -549,14 +560,20 @@ export class PhpUpdatesService {
         if (latest.security) await this.s.alerts.phpRolloutDone(latest.version, branch.sites);
         continue;
       }
-      if (ready.size === 0 || now - (state.movedAt[branch.branch] ?? latest.seenAt) < STUCK_AFTER_MS) continue;
-      if (latest.security) await this.tellBehind(latest.version, branch.branch, branch.sites, ready);
+      if (ready.size === 0) continue;
+      if (latest.security) await this.tellBehind(state, latest.version, branch.branch, branch.sites, ready, now);
     }
   }
 
-  /** Email the sites still behind a security release: those whose server has its image, and those whose has not. */
-  private async tellBehind(version: string, branch: string, total: number, ready: Set<number>): Promise<void> {
+  /**
+   * Email the sites still behind a security release: those whose server has its image, and those
+   * whose has not. Not while a site's server got the image within STUCK_AFTER_MS: its move may not
+   * have been tried yet.
+   */
+  private async tellBehind(state: ImagesState, version: string, branch: string, total: number, ready: Set<number>, now: number): Promise<void> {
     const behind = this.siteRows().filter((r) => r.phpVersion === branch && behindOf(r.phpRelease, version));
+    const since = (serverId: number) => state.servers[serverId]?.releaseSince?.[branch] ?? 0;
+    if (behind.some((r) => ready.has(r.serverId) && now - since(r.serverId) < STUCK_AFTER_MS)) return;
     const listed = (rows: SiteRow[]) => ({
       sites: rows.slice(0, BEHIND_LISTED).map((r) => ({ slug: r.slug, title: r.title, release: r.phpRelease })),
       count: rows.length,
