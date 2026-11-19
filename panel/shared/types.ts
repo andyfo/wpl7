@@ -1864,6 +1864,14 @@ export interface SystemVersionDto {
   nextCheckAt: number | null;
 }
 
+/** A job that brings a PHP release to a server or a site, as the PHP details link to it. */
+export interface PhpJobDto {
+  id: number;
+  status: JobStatus;
+  /** Why it failed. */
+  error: string | null;
+}
+
 /** One PHP branch, as `GET /api/php` tells it (services/phpUpdates.ts). */
 export interface PhpBranchDto {
   /** 8.4 */
@@ -1886,10 +1894,23 @@ export interface PhpBranchDto {
   /** Of them, the ones on the newest release. */
   current: number;
   /** The first few of the others. */
-  behind: { slug: string; title: string; release: string | null }[];
+  behind: {
+    slug: string;
+    title: string;
+    release: string | null;
+    serverId: number;
+    /** Its latest move onto the server's image since the newest release came out. */
+    move: PhpJobDto | null;
+  }[];
   behindCount: number;
   /** The release in each server's site image of this branch, as last read. */
-  images: { serverId: number; serverName: string; release: string | null }[];
+  images: {
+    serverId: number;
+    serverName: string;
+    release: string | null;
+    /** The server's latest refresh of this image since the newest release came out. */
+    refresh: PhpJobDto | null;
+  }[];
   /** Sites are being moved onto a new image now. */
   updating: boolean;
   /** Every site reached the newest release in the last day. */

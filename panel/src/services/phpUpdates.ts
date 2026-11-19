@@ -1,11 +1,12 @@
 // @docs security/privacy, sites/php-updates
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray } from 'drizzle-orm';
 import { jobs, sites, type ServerRow, type SiteRow } from '../db/schema.js';
 import type { JobContext } from '../jobs/context.js';
 import { hostedSites, siteImageSites } from '../lib/siteKind.js';
 import { PANEL_GIT_SHA } from '../lib/version.js';
 import { compareVersions } from '../lib/wpVersions.js';
-import type { PhpBranchDto, PhpUpdatesDto } from '../../shared/types.js';
+import type { JobStatus } from '../../shared/schemas.js';
+import type { PhpBranchDto, PhpJobDto, PhpUpdatesDto } from '../../shared/types.js';
 import type { DockerPort, ImageSummary } from './docker.js';
 import { SETUP_WORDPRESS_IMAGE } from './dockerCleanup.js';
 import type { CoreServices } from './index.js';
@@ -100,6 +101,8 @@ interface ServerImages {
   weeklyDone?: Record<string, number>;
   /** By branch: when the base image was last asked about. */
   baseCheckedAt?: Record<string, number>;
+  /** By branch: the server's latest refresh of the image, by job id, for the details to link to. */
+  refreshJobs?: Record<string, number>;
   /**
    * By branch: the base the last finished build was made on, by every digest Docker lists for it.
    * The same image pulled again under a new digest has both, in no particular order.
@@ -122,6 +125,15 @@ interface ImagesState {
 }
 
 type RefreshPayload = { serverId: number; versions: string[]; reason: 'published' | 'php' | 'weekly' };
+
+/** The branches a refresh job's payload names; none for one that does not read. */
+function refreshedBranches(payload: string): string[] {
+  try {
+    return (JSON.parse(payload) as Partial<RefreshPayload>).versions ?? [];
+  } catch {
+    return [];
+  }
+}
 
 /** Monday 03:00 UTC on or before `now`: the start of the week a weekly rebuild belongs to. */
 export function weekStart(now: number): number {
@@ -294,7 +306,9 @@ export class PhpUpdatesService {
     const plan = this.builds ? await this.staleBuilds(server, docker, versions, releases) : await this.stalePulls(docker, versions);
     if (plan.versions.length > 0) {
       const payload: RefreshPayload = { serverId: server.id, versions: plan.versions, reason: plan.reason };
-      this.s.worker.enqueue('server.refreshSiteImages', payload, undefined, { lane: imagesLane(server.id) });
+      const job = this.s.worker.enqueue('server.refreshSiteImages', payload, undefined, { lane: imagesLane(server.id) });
+      const queued = Object.fromEntries(plan.versions.map((v) => [v, job.id]));
+      this.saveServer(server.id, (row) => ({ ...row, refreshJobs: { ...row.refreshJobs, ...queued } }));
     }
     return { queued: plan.versions.length > 0, problem: plan.problems.length > 0 ? plan.problems.join('; ') : null };
   }
@@ -599,15 +613,30 @@ export class PhpUpdatesService {
       .from(jobs)
       .where(and(inArray(jobs.type, ['server.refreshSiteImages', 'site.reconcile']), inArray(jobs.status, ['queued', 'running'])))
       .all();
-    const refreshing = new Set<string>();
-    for (const job of active.filter((j) => j.type === 'server.refreshSiteImages')) {
-      try {
-        for (const v of (JSON.parse(job.payload) as Partial<RefreshPayload>).versions ?? []) refreshing.add(v);
-      } catch {
-        // A payload that does not read names no branch.
-      }
-    }
+    const refreshing = new Set(active.filter((j) => j.type === 'server.refreshSiteImages').flatMap((j) => refreshedBranches(j.payload)));
     const reconciling = new Set(active.filter((j) => j.type === 'site.reconcile').map((j) => j.siteId));
+    // What the details link each server's image and each site still behind to: the server's latest
+    // refresh of the image, by the id it was queued under, and the site's latest move, both since
+    // the newest release came out. Looked up by key and by index: this is read every minute.
+    const fields = { id: jobs.id, siteId: jobs.siteId, status: jobs.status, error: jobs.error, createdAt: jobs.createdAt };
+    const asJob = (job: { id: number; status: string; error: string | null }): PhpJobDto => ({ id: job.id, status: job.status as JobStatus, error: job.error });
+    const refreshIds = [...new Set(Object.values(state.servers).flatMap((row) => Object.values(row.refreshJobs ?? {})))];
+    const refreshJobs = new Map(
+      (refreshIds.length > 0 ? this.s.db.select(fields).from(jobs).where(inArray(jobs.id, refreshIds)).all() : []).map((job) => [job.id, job]),
+    );
+    const refreshOf = (serverId: number, branch: string, from: number) => {
+      const job = refreshJobs.get(state.servers[serverId]?.refreshJobs?.[branch] ?? 0);
+      return job && job.createdAt >= from ? asJob(job) : null;
+    };
+    const movesOf = (listed: SiteRow[], from: number) =>
+      listed.length === 0
+        ? []
+        : this.s.db
+            .select(fields)
+            .from(jobs)
+            .where(and(eq(jobs.type, 'site.reconcile'), inArray(jobs.siteSlug, listed.map((r) => r.slug)), gte(jobs.createdAt, from)))
+            .orderBy(desc(jobs.id))
+            .all();
     const branchNames = new Set<string>([...offered, ...rows.map((r) => r.phpVersion)]);
     for (const row of Object.values(state.servers)) for (const v of Object.keys(row.releases)) branchNames.add(v);
     const branches: PhpBranchDto[] = [...branchNames]
@@ -620,6 +649,8 @@ export class PhpUpdatesService {
         const behind = latest ? mine.filter((r) => behindOf(r.phpRelease, latest.version)) : [];
         const current = latest ? mine.filter((r) => r.phpRelease && compareVersions(r.phpRelease, latest.version) >= 0).length : 0;
         const doneAt = latest ? (state.doneAt[latest.version] ?? null) : null;
+        const listed = behind.slice(0, BEHIND_LISTED);
+        const moves = latest ? movesOf(listed, latest.seenAt) : [];
         // The servers whose image matters: those with sites on the branch.
         const where = new Set(mine.map((r) => r.serverId));
         return {
@@ -636,11 +667,19 @@ export class PhpUpdatesService {
           next: facts.candidates[branch] ?? null,
           sites: mine.length,
           current,
-          behind: behind.slice(0, BEHIND_LISTED).map((r) => ({ slug: r.slug, title: r.title, release: r.phpRelease })),
+          behind: listed.map((r) => {
+            const move = moves.find((job) => job.siteId === r.id);
+            return { slug: r.slug, title: r.title, release: r.phpRelease, serverId: r.serverId, move: move ? asJob(move) : null };
+          }),
           behindCount: behind.length,
           images: servers
             .filter((server) => where.has(server.id) && state.servers[server.id]?.releases[branch] !== undefined)
-            .map((server) => ({ serverId: server.id, serverName: server.name, release: state.servers[server.id]!.releases[branch] ?? null })),
+            .map((server) => ({
+              serverId: server.id,
+              serverName: server.name,
+              release: state.servers[server.id]!.releases[branch] ?? null,
+              refresh: latest ? refreshOf(server.id, branch, latest.seenAt) : null,
+            })),
           updating: behind.length > 0 && (refreshing.has(branch) || behind.some((r) => reconciling.has(r.id))),
           doneRecently: doneAt !== null && behind.length === 0 && current === mine.length && now - doneAt < DONE_SHOWN_MS,
         };

@@ -24,6 +24,9 @@ const ADVISORIES_8_4_26 = [
 /** The site whose move onto 8.4.26 failed, and went back to its old container. */
 export const PHP_BEHIND = { slug: 'ridge-outfitters', release: '8.4.25' };
 
+/** When the sweep tried to move it, once its server had the new image (demo/jobs.ts). */
+export const PHP_MOVE_AT = SEEN + 5 * HOUR;
+
 export function seedPhp(w: TestWorld): void {
   const releases = Object.fromEntries(
     Object.entries(PHP_RELEASES).map(([branch, version]) => [branch, { version, date: '2026-09-24', security: true, seenAt: SEEN }]),
