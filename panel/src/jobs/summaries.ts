@@ -173,6 +173,13 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
         if (target === null) return null;
         return `To ${names.server?.(target) ?? `server #${target}`}`;
       }
+      case 'site.recover': {
+        const target = num(p.targetServerId);
+        const backup = num(p.backupId);
+        if (target === null || backup === null) return null;
+        const onto = names.server?.(target) ?? `server #${target}`;
+        return p.asNew === true ? `Made again from backup #${backup} on ${onto}` : `From backup #${backup} onto ${onto}`;
+      }
       case 'site.import':
       case 'site.importFinish':
       case 'site.importRefresh':

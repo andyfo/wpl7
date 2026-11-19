@@ -19,6 +19,8 @@ export interface SeedResult {
   generatedOwnerPassword: { username: string; password: string; reason: 'first-boot' | 'reset' } | null;
   /** The login from before accounts existed was turned into the owner on this boot. */
   adoptedLegacyAdmin: boolean;
+  /** Server 1 took a new SERVER_PUBLIC_IP from .env on this boot, for the log (src/index.ts). */
+  publicIpChanged?: { from: string; to: string };
 }
 
 /**
@@ -29,6 +31,9 @@ const LEGACY_ADMIN_KEYS = ['admin.username', 'admin.passwordHash', 'admin.totp',
 
 /** Server 1's DNS provider has been taken from DNS_PROVIDER, the one time it is. */
 const LOCAL_DNS_SEEDED = 'dns.localProviderSeeded';
+
+/** The SERVER_PUBLIC_IP the last boot saw: a value that differs from it is news (see seed). */
+const LOCAL_ENV_IP = 'server1.envPublicIp';
 
 /**
  * First-boot seeding: the owner account + default settings + default plugin catalog.
@@ -47,6 +52,17 @@ export async function seed(db: Db, config: Config): Promise<SeedResult> {
   if (local) {
     const patch: Record<string, unknown> = {};
     if (!local.publicIp && config.serverPublicIp) patch.publicIp = config.serverPublicIp;
+    // A SERVER_PUBLIC_IP other than the last boot's is news, and the row takes it: setup.sh writes
+    // it on every install, so a panel database restored onto a new machine meets that machine's
+    // address here. An edit in the panel sticks for as long as .env says what it said before.
+    if (config.serverPublicIp) {
+      const seen = s.getRaw(LOCAL_ENV_IP);
+      if (typeof seen === 'string' && seen !== config.serverPublicIp && local.publicIp !== config.serverPublicIp) {
+        patch.publicIp = config.serverPublicIp;
+        result.publicIpChanged = { from: local.publicIp, to: config.serverPublicIp };
+      }
+      if (seen !== config.serverPublicIp) s.setRaw(LOCAL_ENV_IP, config.serverPublicIp);
+    }
     if (!local.devDomain) patch.devDomain = config.devDomain;
     // Really once, unlike the sentinels around it: Settings -> DNS switches the wildcard
     // certificate off by emptying this, and a restart must not switch it back on.

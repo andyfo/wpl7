@@ -295,7 +295,8 @@ export class BackupService {
       // Only a note for a restore: not knowing it is no reason to fail the backup.
       const container = app ? null : await h.docker.containerStack(site.containerName).catch(() => null);
       const manifest = {
-        format: 1,
+        // 2: with `site`, what a deleted site is made again from (services/recovery.ts).
+        format: 2,
         slug: site.slug,
         title: site.title,
         type,
@@ -322,6 +323,26 @@ export class BackupService {
          * archive are what the site ran with. None from before there was a choice, or with no container.
          */
         stack: container?.stack ?? null,
+        /**
+         * The site's own settings beyond the ones above, so a deleted site comes back as it was
+         * (services/recovery.ts siteRowFromManifest). Nothing secret: no password of any kind.
+         */
+        site: {
+          isLive: site.isLive === 1,
+          keepDevAlias: site.keepDevAlias === 1,
+          wpAdminUser: site.wpAdminUser,
+          wpAdminEmail: site.wpAdminEmail,
+          pageCache: site.pageCache,
+          objectCache: site.objectCache === 1,
+          cacheRules: site.cacheRules,
+          cpuLimit: site.cpuLimit,
+          memoryLimitMb: site.memoryLimitMb,
+          pidsLimit: site.pidsLimit,
+          backupsEnabled: site.backupsEnabled === 1,
+          offsiteEnabled: site.offsiteEnabled === 1,
+          backupKeepDays: site.backupKeepDays,
+          backupBeforeUpdates: site.backupBeforeUpdates,
+        },
         /**
          * A container app's image, which a restore puts back (handlers/backups.ts), and the mounts in
          * this archive. Never a secret: no registry token, no environment value. The reference is the
@@ -982,7 +1003,56 @@ export class BackupService {
     this.db.delete(backups).where(eq(backups.id, row.id)).run();
   }
 
-  /** GC wordpress.pre-restore-* (and a container app's app.pre-restore-*) safety copies older than 24h, on every reachable server. */
+  /**
+   * Bring `files_present` in line with what is on the server's disk. A complete backup whose folder
+   * is gone - a reinstalled server, a panel database restored onto a new machine - reads as remote
+   * only, or as files missing when it has no copy. One at 0 whose folder is back with its
+   * `sha256sums` and `manifest.json` reads as present again. Rows under a backup root that is not
+   * there are left alone: an unmounted disk is not lost backups. Throws only when the server can't
+   * be asked at all.
+   */
+  async checkFiles(serverId: number): Promise<{ gone: number; back: number }> {
+    const h = this.servers.handleFor(serverId);
+    const rows = this.db
+      .select()
+      .from(backups)
+      .where(and(eq(backups.serverId, serverId), eq(backups.status, 'complete')))
+      .all();
+    const roots = new Map<string, boolean>();
+    let gone = 0;
+    let back = 0;
+    for (const row of rows) {
+      const root = this.rootOf(row);
+      let rootThere = roots.get(root);
+      if (rootThere === undefined) {
+        rootThere = await h.files.exists(root);
+        roots.set(root, rootThere);
+      }
+      if (!rootThere) continue;
+      if (row.filesPresent === 1) {
+        if (await h.files.exists(row.path)) continue;
+        gone += this.db
+          .update(backups)
+          .set({ filesPresent: 0 })
+          .where(and(eq(backups.id, row.id), eq(backups.filesPresent, 1)))
+          .run().changes;
+      } else {
+        if (!(await h.files.exists(path.join(row.path, 'sha256sums')))) continue;
+        if (!(await h.files.exists(path.join(row.path, 'manifest.json')))) continue;
+        back += this.db
+          .update(backups)
+          .set({ filesPresent: 1 })
+          .where(and(eq(backups.id, row.id), eq(backups.filesPresent, 0)))
+          .run().changes;
+      }
+    }
+    return { gone, back };
+  }
+
+  /**
+   * GC wordpress.pre-restore-* (and a container app's app.pre-restore-*) safety copies older than 24h, on every reachable
+   * server, and the `<slug>.pre-recover-*` folders a recovery left.
+   */
   async gcSafetyCopies(): Promise<void> {
     const cutoff = Date.now() - 24 * 3600_000;
     for (const server of this.servers.listRows()) {
@@ -994,6 +1064,17 @@ export class BackupService {
       }
       const slugs = await h.files.readdir(this.config.paths.sites).catch(() => [] as string[]);
       for (const slug of slugs) {
+        // What a recovery set aside and did not get to tidy (jobs/handlers/recover.ts): a folder of its own.
+        if (/\.pre-recover-\d{8}-\d{6}$/.test(slug)) {
+          const full = safeJoin(this.config.paths.sites, slug);
+          try {
+            const stat = await h.files.stat(full);
+            if (stat && stat.mtimeMs < cutoff) await h.files.rm(full);
+          } catch {
+            /* ignore */
+          }
+          continue;
+        }
         const entries = await h.files.readdir(path.join(this.config.paths.sites, slug)).catch(() => [] as string[]);
         for (const entry of entries) {
           if (!entry.startsWith('wordpress.pre-restore-') && !entry.startsWith('app.pre-restore-')) continue;

@@ -10,12 +10,13 @@ import { assertPhpImage, sitePaths, siteImage } from '../../services/siteSpec.js
 import { APP_MOVES_STOPPED, PHP_NO_MAINTENANCE, hasDatabase, isContainerApp, isPhpSite } from '../../lib/siteKind.js';
 import { removeSiteNetwork } from '../../services/siteNetwork.js';
 import { loadSite, removeSiteContainers, siteDomains, siteUrl, startSiteContainer, stopGraceOf, updateSiteRow, writeSiteJson } from './shared.js';
-import { ensureSiteImage, wildcardCovers } from './sites.js';
-import { pipeBetweenServers, proxyConfigPathFor, proxyConfigYaml, rmOn } from './moveHelpers.js';
+import { ensureSiteImage } from './sites.js';
+import { pipeBetweenServers, proxyConfigPathFor, rmOn } from './moveHelpers.js';
+import { repointSiteDns, writeForwarding } from './siteHandover.js';
 import { extraDbFile } from '../../services/backup.js';
 import { parseNames } from '../../services/databases.js';
 import { restoreSiteOnServer, type ProtectionHold } from './restoreSite.js';
-import { appHttpHostsOf, carryAppImage, cleanAppImages, mountsOutOfBackups } from './apps.js';
+import { carryAppImage, cleanAppImages, mountsOutOfBackups } from './apps.js';
 import { appRows } from '../../services/appSpec.js';
 
 export const siteMovePayload = z.object({
@@ -66,7 +67,6 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
   const paths = sitePaths(s.config, site.slug);
   const domains = siteDomains(site);
   const primary = domains[0]!;
-  const customHosts = domains.filter((d) => !(site.devHostname && d === site.devHostname));
 
   s.monitor.busySlugs.add(site.slug);
   let quiesced = false;
@@ -376,94 +376,14 @@ export async function siteMove(ctx: JobContext<z.infer<typeof siteMovePayload>>,
       await s.appRoutes.kick(p.sourceServerId);
     }
 
-    const dns = { updated: [] as string[], manual: [] as { host: string; ip: string }[] };
-    // The source and the target are different servers, so the wildcard covers the site on one of
-    // them at most: landing where it does means leaving a server where it needed a record of its own.
-    const covered = site.devHostname !== null && wildcardCovers(s, p.targetServerId, site.devHostname);
-    if (site.devHostname && !s.dns.enabled) {
-      // Silence here used to mean the dev hostname kept resolving to the old server right
-      // up until finalizeCleanup destroyed it. Landing where the wildcard covers it is no
-      // exception: a record made by hand for the old server still beats the wildcard.
-      dns.manual.push({ host: site.devHostname, ip: target.row.publicIp });
-      ctx.warn(
-        covered
-          ? `DNS management is off. If ${site.devHostname} has an A record of its own, point it at ` +
-              `${target.row.publicIp} or delete it; the old server forwards traffic until then.`
-          : `DNS management is off, so ${site.devHostname} still points at "${source.name}". ` +
-              `Create an A record to ${target.row.publicIp}; the old server forwards traffic until then.`,
-      );
-    }
-    if (site.devHostname && s.dns.enabled) {
-      try {
-        if (covered) {
-          if ((await s.dns.deleteA(site.devHostname)) === 'deleted') {
-            dns.updated.push(site.devHostname);
-            ctx.info(`DNS: removed explicit record for ${site.devHostname} (wildcard server covers it)`);
-          } else {
-            // Not in the token's zones: a record made by hand would still beat the wildcard.
-            dns.manual.push({ host: site.devHostname, ip: target.row.publicIp });
-          }
-        } else if (target.row.publicIp) {
-          const res = await s.dns.upsertA(site.devHostname, target.row.publicIp);
-          if (res === 'updated') {
-            dns.updated.push(site.devHostname);
-            ctx.info(`DNS: ${site.devHostname} -> ${target.row.publicIp}`);
-          } else {
-            dns.manual.push({ host: site.devHostname, ip: target.row.publicIp });
-          }
-        }
-      } catch (err) {
-        ctx.error(`DNS update for ${site.devHostname} failed (fix manually): ${errMsg(err)}`);
-        dns.manual.push({ host: site.devHostname, ip: target.row.publicIp });
-      }
-    }
-    for (const host of customHosts) {
-      if (s.dns.enabled && target.row.publicIp && (await s.dns.canManage(host))) {
-        try {
-          await s.dns.upsertA(host, target.row.publicIp);
-          dns.updated.push(host);
-          ctx.info(`DNS: ${host} -> ${target.row.publicIp}`);
-          continue;
-        } catch (err) {
-          ctx.error(`DNS update for ${host} failed: ${errMsg(err)}`);
-        }
-      }
-      dns.manual.push({ host, ip: target.row.publicIp });
-    }
-    if (dns.manual.length > 0) {
-      ctx.warn(
-        `Update these A records to ${target.row.publicIp}: ${dns.manual.map((d) => d.host).join(', ')}` +
-          (s.config.mailMode === 'direct' ? ' - and add the new server IP to their SPF records (docs/dns.md).' : ''),
-      );
-    }
+    const dns = await repointSiteDns(ctx, s, site, target, { fromName: source.name });
 
     // ------------------------------------------------------------ 6: source handover
     // Traefik on the old server keeps terminating TLS for all of the site's hostnames and
     // forwards to the new server: clients on cached DNS answers, and hostnames whose records
     // were not (or could not be) updated, keep working until the deferred cleanup runs.
     ctx.info('Old server will forward traffic to the new one until DNS has moved…');
-    try {
-      await source.files.mkdirp(path.dirname(proxyPath));
-      await source.files.writeFile(
-        proxyPath,
-        proxyConfigYaml({
-          slug: site.slug,
-          hosts: domains,
-          targetIp: target.row.publicIp,
-          tlsMode: s.config.tlsMode,
-          acmeResolver: s.config.acmeResolver,
-          devDomain: source.row.devDomain,
-          dnsProvider: s.dns.wildcardProvider(source.row.dnsProvider),
-          // A container app's plain http routes are forwarded on port 80 too.
-          httpHosts: isContainerApp(site) ? appHttpHostsOf(s, site) : [],
-        }),
-      );
-    } catch (err) {
-      ctx.warn(
-        `Could not write the forwarding config on the source (${errMsg(err)}); ` +
-          `stragglers on old DNS will get errors until it propagates.`,
-      );
-    }
+    await writeForwarding(ctx, s, site, source, target.row.publicIp);
     stopKeepalive();
     try {
       await removeSiteContainers(source.docker, site.containerName, isContainerApp(site) ? { volumes: true } : undefined);

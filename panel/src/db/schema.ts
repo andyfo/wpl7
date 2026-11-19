@@ -763,6 +763,16 @@ export const moveCleanups = sqliteTable(
      */
     extraDbs: text('extra_dbs'),
     status: text('status').notNull(), // 'pending' | 'done'
+    /**
+     * 'pending' while the old server is still owed its handover: a recovery took the site off a
+     * server that did not answer (jobs/handlers/recover.ts), so the copy there was neither stopped
+     * nor told to forward. `site.recoverHandover` does both once the server answers again. A site
+     * deleted while its server did not answer leaves one too, with `target_server_id` 0 and nothing
+     * to forward to. 'done' for every move, which hands over in its own job.
+     */
+    handover: text('handover').notNull().default('done'),
+    /** When the handover ran: the old copy is kept a day from then, not from the recovery. */
+    handedOverAt: integer('handed_over_at'),
     createdAt: integer('created_at').notNull(),
     finalizedAt: integer('finalized_at'),
   },

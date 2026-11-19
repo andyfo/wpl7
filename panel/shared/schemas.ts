@@ -213,6 +213,10 @@ export const jobTypes = [
   'site.updateDomains',
   'site.move',
   'site.moveFinalize',
+  // A site back from a backup on another server, or on its own once it is gone from it; and
+  // what the old server is owed when it answers again (jobs/handlers/recover.ts).
+  'site.recover',
+  'site.recoverHandover',
   // An import of an existing site: the pull from the old host, then the set-up from what it pulled.
   'site.import',
   'site.importFinish',
@@ -714,6 +718,29 @@ export const siteMoveBody = z.object({
   targetServerId: z.number().int().positive(),
   /** Source freeze while copying. Defaults: live site → 'maintenance', dev site → 'none'. */
   quiesce: z.enum(['maintenance', 'stop', 'none']).optional(),
+}).strict();
+
+/** Bring a site whose server is gone, or that is gone from its server, back from a backup (services/recovery.ts). */
+export const siteRecoverBody = z.object({
+  targetServerId: z.number().int().positive(),
+  backupId: z.number().int().positive(),
+  /**
+   * Where the backup comes from: a destination holding a complete copy, or null for its own files
+   * on the target. Left out: its files on the target when they are there, else its first copy.
+   */
+  destinationId: z.number().int().positive().nullable().optional(),
+}).strict();
+
+/** Every site of a server, each from its newest backup that can reach the target. */
+export const serverRecoverBody = z.object({
+  targetServerId: z.number().int().positive(),
+  /** Only these of the server's sites; left out, all that can be recovered. */
+  slugs: z.array(siteSlugParam).min(1).max(1000).optional(),
+}).strict();
+
+/** Make a deleted site again from one of its backups, under its own name. */
+export const backupRestoreSiteBody = z.object({
+  targetServerId: z.number().int().positive(),
 }).strict();
 
 // ---------------------------------------------------------------------------

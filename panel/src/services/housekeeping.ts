@@ -6,6 +6,7 @@ import type { JobWorker } from '../jobs/worker.js';
 import { ApiActivityService } from './apiActivity.js';
 import { cleanDocker } from './dockerCleanup.js';
 import { pruneOAuth } from './oauth.js';
+import { queueHandovers } from '../jobs/handlers/recover.js';
 import type { CoreServices } from './index.js';
 
 /**
@@ -36,6 +37,22 @@ export async function runHousekeeping(
   resolvers: HousekeepingResolvers = {},
 ): Promise<Record<string, number>> {
   const result: Record<string, number> = {};
+
+  // First, so retention below reads each backup as it is on disk: a reinstalled server, or a
+  // panel database restored onto a new machine, lists backups whose files went with the old disk.
+  result.backupFilesGone = 0;
+  for (const server of s.servers.listRows()) {
+    if (server.status === 'unreachable') continue;
+    try {
+      const checked = await s.backup.checkFiles(server.id);
+      result.backupFilesGone += checked.gone;
+      if (checked.gone > 0) log.warn(`Backups on "${server.name}": ${checked.gone} no longer have their files there`);
+      if (checked.back > 0) log.info(`Backups on "${server.name}": ${checked.back} have their files there again`);
+    } catch (err) {
+      log.warn(`Backups on "${server.name}" not checked: ${errorText(err)}`);
+    }
+  }
+  checkCanceled();
 
   const retention = s.settings.get('backupRetention') || 10;
   const { deleted, offsiteOnly } = await s.backup.prune(retention);
@@ -107,6 +124,10 @@ export async function runHousekeeping(
   });
   checkCanceled();
 
+  // A recovered site's old server that answers again and was not handed over yet (the server
+  // check that saw it come back queues it too; this catches one that was missed).
+  result.handoversQueued = queueHandovers(s);
+  if (result.handoversQueued > 0) log.info(`Recovered sites: stopping ${result.handoversQueued} old copies on servers that answer again`);
   result.movesFinalized = await autoFinalizeMoves(s, s.worker, log, resolvers);
   checkCanceled();
 
@@ -222,7 +243,8 @@ export async function runHousekeeping(
 
 /**
  * Tear down the parked source copy of moved sites once every hostname resolves ONLY to
- * the target IP and the move is at least 24h old (resolver caches). Returns how many
+ * the target IP and the move is at least 24h old (resolver caches) - or, for a recovered
+ * site, 24h since its old server answered again and handed over. Returns how many
  * finalize jobs it queued.
  */
 export async function autoFinalizeMoves(
@@ -237,7 +259,10 @@ export async function autoFinalizeMoves(
   const minAge = Date.now() - 24 * 3600_000;
   let queued = 0;
   for (const cleanup of pending) {
-    if (cleanup.createdAt > minAge) continue;
+    // A recovered site's old server has not answered since: its copy there is not even stopped
+    // yet (jobs/handlers/recover.ts). Once it is, the day counts from then, not from the recovery.
+    if (cleanup.handover === 'pending') continue;
+    if ((cleanup.handedOverAt ?? cleanup.createdAt) > minAge) continue;
     // move_cleanups deliberately has no FK on source_server_id. Registering a job for a
     // server row that is gone would just fail every night, so say so once per run and
     // leave the record for a human.
