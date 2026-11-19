@@ -24,7 +24,7 @@ for a reason; remove one once there is nothing left to watch.
 | [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-11-15 19:04 UTC | 0.21.20 is out as a tag and an image, with no release yet; same definitions as the pinned 0.21.12; its Lite mode skips more signatures and no longer errors on oversized scripts |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-11-01 09:08 UTC | Both overrides still match in 0.21.15, the latest; `@preg_replace` is still 22c684e7; engine test not run at this check |
 | [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-11-15 19:04 UTC | 2.7.6 is the latest; patch still needed |
-| [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-11-19 09:07 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12, still the latest; 8.4.28 and 8.5.13 due today with the CVE-2026-115560 fix; the shapes the panel reads match its fixtures |
+| [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-11-19 19:51 UTC | 8.2.36, 8.3.37, 8.4.28 and 8.5.13 out today, all security releases: floor raised to them, released in 0.4.1; Docker's bases and the edge images carry them; the refresh workflow has had no scheduled run on `main` yet |
 | [phpredis: the pinned 6.3.0](#phpredis-the-pinned-630) | Medium | 2026-11-01 09:08 UTC | 6.3.0 is the latest on PECL and GitHub |
 | [Redis in the site image](#redis-in-the-site-image) | Medium | 2026-11-01 09:08 UTC | Debian's 5:8.0.2-3+deb13u3; three open issues on trixie, none reachable here; `LICENSE.txt` still offers AGPLv3 |
 | [The Redis Object Cache plugin: its constants and `wp redis`](#the-redis-object-cache-plugin-its-constants-and-wp-redis) | Medium | 2026-11-01 09:08 UTC | 3.0.0 is the latest; all seven constants and `status`, `enable`, `disable` are in its code |
@@ -208,22 +208,18 @@ for a reason; remove one once there is nothing left to watch.
 ## PHP security releases and the site image's floor
 
 - **Priority:** High
-- **Last checked:** 2026-11-19 09:07 UTC. No PHP release and no GitHub advisory since the last
-  check. PHP 8.5.12, 8.4.27, 8.3.36 and 8.2.35 (2026-10-21) are still the latest; they fix two
-  critical remote code execution bugs, CVE-2026-109618 and CVE-2026-109619 (GHSA-w8hw-w9fx-j79w,
-  GHSA-6wmf-4rv5-p3rp), and the floor is set to them. The official `php` images carry the same
-  four. CVE-2026-115560, from php.net's informational advisory of 2026-10-23, is still unfixed:
-  an unlikely remote code execution through session upload progress, when an application
-  switches `session.serialize_handler` to `php` at runtime. php.net asks for
-  `session.upload_progress.enabled=0` until the next regular release, which will carry the fix
-  and the full advisory; the site image already sets it off. That release is due today:
-  `pre-release-builds.php` dates 8.4.28RC1 and 8.5.13RC1 to 2026-11-05, and a release follows its
-  first candidate by two weeks. 8.6.0 is planned for today too; `WP_PHP_VERSIONS` does not offer
-  8.6, so it needs no floor yet. The shapes `phpUpstream.ts` reads are as its fixtures have them:
-  `active.php`'s `version`, `date` and `tags`, `pre-release-builds.php`'s entries beside its
-  `reported` and `releases` keys, the 2026-10-20 notice's title and "scheduled for Wednesday,
-  21 October 2026 at 14:00 UTC", and the advisories' `patched_versions`. php.net is behind
-  BunnyCDN, and `release-candidates.php` now redirects to `pre-release-builds.php`.
+- **Last checked:** 2026-11-19 19:51 UTC. PHP 8.5.13, 8.4.28, 8.3.37 and 8.2.36 came out today,
+  all security releases. GitHub lists 12 to 17 advisories for them, several critical: among them
+  CVE-2026-115560, the session upload progress bug php.net warned of on 2026-10-23, remote code
+  execution through session files and the timezone cache, and request smuggling in PHP-FPM. The
+  floor is raised to the four, and 0.4.1 ships it. 8.6.0 came out too; `WP_PHP_VERSIONS` does not
+  offer 8.6, so it needs no floor yet. The official `php` images and `wordpress:php<X.Y>-fpm`
+  carry all four, and so do the newest edge build's images. The published 0.4.0 images do not: the
+  refresh workflow has had no scheduled run on `main` in the two hours since it merged, and an
+  install on 0.4.0 has no `php-releases` schedule to follow them anyway, so 0.4.1 is what brings
+  the new PHP to installs that pull their images. A panel on `main` read today's releases and
+  advisories as its fixtures have them, built its 8.4 images on the new base and moved its sites
+  onto 8.4.28.
 - **The problem:** a site's PHP is whatever its server's `wpl7-wordpress:php<X.Y>` image has, and
   that image is built on `wordpress:php<X.Y>-fpm`. Docker rebuilds that base a few hours after
   each PHP release: on 2026-10-21 the `php` images had the release after about two hours and the
