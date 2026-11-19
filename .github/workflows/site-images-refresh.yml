@@ -9,13 +9,12 @@
 #
 # - Every 30 minutes: an image whose base has a newer PHP is rebuilt and pushed.
 # - Mondays: every image is rebuilt, and pushed only when a package or a PHP extension changed,
-#   so no site is recreated for nothing. The Monday run queues apart from the half-hourly ones, so
-#   none of them can replace it while it waits.
+#   so no site is recreated for nothing.
 # - A pull request that changes this builds and checks one image, and pushes nothing.
 #
-# Edge's images are pushed under `php<X.Y>-edge` and under the tag of their commit, which edge
-# installs follow. A push happens only if the published image is still the one the plan read: a
-# release or an edge build that pushed meanwhile has a fresh base, and a newer commit.
+# Edge's are pushed under the tag of their commit, `php<X.Y>-sha-<commit>`, which edge installs
+# follow; `php<X.Y>-edge` stays the edge build's own, so no edge build can race this for it. A
+# push happens only if the published image is still the one the plan read.
 #
 # A failed build or check pushes nothing: servers keep the image they have, and GitHub mails
 # whoever last changed the schedule. scripts/site-image-refresh.sh holds the steps.
@@ -23,7 +22,9 @@ name: Refresh site images
 
 on:
   schedule:
-    - cron: '7,37 * * * *'
+    # Every 30 minutes, but for Mondays from 03:00 to 03:59 UTC, which is the weekly run's.
+    - cron: '7,37 * * * 0,2-6'
+    - cron: '7,37 0-2,4-23 * * 1'
     - cron: '23 3 * * 1'
   workflow_dispatch:
     inputs:
@@ -39,13 +40,13 @@ on:
 permissions:
   contents: read
 
-# One half-hourly run at a time, the Monday run beside them, and a pull request's runs on their own:
-# a group keeps one run waiting and drops an older waiting one, which would otherwise be the
-# week's. Never cancelled half way: a push may be under way. A push and a Monday push of the same
-# image cannot both land, as each pushes only over the image its plan read. (An expression in
+# One run at a time, so the check of a published image and the push over it happen with no other
+# run between them; a pull request's dry runs on their own. Never cancelled half way: a push may be
+# under way. A group keeps one run waiting and drops an older waiting one: no half-hourly run
+# fires in the hour of the weekly one, so nothing can drop it. (An expression in
 # cancel-in-progress resolves to the string "false", which GitHub reads as true.)
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || ((github.event.schedule == '23 3 * * 1' || inputs.weekly) && 'weekly' || 'php') }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
   cancel-in-progress: false
 
 jobs:
@@ -115,5 +116,4 @@ jobs:
         env:
           REF: ${{ matrix.ref }}
           DIGEST: ${{ matrix.digest }}
-          ALSO: ${{ matrix.also }}
-        run: scripts/site-image-refresh.sh push wpl7-site-image:candidate "$REF" "$DIGEST" "$ALSO"
+        run: scripts/site-image-refresh.sh push wpl7-site-image:candidate "$REF" "$DIGEST"

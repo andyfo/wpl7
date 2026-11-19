@@ -7,7 +7,7 @@
 #   check <built> <published> <published PHP>
 #                             whether the build is worth pushing: a newer PHP, or a package
 #                             or a PHP extension that changed
-#   push <built> <published> <published digest> [<also>]
+#   push <built> <published> <published digest>
 #                             push, unless the published image changed since the plan
 #
 # Needs docker with buildx, jq and gh. Reads REPOSITORY (owner/name), MODE (php, weekly or
@@ -70,15 +70,14 @@ manifest_of() {
 }
 
 plan() {
-  local stable entries='[]' manifest sha php ref also facts digest ours base reason push target
+  local stable entries='[]' manifest sha php ref facts digest ours base reason push target
   # Docker's base images as read: "<php> <release>" lines, so each is asked about once.
   local bases=''
   : "${REPOSITORY:?}" "${MODE:?}"
   stable="$(gh release view --repo "$REPOSITORY" --json tagName --jq .tagName 2>/dev/null)" || stable=''
   local targets=()
   [ -n "$stable" ] && targets+=("$stable")
-  # An edge build in progress pushes a fresh image of its own commit: rebuilding the one before it
-  # now could put an older commit back under the edge tag.
+  # An edge build in progress is about to name a newer commit: its images come fresh.
   if [ "$(gh run list --repo "$REPOSITORY" --workflow deploy.yml --branch main --event push --json status \
     --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || echo unknown)" = 0 ]; then
     targets+=(edge)
@@ -98,13 +97,12 @@ plan() {
         bases="$bases"$'\n'"$php ${base:-none}"
       fi
       [ "$base" != none ] && [ -n "$base" ] || { echo "::warning::Could not read wordpress:php$php-fpm; PHP $php skipped"; continue; }
+      # Edge's images are followed by their commit's own tag, which no edge build pushes again.
+      [ "$target" = edge ] && ref="${ref%-edge}-sha-${sha:0:7}"
       facts="$(facts_of "$ref" digest)"
       # Not "absent" but "could not tell": a rebuild now would replace an image nobody looked at.
       [ -n "$facts" ] || { echo "::warning::Could not read $ref; skipped"; continue; }
       read -r digest ours <<<"$facts"
-      # Edge's images also carry their commit's own tag, which edge installs follow.
-      also=''
-      [ "$target" = edge ] && also="${ref%-edge}-sha-${sha:0:7}"
       reason=''
       push=true
       if [ "$MODE" = dry-run ]; then
@@ -118,9 +116,9 @@ plan() {
       fi
       echo "$target, PHP $php: published $ours, Docker's base $base${reason:+ -> rebuild ($reason)}"
       [ -n "$reason" ] || continue
-      entries="$(jq -c --arg target "$target" --arg php "$php" --arg ref "$ref" --arg also "$also" --arg sha "$sha" \
+      entries="$(jq -c --arg target "$target" --arg php "$php" --arg ref "$ref" --arg sha "$sha" \
         --arg reason "$reason" --arg current "$ours" --arg digest "$digest" --argjson push "$push" \
-        '. + [{target: $target, php: $php, ref: $ref, also: $also, sha: $sha, reason: $reason, current: $current, digest: $digest, push: $push}]' <<<"$entries")"
+        '. + [{target: $target, php: $php, ref: $ref, sha: $sha, reason: $reason, current: $current, digest: $digest, push: $push}]' <<<"$entries")"
     done < <(jq -r '.images.wordpress // {} | to_entries[] | "\(.key) \(.value)"' <<<"$manifest")
   done
   {
@@ -155,31 +153,29 @@ check() {
 }
 
 push() {
-  local built=$1 published=$2 digest=$3 also=${4:-} now type
-  # Pushed over only if it is still the image the plan read: a release or an edge build that
-  # pushed meanwhile has a fresh base of its own, and a newer commit.
+  local built=$1 published=$2 digest=$3 now type
+  # Pushed over only if it is still the image the plan read. Runs of this workflow take turns, so
+  # none comes between this and the push; a release that pushed meanwhile has a fresh base.
   now="$(facts_of "$published" digest | cut -d' ' -f1)"
   if [ "$now" != "$digest" ]; then
     echo "::notice::$published changed since the plan (${now:-unreadable}); not pushed."
     return
   fi
-  for ref in "$published" ${also:+"$also"}; do
-    docker tag "$built" "$ref"
-    docker push --quiet "$ref"
-    # One manifest, as build-images.yml publishes them: an attestation list makes an older
-    # daemon's pull pick the wrong entry.
-    type="$(docker buildx imagetools inspect --raw "$ref" | jq -r '.mediaType // empty')"
-    case "$type" in
-      *manifest.v1+json | *manifest.v2+json) echo "Pushed $ref." ;;
-      *) die "$ref was pushed as $type, not a single image." ;;
-    esac
-  done
+  docker tag "$built" "$published"
+  docker push --quiet "$published"
+  # One manifest, as build-images.yml publishes them: an attestation list makes an older daemon's
+  # pull pick the wrong entry.
+  type="$(docker buildx imagetools inspect --raw "$published" | jq -r '.mediaType // empty')"
+  case "$type" in
+    *manifest.v1+json | *manifest.v2+json) echo "Pushed $published." ;;
+    *) die "$published was pushed as $type, not a single image." ;;
+  esac
 }
 
 case "${1:-}" in
   plan) plan ;;
   php) php_of "${2:?image}" ;;
   check) check "${2:?built image}" "${3:?published image}" "${4:?published PHP}" ;;
-  push) push "${2:?built image}" "${3:?published image}" "${4:?published digest}" "${5:-}" ;;
-  *) die "usage: $0 plan | php <image> | check <built> <published> <published PHP> | push <built> <published> <digest> [<also>]" ;;
+  push) push "${2:?built image}" "${3:?published image}" "${4:?published digest}" ;;
+  *) die "usage: $0 plan | php <image> | check <built> <published> <published PHP> | push <built> <published> <digest>" ;;
 esac

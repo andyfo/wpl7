@@ -237,7 +237,7 @@ for a reason; remove one once there is nothing left to watch.
     (`services/siteImages.ts`) recreates the sites on it.
   - `.github/workflows/site-images-refresh.yml` rebuilds the newest release's and edge's published
     site images when Docker's base has a newer PHP, and on Mondays when a package changed, and
-    pushes them under the same tags.
+    pushes them under the same tags; edge's under its commit's tag, which edge installs follow.
   - `deploy/wordpress-image/Dockerfile` refuses to build on a PHP below the floor of its branch.
     Every build pulls its base (CI's `pull: true`, `--pull` in the provision scripts, `pull` in
     the panel's own builds).
@@ -257,7 +257,8 @@ for a reason; remove one once there is nothing left to watch.
     activity in the repository.
   - For each offered branch, `scripts/site-image-refresh.sh php wordpress:php<X.Y>-fpm` and
     `scripts/site-image-refresh.sh php ghcr.io/andyfo/wpl7/wordpress:php<X.Y>-<newest release>`
-    name the same release, and so do the `-edge` images.
+    name the same release, and so do edge's `php<X.Y>-sha-<commit>` images, for the commit the
+    `edge` release's manifest names. `php<X.Y>-edge` keeps what its edge build had.
 - **When it changes:**
   - **A security release:** within a day, check that the published images carry it (the line
     above) and that the sites of an install on the newest release moved. Raise that branch's
