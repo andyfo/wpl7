@@ -1,4 +1,6 @@
 import { ReminderCard } from '../components/ReminderCard';
+import { PhpCard } from '../components/PhpCard';
+import { PhpRelease } from '../components/PhpRelease';
 // @docs servers/overview
 import { Link } from 'react-router';
 import type { SiteSummary } from '../../../shared/types';
@@ -7,7 +9,7 @@ import { jobLabel } from '../../../shared/jobTypes';
 import { Card, EmptyState, ErrorNote, JobStatusBadge, SiteHealthBadge, StatTile, StatusBadge } from '../components/ui';
 import { Icon } from '../components/Icon';
 import { ResourceCharts } from '../components/ResourceCharts';
-import { formatBytes, sitePhp, timeAgo } from '../lib/format';
+import { formatBytes, timeAgo } from '../lib/format';
 import { siteHealth } from '../lib/siteHealth';
 
 export function Dashboard() {
@@ -45,6 +47,7 @@ export function Dashboard() {
       </div>
 
       <ReminderCard />
+      <PhpCard />
       <ErrorNote error={monitor.error || sites.error} />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <StatTile
@@ -215,7 +218,7 @@ export function Dashboard() {
                     {multiServer && (
                       <td className="pr-3 text-xs text-neutral-500">{site.kind === 'external' ? 'External' : site.serverName}</td>
                     )}
-                    <td className="pr-3 text-xs text-neutral-500">PHP {sitePhp(site)}</td>
+                    <td className="pr-3 text-xs text-neutral-500">PHP <PhpRelease site={site} /></td>
                     <td className="pr-3 text-xs text-neutral-500">
                       {m?.cpuPct != null ? `${m.cpuPct.toFixed(1)}%` : '—'}
                     </td>

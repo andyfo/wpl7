@@ -20,6 +20,8 @@ export interface Shot {
   hero?: boolean;
   /** Taken signed out (the sign-in page). */
   signedOut?: boolean;
+  /** Runs before the page loads: to change what the demo world answers, for this shot alone. */
+  before?: (page: Page) => Promise<void>;
   prepare?: (page: Page) => Promise<void>;
 }
 
@@ -37,6 +39,14 @@ const button = (name: string) => async (page: Page) => {
 const scrollTo = (title: string) => async (page: Page) => {
   await page.getByText(title, { exact: true }).first().evaluate((el) => {
     window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - 96, behavior: 'instant' });
+  });
+};
+
+/** Answer `GET <api>` with the demo world's own answer, as `edit` changes it. */
+const answer = (api: string, edit: (body: Record<string, unknown>) => unknown) => async (page: Page) => {
+  await page.route(`**${api}`, async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: edit((await response.json()) as Record<string, unknown>) });
   });
 };
 
@@ -61,7 +71,22 @@ export const SHOTS: Shot[] = [
     },
   },
   { name: 'reminders-domains', what: 'Domains and their registry dates', path: '/reminders?tab=domains', theme: 'light' },
-  { name: 'overview', what: 'The Dashboard: the fleet at a glance', path: '/', theme: 'both', hero: true },
+  {
+    name: 'overview',
+    what: 'The Dashboard: the fleet at a glance',
+    path: '/',
+    theme: 'both',
+    hero: true,
+    // Without the PHP card, which overview-php shows: it would push the server charts off the page.
+    before: answer('/api/php', (php) => ({ ...php, branches: [] })),
+  },
+  {
+    name: 'overview-php',
+    what: "The Overview's PHP card: a site still on an older PHP than a security release",
+    path: '/',
+    theme: 'light',
+    prepare: scrollTo('PHP'),
+  },
   { name: 'sites-list', what: 'Sites → All sites: thirteen sites on three servers, and two hosted elsewhere', path: '/sites', theme: 'both', hero: true },
   {
     name: 'site-new',

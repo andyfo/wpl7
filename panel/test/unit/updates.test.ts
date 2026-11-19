@@ -201,7 +201,48 @@ describe('scheduling', () => {
     await svc.tick(new Date(2026, 0, 1, 14, svc.minuteOffset()));
     expect(github.requests.length).toBeGreaterThan(before);
   });
+
+  it('asks at once, and once, when an update or a deploy has replaced the panel', async () => {
+    const github = new FakeGitHub().release(manifest());
+    const { svc, settings } = service(github);
+    settings.setRaw('updates.latest', checkedBefore(manifest({ version: '99.2.0' })));
+    const wrongMinute = (svc.minuteOffset() + 1) % 60;
+    await svc.tick(new Date(2026, 0, 1, 12, wrongMinute));
+    expect(github.requests.length).toBeGreaterThan(0);
+    expect(svc.status().latest?.version).toBe('99.3.0');
+    // Then on its own minute, once an hour, as before.
+    const before = github.requests.length;
+    await svc.tick(new Date(2026, 0, 1, 12, wrongMinute));
+    expect(github.requests).toHaveLength(before);
+  });
+
+  it('on edge, takes only its own check for an update: a commit does not say which build is newer', async () => {
+    const edge = manifest({ channel: 'edge', version: '99.0.0-edge.bbbbbbb', gitSha: 'b'.repeat(40) });
+    const github = new FakeGitHub().on('/releases/tags/', { status: 500, body: { message: 'Server Error' } });
+    const { svc, settings } = service(github, { WPL7_CHANNEL: 'edge' });
+    const seen: string[] = [];
+    svc.onNewRelease = (release) => seen.push(release.version);
+    // What the build before this one got: this very commit, or an older one.
+    settings.setRaw('updates.latest', checkedBefore(edge));
+    expect(svc.status().updateAvailable).toBe(false);
+    // A check that fails leaves it unknown, and tells nobody of it.
+    await svc.check();
+    expect(svc.status().updateAvailable).toBe(false);
+    expect(seen).toEqual([]);
+    // Its own answer names another commit: that one is the newer.
+    github.release(edge);
+    await svc.check();
+    expect(svc.status().updateAvailable).toBe(true);
+    expect(seen).toEqual(['99.0.0-edge.bbbbbbb']);
+  });
 });
+
+/** A check five minutes ago, by the build this panel replaced. */
+function checkedBefore(cached: Record<string, unknown>) {
+  const at = Date.now() - 5 * 60_000;
+  const build = `99.1.0 ${'f'.repeat(40)}`;
+  return { manifest: cached, announced: null, checkedAt: at, attemptedAt: at, attemptedBy: build, checkedBy: build, etag: null, error: null, retryAfter: null };
+}
 
 describe('the API', () => {
   it('serves the cached answer and never blocks a page view on GitHub', async () => {

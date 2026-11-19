@@ -425,9 +425,17 @@ else
   # about registries - and so a site container's image reference survives a channel change.
   WORDPRESS_IMAGE="$(env_value WPL7_WORDPRESS_IMAGE)"
   WORDPRESS_IMAGE="${WORDPRESS_IMAGE:-ghcr.io/andyfo/wpl7/wordpress}"
+  # On edge, the images of the very commit this runs (its version ends in -edge.<commit>): those
+  # are what the panel follows and what gets a new PHP (site-images-refresh.yml). `edge` keeps the
+  # PHP its build had, so pulling it again would move the sites back until the panel's next check.
+  WORDPRESS_TAG="$WPL7_IMAGE_TAG"
+  EDGE_COMMIT="${WPL7_VERSION##*-edge.}"
+  if [ "$WPL7_IMAGE_TAG" = edge ] && [[ "$EDGE_COMMIT" =~ ^[0-9a-f]{7}$ ]]; then
+    WORDPRESS_TAG="sha-$EDGE_COMMIT"
+  fi
   for v in ${PHP_VERSIONS//,/ }; do
-    docker pull "$WORDPRESS_IMAGE:php$v-$WPL7_IMAGE_TAG"
-    docker tag "$WORDPRESS_IMAGE:php$v-$WPL7_IMAGE_TAG" "wpl7-wordpress:php$v"
+    docker pull "$WORDPRESS_IMAGE:php$v-$WORDPRESS_TAG"
+    docker tag "$WORDPRESS_IMAGE:php$v-$WORDPRESS_TAG" "wpl7-wordpress:php$v"
   done
 fi
 

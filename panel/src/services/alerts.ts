@@ -1,4 +1,4 @@
-// @docs panel/settings, plugins/updates, sites/external
+// @docs panel/settings, plugins/updates, sites/external, sites/php-updates
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
@@ -8,13 +8,15 @@ import { formatBytes } from '../../shared/bytes.js';
 import type { SettingsService } from './settings.js';
 import type { Logger } from './index.js';
 import type { VulnFinding, WpInventoryService } from './wpInventory.js';
+import type { PhpAdvisory, PhpNotice } from './phpUpstream.js';
+import { phpVersions, phpWhen, severityCounts } from '../../shared/php.js';
 
 /**
  * Emails about sites, to the alert address in Settings (MailService.notifyOperator): a site that
  * stopped answering and came back, a new vulnerability, a backup that failed, and for sites
  * hosted elsewhere a plugin that stopped answering and a certificate about to expire. Each kind
- * has a switch in Settings → Monitoring. A server running out of disk has none: that one is always
- * sent. Without an address they are only logged.
+ * has a switch in Settings → Monitoring. A server running out of disk and PHP's security releases
+ * have none: those are always sent. Without an address they are only logged.
  *
  * What was said is kept in the database (`alert_states`, `vuln_notices`), so a restart neither
  * repeats an alert nor misses a recovery. An alert the relay did not take is tried again, at most
@@ -446,4 +448,127 @@ export class AlertService {
     }
     return count;
   }
+
+  // ------------------------------------------------------------------ PHP (services/phpUpdates.ts)
+
+  /** Whether the email under `key` was said: sent, or logged for want of an address. */
+  private said(key: string): boolean {
+    const row = this.state(key);
+    return !!row && (row.notifiedAt !== null || parse<Delivery>(row.detail).raised === true);
+  }
+
+  /**
+   * Send an email under `key` once, as `deliver` says an alert: again only while the relay does
+   * not take it, at most every RETRY_MS. True once it was said.
+   */
+  private async once(key: string, message: () => [string, string[]]): Promise<boolean> {
+    if (this.said(key)) return true;
+    const row = this.state(key);
+    const { next, notifiedAt } = await this.deliver(parse<Delivery>(row?.detail), row?.notifiedAt ?? null, true, message);
+    this.put({ key, siteId: null, since: row?.since ?? Date.now(), notifiedAt, detail: JSON.stringify(next) });
+    return next.raised === true;
+  }
+
+  /** php.net's advance notice of a security release. */
+  async phpNotice(notice: PhpNotice, updateNeeded: boolean): Promise<void> {
+    await this.once(`php-notice:${notice.id}`, () => {
+      const when = notice.scheduledAt !== null ? phpWhen(notice.scheduledAt, notice.scheduledTime) : null;
+      return [
+        when ? `PHP security release on ${when}` : 'A PHP security release is coming',
+        [
+          `php.net: ${notice.title}.`,
+          when ? `It is scheduled for ${when}.` : 'The notice says when.',
+          '',
+          updateNeeded
+            ? 'This install gets it with a WPL7 update: Settings → Updates.'
+            : 'Sites move onto it by themselves once its image is out, usually a few hours after the release.',
+          '',
+          notice.url,
+        ],
+      ];
+    });
+  }
+
+  /** PHP security releases of branches sites run: one email for those out together. */
+  async phpReleases(releases: { version: string; sites: number; advisories: PhpAdvisory[] }[], updateNeeded: boolean): Promise<void> {
+    // Each release is told once, even when a later pass sees it with others.
+    const fresh = releases.filter((r) => !this.said(`php-release:${r.version}`));
+    if (fresh.length === 0) return;
+    const key = `php-releases:${fresh.map((r) => r.version).sort().join(',')}`;
+    const said = await this.once(key, () => {
+      const names = fresh.map((r) => r.version);
+      const lines: string[] = [];
+      for (const r of fresh) {
+        const counts = severityCounts(r.advisories);
+        lines.push(
+          `PHP ${r.version}: ${counts ? `fixes ${counts}` : 'its advisories are not published yet'}. ${r.sites} ${r.sites === 1 ? 'site runs' : 'sites run'} its branch.`,
+        );
+        for (const a of r.advisories) lines.push(`  - ${a.summary}${a.cve ? ` (${a.cve})` : ''}, ${a.severity}: ${a.url}`);
+      }
+      lines.push(
+        '',
+        updateNeeded
+          ? 'This install gets it with the next WPL7 update: Settings → Updates.'
+          : 'Sites move onto it by themselves once its image is out, usually a few hours after the release. The Overview shows how far it got.',
+      );
+      const base = panelUrl(this.s.config);
+      if (base) lines.push('', base);
+      return [`${phpVersions(names)} ${names.length === 1 ? 'is' : 'are'} out, with security fixes`, lines];
+    });
+    // Marked one by one, so a later pass that sees one of them with another stays quiet about it.
+    if (said) {
+      for (const r of fresh) this.put({ key: `php-release:${r.version}`, siteId: null, since: Date.now(), notifiedAt: null, detail: JSON.stringify({ raised: true }) });
+    }
+  }
+
+  /** That every site on a security release's branch runs it, for a release told by `phpReleases`. Once. */
+  async phpRolloutDone(version: string, total: number): Promise<void> {
+    if (!this.said(`php-release:${version}`)) return;
+    await this.once(`php-rollout-done:${version}`, () => [`All sites run PHP ${version}`, [`Every site on its branch runs PHP ${version} now: ${total} in all.`]]);
+  }
+
+  /**
+   * The sites still on an older release than a security release told by `phpReleases`, once they
+   * had their chance. `stuck` are on a server whose image has it: their move did not happen, or did
+   * not take. `waiting` are on servers that have no such image yet. Once.
+   */
+  async phpRolloutBehind(version: string, total: number, stuck: PhpSitesBehind, waiting: PhpSitesBehind & { servers: string[] }): Promise<void> {
+    if (!this.said(`php-release:${version}`)) return;
+    const count = stuck.count + waiting.count;
+    if (count === 0) return;
+    await this.once(`php-rollout-behind:${version}`, () => {
+      const base = panelUrl(this.s.config);
+      const branch = /^\d+\.\d+/.exec(version)?.[0] ?? version;
+      const list = (group: PhpSitesBehind) => [
+        ...group.sites.map((site) => `  - ${site.title}: PHP ${site.release ?? 'unknown'}${base ? `, ${base}/sites/${site.slug}` : ''}`),
+        ...(group.count > group.sites.length ? [`  - and ${group.count - group.sites.length} more`] : []),
+      ];
+      const one = waiting.servers.length === 1;
+      const groups: string[][] = [];
+      if (stuck.count > 0) groups.push([...list(stuck), '', "A site's page says why it did not move, and offers to try again."]);
+      if (waiting.count > 0) {
+        const servers = waiting.servers.length > 0 ? `${andList(waiting.servers)} ${one ? 'has' : 'have'}` : 'Their servers have';
+        groups.push([...list(waiting), '', `${servers} no image with PHP ${version} yet. ${one ? 'Its sites move once it has one' : 'Their sites move once they have one'}.`]);
+      }
+      return [
+        `${count} ${count === 1 ? 'site still runs' : 'sites still run'} an older PHP than ${version}`,
+        [
+          `${count} of ${total} ${total === 1 ? 'site' : 'sites'} on PHP ${branch} still ${count === 1 ? 'runs' : 'run'} an older release:`,
+          '',
+          ...groups.flatMap((group, i) => (i > 0 ? ['', ...group] : group)),
+        ],
+      ];
+    });
+  }
+}
+
+/** Sites on an older PHP than a release, as an email lists them: the first few, and how many in all. */
+export interface PhpSitesBehind {
+  sites: { slug: string; title: string; release: string | null }[];
+  count: number;
+}
+
+/** "web1", "web1 and web2", "web1, web2 and web3". */
+function andList(names: string[]): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : (names[0] ?? '');
 }

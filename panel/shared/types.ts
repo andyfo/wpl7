@@ -1864,6 +1864,56 @@ export interface SystemVersionDto {
   nextCheckAt: number | null;
 }
 
+/** One PHP branch, as `GET /api/php` tells it (services/phpUpdates.ts). */
+export interface PhpBranchDto {
+  /** 8.4 */
+  branch: string;
+  /** php.net's newest release of the branch; null before the first read, or for a branch php.net no longer lists. */
+  latest: {
+    version: string;
+    /** YYYY-MM-DD, php.net's date. */
+    date: string;
+    security: boolean;
+    /** When this install first read it. */
+    seenAt: number;
+    /** What it fixed, from GitHub's advisories for php-src. Empty until read, and for a release that fixed none. */
+    advisories: { id: string; cve: string | null; severity: string; summary: string; url: string }[];
+  } | null;
+  /** The next release, from its release candidate. */
+  next: { version: string; release: string; date: string; expected: string } | null;
+  /** Sites set to this branch, hosted ones: those the panel updates. */
+  sites: number;
+  /** Of them, the ones on the newest release. */
+  current: number;
+  /** The first few of the others. */
+  behind: { slug: string; title: string; release: string | null }[];
+  behindCount: number;
+  /** The release in each server's site image of this branch, as last read. */
+  images: { serverId: number; serverName: string; release: string | null }[];
+  /** Sites are being moved onto a new image now. */
+  updating: boolean;
+  /** Every site reached the newest release in the last day. */
+  doneRecently: boolean;
+}
+
+export interface PhpUpdatesDto {
+  /** The last read of php.net that worked. */
+  checkedAt: number | null;
+  error: string | null;
+  /** php.net's advance notice of a security release, while it is current. */
+  notice: { id: string; title: string; url: string; publishedAt: number; scheduledAt: number | null; scheduledTime: boolean } | null;
+  branches: PhpBranchDto[];
+  /** Where new site images come from: the registry, or a build on each server. */
+  images: 'registry' | 'build';
+  /**
+   * A new PHP reaches this install with a WPL7 update: it pulls the images of an older release, or
+   * on edge of an older build.
+   */
+  updateNeeded: boolean;
+  /** Servers whose images could not be checked at the last pass. */
+  serverErrors: { serverId: number; serverName: string; error: string }[];
+}
+
 /**
  * What the About page says about this install: where its code comes from, and what it is
  * running on. Deliberately not part of `/api/meta`, which every page loads on mount - this

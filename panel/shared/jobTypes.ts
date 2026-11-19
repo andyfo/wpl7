@@ -254,6 +254,12 @@ export const JOB_TYPE_INFO = {
       'Brings every site container on the server to its CPU, memory and process limits - its own, or else those in Settings - and its caches to what Settings says, in place, without a restart. Lifting a CPU cap is the exception: those sites each get a "Recreate site container" job.',
     category: 'servers',
   },
+  'server.refreshSiteImages': {
+    label: 'Refresh site images',
+    description:
+      "Gives the server the newest site image of each PHP version: the published one, or a fresh build on a server that builds its own. Then each site on an older image gets a \"Recreate site container\" job.",
+    category: 'servers',
+  },
   'server.relocateBackups': {
     label: 'Move backups',
     description: "Copies a server's backups to a new location, verifies them, and points the server at it.",

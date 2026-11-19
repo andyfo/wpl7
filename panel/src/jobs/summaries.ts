@@ -274,6 +274,12 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
       }
       case 'server.relocateBackups':
         return str(p.to) ? `To ${str(p.to)}` : null;
+      case 'server.refreshSiteImages': {
+        const versions = Array.isArray(p.versions) ? p.versions.filter((v): v is string => typeof v === 'string') : [];
+        if (versions.length === 0) return null;
+        const what = `PHP ${versions.join(', ')}`;
+        return p.reason === 'weekly' ? `${what}, weekly` : what;
+      }
       case 'system.postUpdate':
         return str(p.from) && str(p.to) ? `${str(p.from)} → ${str(p.to)}` : null;
       case 'wp.reinstall':

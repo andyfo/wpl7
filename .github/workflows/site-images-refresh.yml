@@ -1,0 +1,119 @@
+# Keep the published site images on the newest PHP, without a WPL7 release.
+#
+# A site image is `FROM wordpress:php<X.Y>-fpm`, built once per release (build-images.yml). Docker
+# rebuilds that base for every PHP release, a few hours after php.net, and for Debian's fixes every
+# week or two; a release's images keep what they were built with. This rebuilds the site images of
+# the newest release and of edge, each from the commit its manifest names, and pushes them under
+# the same tags, as Docker does with its own version tags. Panels follow the tags' digests and move
+# their sites onto a new image by themselves (panel/src/services/phpUpdates.ts).
+#
+# - Every 30 minutes: an image whose base has a newer PHP is rebuilt and pushed.
+# - Mondays: every image is rebuilt, and pushed only when a package or a PHP extension changed,
+#   so no site is recreated for nothing.
+# - A pull request that changes this builds and checks one image, and pushes nothing.
+#
+# Edge's are pushed under the tag of their commit, `php<X.Y>-sha-<commit>`, which edge installs
+# follow; `php<X.Y>-edge` stays the edge build's own, so no edge build can race this for it. A
+# push happens only if the published image is still the one the plan read.
+#
+# A failed build or check pushes nothing: servers keep the image they have, and GitHub mails
+# whoever last changed the schedule. scripts/site-image-refresh.sh holds the steps.
+name: Refresh site images
+
+on:
+  schedule:
+    # Every 30 minutes, but for Mondays from 03:00 to 03:59 UTC, which is the weekly run's.
+    - cron: '7,37 * * * 0,2-6'
+    - cron: '7,37 0-2,4-23 * * 1'
+    - cron: '23 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      weekly:
+        description: Rebuild every image, and push those whose packages changed
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - .github/workflows/site-images-refresh.yml
+      - scripts/site-image-refresh.sh
+
+permissions:
+  contents: read
+
+# One run at a time, so the check of a published image and the push over it happen with no other
+# run between them; a pull request's dry runs on their own. Never cancelled half way: a push may be
+# under way. A group keeps one run waiting and drops an older waiting one: no half-hourly run
+# fires in the hour of the weekly one, so nothing can drop it. (An expression in
+# cancel-in-progress resolves to the string "false", which GitHub reads as true.)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: What needs a rebuild
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      any: ${{ steps.plan.outputs.any }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          MODE: ${{ github.event_name == 'pull_request' && 'dry-run' || ((github.event.schedule == '23 3 * * 1' || inputs.weekly) && 'weekly' || 'php') }}
+        run: scripts/site-image-refresh.sh plan
+
+  build:
+    name: PHP ${{ matrix.php }}, ${{ matrix.target }}
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      # This workflow's own steps, and the release's Dockerfile beside them.
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.sha }}
+          path: release
+          persist-credentials: false
+      - name: Build
+        env:
+          PHP: ${{ matrix.php }}
+        # No cache: a weekly rebuild is for the packages a cached step would keep. One platform and
+        # no attestation, as build-images.yml publishes: a list would make an older daemon's pull
+        # pick the wrong entry.
+        run: >-
+          docker build --pull --no-cache --platform linux/amd64 --provenance=false --sbom=false
+          --build-arg "PHP_TAG=php$PHP" -t wpl7-site-image:candidate release/deploy/wordpress-image
+      - id: check
+        name: Check
+        env:
+          REF: ${{ matrix.ref }}
+          CURRENT: ${{ matrix.current }}
+        run: scripts/site-image-refresh.sh check wpl7-site-image:candidate "$REF" "$CURRENT"
+      - if: steps.check.outputs.push == 'true' && matrix.push
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - if: steps.check.outputs.push == 'true' && matrix.push
+        name: Push
+        env:
+          REF: ${{ matrix.ref }}
+          DIGEST: ${{ matrix.digest }}
+        run: scripts/site-image-refresh.sh push wpl7-site-image:candidate "$REF" "$DIGEST"

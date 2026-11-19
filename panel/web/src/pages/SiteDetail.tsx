@@ -1,5 +1,5 @@
 // @docs backups/overview, get-started/first-site, sites/container, sites/domains, sites/move, sites/overview, sites/php, sites/settings, sites/visitors, sites/wordpress
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -68,7 +68,8 @@ import {
   createFailed,
   useSiteCreation,
 } from '../components/SiteCreation';
-import { countryName, flagOf, formatBytes, formatDate, localeName, sitePhp, timeAgo } from '../lib/format';
+import { countryName, flagOf, formatBytes, formatDate, localeName, timeAgo } from '../lib/format';
+import { PhpRelease } from '../components/PhpRelease';
 import { siteHealth } from '../lib/siteHealth';
 import { moveBody, moveFreeze, type MoveQuiesce } from './siteMove';
 
@@ -222,7 +223,7 @@ function SiteFacts({ site: s, creating = false }: { site: SiteDetailDto; creatin
         <FactRow label={app ? 'Hosts' : 'Domains'} value={s.domains.join(', ')} />
         {s.devHostname && <FactRow label="Dev hostname" value={s.devHostname} />}
         {multiServer && <FactRow label="Server" value={s.serverName} />}
-        {!app && <FactRow label="PHP" value={sitePhp(s)} />}
+        {!app && <FactRow label="PHP" value={<PhpRelease site={s} />} />}
         {php ? (
           <FactRow label="Web root" value={s.webRoot || "The site's folder"} />
         ) : app ? null : (
@@ -614,7 +615,7 @@ function ImportedBanner({ slug, source }: { slug: string; source: NonNullable<Si
   );
 }
 
-function FactRow({ label, value }: { label: string; value: string }) {
+function FactRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex gap-3">
       <dt className="w-28 shrink-0 text-neutral-500">{label}</dt>

@@ -783,7 +783,9 @@ function MonitoringTab({ s, set }: TabProps) {
             />
             <Toggle checked={s.alertsDeployFailed} onChange={(v) => set('alertsDeployFailed', v)} label="Container apps: a deploy that failed" />
           </div>
-          <p className="text-xs text-neutral-500">Suspended mail, malware findings, failed offsite copies, a server low on disk and new releases are always sent.</p>
+          <p className="text-xs text-neutral-500">
+            Suspended mail, malware findings, failed offsite copies, a server low on disk, new releases and PHP security releases are always sent.
+          </p>
         </div>
       </Card>
 
