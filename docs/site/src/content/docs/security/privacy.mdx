@@ -37,7 +37,7 @@ server's address.
 
 | Request | When | What it sends | Switch |
 |---|---|---|---|
-| GitHub, `api.github.com`: is there a new release? | Hourly | The channel you follow, by the release it asks for. `WPL7_GITHUB_TOKEN` when you set one. | Pause **Update check** on **Automations → Schedules**. **Check now** still asks. |
+| GitHub, `api.github.com`: is there a new release? | Hourly, and once after an update | The channel you follow, by the release it asks for. `WPL7_GITHUB_TOKEN` when you set one. | Pause **Update check** on **Automations → Schedules**. **Check now** still asks. |
 | GitHub Pages: the signed recipe catalog | Hourly | Nothing but the request | `WPL7_CATALOG_URL=off` in `deploy/.env`, or pause **Recipe catalog** |
 | php.net: PHP's newest releases, release candidates and news | <Since v="0.4.1" /> Every 15 minutes | Nothing but the request | Pause **PHP releases** on **Automations → Schedules** |
 | GitHub, `api.github.com`: what a PHP security release fixed | Once per security release | Nothing but the request. `WPL7_GITHUB_TOKEN` when you set one. | As for php.net |

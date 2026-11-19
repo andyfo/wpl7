@@ -223,19 +223,20 @@ describe('an install that pulls its site images', () => {
 
   it('tells an edge install behind the newest edge build that a WPL7 update brings the new PHP', async () => {
     const w = await makeWorld({ env: { WPL7_CHANNEL: 'edge', WPL7_IMAGE_TAG: 'edge' }, phpFetch: phpNet(php83('8.3.37', today())).fetch });
+    const edge = {
+      version: '99.0.0-edge.abcdef1',
+      channel: 'edge',
+      gitSha: 'abcdef1234567890abcdef1234567890abcdef12',
+      publishedAt: '2026-11-19T12:00:00Z',
+      notesUrl: 'https://example.test/releases/edge',
+      images: { panel: 'ghcr.io/example/wpl7/panel:edge', wordpress: { '8.3': 'ghcr.io/example/wpl7/wordpress:php8.3-edge' } },
+    };
+    // What the build before this one was told says nothing of this one: the deploy may have brought that commit.
+    w.core.settings.setRaw('updates.latest', { manifest: edge, checkedAt: Date.now(), attemptedBy: 'the build before', checkedBy: 'the build before' });
     expect(w.core.phpUpdates.status().updateNeeded).toBe(false);
-    // CI refreshes the images of the commit the edge release names, which is not this one.
-    w.core.settings.setRaw('updates.latest', {
-      manifest: {
-        version: '99.0.0-edge.abcdef1',
-        channel: 'edge',
-        gitSha: 'abcdef1234567890abcdef1234567890abcdef12',
-        publishedAt: '',
-        notesUrl: '',
-        images: { panel: '', wordpress: {} },
-      },
-      checkedAt: Date.now(),
-    });
+    // Its own check names another commit. CI refreshes that commit's images, not this one's.
+    w.github.release(edge);
+    await w.core.updates.check();
     expect(w.core.phpUpdates.status().updateNeeded).toBe(true);
   });
 });
