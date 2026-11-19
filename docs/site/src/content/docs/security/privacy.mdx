@@ -5,6 +5,8 @@ sidebar:
   order: 6
 sources:
   - panel/src/services/updates.ts
+  - panel/src/services/phpUpstream.ts
+  - panel/src/services/phpUpdates.ts
   - panel/src/services/catalogSync.ts
   - panel/src/services/vulnerabilities.ts
   - panel/src/services/integrityManifests.ts
@@ -23,6 +25,7 @@ sources:
   - deploy/docker-compose.yml
 ---
 
+import Since from '~/components/Since.astro';
 import UiPath from '~/components/UiPath.astro';
 
 The panel sends no telemetry, and there is no control plane. Your sites, their data and the panel's
@@ -36,6 +39,9 @@ server's address.
 |---|---|---|---|
 | GitHub, `api.github.com`: is there a new release? | Hourly | The channel you follow, by the release it asks for. `WPL7_GITHUB_TOKEN` when you set one. | Pause **Update check** on **Automations → Schedules**. **Check now** still asks. |
 | GitHub Pages: the signed recipe catalog | Hourly | Nothing but the request | `WPL7_CATALOG_URL=off` in `deploy/.env`, or pause **Recipe catalog** |
+| php.net: PHP's newest releases, release candidates and news | <Since v="0.4.1" /> Every 15 minutes | Nothing but the request | Pause **PHP releases** on **Automations → Schedules** |
+| GitHub, `api.github.com`: what a PHP security release fixed | Once per security release | Nothing but the request. `WPL7_GITHUB_TOKEN` when you set one. | As for php.net |
+| Each server: is there a newer site image? | Every 15 minutes, as the registry asked by that server's Docker. A server that builds its own images asks Docker Hub about its base image only when php.net has a newer PHP. | Nothing but the request | As for php.net |
 | wpvulnerability.net: known vulnerabilities | Once a day per slug, hourly for one it calls closed, from the inventory scan and the nightly housekeeping | The slug of every installed plugin and theme, custom ones included, and each WordPress version. Never a site, a domain or an address. | **Rate installed plugins and themes against known vulnerabilities** in **Settings → Security** |
 | wordpress.org's directory: is a plugin closed? | With each wpvulnerability.net lookup of a plugin, and of a theme it calls closed | The slug of every installed plugin, custom ones included, and of a theme the feed calls closed | As for wpvulnerability.net |
 | wordpress.org: published checksums | During malware scans, the first time a scan meets each WordPress or plugin version | WordPress's version and language. Each plugin's folder name and version, custom ones included. | **Scan every site** off in **Settings → Security**, with no site switched on by itself |
@@ -67,9 +73,10 @@ The panel hands its own mail to your [relay](/docs/reference/glossary/#relay), l
 
 - Alerts go to **Send alerts to** in <UiPath href="/docs/panel/settings/#alerts">Settings → Monitoring</UiPath>:
   a site's mail suspended, malware found or moved, failing offsite copies, a catalog zip that
-  matches known malware, and a new release. With their switches on, also a site down or back up,
-  a new vulnerability, a failed backup, and a site hosted elsewhere whose plugin stops answering or
-  whose certificate expires soon. Leave the address empty to only log them.
+  matches known malware, a new release, and PHP security releases. With their switches on, also a
+  site down or back up, a new vulnerability, a failed backup, and a site hosted elsewhere whose
+  plugin stops answering or whose certificate expires soon. Leave the address empty to only log
+  them.
 - Account mail goes to an account's recovery address, or to a new one being confirmed, and only
   when someone asks: a password reset link, a confirmation link, and the notice that a password
   changed.

@@ -36,6 +36,8 @@ import type {
 import { fileFromTar } from '../src/services/imageArchive.js';
 import { AppRoutesService } from '../src/services/appRoutes.js';
 import { AppsService } from '../src/services/apps.js';
+import { PhpUpdatesService } from '../src/services/phpUpdates.js';
+import { repositoryOf } from '../src/services/dockerCleanup.js';
 import { TarWriter } from '../src/lib/tarWriter.js';
 import { SPEC_LABEL, fitCpus, serviceSpecHash } from '../src/services/docker.js';
 import { APACHE_RELOAD_COMMAND } from '../src/services/security.js';
@@ -718,6 +720,11 @@ export class FakeDocker implements DockerPort {
         const id = entry.imageId ?? entry.digest;
         this.imageIds.set(tag, id);
         this.images.add(tag);
+        // As RepoDigests: where it came from, by the digest the registry gave it.
+        if (this.recordDigests) {
+          const digest = `${repositoryOf(tag)}@${entry.digest}`;
+          this.imageDigests.set(id, [...new Set([...(this.imageDigests.get(id) ?? []), digest])]);
+        }
         return;
       }
       throw Object.assign(new Error(`no matching manifest for ${this.platform.os}/${this.platform.arch} in the manifest list entries`), { statusCode: 404 });
@@ -830,11 +837,15 @@ export class FakeDocker implements DockerPort {
   untaggedImages: ImageSummary[] = [];
   /** When an image was built (Unix seconds), by id; 0 for one not here. */
   imageCreated = new Map<string, number>();
+  /** `repo@sha256:…` an image was pulled as, by id: what `listImages` reports as its digests. */
+  imageDigests = new Map<string, string[]>();
+  /** Whether a pull records its digest in `imageDigests`, as Docker does. Off unless a test asks. */
+  recordDigests = false;
   async listImages(): Promise<ImageSummary[]> {
     const byId = new Map<string, ImageSummary>();
     for (const tag of this.images) {
       const id = (await this.imageId(tag))!;
-      const image = byId.get(id) ?? { id, tags: [], digests: [], created: this.imageCreated.get(id) ?? 0 };
+      const image = byId.get(id) ?? { id, tags: [], digests: [...(this.imageDigests.get(id) ?? [])], created: this.imageCreated.get(id) ?? 0 };
       image.tags.push(tag);
       byId.set(id, image);
     }
@@ -1672,6 +1683,8 @@ export async function makeWorld(
     env?: Record<string, string>;
     /** Answers for the public catalog's index and signature; absent = unreachable. */
     catalogFetch?: typeof fetch;
+    /** Answers for php.net and GitHub's PHP advisories; absent = unreachable. */
+    phpFetch?: typeof fetch;
   } = {},
 ): Promise<TestWorld> {
   const config = opts.config ?? makeTestConfig(opts.env);
@@ -1910,6 +1923,7 @@ export async function makeWorld(
   core.reminders = new ReminderService(core, serverInfo);
   core.siteCron = new SiteCronService(core);
   core.apps = new AppsService(core);
+  core.phpUpdates = new PhpUpdatesService(core, opts.phpFetch ?? (async () => new Response('', { status: 503 })));
   // The hourly check of each external site and every uptime probe are what the alerts hear from.
   core.connections.attachEvents({ checked: (site, conn) => core.alerts.connectorChecked(site, conn) });
   core.monitor.attachExternal(core.connections, {

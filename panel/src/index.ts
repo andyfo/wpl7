@@ -53,6 +53,7 @@ import { SecurityEventsService } from './services/securityEvents.js';
 import { FirewallSyncService } from './services/firewallSync.js';
 import { AppRoutesService } from './services/appRoutes.js';
 import { AppsService } from './services/apps.js';
+import { PhpUpdatesService } from './services/phpUpdates.js';
 import { AttackDetector } from './services/attackDetector.js';
 import { IntegrityManifests } from './services/integrityManifests.js';
 import { MalwareScanService } from './services/malwareScan.js';
@@ -250,6 +251,7 @@ async function main(): Promise<void> {
   core.reminders = new ReminderService(core, serverInfo);
   core.siteCron = new SiteCronService(core);
   core.apps = new AppsService(core);
+  core.phpUpdates = new PhpUpdatesService(core);
   // The hourly check of each external site and every uptime probe are what the alerts hear from.
   core.connections.attachEvents({ checked: (site, conn) => core.alerts.connectorChecked(site, conn) });
   core.monitor.attachExternal(core.connections, {

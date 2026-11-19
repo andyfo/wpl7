@@ -45,6 +45,7 @@ import type {
   SiteWpStatusDto,
   SystemAboutDto,
   SystemVersionDto,
+  PhpUpdatesDto,
   WpInventoryDto,
   WporgPluginDto,
 } from '../../../shared/types';
@@ -69,6 +70,13 @@ export const useMeta = () =>
  */
 export const useSystemVersion = () =>
   useQuery({ queryKey: ['system-version'], queryFn: () => api<SystemVersionDto>('/api/system/version') });
+
+/**
+ * PHP's releases as php.net said at the panel's last read, and how far each branch's sites got:
+ * the Overview's card and the mark beside a site's PHP. One query for every page that shows it.
+ */
+export const usePhpUpdates = () =>
+  useQuery({ queryKey: ['php'], queryFn: () => api<PhpUpdatesDto>('/api/php'), refetchInterval: 60_000, staleTime: 30_000 });
 
 /**
  * Where this install came from and what it runs on, for the About page. Both halves are

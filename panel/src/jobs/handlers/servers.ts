@@ -40,6 +40,26 @@ export const serverApplySiteLimitsPayload = z.object({
   serverId: z.number().int(),
 });
 
+export const serverRefreshSiteImagesPayload = z.object({
+  serverId: z.number().int(),
+  /** The PHP branches whose image to refresh: 8.4. */
+  versions: z.array(z.string().regex(/^\d+\.\d+$/)).min(1),
+  /** `published`: the registry names a new image. `php`: php.net has a newer release. `weekly`: the weekly rebuild. */
+  reason: z.enum(['published', 'php', 'weekly']),
+});
+
+/**
+ * A new site image for each PHP branch asked for, and the sites onto it (services/phpUpdates.ts).
+ * In the server's `images:<id>` lane: a build takes minutes, and the server's sites carry on with
+ * their own jobs meanwhile. The moves are a `site.reconcile` each, in the server's lane.
+ */
+export async function serverRefreshSiteImages(
+  ctx: JobContext<z.infer<typeof serverRefreshSiteImagesPayload>>,
+  s: CoreServices,
+): Promise<void> {
+  await s.phpUpdates.refreshImages(ctx);
+}
+
 const describeLimits = (l: SiteRuntime): string =>
   [
     l.nanoCpus ? `${l.nanoCpus / 1e9} CPU core(s)` : 'no CPU cap',

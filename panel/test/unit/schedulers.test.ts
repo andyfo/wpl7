@@ -55,6 +55,7 @@ describe('built-in schedules', () => {
       'database-sizes',
       'traffic-ingest',
       'update-check',
+      'php-releases',
       'catalog',
       'mail-ingest',
       'adminer-idle',

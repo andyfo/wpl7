@@ -1,0 +1,82 @@
+---
+title: PHP updates
+description: "PHP's patch releases reach every site by themselves, and the Overview says when one is coming."
+sidebar:
+  order: 14.5
+since: 0.4.1
+sources:
+  - panel/src/services/phpUpdates.ts
+  - panel/src/services/phpUpstream.ts
+  - panel/web/src/components/PhpCard.tsx
+  - panel/web/src/components/PhpRelease.tsx
+  - panel/web/src/lib/php.ts
+  - .github/workflows/site-images-refresh.yml
+  - scripts/site-image-refresh.sh
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+import UiPath from '~/components/UiPath.astro';
+
+A site runs the PHP release in its server's site image, such as 8.4.27. When PHP publishes a patch
+release, each server gets a new image with it, and every site moves onto it. Nobody has to start
+anything.
+
+<Screenshot name="overview-php" alt="The Overview's PHP card: one site still on an older PHP than a security release, with what that release fixed" />
+
+## What the Overview shows
+
+The **PHP** card on the **Overview** is there only while something is happening. It says, for example:
+
+| Line | When |
+|---|---|
+| PHP security release on Wed 21 Oct, 14:00 UTC | php.net has announced a security release ahead of time |
+| PHP 8.4.28 is out. Waiting for its image. | The release is out, and no server has its image yet |
+| Updating sites to PHP 8.4.28: 5 of 12 | Sites are moving onto it |
+| 2 of 12 sites still on an older PHP than 8.4.28 | Those sites did not move. Each one's page says why. |
+| All sites run PHP 8.4.28 | For a day after the last site moved |
+| Next: PHP 8.4.28 and 8.5.13, expected Thu 19 Nov | A release candidate is out, and its release is due within a week |
+
+A security release also says what it fixes, such as 2 critical and 1 high. A site on an older
+release than the newest of its branch has its PHP in amber in the site lists, on its **Overview**
+tab and on its server's page.
+
+The alert address gets an email when php.net announces a security release, when one is out for a
+PHP version your sites run, and when its sites have moved or some could not. These emails are
+always sent. The address is set in <UiPath href="/docs/panel/settings/#alerts">Settings → Monitoring</UiPath>.
+
+## How it works
+
+The **PHP releases** schedule reads php.net every 15 minutes: its newest releases, its release
+candidates and its news. What a security release fixed comes from GitHub's advisories for PHP.
+
+A server's new image comes from one of two places:
+
+- **An install that pulls its images** follows the published images of its release. A GitHub
+  workflow rebuilds them when Docker's official WordPress image has a newer PHP. That is usually a
+  few hours after php.net. On Mondays it rebuilds every image, and publishes those whose packages
+  changed.
+- **An install that builds its own** builds a new image on the server. It does so when php.net has
+  a newer release and Docker's base image has changed, and on Mondays from 03:00 UTC. A build that
+  changed no package is thrown away.
+
+Either way, each server gets a **Refresh site images** job, which runs beside its other jobs. Then
+each site on an older image gets a **Recreate site container** job, with its own rollback. The site
+does not answer for a second or two. Its files, its database and WordPress stay as they are.
+
+To stop all of it, pause **PHP releases** on **Automations → Schedules**.
+
+## Limits
+
+- Docker's WordPress image follows a PHP release by a few hours. Sites cannot move before it.
+- Only the newest release's images and edge's are rebuilt. An install on an older release gets a new PHP with a WPL7 update, and the card says so.
+- A site busy with another job moves at the next hourly check.
+- A coming release's fixes are not known before php.net publishes it.
+- php.net's notice is read from its wording. A notice whose date does not read shows without one.
+- Sites hosted elsewhere are not updated. Their PHP is their host's.
+
+## Related
+
+- [Updating WPL7](/docs/panel/updating/)
+- [Site settings](/docs/sites/settings/#switch-php)
+- [Schedules](/docs/automations/schedules/)
+- [What leaves your server](/docs/security/privacy/)

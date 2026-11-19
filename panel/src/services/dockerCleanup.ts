@@ -35,7 +35,7 @@ import { DKIM_CONTAINER, MAIL_CONTAINER, MARIADB_CONTAINER, PANEL_CONTAINER, TRA
 export const BUILD_CACHE_KEEP_BYTES = 1024 ** 3;
 
 /** The registry setup.sh pulls site images from when `WPL7_WORDPRESS_IMAGE` names none. */
-const SETUP_WORDPRESS_IMAGE = 'ghcr.io/andyfo/wpl7/wordpress';
+export const SETUP_WORDPRESS_IMAGE = 'ghcr.io/andyfo/wpl7/wordpress';
 
 /** `traefik:v3.7` and `traefik@sha256:…` are both `traefik`; a registry's port is not a tag. */
 export function repositoryOf(ref: string): string {

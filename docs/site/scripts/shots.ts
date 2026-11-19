@@ -62,6 +62,13 @@ export const SHOTS: Shot[] = [
   },
   { name: 'reminders-domains', what: 'Domains and their registry dates', path: '/reminders?tab=domains', theme: 'light' },
   { name: 'overview', what: 'The Dashboard: the fleet at a glance', path: '/', theme: 'both', hero: true },
+  {
+    name: 'overview-php',
+    what: "The Overview's PHP card: a site still on an older PHP than a security release",
+    path: '/',
+    theme: 'light',
+    prepare: scrollTo('PHP'),
+  },
   { name: 'sites-list', what: 'Sites → All sites: thirteen sites on three servers, and two hosted elsewhere', path: '/sites', theme: 'both', hero: true },
   {
     name: 'site-new',

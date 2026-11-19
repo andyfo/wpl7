@@ -110,9 +110,12 @@ A failed step is a failed job, never a rollback, because the new version is alre
 what it reports, then choose **Re-run**.
 
 <Since v="0.3.2" /> The panel then rebuilds every site container that runs an older site image than
-its server now has. That is how a PHP security release reaches the sites. Each rebuild is a job of
-its own, with its own rollback. Sites on a worker server follow within the hour after that server
-updates. A site busy with another job is rebuilt at the next hourly check.
+its server now has. Each rebuild is a job of its own, with its own rollback. Sites on a worker
+server follow within the hour after that server updates. A site busy with another job is rebuilt
+at the next hourly check.
+
+<Since v="0.4.1" /> A new PHP patch release does not wait for an update. Each server gets a new site
+image with it, and its sites move the same way, as [PHP updates](/docs/sites/php-updates/) explains.
 
 In checkout mode, the same happens when a rebuild changes the site images. `deploy.sh` and
 `build.sh --images` pull the newest WordPress base image for each rebuild.

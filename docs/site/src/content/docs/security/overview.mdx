@@ -18,6 +18,7 @@ sources:
   - provision/setup.sh
 ---
 
+import Since from '~/components/Since.astro';
 import UiPath from '~/components/UiPath.astro';
 
 WordPress sites get hacked. WPL7 works to keep attacks out, to notice the ones that got in, and to
@@ -100,9 +101,10 @@ Site protection and blocked addresses run in Traefik and at the firewall, in fro
 [page cache](/docs/sites/caching/). A security plugin's firewall runs in PHP, so a request for a
 stored page never reaches it.
 
-A site's PHP comes from its site image. When an update brings a newer image, the panel rebuilds every
-site container on it, so a PHP security release reaches every site. The site image does not build on
-a PHP older than the last security release of its branch.
+A site's PHP comes from its site image. <Since v="0.4.1" /> When PHP publishes a patch release, each
+server gets a new image with it, and the panel rebuilds every site container on it. See
+[PHP updates](/docs/sites/php-updates/). The site image does not build on a PHP older than the last
+security release of its branch.
 
 ## The panel is root-equivalent
 

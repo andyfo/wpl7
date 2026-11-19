@@ -2420,6 +2420,13 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
       },
       {
         method: 'GET',
+        path: '/api/php',
+        summary: "PHP's newest and next releases, php.net's notice of a security release, and each branch's sites",
+        returns: '{checkedAt, error, notice, branches: [{branch, latest, next, sites, current, behind, behindCount, images, updating, doneRecently}], images, updateNeeded, serverErrors}',
+        level: 'read',
+      },
+      {
+        method: 'GET',
         path: '/api/system/about',
         summary: 'Where this install came from and what it runs on - the About page in one call',
         returns: '{repoUrl, host, publicIp, reverseDns, communityUrl, panelDomain, node, panelUptimeSeconds}',

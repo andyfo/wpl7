@@ -41,6 +41,7 @@ import type { DatabasesService } from './databases.js';
 import type { SiteCronService } from './siteCron.js';
 import type { AppRoutesService } from './appRoutes.js';
 import type { AppsService } from './apps.js';
+import type { PhpUpdatesService } from './phpUpdates.js';
 
 export interface Logger {
   info(msg: string): void;
@@ -134,5 +135,7 @@ export interface CoreServices {
   appRoutes: AppRoutesService;
   /** Container apps: their settings, routes, deploys and deploy hook. */
   apps: AppsService;
+  /** PHP's releases, from php.net, and each server's site images kept on the newest. */
+  phpUpdates: PhpUpdatesService;
   log: Logger;
 }

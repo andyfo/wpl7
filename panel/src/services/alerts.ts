@@ -1,4 +1,4 @@
-// @docs panel/settings, plugins/updates, sites/external
+// @docs panel/settings, plugins/updates, sites/external, sites/php-updates
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
@@ -8,13 +8,14 @@ import { formatBytes } from '../../shared/bytes.js';
 import type { SettingsService } from './settings.js';
 import type { Logger } from './index.js';
 import type { VulnFinding, WpInventoryService } from './wpInventory.js';
+import type { PhpAdvisory, PhpNotice } from './phpUpstream.js';
 
 /**
  * Emails about sites, to the alert address in Settings (MailService.notifyOperator): a site that
  * stopped answering and came back, a new vulnerability, a backup that failed, and for sites
  * hosted elsewhere a plugin that stopped answering and a certificate about to expire. Each kind
- * has a switch in Settings → Monitoring. A server running out of disk has none: that one is always
- * sent. Without an address they are only logged.
+ * has a switch in Settings → Monitoring. A server running out of disk and PHP's security releases
+ * have none: those are always sent. Without an address they are only logged.
  *
  * What was said is kept in the database (`alert_states`, `vuln_notices`), so a restart neither
  * repeats an alert nor misses a recovery. An alert the relay did not take is tried again, at most
@@ -446,4 +447,127 @@ export class AlertService {
     }
     return count;
   }
+
+  // ------------------------------------------------------------------ PHP (services/phpUpdates.ts)
+
+  /** Whether the email under `key` was said: sent, or logged for want of an address. */
+  private said(key: string): boolean {
+    const row = this.state(key);
+    return !!row && (row.notifiedAt !== null || parse<Delivery>(row.detail).raised === true);
+  }
+
+  /**
+   * Send an email under `key` once: again only while the relay does not take it, at most every
+   * RETRY_MS. True once it was said.
+   */
+  private async once(key: string, message: () => [string, string[]]): Promise<boolean> {
+    if (this.said(key)) return true;
+    const row = this.state(key);
+    const detail = parse<Delivery>(row?.detail);
+    if (detail.triedAt !== undefined && Date.now() - detail.triedAt < RETRY_MS) return false;
+    const [subject, lines] = message();
+    const outcome = await this.send(subject, lines);
+    const now = Date.now();
+    this.put({
+      key,
+      siteId: null,
+      since: row?.since ?? now,
+      notifiedAt: outcome === 'sent' ? now : null,
+      detail: JSON.stringify(outcome === 'failed' ? { triedAt: now } : { raised: true }),
+    });
+    return outcome !== 'failed';
+  }
+
+  /** php.net's advance notice of a security release. */
+  async phpNotice(notice: PhpNotice): Promise<void> {
+    await this.once(`php-notice:${notice.id}`, () => {
+      const when = notice.scheduledAt !== null ? phpWhen(notice.scheduledAt, notice.scheduledTime) : null;
+      return [
+        when ? `PHP security release on ${when}` : 'A PHP security release is coming',
+        [
+          `php.net: ${notice.title}.`,
+          when ? `It is scheduled for ${when}.` : 'php.net has not said when in a way the panel can read; the notice says.',
+          '',
+          'Sites move onto it by themselves once its image is out, usually a few hours after the release.',
+          '',
+          notice.url,
+        ],
+      ];
+    });
+  }
+
+  /** PHP security releases of branches sites run: one email for those out together. */
+  async phpReleases(releases: { version: string; sites: number; advisories: PhpAdvisory[] }[], updateNeeded: boolean): Promise<void> {
+    // Each release is told once, even when a later pass sees it with others.
+    const fresh = releases.filter((r) => !this.said(`php-release:${r.version}`));
+    if (fresh.length === 0) return;
+    const key = `php-releases:${fresh.map((r) => r.version).sort().join(',')}`;
+    const said = await this.once(key, () => {
+      const names = fresh.map((r) => r.version);
+      const lines: string[] = [];
+      for (const r of fresh) {
+        const counts = severityCounts(r.advisories);
+        lines.push(`PHP ${r.version}${counts ? `: fixes ${counts}` : ''}. ${r.sites} ${r.sites === 1 ? 'site runs' : 'sites run'} its branch.`);
+        for (const a of r.advisories) lines.push(`  - ${a.summary}${a.cve ? ` (${a.cve})` : ''}, ${a.severity}: ${a.url}`);
+      }
+      lines.push(
+        '',
+        updateNeeded
+          ? 'This install gets it with the next WPL7 update: Settings → Updates.'
+          : 'Sites move onto it by themselves once its image is out, usually a few hours after the release. The Overview shows how far it got.',
+      );
+      const base = panelUrl(this.s.config);
+      if (base) lines.push('', base);
+      return [`${listOf(names)} ${names.length === 1 ? 'is' : 'are'} out, with security fixes`, lines];
+    });
+    // Marked one by one, so a later pass that sees one of them with another stays quiet about it.
+    if (said) {
+      for (const r of fresh) this.put({ key: `php-release:${r.version}`, siteId: null, since: Date.now(), notifiedAt: null, detail: JSON.stringify({ raised: true }) });
+    }
+  }
+
+  /** How a security release's move went, once every site had its chance. */
+  async phpRollout(version: string, total: number, behind: { slug: string; title: string; release: string | null }[], behindCount: number): Promise<void> {
+    await this.once(`php-rollout:${version}`, () => {
+      if (behindCount === 0) return [`All sites run PHP ${version}`, [`Every site on its branch runs PHP ${version} now: ${total} in all.`]];
+      const base = panelUrl(this.s.config);
+      const branch = /^\d+\.\d+/.exec(version)?.[0] ?? version;
+      const lines = [
+        `${behindCount} of ${total} ${total === 1 ? 'site' : 'sites'} on PHP ${branch} still ${behindCount === 1 ? 'runs' : 'run'} an older release:`,
+        '',
+      ];
+      for (const site of behind) lines.push(`  - ${site.title}: PHP ${site.release ?? 'unknown'}${base ? `, ${base}/sites/${site.slug}` : ''}`);
+      if (behindCount > behind.length) lines.push(`  - and ${behindCount - behind.length} more`);
+      lines.push('', "A site's page says why it did not move, and offers to try again.");
+      return [`${behindCount} ${behindCount === 1 ? 'site still runs' : 'sites still run'} an older PHP than ${version}`, lines];
+    });
+  }
+}
+
+/** "8.4.28", "8.4.28 and 8.5.13", "8.2.36, 8.3.37 and 8.4.28", each with PHP before it once. */
+function listOf(versions: string[]): string {
+  const all = [...versions];
+  const last = all.pop()!;
+  return `PHP ${all.length > 0 ? `${all.join(', ')} and ${last}` : last}`;
+}
+
+/** "2 critical, 1 high", most severe first; '' for none. */
+export function severityCounts(advisories: { severity: string }[]): string {
+  const order = ['critical', 'high', 'medium', 'low'];
+  const rank = (severity: string) => (order.includes(severity) ? order.indexOf(severity) : order.length);
+  const counts = new Map<string, number>();
+  for (const a of advisories) counts.set(a.severity, (counts.get(a.severity) ?? 0) + 1);
+  return [...counts.entries()]
+    .sort((a, b) => rank(a[0]) - rank(b[0]))
+    .map(([severity, n]) => `${n} ${severity}`)
+    .join(', ');
+}
+
+const PHP_DAY = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+
+/** "Wed 21 Oct 2026, 14:00 UTC", or the date alone when the notice named no time. */
+export function phpWhen(at: number, time: boolean): string {
+  const part = (type: string) => PHP_DAY.formatToParts(at).find((p) => p.type === type)?.value ?? '';
+  const date = `${part('weekday')} ${part('day')} ${part('month')} ${part('year')}`;
+  return time ? `${date}, ${new Date(at).toISOString().slice(11, 16)} UTC` : date;
 }

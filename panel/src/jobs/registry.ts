@@ -57,6 +57,8 @@ import {
 import {
   serverApplySiteLimits,
   serverApplySiteLimitsPayload,
+  serverRefreshSiteImages,
+  serverRefreshSiteImagesPayload,
   serverProvision,
   serverProvisionPayload,
   serverProvisionQueuedCancel,
@@ -189,6 +191,8 @@ const registry: Partial<Record<JobType, RegistryEntry>> = {
   'server.provision': entry(serverProvisionPayload, serverProvision, 30 * 60_000, serverProvisionQueuedCancel) as RegistryEntry,
   'server.relocateBackups': entry(serverRelocateBackupsPayload, serverRelocateBackups, 12 * 3600_000) as RegistryEntry,
   'server.applySiteLimits': entry(serverApplySiteLimitsPayload, serverApplySiteLimits, 10 * 60_000) as RegistryEntry,
+  // A build of every PHP version on a small server is minutes each; a pull is less.
+  'server.refreshSiteImages': entry(serverRefreshSiteImagesPayload, serverRefreshSiteImages, 90 * 60_000) as RegistryEntry,
   'site.move': entry(siteMovePayload, siteMove, 180 * 60_000) as RegistryEntry,
   'site.moveFinalize': entry(siteMoveFinalizePayload, siteMoveFinalize, 15 * 60_000) as RegistryEntry,
   // A whole day: a big site over a slow old host is hours of requests, in a lane of its own.

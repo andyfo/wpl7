@@ -128,6 +128,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   'services/securityEvents.ts': { fold: NAMES, recent: NAMES },
   'services/securityViews.ts': { securityOverview: hosted('hostedSites()'), fleetScans: hosted('hostedSites()') },
   'services/phpReleases.ts': { readSitePhp: hosted('isExternal(site)'), sweepPhpReleases: hosted('hostedSites()') },
+  'services/phpUpdates.ts': { siteRows: hosted('hostedSites()') },
   'services/siteHardening.ts': { sweepHardening: hosted('hostedSites()') },
   'services/siteImages.ts': { sweepSiteImages: hosted('hostedSites()') },
   'services/sites.ts': {
@@ -273,6 +274,7 @@ const SITE_APP_REVIEW: Record<string, Record<string, AppVerdict>> = {
   'services/securityEvents.ts': { fold: APP_NAMES, recent: APP_NAMES },
   'services/securityViews.ts': { securityOverview: apps('each site with its own policy, by its app'), fleetScans: SCANNED },
   'services/phpReleases.ts': { readSitePhp: ANY_SITE, sweepPhpReleases: ANY_SITE },
+  'services/phpUpdates.ts': { siteRows: apps('a PHP site runs the site image, and moves onto a new one like a WordPress site') },
   'services/siteHardening.ts': { sweepHardening: ANY_SITE },
   'services/siteImages.ts': { sweepSiteImages: apps('a PHP site follows its image too, once the image can run it (isPhpSite in canRun)') },
   'services/sites.ts': {
@@ -460,6 +462,7 @@ const SITE_IMAGE_REVIEW: Record<string, Record<string, ImageVerdict>> = {
     readSitePhp: siteImage('isContainerApp('),
     sweepPhpReleases: siteImage('siteImageSites()'),
   },
+  'services/phpUpdates.ts': { siteRows: siteImage('siteImageSites()') },
   'services/quarantine.ts': {
     prune: images('quarantined files, which an app never has: it is never scanned'),
   },
