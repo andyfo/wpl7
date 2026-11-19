@@ -66,6 +66,12 @@ Yes. **Add server** on the **Servers** page sets up a blank server over SSH, and
 runs sites there too. You can move a site between servers, and the old server forwards visitors
 until DNS catches up. See [Add a server](/docs/servers/add/) and [Move a site to another server](/docs/sites/move/).
 
+### What if a server dies?
+
+Its sites come back from their offsite backups, on another server or on the same one rebuilt:
+**Recover sites** on the server's page. If it was the panel's own server, install the panel again
+from its nightly snapshot first. See [Recover a lost server](/docs/servers/recover/).
+
 ### Which PHP versions can a site use?
 
 PHP 8.2, 8.3, 8.4 and 8.5. Each site picks its own, and you can switch it later. See

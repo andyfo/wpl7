@@ -88,6 +88,20 @@ the check got back, and its button is the repair.
 **Recreate container** only warns when the rebuilt site still does not answer, so read its job
 log. See [The Sites list](/docs/sites/overview/).
 
+### The site shows Missing
+
+Its container and its database are both gone from its server. That happens after a reinstall, or
+after the panel's database was restored onto a new machine. **Recreate container** would only make
+an empty WordPress there. Choose **Recover** in the banner to bring the site back from a backup.
+See [Recover a lost server](/docs/servers/recover/).
+
+### An added server refuses the panel after a reinstall
+
+Its **Last error** says `All configured authentication methods failed`. A panel installed again has
+a new SSH key, which the servers it had do not know. The server's page shows the key. Add it to
+`/home/wpl7-panel/.ssh/authorized_keys` and `/root/.ssh/authorized_keys` on that server, then
+choose **Test connection**.
+
 ### Every site returns 504 after a stack redeploy
 
 `docker compose up` recreated Traefik without the site networks. The panel attaches them again

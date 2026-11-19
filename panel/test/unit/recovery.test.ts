@@ -8,6 +8,11 @@ import { sitePaths } from '../../src/services/siteSpec.js';
 import { hostExec, type ExecPort } from '../../src/lib/exec.js';
 import { externalWorld } from '../connectWorld.js';
 import { autoFinalizeMoves } from '../../src/services/housekeeping.js';
+import { alertStates } from '../../src/db/schema.js';
+import { JobContext } from '../../src/jobs/context.js';
+import { panelSnapshot } from '../../src/jobs/handlers/offsite.js';
+import { seed } from '../../src/db/seed.js';
+import { createTestDb, makeTestConfig } from '../helpers.js';
 import type { EphemeralOpts, RunResult } from '../../src/services/docker.js';
 import {
   queueDeletedSiteRestore,
@@ -392,5 +397,107 @@ describe('recovery', () => {
     const elsewhere = path.join(w.config.srvRoot, 'not-mounted');
     w.db.update(backups).set({ rootPath: elsewhere, path: path.join(elsewhere, site.slug, 'x') }).where(eq(backups.id, kept.id)).run();
     expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 0, back: 0 });
+  });
+});
+
+describe('around a recovery', () => {
+  it('emails once when an added server has not answered for ten minutes, and when it answers again', async () => {
+    const w = await makeWorld();
+    const sent: { subject: string; body: string }[] = [];
+    w.core.settings.set('alertEmail', 'ops@example.com');
+    w.core.mail.notifyOperator = async (subject: string, body: string) => {
+      sent.push({ subject, body });
+      return true;
+    };
+    const lost = w.addSshServer('lost');
+    await w.core.alerts.serverChecked({ id: lost.id, name: 'lost' }, false, 'connect ETIMEDOUT');
+    expect(sent).toHaveLength(0);
+    w.db.update(alertStates).set({ since: Date.now() - 11 * 60_000 }).run();
+    await w.core.alerts.serverChecked({ id: lost.id, name: 'lost' }, false, 'connect ETIMEDOUT');
+    await w.core.alerts.serverChecked({ id: lost.id, name: 'lost' }, false, 'connect ETIMEDOUT');
+    expect(sent.map((m) => m.subject)).toEqual(['lost does not answer']);
+    expect(sent[0]!.body).toContain('Recover sites');
+
+    // A site recovered elsewhere meanwhile: the email that it is back says its old copy goes.
+    w.db
+      .insert(moveCleanups)
+      .values({
+        siteId: 99,
+        siteSlug: 'bakery',
+        sourceServerId: lost.id,
+        targetServerId: 1,
+        containerName: 'wp-bakery',
+        dbName: 'wp_bakery',
+        dbUser: 'wp_bakery',
+        filesPath: '/srv/sites/bakery',
+        verifyHosts: '[]',
+        targetIp: '203.0.113.1',
+        status: 'pending',
+        handover: 'pending',
+        createdAt: Date.now(),
+      })
+      .run();
+    await w.core.alerts.serverChecked({ id: lost.id, name: 'lost' }, true, null);
+    expect(sent.map((m) => m.subject)).toEqual(['lost does not answer', 'lost answers again']);
+    expect(sent[1]!.body).toMatch(/recovered on another server meanwhile: bakery/);
+  });
+
+  it("takes server 1's address from a changed SERVER_PUBLIC_IP, and keeps an edit while .env stays as it was", async () => {
+    const db = createTestDb();
+    await seed(db, makeTestConfig({ SERVER_PUBLIC_IP: '198.51.100.1' }));
+    const ip = () => db.select().from(servers).where(eq(servers.id, 1)).get()!.publicIp;
+    expect(ip()).toBe('198.51.100.1');
+    db.update(servers).set({ publicIp: '198.51.100.9' }).where(eq(servers.id, 1)).run();
+    await seed(db, makeTestConfig({ SERVER_PUBLIC_IP: '198.51.100.1' }));
+    expect(ip()).toBe('198.51.100.9');
+    // The panel database restored onto a machine whose setup.sh found another address.
+    const result = await seed(db, makeTestConfig({ SERVER_PUBLIC_IP: '203.0.113.5' }));
+    expect(ip()).toBe('203.0.113.5');
+    expect(result.publicIpChanged).toEqual({ from: '198.51.100.9', to: '203.0.113.5' });
+  });
+
+  it('keeps what deploy/.env holds in the panel snapshot, for an install from it', async () => {
+    const w = await makeWorld({
+      exec: hostExec,
+      env: { SMTP_RELAYHOST: '[smtp.example.com]:587', SMTP_USERNAME: 'relay', SMTP_PASSWORD: 'relay-secret', ACME_EMAIL: 'ops@example.com' },
+    });
+    fs.mkdirSync(path.join(w.config.srvRoot, 'mail'), { recursive: true });
+    fs.writeFileSync(path.join(w.config.srvRoot, 'mail', 'relay.env'), 'POSTFIX_myhostname=mail.example.net\n');
+    const job = w.worker.enqueue('panel.snapshot', {}, undefined, { serverId: 1 });
+    await panelSnapshot(new JobContext(job.id, {}, w.db) as never, w.core);
+    const row = w.db.select().from(backups).where(eq(backups.type, 'panel')).get()!;
+    const manifest = JSON.parse(fs.readFileSync(path.join(row.path, 'manifest.json'), 'utf8'));
+    expect(manifest.format).toBe(2);
+    expect(typeof manifest.panelVersion).toBe('string');
+    expect(manifest.env).toMatchObject({
+      PANEL_DOMAIN: w.config.panelDomain,
+      DEV_DOMAIN: w.config.devDomain,
+      SMTP_RELAYHOST: '[smtp.example.com]:587',
+      SMTP_USERNAME: 'relay',
+      SMTP_PASSWORD: 'relay-secret',
+      ACME_EMAIL: 'ops@example.com',
+      MAIL_HOSTNAME: 'mail.example.net',
+    });
+  });
+
+  it('refuses Finalize now while the old server has not answered since the site left it', async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const s2 = w.addSshServer('s2', { real: true, publicIp: '203.0.113.20' });
+    const { site, backup } = await siteOnLostServer(w, s2);
+    const job = await queueSiteRecovery(w.core, site, { backupId: backup.id, targetServerId: s2.id });
+    expect((await runJob(w, job.id)).status).toBe('succeeded');
+    const { app } = await makeApp(w);
+    const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { username: 'admin', password: 'correct-horse-battery' } });
+    const c = login.cookies.find((x) => x.name === 'panel.sid')!;
+    const headers = { cookie: `${c.name}=${c.value}`, 'x-csrf': '1' };
+    try {
+      const detail = await app.inject({ method: 'GET', url: `/api/sites/${site.slug}`, headers });
+      expect(detail.json().pendingMoveCleanup).toMatchObject({ sourceServerName: 'lost', handoverPending: true });
+      const res = await app.inject({ method: 'POST', url: `/api/sites/${site.slug}/move/finalize`, headers });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.message).toMatch(/has not answered since the site left it/);
+    } finally {
+      await app.close();
+    }
   });
 });
