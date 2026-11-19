@@ -133,6 +133,7 @@ async function capture(ctx: BrowserContext, shot: Shot, file: string): Promise<v
   const page = await ctx.newPage();
   await page.setExtraHTTPHeaders({ 'x-forwarded-proto': 'https', 'x-forwarded-for': nextAddress() });
   await page.clock.setFixedTime(DEMO_NOW);
+  if (shot.before) await shot.before(page);
   await page.goto(shot.path, { waitUntil: 'networkidle' });
   await page.addStyleTag({ content: '*, *::before, *::after { cursor: none !important; caret-color: transparent !important; }' });
   await page.evaluate(() => window.scrollTo(0, 0));

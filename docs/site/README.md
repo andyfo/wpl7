@@ -173,13 +173,14 @@ import ManagedInstall from '~/components/ManagedInstall.astro';
 ## Screenshots
 
 `scripts/shots.ts` is the one list of what exists: a name, the panel URL, what to open or fill
-in first, and whether a dark twin is taken. `scripts/shoot.ts` builds the panel's web app,
-starts its **demo world** (`panel/scripts/demo-world.ts`: fictional servers and sites over the
-test suite's fakes, no Docker, no network, see `panel/scripts/demo/README.md`), signs in once,
-and captures every shot at 1440×900 CSS pixels at 2× into `screens/<name>-<theme>.png`. Both
-clocks stand at the demo's instant, so two runs give the same bytes. Besides the shots, one
-Dashboard shot per other accent goes to `screens/marketing/`; `--marketing` takes the whole
-hero set in every accent and theme there.
+in first, and whether a dark twin is taken. A shot can also change what the demo world answers,
+for itself alone: the Dashboard shot leaves out the PHP card that way. `scripts/shoot.ts` builds
+the panel's web app, starts its **demo world** (`panel/scripts/demo-world.ts`: fictional servers
+and sites over the test suite's fakes, no Docker, no network, see `panel/scripts/demo/README.md`),
+signs in once, and captures every shot at 1440×900 CSS pixels at 2× into
+`screens/<name>-<theme>.png`. Both clocks stand at the demo's instant, so two runs give the same
+bytes. Besides the shots, one Dashboard shot per other accent goes to `screens/marketing/`;
+`--marketing` takes the whole hero set in every accent and theme there.
 
 ```bash
 npm run shoot -- --out .screens-local                   # every shot, for looking at

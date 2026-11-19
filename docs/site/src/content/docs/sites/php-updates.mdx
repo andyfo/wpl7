@@ -55,7 +55,7 @@ A server's new image comes from one of two places:
 - **An install that pulls its images** follows the published images of its release. A GitHub
   workflow rebuilds them when Docker's official WordPress image has a newer PHP. That is usually a
   few hours after php.net. On Mondays it rebuilds every image, and publishes those whose packages
-  changed.
+  changed. A rebuild is published only if it serves a PHP page.
 - **An install that builds its own** builds a new image on the server. It does so when php.net has
   a newer release and Docker's base image has changed, and on Mondays from 03:00 UTC. A build that
   changed no package is thrown away.

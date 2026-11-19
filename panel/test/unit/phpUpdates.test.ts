@@ -75,12 +75,13 @@ async function createSite(w: TestWorld): Promise<SiteRow> {
 }
 
 /** A site row, without a container: what the status and the emails count. */
-function siteRow(w: TestWorld, slug: string, release: string | null, phpVersion = '8.3') {
+function siteRow(w: TestWorld, slug: string, release: string | null, phpVersion = '8.3', serverId = 1) {
   const now = Date.now();
   return w.db
     .insert(sites)
     .values({
       slug,
+      serverId,
       title: slug.toUpperCase(),
       domains: JSON.stringify([`${slug}.example.org`]),
       phpVersion,
@@ -159,19 +160,23 @@ describe('an install that pulls its site images', () => {
     expect(new PhpUpdatesService(w.core, undefined, 'unknown').publishedImage('8.4')).toBe('ghcr.io/andyfo/wpl7/wordpress:php8.4-edge');
   });
 
-  it('says why a server could not be checked, and still plans the branches it could', async () => {
+  // What Docker 28 and dockerode say: neither is a tag the registry does not have.
+  it.each([
+    ['a registry it cannot reach', 500, 'server error - Get "https://registry.example.invalid/v2/": dial tcp: lookup registry.example.invalid: no such host'],
+    ['a registry that refuses it', 401, 'no such image - unauthorized: authentication required'],
+  ])('says why a server could not be checked, for %s, and still plans the branches it could', async (_, status, message) => {
     const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
     w.docker.images.add(siteImage('8.4'));
     w.docker.recordDigests = true;
     w.docker.publish(w.core.phpUpdates.publishedImage('8.3'), DIGEST('a'), { imageId: 'sha256:patched' });
     const distribution = w.docker.distribution.bind(w.docker);
     w.docker.distribution = async (ref, auth) => {
-      if (ref === w.core.phpUpdates.publishedImage('8.4')) throw new Error('(HTTP code 500) server error - Get "https://ghcr.io/v2/": dial tcp: i/o timeout');
+      if (ref === w.core.phpUpdates.publishedImage('8.4')) throw Object.assign(new Error(`(HTTP code ${status}) ${message} `), { statusCode: status });
       return distribution(ref, auth);
     };
     const result = await w.core.phpUpdates.tick();
     expect(result.error).toBe('Could not check local');
-    expect(w.core.phpUpdates.status().serverErrors).toEqual([{ serverId: 1, serverName: 'local', error: expect.stringContaining('i/o timeout') }]);
+    expect(w.core.phpUpdates.status().serverErrors).toEqual([{ serverId: 1, serverName: 'local', error: expect.stringContaining(message) }]);
     expect(JSON.parse(refreshJobs(w)[0]!.payload)).toMatchObject({ versions: ['8.3'] });
   });
 
@@ -276,6 +281,22 @@ describe('an install that builds its own site images', () => {
     vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61 * 60_000 });
     await w.core.phpUpdates.tick();
     expect(refreshJobs(w)).toHaveLength(2);
+  });
+
+  it('knows the base it built on when Docker pulled the same image again under a new digest', async () => {
+    const { w } = await building({ remoteBase: DIGEST('b'), localBase: DIGEST('a'), same: true });
+    const build = w.docker.buildImage.bind(w.docker);
+    w.docker.buildImage = async (tag, context, args, onProgress, opts) => {
+      await build(tag, context, args, onProgress, opts);
+      // The classic store lists both digests of the unchanged base, sorted: the old one first.
+      w.docker.imageDigests.set(`sha256:${baseImage('8.3')}`, [`wordpress@${DIGEST('a')}`, `wordpress@${DIGEST('b')}`]);
+    };
+    await w.core.phpUpdates.tick();
+    expect(await runJob(w, refreshJobs(w)[0]!.id)).toBe('succeeded');
+    // Its PHP is still behind php.net's, on the very base the registry names: nothing to build.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 31 * 60_000 });
+    await w.core.phpUpdates.tick();
+    expect(refreshJobs(w)).toHaveLength(1);
   });
 
   it("waits while Docker's base is the one the server has, and asks about it at most every half hour", async () => {
@@ -412,6 +433,59 @@ describe('what the Overview and the emails say', () => {
     expect(sent[1]!.body).toContain('Demo Site: PHP 8.3.36, http://panel.example.test/sites/demo-site');
   });
 
+  it.each([
+    ['its image is late', false],
+    ['this install gets it with a WPL7 update', true],
+  ])('emails nothing about the sites behind a release no server has an image of: %s', async (_, update) => {
+    const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
+    const sent = capture(w);
+    if (update) {
+      w.core.settings.setRaw('updates.latest', {
+        manifest: { version: '99.0.0', channel: 'stable', publishedAt: '', notesUrl: '', images: { panel: '', wordpress: {} } },
+        checkedAt: Date.now(),
+      });
+    }
+    expect(w.core.phpUpdates.status().updateNeeded).toBe(update);
+    siteRow(w, 'blog', '8.3.36');
+    w.docker.phpOf(siteImage('8.3'), '8.3.36');
+    await w.core.phpUpdates.tick();
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 25 * 3600_000 });
+    await w.core.phpUpdates.tick();
+    expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes']);
+  });
+
+  it('tells the sites waiting for an image on their server apart from those that did not move', async () => {
+    const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
+    const sent = capture(w);
+    const web2 = w.addSshServer('web2');
+    w.docker.phpOf(siteImage('8.3'), '8.3.37');
+    web2.docker.phpOf(siteImage('8.3'), '8.3.36');
+    siteRow(w, 'blog', '8.3.36');
+    siteRow(w, 'shop', '8.3.36', '8.3', web2.id);
+    siteRow(w, 'docs', '8.3.37');
+    await w.core.phpUpdates.tick();
+    // A server without the image keeps it waiting for a day.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 23 * 3600_000 });
+    await w.core.phpUpdates.tick();
+    expect(sent).toHaveLength(1);
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 2 * 3600_000 });
+    await w.core.phpUpdates.tick();
+    expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes', '2 sites still run an older PHP than 8.3.37']);
+    expect(sent[1]!.body).toBe(
+      [
+        '2 of 3 sites on PHP 8.3 still run an older release:',
+        '',
+        '  - BLOG: PHP 8.3.36, http://panel.example.test/sites/blog',
+        '',
+        "A site's page says why it did not move, and offers to try again.",
+        '',
+        '  - SHOP: PHP 8.3.36, http://panel.example.test/sites/shop',
+        '',
+        'web2 has no image with PHP 8.3.37 yet. Its sites move once it has one.',
+      ].join('\n'),
+    );
+  });
+
   it("does not call a rollout done while a site's PHP is not known", async () => {
     const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
     const sent = capture(w);
@@ -425,15 +499,25 @@ describe('what the Overview and the emails say', () => {
     expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes', 'All sites run PHP 8.3.37']);
   });
 
-  it('says when every site is on the newest release, for a day', async () => {
+  it('says when every site moved onto the newest release, for a day', async () => {
     const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
     const sent = capture(w);
-    siteRow(w, 'blog', '8.3.37');
+    const site = siteRow(w, 'blog', '8.3.36');
     w.docker.phpOf(siteImage('8.3'), '8.3.37');
+    await w.core.phpUpdates.tick();
+    w.db.update(sites).set({ phpRelease: '8.3.37' }).where(eq(sites.id, site.id)).run();
     await w.core.phpUpdates.tick();
     expect(w.core.phpUpdates.status().branches.find((b) => b.branch === '8.3')!.doneRecently).toBe(true);
     expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes', 'All sites run PHP 8.3.37']);
     vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 25 * 3600_000 });
+    expect(w.core.phpUpdates.status().branches.find((b) => b.branch === '8.3')!.doneRecently).toBe(false);
+  });
+
+  it('shows nothing done for sites that ran the newest release from the start, as after an install', async () => {
+    const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', '21 Oct 2026')).fetch });
+    siteRow(w, 'blog', '8.3.37');
+    w.docker.phpOf(siteImage('8.3'), '8.3.37');
+    await w.core.phpUpdates.tick();
     expect(w.core.phpUpdates.status().branches.find((b) => b.branch === '8.3')!.doneRecently).toBe(false);
   });
 });

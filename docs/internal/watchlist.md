@@ -683,13 +683,21 @@ for a reason; remove one once there is nothing left to watch.
   the classic store and nothing on containerd's. A list without the server's platform fails the pull.
   Docker 28.1.1 and 27.5.1.
 - **The problem:** app-updates asks the registry every interval instead of pulling, and the platform
-  check rests on what the answer says.
+  check rests on what the answer says. The PHP releases schedule asks it too, and tells a tag the
+  registry does not have (a branch its release does not publish) from a registry it cannot reach or
+  that refuses it. On 2026-11-19, Docker 28.1.1 answered the first with 404 `manifest unknown`, and an
+  unknown host or a refused repository with 500. dockerode words a 401 `no such image`.
 - **What we do about it:** `resolveDigest` and `pullPinned` in `panel/src/services/appImages.ts`. A single
   image's platform is checked after the pull. `test/engine/containerImages.test.ts` items 4 and 6.
+  `unpublished` in `panel/src/services/phpUpdates.ts` takes a 404 or `manifest unknown` alone.
 - **Check:** the Engine API changelog for `/distribution/{name}/json` and image pulls with
-  `X-Registry-Auth`. To measure: items 4 and 6 of the image engine test.
+  `X-Registry-Auth`. To measure: items 4 and 6 of the image engine test, and
+  `curl --unix-socket /var/run/docker.sock http://localhost/distribution/ghcr.io/andyfo/wpl7/wordpress:php7.4-0.4.0/json`
+  for a tag that does not exist.
 - **When it changes:** if the answer stops giving a digest, app-updates has to pull to compare. If it
-  gives a single image's platform on every store, the check can move before the pull.
+  gives a single image's platform on every store, the check can move before the pull. If a missing
+  tag stops answering 404, every branch a release does not publish shows as a server the PHP
+  releases schedule could not check: change `unpublished`.
 
 ## Docker: unprivileged ports from 0
 

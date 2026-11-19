@@ -760,7 +760,8 @@ export class FakeDocker implements DockerPort {
   async distribution(ref: string, auth?: RegistryAuth): Promise<DistributionInfo> {
     this.record('distribution', [ref, ...(auth ? [auth.username] : [])]);
     const entry = this.registryEntry(ref);
-    if (!entry) throw Object.assign(new Error(`(HTTP code 500) server error - ${ref}: manifest unknown`), { statusCode: 500 });
+    // As Docker 28 answers a tag the registry does not have, in dockerode's words.
+    if (!entry) throw Object.assign(new Error('(HTTP code 404) unexpected - manifest unknown '), { statusCode: 404 });
     this.registryLogin(entry, auth, ref);
     return { digest: entry.digest, mediaType: entry.mediaType ?? 'application/vnd.oci.image.manifest.v1+json', platforms: entry.platforms ?? [] };
   }

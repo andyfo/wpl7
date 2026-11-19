@@ -94,8 +94,11 @@ interface ServerImages {
   weeklyDone?: Record<string, number>;
   /** By branch: when the base image was last asked about. */
   baseCheckedAt?: Record<string, number>;
-  /** By branch: the digest of the base the last finished build was made on. */
-  builtBase?: Record<string, string>;
+  /**
+   * By branch: the base the last finished build was made on, by every digest Docker lists for it.
+   * The same image pulled again under a new digest has both, in no particular order.
+   */
+  builtBase?: Record<string, string[]>;
   /** Why the last look at the server failed; null when it worked. */
   error: string | null;
 }
@@ -103,7 +106,12 @@ interface ServerImages {
 interface ImagesState {
   /** By server id. */
   servers: Record<string, ServerImages>;
-  /** By release version: when the last site moved onto it. */
+  /**
+   * By release version: when a site was first seen on an older release. Only such a release gets a
+   * `doneAt`: sites that ran it from the start, as after an install, did not move.
+   */
+  behindAt: Record<string, number>;
+  /** By release version: when the last site moved onto it, for the Overview. */
   doneAt: Record<string, number>;
   /** By branch: when a refresh last gave a server a new image of it. */
   movedAt: Record<string, number>;
@@ -123,16 +131,24 @@ export function weekStart(now: number): number {
 /** A tag's branch: `wpl7-wordpress:php8.4` → 8.4. A build's own `-next` name is not one. */
 const branchOfTag = (tag: string) => /:php(\d+\.\d+)$/.exec(tag)?.[1] ?? null;
 
-/** The digest an image was pulled as, by the registry's name for it (`repo@sha256:…`). */
-const digestOf = (image: ImageSummary | undefined) => {
-  const name = image?.digests[0];
-  return name ? name.slice(name.indexOf('@') + 1) : null;
-};
+/**
+ * Every digest an image was pulled as, from the registry's names for it (`repo@sha256:…`). Docker's
+ * classic store keeps each one an unchanged image was pulled again under, sorted, not newest first.
+ */
+const digestsOf = (image: ImageSummary | undefined) => (image?.digests ?? []).map((name) => name.slice(name.indexOf('@') + 1));
 
 const hasDigest = (image: ImageSummary | undefined, digest: string) => (image?.digests ?? []).some((d) => d.endsWith(`@${digest}`));
 
-/** A registry's "no such tag": a branch the release does not publish, not a failure. */
-const unpublished = (err: unknown) => /manifest unknown|not found|no such/i.test(errorText(err));
+/**
+ * A registry's "no such tag": a branch the release does not publish, not a failure. Docker answers
+ * it with a 404 (`manifest unknown`); a registry it cannot reach or that refuses it is a 500, and a
+ * 401 reads `no such image` in dockerode's words. Those are failures, and said.
+ */
+const unpublished = (err: unknown) =>
+  (err as { statusCode?: unknown } | null)?.statusCode === 404 || /manifest unknown/i.test(errorText(err));
+
+/** A site on an older release than `version`. One whose release is not known yet is not. */
+const behindOf = (release: string | null, version: string) => !!release && compareVersions(release, version) < 0;
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -168,13 +184,22 @@ export class PhpUpdatesService {
 
   private state(): ImagesState {
     const raw = this.s.settings.getRaw(STATE_KEY) as Partial<ImagesState> | undefined;
-    return { servers: { ...raw?.servers }, doneAt: { ...raw?.doneAt }, movedAt: { ...raw?.movedAt } };
+    return { servers: { ...raw?.servers }, behindAt: { ...raw?.behindAt }, doneAt: { ...raw?.doneAt }, movedAt: { ...raw?.movedAt } };
   }
 
   private change(fn: (state: ImagesState) => void): void {
     const state = this.state();
     fn(state);
     this.s.settings.setRaw(STATE_KEY, state);
+  }
+
+  /** Note when a release was first behind, or done: in `state` as read, and as stored. */
+  private mark(state: ImagesState, field: 'behindAt' | 'doneAt', version: string, at: number): void {
+    state[field][version] = at;
+    this.change((s) => {
+      // The newest few: nothing reads the rest.
+      s[field] = Object.fromEntries(Object.entries({ ...s[field], [version]: at }).sort((a, b) => b[1] - a[1]).slice(0, 12));
+    });
   }
 
   private saveServer(serverId: number, change: (row: ServerImages) => ServerImages): void {
@@ -303,12 +328,12 @@ export class PhpUpdatesService {
     // The base each branch was last built on. Until a build here records one, the base the server
     // has now, taken once: a failed build may pull a newer base, and must not pass for a finished one.
     const built = { ...row?.builtBase };
-    const unknown = versions.filter((v) => !built[v]);
+    const unknown = versions.filter((v) => !built[v]?.length);
     if (unknown.length > 0) {
       const images = await docker.listImages();
       for (const v of unknown) {
-        const digest = digestOf(images.find((image) => image.tags.includes(baseImage(v))));
-        if (digest) built[v] = digest;
+        const digests = digestsOf(images.find((image) => image.tags.includes(baseImage(v))));
+        if (digests.length > 0) built[v] = digests;
       }
     }
     const stale: string[] = [];
@@ -326,7 +351,7 @@ export class PhpUpdatesService {
         problems.push(`${baseImage(v)}: ${errorText(err)}`);
         continue;
       }
-      if (built[v] !== digest) stale.push(v);
+      if (!built[v]?.includes(digest)) stale.push(v);
     }
     this.saveServer(server.id, (r) => ({ ...r, baseCheckedAt: checked, builtBase: { ...built, ...r.builtBase } }));
     return { versions: [...weekly, ...stale], reason: weekly.length > 0 ? 'weekly' : 'php', problems };
@@ -439,8 +464,8 @@ export class PhpUpdatesService {
       const id = await docker.imageId(candidate);
       if (!id) throw new Error('The build finished, but Docker has no image by its name.');
       // Built on this base, whatever comes of the build: a PHP rebuild waits for the next one.
-      const base = digestOf((await docker.listImages()).find((image) => image.tags.includes(baseImage(version))));
-      if (base) this.saveServer(serverId, (row) => ({ ...row, builtBase: { ...row.builtBase, [version]: base } }));
+      const base = digestsOf((await docker.listImages()).find((image) => image.tags.includes(baseImage(version))));
+      if (base.length > 0) this.saveServer(serverId, (row) => ({ ...row, builtBase: { ...row.builtBase, [version]: base } }));
       if (await this.sameContents(ctx, docker, candidate, siteImage(version))) {
         ctx.info(`Nothing in ${siteImage(version)} changed: it stays as it is.`);
         return false;
@@ -500,7 +525,8 @@ export class PhpUpdatesService {
   /**
    * Remember when each branch's newest release reached its last site, and tell how a security
    * release went, once its sites had their chance: every site on it, or the ones still behind.
-   * A release that some server never gets an image of is told as it stands after a day.
+   * A release that some server never gets an image of is told as it stands after a day. One that
+   * no server has an image of is not: no site could move, and the Overview says why.
    */
   private async settleRollouts(): Promise<void> {
     const status = this.status();
@@ -508,25 +534,39 @@ export class PhpUpdatesService {
     const now = Date.now();
     for (const branch of status.branches) {
       const latest = branch.latest;
-      if (!latest || branch.sites === 0 || branch.updating) continue;
+      if (!latest || branch.sites === 0) continue;
+      if (branch.behindCount > 0 && !state.behindAt[latest.version]) this.mark(state, 'behindAt', latest.version, now);
+      if (branch.updating) continue;
       const has = (release: string | null) => release !== null && compareVersions(release, latest.version) >= 0;
-      const everywhere = branch.images.length > 0 && branch.images.every((i) => has(i.release));
+      const ready = new Set(branch.images.filter((i) => has(i.release)).map((i) => i.serverId));
+      const everywhere = branch.images.length > 0 && ready.size === branch.images.length;
       if (!everywhere && now - latest.seenAt < SETTLE_ANYWAY_MS) continue;
       if (branch.behindCount === 0) {
         // A site whose release is not known yet is not done: it waits, and so does the email.
         if (branch.current < branch.sites) continue;
-        if (!state.doneAt[latest.version]) {
-          this.change((s) => {
-            s.doneAt[latest.version] = now;
-            // The newest few: nothing reads the rest.
-            s.doneAt = Object.fromEntries(Object.entries(s.doneAt).sort((a, b) => b[1] - a[1]).slice(0, 12));
-          });
-        }
-      } else if (now - (state.movedAt[branch.branch] ?? latest.seenAt) < STUCK_AFTER_MS) {
+        // On the Overview only once sites moved onto it: not for sites that ran it from the start.
+        if (state.behindAt[latest.version] && !state.doneAt[latest.version]) this.mark(state, 'doneAt', latest.version, now);
+        if (latest.security) await this.s.alerts.phpRolloutDone(latest.version, branch.sites);
         continue;
       }
-      if (latest.security) await this.s.alerts.phpRollout(latest.version, branch.sites, branch.behind, branch.behindCount);
+      if (ready.size === 0 || now - (state.movedAt[branch.branch] ?? latest.seenAt) < STUCK_AFTER_MS) continue;
+      if (latest.security) await this.tellBehind(latest.version, branch.branch, branch.sites, ready);
     }
+  }
+
+  /** Email the sites still behind a security release: those whose server has its image, and those whose has not. */
+  private async tellBehind(version: string, branch: string, total: number, ready: Set<number>): Promise<void> {
+    const behind = this.siteRows().filter((r) => r.phpVersion === branch && behindOf(r.phpRelease, version));
+    const listed = (rows: SiteRow[]) => ({
+      sites: rows.slice(0, BEHIND_LISTED).map((r) => ({ slug: r.slug, title: r.title, release: r.phpRelease })),
+      count: rows.length,
+    });
+    const waiting = behind.filter((r) => !ready.has(r.serverId));
+    const servers = this.s.servers.listRows().filter((server) => waiting.some((r) => r.serverId === server.id));
+    await this.s.alerts.phpRolloutBehind(version, total, listed(behind.filter((r) => ready.has(r.serverId))), {
+      ...listed(waiting),
+      servers: servers.map((server) => server.name),
+    });
   }
 
   /** What the Overview card and `GET /api/php` show. */
@@ -560,7 +600,7 @@ export class PhpUpdatesService {
         const latest = facts.releases[branch] ?? null;
         const mine = rows.filter((r) => r.phpVersion === branch);
         // A site whose release is not known yet, or that has no container, is neither behind nor current.
-        const behind = latest ? mine.filter((r) => r.phpRelease && compareVersions(r.phpRelease, latest.version) < 0) : [];
+        const behind = latest ? mine.filter((r) => behindOf(r.phpRelease, latest.version)) : [];
         const current = latest ? mine.filter((r) => r.phpRelease && compareVersions(r.phpRelease, latest.version) >= 0).length : 0;
         const doneAt = latest ? (state.doneAt[latest.version] ?? null) : null;
         // The servers whose image matters: those with sites on the branch.

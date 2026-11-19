@@ -5,8 +5,8 @@
 #   plan                      which images to rebuild: JSON for the build matrix
 #   php <image>               the PHP release in an image's linux/amd64 build
 #   check <built> <published> <published PHP>
-#                             whether the build is worth pushing: a newer PHP, or a package
-#                             or a PHP extension that changed
+#                             whether the build serves a page, and is worth pushing: a newer
+#                             PHP, or a package or a PHP extension that changed
 #   push <built> <published> <published digest>
 #                             push, unless the published image changed since the plan
 #
@@ -62,6 +62,32 @@ php_of() {
 
 fingerprint() {
   docker run --rm --network none --entrypoint sh "$1" -c "$FINGERPRINT"
+}
+
+# Starts the image as a site's container starts, without the panel's files, and asks it for a PHP
+# file: nginx, Apache and PHP-FPM all have to answer. An image that does not would reach every
+# install, and every site's move onto it would roll back.
+serves() {
+  local built=$1 php=$2 root cid port out=''
+  root="$(mktemp -d)"
+  printf '<?php echo "ok ", PHP_VERSION;' >"$root/wpl7-check.php"
+  chmod -R a+rX "$root"
+  cid="$(docker run -d -v "$root:/var/www/html:ro" -p 127.0.0.1::8080 "$built")"
+  port="$(docker port "$cid" 8080/tcp 2>/dev/null | sed -n '1s/.*://p')" || true
+  for _ in $(seq 60); do
+    # The first page it serves is its answer. Until then, one that stopped will not give one.
+    out="$(curl -fsS -m 2 "http://127.0.0.1:$port/wpl7-check.php" 2>/dev/null)" && break
+    out=''
+    [ "$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null)" = true ] || break
+    sleep 1
+  done
+  if [ "$out" != "ok $php" ]; then
+    docker logs --tail 30 "$cid" >&2 || true
+    docker rm -f "$cid" >/dev/null
+    die "The build does not serve a PHP page${out:+: it answered \"$out\"}."
+  fi
+  docker rm -f "$cid" >/dev/null
+  echo "It serves a PHP page."
 }
 
 # The release's manifest, as update.sh reads it: its commit and its site images.
@@ -136,6 +162,7 @@ check() {
   for ext in redis mysqli pdo_mysql; do
     grep -qx "$ext" <<<"$mods" || die "The build has no PHP extension $ext."
   done
+  serves "$built" "$php"
   if newer "$php" "$current"; then
     echo "PHP $current -> $php: pushed."
     echo "push=true" >>"${GITHUB_OUTPUT:-/dev/stdout}"

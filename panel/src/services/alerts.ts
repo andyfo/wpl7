@@ -521,27 +521,54 @@ export class AlertService {
     }
   }
 
-  /**
-   * How a security release's move went, for a release told by `phpReleases`: the sites still
-   * behind once they had their chance, and that every site made it. Each once.
-   */
-  async phpRollout(version: string, total: number, behind: { slug: string; title: string; release: string | null }[], behindCount: number): Promise<void> {
+  /** That every site on a security release's branch runs it, for a release told by `phpReleases`. Once. */
+  async phpRolloutDone(version: string, total: number): Promise<void> {
     if (!this.said(`php-release:${version}`)) return;
-    if (behindCount === 0) {
-      await this.once(`php-rollout-done:${version}`, () => [`All sites run PHP ${version}`, [`Every site on its branch runs PHP ${version} now: ${total} in all.`]]);
-      return;
-    }
+    await this.once(`php-rollout-done:${version}`, () => [`All sites run PHP ${version}`, [`Every site on its branch runs PHP ${version} now: ${total} in all.`]]);
+  }
+
+  /**
+   * The sites still on an older release than a security release told by `phpReleases`, once they
+   * had their chance. `stuck` are on a server whose image has it: their move did not happen, or did
+   * not take. `waiting` are on servers that have no such image yet. Once.
+   */
+  async phpRolloutBehind(version: string, total: number, stuck: PhpSitesBehind, waiting: PhpSitesBehind & { servers: string[] }): Promise<void> {
+    if (!this.said(`php-release:${version}`)) return;
+    const count = stuck.count + waiting.count;
+    if (count === 0) return;
     await this.once(`php-rollout-behind:${version}`, () => {
       const base = panelUrl(this.s.config);
       const branch = /^\d+\.\d+/.exec(version)?.[0] ?? version;
-      const lines = [
-        `${behindCount} of ${total} ${total === 1 ? 'site' : 'sites'} on PHP ${branch} still ${behindCount === 1 ? 'runs' : 'run'} an older release:`,
-        '',
+      const list = (group: PhpSitesBehind) => [
+        ...group.sites.map((site) => `  - ${site.title}: PHP ${site.release ?? 'unknown'}${base ? `, ${base}/sites/${site.slug}` : ''}`),
+        ...(group.count > group.sites.length ? [`  - and ${group.count - group.sites.length} more`] : []),
       ];
-      for (const site of behind) lines.push(`  - ${site.title}: PHP ${site.release ?? 'unknown'}${base ? `, ${base}/sites/${site.slug}` : ''}`);
-      if (behindCount > behind.length) lines.push(`  - and ${behindCount - behind.length} more`);
-      lines.push('', "A site's page says why it did not move, and offers to try again.");
-      return [`${behindCount} ${behindCount === 1 ? 'site still runs' : 'sites still run'} an older PHP than ${version}`, lines];
+      const one = waiting.servers.length === 1;
+      const groups: string[][] = [];
+      if (stuck.count > 0) groups.push([...list(stuck), '', "A site's page says why it did not move, and offers to try again."]);
+      if (waiting.count > 0) {
+        const servers = waiting.servers.length > 0 ? `${andList(waiting.servers)} ${one ? 'has' : 'have'}` : 'Their servers have';
+        groups.push([...list(waiting), '', `${servers} no image with PHP ${version} yet. ${one ? 'Its sites move once it has one' : 'Their sites move once they have one'}.`]);
+      }
+      return [
+        `${count} ${count === 1 ? 'site still runs' : 'sites still run'} an older PHP than ${version}`,
+        [
+          `${count} of ${total} ${total === 1 ? 'site' : 'sites'} on PHP ${branch} still ${count === 1 ? 'runs' : 'run'} an older release:`,
+          '',
+          ...groups.flatMap((group, i) => (i > 0 ? ['', ...group] : group)),
+        ],
+      ];
     });
   }
+}
+
+/** Sites on an older PHP than a release, as an email lists them: the first few, and how many in all. */
+export interface PhpSitesBehind {
+  sites: { slug: string; title: string; release: string | null }[];
+  count: number;
+}
+
+/** "web1", "web1 and web2", "web1, web2 and web3". */
+function andList(names: string[]): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : (names[0] ?? '');
 }
