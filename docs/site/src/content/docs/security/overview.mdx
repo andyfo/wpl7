@@ -103,8 +103,8 @@ stored page never reaches it.
 
 A site's PHP comes from its site image. <Since v="0.4.1" /> When PHP publishes a patch release, each
 server gets a new image with it, and the panel rebuilds every site container on it. See
-[PHP updates](/docs/sites/php-updates/). The site image does not build on a PHP older than the last
-security release of its branch.
+[PHP updates](/docs/sites/php-updates/). The site image also refuses to build on a PHP older than
+the floor set for its branch, which is raised after each security release.
 
 ## The panel is root-equivalent
 

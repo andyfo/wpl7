@@ -60,9 +60,9 @@ describe('the PHP card', () => {
     ]);
     expect(phpLines(data([waiting], { updateNeeded: true }), NOW)).toMatchObject([{ text: 'PHP 8.4.28 is out. Update WPL7 to get it.', update: true }]);
     expect(phpLines(data([branch({ ...behind, updating: true })]), NOW)).toMatchObject([{ tone: 'updating', text: 'Updating sites to PHP 8.4.28: 5 of 12' }]);
-    // One server has it, another not yet: still on its way.
+    // One server has it, another not, and nothing is moving: the sites behind are named.
     const half = branch({ ...behind, images: [{ serverId: 1, serverName: 'fra1', release: '8.4.28' }, { serverId: 2, serverName: 'nyc1', release: '8.4.27' }] });
-    expect(phpLines(data([half]), NOW)).toMatchObject([{ tone: 'updating' }]);
+    expect(phpLines(data([half]), NOW)).toMatchObject([{ tone: 'behind', sites: behind.behind }]);
     expect(phpLines(data([branch(behind)]), NOW)).toMatchObject([
       { tone: 'behind', text: '7 of 12 sites still on an older PHP than 8.4.28', sites: behind.behind, more: 6 },
     ]);

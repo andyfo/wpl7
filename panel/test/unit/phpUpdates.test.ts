@@ -9,7 +9,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { jobs, sites, type SiteRow } from '../../src/db/schema.js';
 import { PHP_ACTIVE_URL, PHP_ADVISORIES_URL, PHP_CANDIDATES_URL, PHP_NEWS_URL } from '../../src/services/phpUpstream.js';
-import { baseImage, imagesLane, weekStart } from '../../src/services/phpUpdates.js';
+import { PhpUpdatesService, baseImage, imagesLane, weekStart } from '../../src/services/phpUpdates.js';
+import { imagesToRemove } from '../../src/services/dockerCleanup.js';
 import { siteImage, sitePaths } from '../../src/services/siteSpec.js';
 import { makeWorld, waitFor, type TestWorld } from '../helpers.js';
 import { ACTIVE, ADVISORIES, CANDIDATES, NOTICE, feed, phpNet, release } from '../phpFixtures.js';
@@ -150,6 +151,61 @@ describe('an install that pulls its site images', () => {
     expect(w.core.phpUpdates.status().serverErrors).toEqual([]);
   });
 
+  it('follows, on edge, the images of the commit it runs, not the moving edge tag', async () => {
+    const w = await makeWorld({ env: { WPL7_CHANNEL: 'edge', WPL7_IMAGE_TAG: 'edge' } });
+    const php = new PhpUpdatesService(w.core, undefined, '0123456789abcdef0123456789abcdef01234567');
+    expect(php.publishedImage('8.4')).toBe('ghcr.io/andyfo/wpl7/wordpress:php8.4-sha-0123456');
+    // A build that does not know its commit falls back to the edge tag.
+    expect(new PhpUpdatesService(w.core, undefined, 'unknown').publishedImage('8.4')).toBe('ghcr.io/andyfo/wpl7/wordpress:php8.4-edge');
+  });
+
+  it('says why a server could not be checked, and still plans the branches it could', async () => {
+    const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
+    w.docker.images.add(siteImage('8.4'));
+    w.docker.recordDigests = true;
+    w.docker.publish(w.core.phpUpdates.publishedImage('8.3'), DIGEST('a'), { imageId: 'sha256:patched' });
+    const distribution = w.docker.distribution.bind(w.docker);
+    w.docker.distribution = async (ref, auth) => {
+      if (ref === w.core.phpUpdates.publishedImage('8.4')) throw new Error('(HTTP code 500) server error - Get "https://ghcr.io/v2/": dial tcp: i/o timeout');
+      return distribution(ref, auth);
+    };
+    const result = await w.core.phpUpdates.tick();
+    expect(result.error).toBe('Could not check local');
+    expect(w.core.phpUpdates.status().serverErrors).toEqual([{ serverId: 1, serverName: 'local', error: expect.stringContaining('i/o timeout') }]);
+    expect(JSON.parse(refreshJobs(w)[0]!.payload)).toMatchObject({ versions: ['8.3'] });
+  });
+
+  it('waits an hour after a refresh that failed before it tries again', async () => {
+    const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
+    w.docker.publish(w.core.phpUpdates.publishedImage('8.3'), DIGEST('a'), { imageId: 'sha256:patched' });
+    w.docker.pullImage = async () => {
+      throw new Error('no space left on device');
+    };
+    await w.core.phpUpdates.tick();
+    expect(await runJob(w, refreshJobs(w)[0]!.id)).toBe('failed');
+    await w.core.phpUpdates.tick();
+    expect(refreshJobs(w)).toHaveLength(1);
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61 * 60_000 });
+    await w.core.phpUpdates.tick();
+    expect(refreshJobs(w)).toHaveLength(2);
+  });
+
+  it("leaves the image an update brought while the pull ran", async () => {
+    const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
+    const ref = w.core.phpUpdates.publishedImage('8.3');
+    w.docker.publish(ref, DIGEST('a'), { imageId: 'sha256:patched' });
+    const pull = w.docker.pullImage.bind(w.docker);
+    w.docker.pullImage = async (tag, onProgress, opts) => {
+      await pull(tag, onProgress, opts);
+      // update.sh retags the site image to its new release's meanwhile.
+      w.docker.imageIds.set(siteImage('8.3'), 'sha256:next-release');
+    };
+    await w.core.phpUpdates.tick();
+    expect(await runJob(w, refreshJobs(w)[0]!.id)).toBe('succeeded');
+    expect(await w.docker.imageId(siteImage('8.3'))).toBe('sha256:next-release');
+    expect(reconciles(w)).toHaveLength(0);
+  });
+
   it("tells an install on an older release that a WPL7 update brings the new PHP", async () => {
     const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
     expect(w.core.phpUpdates.status().updateNeeded).toBe(false);
@@ -204,6 +260,22 @@ describe('an install that builds its own site images', () => {
     expect(await w.docker.imageId(siteImage('8.3'))).toBe(`sha256:${siteImage('8.3')}`);
     expect(reconciles(w)).toHaveLength(0);
     expect(w.docker.images.has(`${siteImage('8.3')}-next`)).toBe(false);
+  });
+
+  it('tries a build again after one that failed, though it pulled the new base', async () => {
+    const { w } = await building({ remoteBase: DIGEST('b'), localBase: DIGEST('a') });
+    w.docker.buildFails = 'E: Failed to fetch http://deb.debian.org/debian/pool/main/a/apache2/apache2_2.4.71.deb';
+    await w.core.phpUpdates.tick();
+    const [first] = refreshJobs(w);
+    expect(JSON.parse(first!.payload)).toMatchObject({ reason: 'php' });
+    // The build pulled the new base before its apt step failed.
+    w.docker.imageDigests.set(`sha256:${baseImage('8.3')}`, [`wordpress@${DIGEST('b')}`]);
+    expect(await runJob(w, first!.id)).toBe('failed');
+    expect(w.docker.calls.find((c) => c.method === 'buildImage')!.args[3]).toEqual({ noCache: true });
+    w.docker.buildFails = null;
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 61 * 60_000 });
+    await w.core.phpUpdates.tick();
+    expect(refreshJobs(w)).toHaveLength(2);
   });
 
   it("waits while Docker's base is the one the server has, and asks about it at most every half hour", async () => {
@@ -283,7 +355,7 @@ describe('what the Overview and the emails say', () => {
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-20T21:00:00Z') });
     await w.core.phpUpdates.tick();
     await w.core.phpUpdates.tick();
-    expect(sent.map((m) => m.subject)).toEqual(['PHP security release on Wed 21 Oct 2026, 14:00 UTC']);
+    expect(sent.map((m) => m.subject)).toEqual(['PHP security release on Wed 21 Oct, 14:00 UTC']);
     expect(w.core.phpUpdates.status().notice?.scheduledAt).toBe(Date.parse('2026-10-21T14:00:00Z'));
     // A day after the time it named, it is gone.
     vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-22T14:01:00Z') });
@@ -327,5 +399,24 @@ describe('what the Overview and the emails say', () => {
     expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes', 'All sites run PHP 8.3.37']);
     vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 25 * 3600_000 });
     expect(w.core.phpUpdates.status().branches.find((b) => b.branch === '8.3')!.doneRecently).toBe(false);
+  });
+});
+
+describe("what the nightly clean-up does with Docker's old bases", () => {
+  const image = (id: string, tags: string[], digests: string[]) => ({ id, tags, digests, created: 0 });
+  it('removes a base no name points at any more, and leaves a tagged one alone', () => {
+    const plan = imagesToRemove({
+      images: [
+        image('sha256:old', [], ['wordpress@sha256:aaa']),
+        image('sha256:current', ['wordpress:php8.4-fpm'], ['wordpress@sha256:bbb']),
+        image('sha256:mine', ['wordpress:latest'], ['wordpress@sha256:ccc']),
+      ],
+      inUse: new Set(),
+      needed: new Set(),
+      repos: new Set(['wpl7-wordpress']),
+      panelRepos: new Set(),
+      untaggedRepos: new Set(['wordpress', 'docker.io/library/wordpress']),
+    });
+    expect(plan.map((i) => i.id)).toEqual(['sha256:old']);
   });
 });

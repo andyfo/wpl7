@@ -706,10 +706,13 @@ export class FakeDocker implements DockerPort {
   async imageTags(repository: string): Promise<string[]> {
     return [...this.images].filter((tag) => tag.startsWith(`${repository}:`));
   }
-  async buildImage(tag: string, contextDir: string, buildArgs: Record<string, string>): Promise<void> {
-    this.record('buildImage', [tag, contextDir, buildArgs]);
+  async buildImage(tag: string, contextDir: string, buildArgs: Record<string, string>, _onProgress?: (line: string) => void, opts: { noCache?: boolean } = {}): Promise<void> {
+    this.record('buildImage', [tag, contextDir, buildArgs, ...(opts.noCache ? [{ noCache: true }] : [])]);
+    if (this.buildFails) throw new Error(this.buildFails);
     this.images.add(tag);
   }
+  /** Set to have every build fail with this message. */
+  buildFails: string | null = null;
   async pullImage(tag: string, _onProgress?: (line: string) => void, opts: { auth?: RegistryAuth; platform?: string } = {}): Promise<void> {
     this.record('pullImage', [tag, ...(opts.auth || opts.platform ? [{ ...(opts.auth ? { auth: opts.auth.username } : {}), ...(opts.platform ? { platform: opts.platform } : {}) }] : [])]);
     const entry = this.registryEntry(tag);

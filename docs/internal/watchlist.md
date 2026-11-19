@@ -261,7 +261,9 @@ for a reason; remove one once there is nothing left to watch.
 - **When it changes:**
   - **A security release:** within a day, check that the published images carry it (the line
     above) and that the sites of an install on the newest release moved. Raise that branch's
-    floor in the Dockerfile in a pull request of its own. No release has to wait for it.
+    floor in the Dockerfile in a pull request of its own. An install whose panel predates the
+    `php-releases` schedule never pulls a refreshed image: until every install runs a release
+    that has it, cut a release too, as before.
   - **A shape the panel reads:** fix `phpUpstream.ts` and the fixtures. Until then the schedule
     fails or the card misses a notice, while servers still follow the published images.
   - **The workflow failing or turned off:** fix it, or run it by hand (**Run workflow**). Until

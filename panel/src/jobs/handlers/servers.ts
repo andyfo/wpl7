@@ -9,7 +9,7 @@ import type { CoreServices } from '../../services/index.js';
 import type { JobContext } from '../context.js';
 import { PluginSyncService } from '../../services/pluginSync.js';
 import { CLOUDFLARE } from '../../services/dns.js';
-import { hasOwnLimits, limitsChange, NO_OWN_LIMITS, siteRuntimeFrom, type SiteRuntime } from '../../services/siteSpec.js';
+import { hasOwnLimits, limitsChange, NO_OWN_LIMITS, releaseImageTag, siteRuntimeFrom, type SiteRuntime } from '../../services/siteSpec.js';
 import { fitCpus } from '../../services/docker.js';
 import { ServerUnreachableError, SshConnection } from '../../servers/sshConnection.js';
 import { shellQuote } from '../../servers/sshExec.js';
@@ -218,7 +218,7 @@ export function releaseIdentity(config: CoreServices['config']): string {
     // The tag is not the version on edge, where every build is published as the moving
     // `edge` while calling itself 0.3.0-edge.<commit>. .env normally says so outright; the
     // fallback is the same rule update.sh applies when it writes it.
-    `WPL7_IMAGE_TAG=${config.imageTag || (config.channel === 'edge' ? 'edge' : PANEL_VERSION)}`,
+    `WPL7_IMAGE_TAG=${releaseImageTag(config)}`,
     `WPL7_CHANNEL=${config.channel}`,
     `WPL7_REPO=${config.updateRepo}`,
   ];

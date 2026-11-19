@@ -55,6 +55,11 @@ export interface ImagePlanInput {
   repos: Set<string>;
   /** The panel's own repositories, among `repos`. */
   panelRepos: Set<string>;
+  /**
+   * Repositories whose images are WPL7's only once no tag names them: Docker's base images a
+   * server that builds its own pulled and moved off. Tagged ones may be the operator's.
+   */
+  untaggedRepos?: Set<string>;
 }
 
 /** The images to remove, by the rules above. */
@@ -68,12 +73,15 @@ export function imagesToRemove(input: ImagePlanInput): ImageSummary[] {
   return unused.filter((image) => {
     if (image === rollback) return false;
     const repos = reposOf(image);
-    return [...repos].every((repo) => input.repos.has(repo));
+    return [...repos].every((repo) => input.repos.has(repo) || (image.tags.length === 0 && (input.untaggedRepos?.has(repo) ?? false)));
   });
 }
 
 /** What the panel needs on this server, and where its images come from. */
-async function needsOn(s: CoreServices, handle: ServerHandle): Promise<{ needed: string[]; repos: string[]; panelRepos: string[] }> {
+async function needsOn(
+  s: CoreServices,
+  handle: ServerHandle,
+): Promise<{ needed: string[]; repos: string[]; panelRepos: string[]; untaggedRepos: string[] }> {
   const { config } = s;
   const offered = s.settings.get('phpVersions');
   const running = s.db
@@ -99,8 +107,11 @@ async function needsOn(s: CoreServices, handle: ServerHandle): Promise<{ needed:
     `ghcr.io/${config.updateRepo.toLowerCase()}/panel`,
     ...(panelRef ? [repositoryOf(panelRef)] : []),
   ];
+  const branches = [...new Set([...offered, ...running])];
   const needed = [
-    ...[...new Set([...offered, ...running])].map(siteImage),
+    ...branches.map(siteImage),
+    // A build of the PHP releases schedule under its own name, until it is kept or thrown away.
+    ...branches.map((v) => `${siteImage(v)}-next`),
     // During an update the release's images are pulled before they get their local names.
     ...(config.imageTag ? offered.flatMap((v) => wordpressRepos.map((repo) => `${repo}:php${v}-${config.imageTag}`)) : []),
     ...stack.values(),
@@ -127,7 +138,10 @@ async function needsOn(s: CoreServices, handle: ServerHandle): Promise<{ needed:
     // image while it ran, and on some paths left on it: the image goes once nothing uses it.
     'wpl7-rollback',
   ];
-  return { needed, repos, panelRepos };
+  // A server that builds its own site images pulls Docker's base again for every build
+  // (services/phpUpdates.ts), and each pull leaves the base it replaced without a name.
+  const untaggedRepos = config.source === 'build' ? ['wordpress', 'docker.io/library/wordpress'] : [];
+  return { needed, repos, panelRepos, untaggedRepos };
 }
 
 const isConflict = (err: unknown) => typeof err === 'object' && err !== null && (err as { statusCode?: number }).statusCode === 409;
@@ -161,14 +175,14 @@ async function removeFrom(s: CoreServices, handle: ServerHandle, log: Housekeepi
   const { docker } = handle;
   const images = await docker.listImages();
   const inUse = new Set(await docker.containerImageIds());
-  const { needed: neededRefs, repos, panelRepos } = await needsOn(s, handle);
+  const { needed: neededRefs, repos, panelRepos, untaggedRepos } = await needsOn(s, handle);
   const needed = new Set<string>();
   for (const ref of new Set(neededRefs)) {
     const id = await docker.imageId(ref);
     if (id) needed.add(id);
   }
   const removed: string[] = [];
-  for (const image of imagesToRemove({ images, inUse, needed, repos: new Set(repos), panelRepos: new Set(panelRepos) })) {
+  for (const image of imagesToRemove({ images, inUse, needed, repos: new Set(repos), panelRepos: new Set(panelRepos), untaggedRepos: new Set(untaggedRepos) })) {
     try {
       // By each of its names: Docker refuses to remove an image with two by its id. The last
       // one to go takes the image with it.

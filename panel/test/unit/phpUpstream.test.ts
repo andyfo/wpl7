@@ -3,7 +3,7 @@
  * candidates, the advance notice in its news feed and GitHub's advisories, read as they are
  * published, and kept when a read fails.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   PHP_ACTIVE_URL,
   PHP_ADVISORIES_URL,
@@ -84,6 +84,10 @@ describe("php.net's answers, read", () => {
 });
 
 describe('reading php.net', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const answers = () => ({
     [PHP_ACTIVE_URL]: { status: 200, body: ACTIVE },
     [PHP_CANDIDATES_URL]: { status: 200, body: CANDIDATES },
@@ -133,6 +137,26 @@ describe('reading php.net', () => {
     // Not again within the hour.
     expect(net.calls.filter((c) => c.url === PHP_ADVISORIES_URL)).toHaveLength(1);
     expect(net.calls.find((c) => c.url === PHP_ADVISORIES_URL)!.headers.authorization).toBe('Bearer ghp_token');
+  });
+
+  it('asks again for the advisories of a security release GitHub has not published yet', async () => {
+    // The day of the release, before GitHub published its advisories.
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-21T01:00:00Z') });
+    const w = await makeWorld();
+    const script: Record<string, Answer> = { ...answers(), [PHP_ADVISORIES_URL]: { status: 200, body: ADVISORIES.slice(2) } };
+    const net = phpNet(script);
+    const upstream = new PhpUpstream(w.core.settings, w.core.log, net.fetch);
+    await upstream.refresh();
+    expect(upstream.facts().advisories['8.4.27']).toMatchObject({ error: null, items: [] });
+    script[PHP_ADVISORIES_URL] = { status: 200, body: ADVISORIES };
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-21T14:00:00Z') });
+    await upstream.refresh();
+    expect(upstream.facts().advisories['8.4.27']?.items.map((a) => a.severity)).toEqual(['critical', 'critical']);
+    // Once known, not asked again.
+    await upstream.refresh();
+    expect(net.calls.filter((c) => c.url === PHP_ADVISORIES_URL)).toHaveLength(2);
+    // Only each branch's current release is kept.
+    expect(Object.keys(upstream.facts().advisories).sort()).toEqual(['8.3.36', '8.4.27', '8.5.12']);
   });
 
   it('keeps what it had when php.net cannot be read, and says why', async () => {

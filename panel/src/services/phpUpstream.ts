@@ -35,8 +35,6 @@ const REQUEST_TIMEOUT_MS = 20_000;
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 /** A failed advisory lookup is tried again this long after. */
 const ADVISORY_RETRY_MS = 60 * 60_000;
-/** Advisories kept, by release: the newest few, which is all a page or an email shows. */
-const ADVISORY_RELEASES_KEPT = 12;
 const DAY_MS = 24 * 3600_000;
 
 export interface PhpRelease {
@@ -201,10 +199,14 @@ const textOf = (html: string) => decode(html.replace(/<[^>]+>/g, ' ')).replace(/
 export function noticeSchedule(text: string): { at: number; time: boolean } | null {
   const day = String.raw`(?:(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day,?\s+)?`;
   const time = String.raw`(?:\s+at\s+(\d{1,2}):(\d{2})\s*UTC)?`;
-  const patterns: [RegExp, (m: RegExpExecArray) => [string, string, string]][] = [
-    [new RegExp(String.raw`(?:scheduled\s+for|on)\s+${day}(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})${time}`, 'i'), (m) => [m[1]!, m[2]!, m[3]!]],
-    [new RegExp(String.raw`(?:scheduled\s+for|on)\s+${day}([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})${time}`, 'i'), (m) => [m[2]!, m[1]!, m[3]!]],
-  ];
+  // "scheduled for" first: it is the sentence that names the release's time. "on" is the fallback.
+  const patterns: [RegExp, (m: RegExpExecArray) => [string, string, string]][] = [];
+  for (const lead of [String.raw`\bscheduled\s+for`, String.raw`\bon`]) {
+    patterns.push(
+      [new RegExp(String.raw`${lead}\s+${day}(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})${time}`, 'i'), (m) => [m[1]!, m[2]!, m[3]!]],
+      [new RegExp(String.raw`${lead}\s+${day}([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})${time}`, 'i'), (m) => [m[2]!, m[1]!, m[3]!]],
+    );
+  }
   for (const [pattern, parts] of patterns) {
     const m = pattern.exec(text);
     if (!m) continue;
@@ -346,16 +348,23 @@ export class PhpUpstream {
     this.settings.setRaw(SETTINGS_KEY, next);
   }
 
-  /** The advisories of each branch's newest release that is a security one, read once. */
+  /**
+   * The advisories of each branch's newest release that is a security one. GitHub publishes them
+   * up to hours after php.net lists the release (13 hours on 2026-10-21), so a release with none yet
+   * is asked about again every hour for a week after its date, and one whose read failed likewise.
+   */
   private async advisories(next: PhpFacts, old: PhpFacts): Promise<PhpFacts['advisories']> {
     const kept = { ...old.advisories };
-    const wanted = Object.values(next.releases)
-      .filter((r) => r.security)
-      .map((r) => r.version)
-      .filter((v) => {
-        const known = kept[v];
-        return !known || (known.error !== null && Date.now() - known.fetchedAt >= ADVISORY_RETRY_MS);
-      });
+    const now = Date.now();
+    const current = Object.values(next.releases).filter((r) => r.security);
+    const wanted = current
+      .filter((r) => {
+        const known = kept[r.version];
+        if (!known) return true;
+        if (now - known.fetchedAt < ADVISORY_RETRY_MS) return false;
+        return known.error !== null || (known.items.length === 0 && now - Date.parse(`${r.date}T00:00:00Z`) < 7 * DAY_MS);
+      })
+      .map((r) => r.version);
     if (wanted.length > 0) {
       const at = Date.now();
       try {
@@ -368,15 +377,14 @@ export class PhpUpstream {
         this.log.warn(`PHP's advisories could not be read from GitHub: ${errorText(err)}`);
       }
     }
-    // The newest releases' only: nothing reads older ones.
-    const newest = Object.keys(kept).sort((a, b) => compareVersions(b, a)).slice(0, ADVISORY_RELEASES_KEPT);
-    return Object.fromEntries(newest.map((v) => [v, kept[v]!]));
+    // Each branch's newest release's only: nothing reads older ones.
+    return Object.fromEntries(current.filter((r) => kept[r.version]).map((r) => [r.version, kept[r.version]!]));
   }
 
   private async json(url: string, headers: Record<string, string> = {}): Promise<unknown> {
     const res = await this.get(url, { accept: 'application/json', ...headers });
     if (res.status !== 200) throw new Error(`${new URL(url).host} answered ${res.status}`);
-    return JSON.parse(await bodyOf(res));
+    return JSON.parse(res.body);
   }
 
   /** The news feed, or null when it has not changed since `validators`. */
@@ -387,30 +395,23 @@ export class PhpUpstream {
     const res = await this.get(PHP_NEWS_URL, headers);
     if (res.status === 304) return null;
     if (res.status !== 200) throw new Error(`www.php.net answered ${res.status}`);
-    return {
-      body: await bodyOf(res),
-      validators: { etag: res.headers.get('etag'), lastModified: res.headers.get('last-modified') },
-    };
+    return { body: res.body, validators: { etag: res.headers.get('etag'), lastModified: res.headers.get('last-modified') } };
   }
 
-  private async get(url: string, headers: Record<string, string>): Promise<Response> {
+  /** One request, its body read within the same deadline and refused past MAX_BODY_BYTES. */
+  private async get(url: string, headers: Record<string, string>): Promise<{ status: number; headers: Headers; body: string }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error('timed out')), REQUEST_TIMEOUT_MS);
     try {
-      return await this.fetchImpl(url, { headers: { 'user-agent': 'WPL7 PHP releases', ...headers }, signal: controller.signal });
+      const res = await this.fetchImpl(url, { headers: { 'user-agent': 'WPL7 PHP releases', ...headers }, signal: controller.signal });
+      if (Number(res.headers.get('content-length') ?? 0) > MAX_BODY_BYTES) throw new Error('the answer is too large');
+      const body = res.status === 304 ? '' : await res.text();
+      if (body.length > MAX_BODY_BYTES) throw new Error('the answer is too large');
+      return { status: res.status, headers: res.headers, body };
     } finally {
       clearTimeout(timer);
     }
   }
-}
-
-/** A response's text, refused past MAX_BODY_BYTES. */
-async function bodyOf(res: Response): Promise<string> {
-  const declared = Number(res.headers.get('content-length') ?? 0);
-  if (declared > MAX_BODY_BYTES) throw new Error('the answer is too large');
-  const text = await res.text();
-  if (text.length > MAX_BODY_BYTES) throw new Error('the answer is too large');
-  return text;
 }
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));

@@ -364,7 +364,7 @@ function MachineCard({ serverId }: { serverId: number }) {
               ? dto.php.map((image, i) => (
                   <span key={image.version}>
                     {i > 0 && ' · '}
-                    <PhpRelease site={{ phpVersion: image.version, phpRelease: image.release }} />
+                    <PhpRelease site={{ phpVersion: image.version, phpRelease: image.release }} image />
                   </span>
                 ))
               : '–'

@@ -29,16 +29,21 @@ import { stackFromLabels, type SiteStack } from './siteStack.js';
  *
  * A container kept aside by a change that never finished (replaceContainer) gets its site a
  * reconcile too, which puts it back first.
+ *
+ * `serverId` limits it to one server: the one a refresh just gave new images
+ * (services/phpUpdates.ts).
  */
 export async function sweepSiteImages(
   s: CoreServices,
   worker: Pick<JobWorker, 'enqueue' | 'activeSiteJob'>,
+  serverId?: number,
 ): Promise<HardeningSweep> {
   const sweep: HardeningSweep = { queued: [], busy: [] };
   // Onto the site image: a container app has its own image and its own sweep (services/apps.ts).
   const rows = s.db.select().from(sites).where(and(hostedSites(), siteImageSites())).orderBy(asc(sites.id)).all();
   for (const server of s.servers.listRows()) {
     if (server.status === 'unreachable' || server.status === 'provisioning') continue;
+    if (serverId !== undefined && server.id !== serverId) continue;
     const docker = s.servers.handleFor(server.id).docker;
     // One lookup per PHP version and server, not one per site.
     const current = new Map<string, { id: string | null; stack: SiteStack; apps: SiteApp[] }>();
@@ -88,6 +93,7 @@ export async function sweepSiteImages(
       }
     } catch (err) {
       s.log.warn(`Site image sweep on "${server.name}" failed: ${err instanceof Error ? err.message : err}`);
+      (sweep.failed ??= []).push(server.name);
     }
   }
   if (sweep.queued.length > 0) {

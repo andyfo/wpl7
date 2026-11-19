@@ -140,6 +140,8 @@ export interface HardeningSweep {
   queued: string[];
   /** Slugs whose container needs rebuilding but could not be queued right now. */
   busy: string[];
+  /** Servers the sweep could not look at, by name. */
+  failed?: string[];
 }
 
 /**

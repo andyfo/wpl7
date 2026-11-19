@@ -9,6 +9,7 @@ import type { SettingsService } from './settings.js';
 import type { Logger } from './index.js';
 import type { VulnFinding, WpInventoryService } from './wpInventory.js';
 import type { PhpAdvisory, PhpNotice } from './phpUpstream.js';
+import { phpVersions, phpWhen, severityCounts } from '../../shared/php.js';
 
 /**
  * Emails about sites, to the alert address in Settings (MailService.notifyOperator): a site that
@@ -457,38 +458,30 @@ export class AlertService {
   }
 
   /**
-   * Send an email under `key` once: again only while the relay does not take it, at most every
-   * RETRY_MS. True once it was said.
+   * Send an email under `key` once, as `deliver` says an alert: again only while the relay does
+   * not take it, at most every RETRY_MS. True once it was said.
    */
   private async once(key: string, message: () => [string, string[]]): Promise<boolean> {
     if (this.said(key)) return true;
     const row = this.state(key);
-    const detail = parse<Delivery>(row?.detail);
-    if (detail.triedAt !== undefined && Date.now() - detail.triedAt < RETRY_MS) return false;
-    const [subject, lines] = message();
-    const outcome = await this.send(subject, lines);
-    const now = Date.now();
-    this.put({
-      key,
-      siteId: null,
-      since: row?.since ?? now,
-      notifiedAt: outcome === 'sent' ? now : null,
-      detail: JSON.stringify(outcome === 'failed' ? { triedAt: now } : { raised: true }),
-    });
-    return outcome !== 'failed';
+    const { next, notifiedAt } = await this.deliver(parse<Delivery>(row?.detail), row?.notifiedAt ?? null, true, message);
+    this.put({ key, siteId: null, since: row?.since ?? Date.now(), notifiedAt, detail: JSON.stringify(next) });
+    return next.raised === true;
   }
 
   /** php.net's advance notice of a security release. */
-  async phpNotice(notice: PhpNotice): Promise<void> {
+  async phpNotice(notice: PhpNotice, updateNeeded: boolean): Promise<void> {
     await this.once(`php-notice:${notice.id}`, () => {
       const when = notice.scheduledAt !== null ? phpWhen(notice.scheduledAt, notice.scheduledTime) : null;
       return [
         when ? `PHP security release on ${when}` : 'A PHP security release is coming',
         [
           `php.net: ${notice.title}.`,
-          when ? `It is scheduled for ${when}.` : 'php.net has not said when in a way the panel can read; the notice says.',
+          when ? `It is scheduled for ${when}.` : 'The notice says when.',
           '',
-          'Sites move onto it by themselves once its image is out, usually a few hours after the release.',
+          updateNeeded
+            ? 'This install gets it with a WPL7 update: Settings → Updates.'
+            : 'Sites move onto it by themselves once its image is out, usually a few hours after the release.',
           '',
           notice.url,
         ],
@@ -507,7 +500,9 @@ export class AlertService {
       const lines: string[] = [];
       for (const r of fresh) {
         const counts = severityCounts(r.advisories);
-        lines.push(`PHP ${r.version}${counts ? `: fixes ${counts}` : ''}. ${r.sites} ${r.sites === 1 ? 'site runs' : 'sites run'} its branch.`);
+        lines.push(
+          `PHP ${r.version}: ${counts ? `fixes ${counts}` : 'its advisories are not published yet'}. ${r.sites} ${r.sites === 1 ? 'site runs' : 'sites run'} its branch.`,
+        );
         for (const a of r.advisories) lines.push(`  - ${a.summary}${a.cve ? ` (${a.cve})` : ''}, ${a.severity}: ${a.url}`);
       }
       lines.push(
@@ -518,7 +513,7 @@ export class AlertService {
       );
       const base = panelUrl(this.s.config);
       if (base) lines.push('', base);
-      return [`${listOf(names)} ${names.length === 1 ? 'is' : 'are'} out, with security fixes`, lines];
+      return [`${phpVersions(names)} ${names.length === 1 ? 'is' : 'are'} out, with security fixes`, lines];
     });
     // Marked one by one, so a later pass that sees one of them with another stays quiet about it.
     if (said) {
@@ -526,10 +521,17 @@ export class AlertService {
     }
   }
 
-  /** How a security release's move went, once every site had its chance. */
+  /**
+   * How a security release's move went, for a release told by `phpReleases`: the sites still
+   * behind once they had their chance, and that every site made it. Each once.
+   */
   async phpRollout(version: string, total: number, behind: { slug: string; title: string; release: string | null }[], behindCount: number): Promise<void> {
-    await this.once(`php-rollout:${version}`, () => {
-      if (behindCount === 0) return [`All sites run PHP ${version}`, [`Every site on its branch runs PHP ${version} now: ${total} in all.`]];
+    if (!this.said(`php-release:${version}`)) return;
+    if (behindCount === 0) {
+      await this.once(`php-rollout-done:${version}`, () => [`All sites run PHP ${version}`, [`Every site on its branch runs PHP ${version} now: ${total} in all.`]]);
+      return;
+    }
+    await this.once(`php-rollout-behind:${version}`, () => {
       const base = panelUrl(this.s.config);
       const branch = /^\d+\.\d+/.exec(version)?.[0] ?? version;
       const lines = [
@@ -542,32 +544,4 @@ export class AlertService {
       return [`${behindCount} ${behindCount === 1 ? 'site still runs' : 'sites still run'} an older PHP than ${version}`, lines];
     });
   }
-}
-
-/** "8.4.28", "8.4.28 and 8.5.13", "8.2.36, 8.3.37 and 8.4.28", each with PHP before it once. */
-function listOf(versions: string[]): string {
-  const all = [...versions];
-  const last = all.pop()!;
-  return `PHP ${all.length > 0 ? `${all.join(', ')} and ${last}` : last}`;
-}
-
-/** "2 critical, 1 high", most severe first; '' for none. */
-export function severityCounts(advisories: { severity: string }[]): string {
-  const order = ['critical', 'high', 'medium', 'low'];
-  const rank = (severity: string) => (order.includes(severity) ? order.indexOf(severity) : order.length);
-  const counts = new Map<string, number>();
-  for (const a of advisories) counts.set(a.severity, (counts.get(a.severity) ?? 0) + 1);
-  return [...counts.entries()]
-    .sort((a, b) => rank(a[0]) - rank(b[0]))
-    .map(([severity, n]) => `${n} ${severity}`)
-    .join(', ');
-}
-
-const PHP_DAY = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
-
-/** "Wed 21 Oct 2026, 14:00 UTC", or the date alone when the notice named no time. */
-export function phpWhen(at: number, time: boolean): string {
-  const part = (type: string) => PHP_DAY.formatToParts(at).find((p) => p.type === type)?.value ?? '';
-  const date = `${part('weekday')} ${part('day')} ${part('month')} ${part('year')}`;
-  return time ? `${date}, ${new Date(at).toISOString().slice(11, 16)} UTC` : date;
 }
