@@ -72,7 +72,7 @@ for a reason; remove one once there is nothing left to watch.
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
 | [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-11-19 08:16 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04, rebuilt 2026-11-11) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
 | [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-11-15 19:04 UTC | 6.3.0 (2026-11-03) is the latest, 6.2.0 still pinned; its sign-in answers 303, which the panel refuses; no new advisory; base is PHP 8.4.27 |
-| [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-10-20 12:22 UTC | The feed calls five listed bbPress plugins closed and misses `captcha`; the directory answers as `wporgListing` reads them |
+| [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-11-19 11:43 UTC | The feed still calls `bbpress` and `bbpress-private-replies` closed and misses `captcha`; the directory answers as `wporgListing` reads them |
 | [Google's crawler address lists](#googles-crawler-address-lists) | Medium | 2026-11-03 09:35 UTC | Both answer: 589 prefixes, none wider than a /27 or a /64 |
 | [ssh2: how a channel closes, as the panel's SSH channels rely on it](#ssh2-how-a-channel-closes-as-the-panels-ssh-channels-rely-on-it) | Low | 2026-11-15 10:57 UTC | 1.17.0 is the latest; channels half-open by default, `destroy()` never marks one destroyed, `'close'` waits for `'end'` or an unreadable stream |
 
@@ -1459,8 +1459,13 @@ for a reason; remove one once there is nothing left to watch.
 ## wordpress.org's directory, as the panel's closed flag reads it
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-20 12:22 UTC. The feed says `closed: 1` for five plugins that
-  wordpress.org lists: `bbpress` (2.6.20, updated 2026-10-15), `bbpress-private-replies`,
+- **Last checked:** 2026-11-19 11:43 UTC. Unchanged: the feed still says `closed: 1` for
+  `bbpress` (2.6.22 now) and `bbpress-private-replies`, and `closed: null` for `captcha`. The
+  directory answers as below: a 200 with `slug` and `version` for `bbpress`, a 404 with
+  `error: "closed"`, `closed: true`, `reason: "author-request"` and the sentence for
+  `wp-gdpr-compliance`, "Plugin not found." and "Theme not found" for slugs it does not have, and
+  a 200 for `twentytwentyfive`.
+  At 2026-10-20 12:22 UTC the feed said `closed: 1` for five plugins that wordpress.org lists: `bbpress` (2.6.20, updated 2026-10-15), `bbpress-private-replies`,
   `bbpress-new-topic-notifications`, `bbpress-enable-tinymce-visual-tab` and
   `bbpress-direct-quotes`. Archived copies of bbPress's page from 2026-09-11 to 2026-10-15 show
   it open each time, so the flag is not a closure the feed failed to clear. The feed has
