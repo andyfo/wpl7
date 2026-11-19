@@ -307,6 +307,8 @@ export async function queueSiteRecovery(s: CoreServices, site: SiteRow, req: Rec
   const answers = isExternal(site) ? false : await serverAnswers(s, site.serverId);
   const { state, refusal } = await siteRecoveryState(s, site, { answers });
   if (refusal) throw conflict(refusal);
+  // A backup whose files left with a reinstalled disk must not be picked as one that is there.
+  if (s.servers.rowById(req.targetServerId)?.status === 'ok') await s.backup.checkFiles(req.targetServerId).catch(() => undefined);
   const { target, backup, destinationId } = checkRecoverRequest(s, site, state, req);
   return s.worker.enqueue(
     'site.recover',

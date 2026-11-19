@@ -219,8 +219,8 @@ async function recoverSite(
 
     // The backup's other databases must land on names that are free there and belong to no other site.
     const inBackup = manifestDatabases(manifest);
+    const onTarget = new Set(inBackup.length > 0 || sameServer ? (await target.dbAdmin.inventory()).map((r) => r.name) : []);
     if (inBackup.length > 0) {
-      const onTarget = new Set((await target.dbAdmin.inventory()).map((r) => r.name));
       const taken = inBackup.filter((n) => onTarget.has(n));
       if (taken.length > 0) {
         throw new Error(
@@ -344,7 +344,9 @@ async function recoverSite(
 
     // ------------------------------------------------------------ 5: cutover
     let cleanupId: number | null = null;
-    const dropped = extrasBefore.filter((n) => !inBackup.includes(n));
+    // Added after the backup: gone with the lost server, unless the site came back on its own server,
+    // where such a database is still there and stays the site's.
+    const dropped = extrasBefore.filter((n) => !inBackup.includes(n) && !(sameServer && onTarget.has(n)));
     s.db.transaction(() => {
       updateSiteRow(s.db, site.id, {
         serverId: target.id,
