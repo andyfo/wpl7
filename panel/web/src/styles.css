@@ -791,6 +791,35 @@
 .button-primary:disabled {
   opacity: 0.45;
 }
+/*
+ * <Segmented muted> in ui.tsx: one track, the chosen option raised on it. As tall as the
+ * secondary buttons and selects beside it. The dark theme's surface is darker than its track,
+ * so a chosen option there is lifted with a lighter grey instead.
+ */
+.segmented-muted {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--n200);
+  border-radius: 8px;
+  background: var(--n100);
+}
+.segmented-muted button {
+  border-radius: 6px;
+  color: var(--n500);
+}
+.segmented-muted button:hover:enabled {
+  color: var(--n900);
+}
+.segmented-muted button[aria-pressed='true'] {
+  background: var(--surface);
+  color: var(--n900);
+  box-shadow: 0 1px 3px #00000014;
+}
+:root[data-theme='dark'] .segmented-muted button[aria-pressed='true'] {
+  background: var(--n300);
+}
 .stat-tile {
   padding: 22px;
   position: relative;

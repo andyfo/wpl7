@@ -134,7 +134,7 @@ wildcard certificate: docs/dns.md.
 
 ## Moving a site
 
-**Site page → "Move server"** or `POST /api/sites/:slug/move {"targetServerId": N}`. Hostnames never
+**Site page → "Change server"** or `POST /api/sites/:slug/move {"targetServerId": N}`. Hostnames never
 change, so there is no URL rewriting — a move is copy + cutover + DNS:
 
 1. **Preflight on the target**: reachable, MariaDB healthy, leftovers of a previous failed attempt

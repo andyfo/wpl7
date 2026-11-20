@@ -53,7 +53,7 @@ export function Sites() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="page-title">Sites</h1>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {view.choice && <Segmented label="Layout" options={LAYOUTS} value={layout} onChange={chooseLayout} />}
+          {view.choice && <Segmented muted label="Layout" options={LAYOUTS} value={layout} onChange={chooseLayout} />}
           {multiServer && (
             <select
               className={`${inputClass} w-auto`}
