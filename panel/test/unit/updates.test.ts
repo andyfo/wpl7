@@ -60,6 +60,16 @@ describe('is this install behind', () => {
     // An unstamped local build is behind every release, which is the useful answer.
     expect(isBehind('dev', 'unknown', stable)).toBe(true);
   });
+
+  it('takes a checkout-mode build for the release its checkout has in it', () => {
+    // `<package.json's version>-source`, and a release commit raises that version.
+    const stable = { channel: 'stable', version: '0.3.0', gitSha: 'c'.repeat(40) } as UpdateManifest;
+    expect(isBehind('0.3.0-source', 'abc1234', stable)).toBe(false);
+    expect(isBehind('0.2.0-source', 'abc1234', stable)).toBe(true);
+    expect(isBehind('0.4.0-beta.1-source', 'abc1234', stable)).toBe(false);
+    // A local build of what is on disk is still behind the release it names.
+    expect(isBehind('0.3.0-dev', 'unknown', stable)).toBe(true);
+  });
 });
 
 describe('the check', () => {

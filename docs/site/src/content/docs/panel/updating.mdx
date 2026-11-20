@@ -101,6 +101,10 @@ beside it, and a healthy update removes the copies of earlier ones.
 The button in the panel works in [image mode](/docs/reference/glossary/#image-mode) only.
 `update.sh --force` moves a checkout-mode install to image mode, replacing the panel built there.
 
+In checkout mode the version reads like `0.4.1-source`: the panel was built from a checkout that
+has 0.4.1 in it. Only a newer release counts as an update. **Settings → Updates** shows the commit
+beside the version.
+
 ## What the panel does afterwards
 
 Once up, the new panel runs the **Finish panel update** job. It runs the steps each skipped release
