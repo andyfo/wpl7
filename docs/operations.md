@@ -187,7 +187,7 @@ The operational short version:
 - **Remove**: move or delete its sites first; `?force=true` additionally drops records of backups
   stranded on a dead server. Revoke the panel's access by deleting its key line from
   `~wpl7-panel/.ssh/authorized_keys` on the server.
-- **Move a site**: site page → **Move server** (docs/multi-server.md#moving-a-site).
+- **Move a site**: site page → **Change server** (docs/multi-server.md#moving-a-site).
 - **Offsite backups**: the panel copies backups to a bucket or another server itself — **Backups →
   Storage → Add remote destination** (docs/backup-restore.md#offsite-copies). Uploads run on the
   server that holds the backup, so a fleet needs one destination, not one per machine. The nightly

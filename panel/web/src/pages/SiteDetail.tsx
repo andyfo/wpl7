@@ -399,7 +399,7 @@ function OverviewTab({ slug }: { slug: string }) {
           )}
           {multiServer && (
             <Button small variant="secondary" onClick={() => setMoveOpen(true)}>
-              Move server
+              Change server
             </Button>
           )}
         </div>

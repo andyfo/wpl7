@@ -195,6 +195,7 @@ export function Segmented<T extends string>({
   value,
   onChange,
   small = false,
+  muted = false,
   label,
   disabled = false,
 }: {
@@ -202,12 +203,18 @@ export function Segmented<T extends string>({
   value: T;
   onChange: (id: T) => void;
   small?: boolean;
+  /**
+   * One grey track with the chosen option raised on it (`.segmented-muted`), instead of the
+   * chosen option in the accent colour: for a choice beside a page's primary button, where an
+   * accent-coloured option would look like a second primary button.
+   */
+  muted?: boolean;
   /** What the group chooses, for screen readers. */
   label?: string;
   disabled?: boolean;
 }) {
   return (
-    <div role="group" aria-label={label} className="flex flex-wrap items-center gap-1.5">
+    <div role="group" aria-label={label} className={muted ? 'segmented-muted' : 'flex flex-wrap items-center gap-1.5'}>
       {options.map((option) => (
         <button
           key={option.id}
@@ -216,8 +223,8 @@ export function Segmented<T extends string>({
           title={option.title}
           disabled={disabled}
           onClick={() => onChange(option.id)}
-          className={`rounded-lg font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${small ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5 text-sm'} ${
-            value === option.id ? 'button-primary' : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+          className={`font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${small ? 'px-2.5 py-1 text-xs' : 'px-3 py-1.5 text-sm'} ${
+            muted ? '' : value === option.id ? 'rounded-lg button-primary' : 'rounded-lg bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
           }`}
         >
           {option.label}
