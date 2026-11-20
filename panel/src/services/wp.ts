@@ -51,6 +51,40 @@ const actingAs = (actor: string | undefined): string[] => (actor ? [`--user=${ac
 /** WP-CLI's flags for running a command with none of the site's plugins or themes loaded. */
 const skipping = (opts: { skipExtensions?: boolean }): string[] => (opts.skipExtensions ? ['--skip-plugins', '--skip-themes'] : []);
 
+/** Where a plugin stands in WordPress: active, installed but not active, or not installed. */
+export type PluginState = 'active' | 'inactive' | 'missing';
+
+/**
+ * How a plugin install or activation came out: `done` as asked, `inactive` installed but not
+ * active, `failed` not installed or not known to be. `error` is what WP-CLI reported: why it is
+ * not done, or, when it is, the error the run ended in all the same.
+ */
+export interface PluginChange {
+  outcome: 'done' | 'inactive' | 'failed';
+  error: string | null;
+}
+
+/** A PHP fatal error as WP-CLI's stderr has it: logged (after a timestamp) or displayed. */
+const PHP_FATAL = /\b(?:Fatal|Parse) error:\s/;
+
+/**
+ * What a WP-CLI run that failed said about it, for a log line: PHP's fatal error if there was
+ * one, else WP-CLI's own warnings and error, else the exit code. Never the backtraces under them.
+ */
+export function wpCliFailure(res: RunResult): string {
+  const lines = res.stderr.split('\n').map((line) => line.trim());
+  const clip = (text: string) => text.replace(/\s+/g, ' ').slice(0, 300);
+  const fatal = lines.find((line) => PHP_FATAL.test(line));
+  if (fatal) return clip(fatal.replace(/^\[[^\]]*\]\s*/, ''));
+  const said = lines.filter((line) => /^(?:Error|Warning): /.test(line)).map((line) => line.replace(/\s*Backtrace:$/, ''));
+  return said.length > 0 ? clip(said.join(' ')) : `exit code ${res.exitCode}`;
+}
+
+/** Whether a WP-CLI run that failed reported an error, rather than only stopping: PHP's, or its own. */
+function wpCliReportedError(res: RunResult): boolean {
+  return res.stderr.split('\n').some((line) => PHP_FATAL.test(line) || line.trim().startsWith('Error: '));
+}
+
 /**
  * WP-CLI operations, executed inside the running site container via docker exec.
  * The wpl7-wordpress image bakes in wp-cli, so PHP version and mail setup always match the site.
@@ -155,20 +189,64 @@ export class WpService {
     return [...present];
   }
 
-  installPluginSlug(container: string, slug: string, activate: boolean, actor?: string): Promise<RunResult> {
-    return this.runOk(
+  /**
+   * Install a plugin - a wordpress.org slug, or the path of a zip in the container - and activate
+   * it if asked. `name` is the folder it installs into, which is what `wp plugin list` calls it;
+   * without one, a run that failed is a failure. See settle().
+   */
+  async installPlugin(container: string, source: string, name: string | null, activate: boolean, actor?: string): Promise<PluginChange> {
+    const res = await this.run(
       container,
-      ['plugin', 'install', slug, ...(activate ? ['--activate'] : []), ...actingAs(actor)],
+      ['plugin', 'install', source, ...(activate ? ['--activate'] : []), ...actingAs(actor)],
       300_000,
     );
+    return this.settle(container, res, name, activate);
   }
 
-  installPluginZip(container: string, zipPath: string, activate: boolean, actor?: string): Promise<RunResult> {
-    return this.runOk(
+  /** Activate an installed plugin, by its `wp plugin list` name. See settle(). */
+  async activatePlugin(container: string, name: string, actor?: string): Promise<PluginChange> {
+    const res = await this.run(container, ['plugin', 'activate', name, ...actingAs(actor)], 300_000);
+    return this.settle(container, res, name, true);
+  }
+
+  /**
+   * How a plugin install or activation came out. A run that succeeded is taken at its word; one
+   * that failed is judged by what WordPress has. A plugin can end PHP while it is being activated,
+   * after WordPress has saved it as active, and WP-CLI then exits non-zero for a plugin that is in
+   * place. Breakdance's first activation does: it sends a browser to its onboarding with
+   * exit(wp_redirect(...)), and PHP 8.4 makes exit(true) exit status 1.
+   */
+  private async settle(container: string, res: RunResult, name: string | null, activate: boolean): Promise<PluginChange> {
+    if (res.exitCode === 0) return { outcome: 'done', error: null };
+    const error = wpCliFailure(res);
+    const state = name ? await this.pluginState(container, name).catch(() => null) : null;
+    if (state === 'active' || (state === 'inactive' && !activate)) {
+      return { outcome: 'done', error: wpCliReportedError(res) ? error : null };
+    }
+    return { outcome: state === 'inactive' ? 'inactive' : 'failed', error };
+  }
+
+  /**
+   * Whether WordPress has the plugin `name`, and active. Read with the site's plugins and theme not
+   * loaded, so a plugin that breaks WordPress cannot hide its own state, and with no update check
+   * (`list` asks every update server otherwise). Null when WP-CLI cannot tell.
+   */
+  async pluginState(container: string, name: string): Promise<PluginState | null> {
+    const res = await this.run(
       container,
-      ['plugin', 'install', zipPath, ...(activate ? ['--activate'] : []), ...actingAs(actor)],
-      300_000,
+      ['plugin', 'list', '--format=json', '--fields=name,status', '--skip-update-check', '--skip-plugins', '--skip-themes'],
+      60_000,
     );
+    if (res.exitCode !== 0) return null;
+    let rows: unknown[];
+    try {
+      rows = parseWpJsonArray(res.stdout, 'wp plugin list');
+    } catch {
+      return null;
+    }
+    const row = rows.find((r) => (r as { name?: unknown } | null)?.name === name) as { status?: unknown } | undefined;
+    if (!row) return 'missing';
+    return row.status === 'active' || row.status === 'active-network' ? 'active' : 'inactive';
   }
 
   async listPlugins(container: string): Promise<WpPluginRow[]> {
@@ -343,10 +421,11 @@ export class WpService {
     return this.runOk(container, ['plugin', 'deactivate', ...names, ...actingAs(actor)], 300_000);
   }
 
+  /** Activating goes through activatePlugin, which knows a run that failed from a plugin that did not activate. */
   pluginAction(
     container: string,
     name: string,
-    action: 'activate' | 'deactivate' | 'update' | 'delete',
+    action: 'deactivate' | 'update' | 'delete',
     actor?: string,
   ): Promise<RunResult> {
     return this.runOk(container, ['plugin', action, name, ...actingAs(actor)], 300_000);

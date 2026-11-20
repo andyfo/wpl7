@@ -713,3 +713,59 @@ describe("plugin and theme changes act as the site's administrator", () => {
     expect(logOf(w, done.id).some((line) => line.includes('no administrator account'))).toBe(true);
   });
 });
+
+describe('a plugin install or activation on a site goes by what WordPress has', () => {
+  // A plugin can end PHP while it is being activated, after WordPress saved it as active - as
+  // Breakdance's first activation does - and WP-CLI then exits 1 for a plugin that is in place.
+  const run = async (w: TestWorld, site: SiteRow, payload: Record<string, unknown>) => {
+    const job = w.worker.enqueue('wp.pluginTask', { siteId: site.id, ...payload }, { id: site.id, slug: site.slug, serverId: 1 });
+    return runJob(w, job.id);
+  };
+  const warnings = (w: TestWorld, jobId: number) =>
+    w.db.select().from(jobLogs).where(eq(jobLogs.jobId, jobId)).all().filter((l) => l.level === 'warn').map((l) => l.message);
+  const redirected = { stdout: "Activating 'welcome-redirect'...\n", stderr: 'Warning: Some code is trying to do a URL redirect. Backtrace:\n#0 ...\n', exitCode: 1 };
+  const crashed = { stdout: '', stderr: 'PHP Fatal error:  Uncaught RuntimeException: welcome page failed in /y.php:7\n', exitCode: 255 };
+  const listing = (status: string) => ok(JSON.stringify([{ name: 'welcome-redirect', status }]));
+  const install = { action: 'install', source: { kind: 'wporg', slug: 'welcome-redirect' }, activate: true };
+
+  it('an install succeeds when WordPress has the plugin active, though WP-CLI failed after it', async () => {
+    const w = await makeWorld();
+    const site = addRunningSite(w, 'blog');
+    w.docker.execQueue.push(redirected, listing('active'));
+    const done = await run(w, site, install);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(warnings(w, done.id).filter((m) => m.includes('welcome-redirect'))).toEqual([]);
+  });
+
+  it("an install fails with WP-CLI's error when the plugin is not active, and says when it is but crashed", async () => {
+    const w = await makeWorld();
+    const site = addRunningSite(w, 'blog');
+    w.docker.execQueue.push(crashed, listing('inactive'));
+    const failed = await run(w, site, install);
+    expect(failed.status).toBe('failed');
+    expect(failed.error).toBe('Plugin "welcome-redirect" was installed but not activated: PHP Fatal error: Uncaught RuntimeException: welcome page failed in /y.php:7');
+
+    w.docker.execQueue.length = 0;
+    w.docker.execQueue.push(crashed, listing('active'));
+    const done = await run(w, site, install);
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(warnings(w, done.id)).toContain(
+      'Plugin "welcome-redirect" was installed and activated, but WP-CLI reported an error: PHP Fatal error: Uncaught RuntimeException: welcome page failed in /y.php:7',
+    );
+  });
+
+  it('an activation is the same: done when WordPress has it active, a failure when not', async () => {
+    const w = await makeWorld();
+    const site = addRunningSite(w, 'blog');
+    w.docker.execQueue.push(redirected, listing('active'));
+    const done = await run(w, site, { action: 'activate', name: 'welcome-redirect' });
+    expect(done.status, done.error ?? '').toBe('succeeded');
+    expect(execLines(w)).toContain('wp plugin list --format=json --fields=name,status --skip-update-check --skip-plugins --skip-themes');
+
+    w.docker.execQueue.length = 0;
+    w.docker.execQueue.push(crashed, listing('inactive'));
+    const failed = await run(w, site, { action: 'activate', name: 'welcome-redirect' });
+    expect(failed.status).toBe('failed');
+    expect(failed.error).toBe('Plugin "welcome-redirect" was not activated: PHP Fatal error: Uncaught RuntimeException: welcome page failed in /y.php:7');
+  });
+});

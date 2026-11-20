@@ -67,6 +67,8 @@ export class FakeConnectedSite extends FakeSourceSite {
   updates: string[] = [];
   /** Who each update and plugin or theme change ran as (`user`), as `action:kind:slug=user`. */
   actedAs: string[] = [];
+  /** A plugin or theme change's answer, by `action:kind:slug`, in place of the fake's own: what a plugin's code made of it. */
+  componentAnswers = new Map<string, Record<string, unknown>>();
   rollbacks: { op: string; items: { kind: string; slug: string }[]; skipPlugins: string[]; skipTheme: boolean }[] = [];
   cleanups: string[] = [];
   /** The update offer the last ping carried. */
@@ -355,6 +357,8 @@ export class FakeConnectedSite extends FakeSourceSite {
     const slug = String(p.slug);
     const action = String(p.action);
     this.actedAs.push(`${action}:${kind}:${slug}=${typeof p.user === 'string' ? p.user : '-'}`);
+    const scripted = this.componentAnswers.get(`${action}:${kind}:${slug}`);
+    if (scripted) return this.json(200, scripted);
     if (kind === 'plugin' && slug === 'wpl7-connect' && (action === 'deactivate' || action === 'delete')) {
       return this.json(200, { ok: false, error: 'WPL7 Connect connects this site to the panel.' });
     }

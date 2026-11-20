@@ -373,6 +373,17 @@ Answer: `{ "ok": true, "status": "active" | "inactive" | "deleted" }`, or `{ "ok
 when WordPress refused. A component that is not installed is **404** `not_found` with `detail`
 `plugin` or `theme`.
 
+- A plugin activation (`activate`, or `install` with activation) answers by whether WordPress
+  has the plugin active afterwards. Active: `ok` true, with `"warning": "<what went wrong>"` when
+  something did - WordPress's error for a plugin that printed while it was activated, which it
+  saves as active all the same, or a fatal error after the save. Not active: `ok` false,
+  `"status": "inactive"` and the `error`; after an `install`, the plugin is installed.
+- A plugin can end PHP while it is being activated, after WordPress saved it as active:
+  Breakdance's first activation redirects to its onboarding and exits. The answer then comes
+  from WordPress's `shutdown` action, ahead of the output it flushes. A fatal error is
+  `PHP stopped: <its first line>`. Before 1.0.1 the panel got the redirect instead of an
+  answer, and asked again the other way in.
+
 - A `url` source must start with `<panel address>/api/connect/catalog/`, the panel this plugin
   enrolled with, else **422** with `detail: "source"`. The plugin downloads nothing else from a
   URL the panel names.
