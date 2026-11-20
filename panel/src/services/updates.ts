@@ -337,7 +337,17 @@ export function isBehind(version: string, gitSha: string, latest: UpdateManifest
     if (!latest.gitSha || gitSha === 'unknown') return compareVersions(version, latest.version) < 0;
     return !shaMatches(gitSha, latest.gitSha);
   }
-  return compareVersions(version, latest.version) < 0;
+  return compareVersions(releaseIn(version), latest.version) < 0;
+}
+
+/**
+ * The release a build has in it. A checkout-mode build is stamped with package.json's version
+ * and `-source` (provision/lib.sh, wpl7_stamp), and a release commit raises that version, so
+ * `0.4.1-source` was built from a checkout that has 0.4.1 in it. Compared as it is, `-source`
+ * makes it a prerelease of 0.4.1, and a panel built from main offered the release it runs.
+ */
+function releaseIn(version: string): string {
+  return version.endsWith('-source') ? version.slice(0, -'-source'.length) : version;
 }
 
 /** One may be a short sha (a local build) and the other full (CI stamps github.sha). */
