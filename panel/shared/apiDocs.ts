@@ -2422,7 +2422,7 @@ export const API_DOC_GROUPS: ApiDocGroup[] = [
         method: 'GET',
         path: '/api/php',
         summary: "PHP's newest and next releases, php.net's notice of a security release, and each branch's sites",
-        returns: '{checkedAt, error, notice, branches: [{branch, latest, next, sites, current, behind, behindCount, images, updating, doneRecently}], images, updateNeeded, serverErrors}',
+        returns: '{checkedAt, error, notice, branches: [{branch, latest, next, sites, release, current, behind, behindCount, images, updating, doneRecently}], images, updateNeeded, serverErrors}',
         level: 'read',
       },
       {

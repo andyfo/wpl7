@@ -372,19 +372,24 @@ describe('what the Overview and the emails say', () => {
     const w = await makeWorld({ phpFetch: phpNet(php83('8.3.37', today())).fetch });
     siteRow(w, 'blog', '8.3.36');
     siteRow(w, 'shop', '8.3.37');
+    siteRow(w, 'docs', '8.4.27', '8.4');
+    siteRow(w, 'wiki', '8.4.27', '8.4');
     await w.core.phpUpdates.tick();
     const status = w.core.phpUpdates.status();
     const b83 = status.branches.find((b) => b.branch === '8.3')!;
     expect(b83).toMatchObject({
       latest: { version: '8.3.37', security: true },
       sites: 2,
+      release: null,
       current: 1,
       behind: [{ slug: 'blog', title: 'BLOG', release: '8.3.36' }],
       behindCount: 1,
       updating: false,
     });
     expect(b83.latest!.advisories.map((a) => a.cve)).toEqual(['CVE-2026-115560']);
-    expect(status.branches.find((b) => b.branch === '8.4')!.next).toMatchObject({ release: '8.4.28', expected: '2026-11-19' });
+    const b84 = status.branches.find((b) => b.branch === '8.4')!;
+    expect(b84).toMatchObject({ sites: 2, release: '8.4.27', current: 2, behindCount: 0 });
+    expect(b84.next).toMatchObject({ release: '8.4.28', expected: '2026-11-19' });
     expect(status.images).toBe('registry');
   });
 
@@ -548,11 +553,11 @@ describe('what the Overview and the emails say', () => {
     const site = siteRow(w, 'blog', null);
     w.docker.phpOf(siteImage('8.3'), '8.3.37');
     await w.core.phpUpdates.tick();
-    expect(w.core.phpUpdates.status().branches.find((b) => b.branch === '8.3')).toMatchObject({ current: 0, behindCount: 0, doneRecently: false });
+    expect(w.core.phpUpdates.status().branches.find((b) => b.branch === '8.3')).toMatchObject({ release: null, current: 0, behindCount: 0, doneRecently: false });
     expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes']);
     w.db.update(sites).set({ phpRelease: '8.3.37' }).where(eq(sites.id, site.id)).run();
     await w.core.phpUpdates.tick();
-    expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes', 'All sites run PHP 8.3.37']);
+    expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes', 'All PHP 8.3 sites run 8.3.37']);
   });
 
   it('says when every site moved onto the newest release, for a day', async () => {
@@ -564,7 +569,8 @@ describe('what the Overview and the emails say', () => {
     w.db.update(sites).set({ phpRelease: '8.3.37' }).where(eq(sites.id, site.id)).run();
     await w.core.phpUpdates.tick();
     expect(w.core.phpUpdates.status().branches.find((b) => b.branch === '8.3')!.doneRecently).toBe(true);
-    expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes', 'All sites run PHP 8.3.37']);
+    expect(sent.map((m) => m.subject)).toEqual(['PHP 8.3.37 is out, with security fixes', 'All PHP 8.3 sites run 8.3.37']);
+    expect(sent[1]!.body).toBe('Every site on PHP 8.3 runs 8.3.37 now: 1 in all.');
     vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 25 * 3600_000 });
     expect(w.core.phpUpdates.status().branches.find((b) => b.branch === '8.3')!.doneRecently).toBe(false);
   });

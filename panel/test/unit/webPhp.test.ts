@@ -11,6 +11,7 @@ function branch(over: Partial<PhpBranchDto> = {}): PhpBranchDto {
     latest: { version: '8.4.28', date: '2026-11-19', security: true, seenAt: NOW, advisories: [] },
     next: null,
     sites: 12,
+    release: '8.4.28',
     current: 12,
     behind: [],
     behindCount: 0,
@@ -37,11 +38,29 @@ const data = (branches: PhpBranchDto[], over: Partial<PhpUpdatesDto> = {}): PhpU
   ...over,
 });
 
-const behind = { current: 5, behindCount: 7, behind: [{ slug: 'blog', title: 'Blog', release: '8.4.27', serverId: 1, move: null }] };
+const behind = { release: null, current: 5, behindCount: 7, behind: [{ slug: 'blog', title: 'Blog', release: '8.4.27', serverId: 1, move: null }] };
+
+/** The card's line for a PHP version none of whose sites is behind. */
+const quiet = (branch: string, text: string, tone: 'done' | 'unknown' = 'done') => ({ kind: 'release', branch, text, tone, badge: null, sites: [], more: 0, update: false });
 
 describe('the PHP card', () => {
-  it('says nothing when nothing is happening', () => {
-    expect(phpLines(data([branch()]), NOW)).toEqual([]);
+  it('says what the sites of each PHP version run', () => {
+    expect(phpLines(data([branch()]), NOW)).toEqual([quiet('8.4', '12 sites run PHP 8.4.28')]);
+    // Each version has a line of its own: its sites run a release of their own.
+    const b85 = branch({ branch: '8.5', latest: { ...branch().latest!, version: '8.5.13' }, sites: 1, current: 1, release: '8.5.13', images: [image('nyc1', '8.5.13')] });
+    const lines = phpLines(data([branch({ sites: 3, current: 3 }), b85]), NOW);
+    expect(lines).toEqual([quiet('8.4', '3 sites run PHP 8.4.28'), quiet('8.5', '1 site runs PHP 8.5.13')]);
+    // The day after its sites moved onto a release reads the same.
+    expect(phpLines(data([branch({ doneRecently: true })]), NOW)).toEqual([quiet('8.4', '12 sites run PHP 8.4.28')]);
+  });
+
+  it('grays a version whose sites are not all known to run its newest release', () => {
+    // A site whose PHP is not read yet: the version alone, as nothing names one release.
+    expect(phpLines(data([branch({ sites: 3, current: 2, release: null })]), NOW)).toEqual([quiet('8.4', '3 sites run PHP 8.4', 'unknown')]);
+    // php.net not read yet: what the sites run, but not whether it is the newest.
+    expect(phpLines(data([branch({ latest: null, current: 0, release: '8.4.27' })]), NOW)).toEqual([quiet('8.4', '12 sites run PHP 8.4.27', 'unknown')]);
+    // Sites on a release php.net was not read to list yet: still current, by their own release.
+    expect(phpLines(data([branch({ release: '8.4.29' })]), NOW)).toEqual([quiet('8.4', '12 sites run PHP 8.4.29')]);
   });
 
   it('shows an advance notice with its time', () => {
@@ -51,7 +70,10 @@ describe('the PHP card', () => {
       }),
       NOW,
     );
-    expect(lines).toEqual([{ kind: 'notice', text: 'PHP security release on Wed 21 Oct, 14:00 UTC', url: 'https://www.php.net/x' }]);
+    expect(lines).toEqual([
+      { kind: 'notice', text: 'PHP security release on Wed 21 Oct, 14:00 UTC', url: 'https://www.php.net/x' },
+      quiet('8.4', '12 sites run PHP 8.4.28'),
+    ]);
   });
 
   it('waits for the image, then counts the sites moving, then names the ones left behind', () => {
@@ -73,27 +95,23 @@ describe('the PHP card', () => {
     ]);
   });
 
-  it('says for a day that every site made it', () => {
-    expect(phpLines(data([branch({ doneRecently: true })]), NOW)).toMatchObject([{ tone: 'done', text: 'All sites run PHP 8.4.28', badge: null }]);
-  });
-
   it('leaves out a branch no site runs', () => {
     expect(phpLines(data([branch({ ...behind, sites: 0 })]), NOW)).toEqual([]);
   });
 
   it('dates the next releases a week ahead, and says when one is due', () => {
     const next = (release: string, expected: string) => ({ version: `${release}RC1`, release, date: '2026-11-05', expected });
-    const lines = phpLines(
+    const coming = (d: PhpUpdatesDto) => phpLines(d, NOW).filter((line) => line.kind === 'next');
+    const lines = coming(
       data([
         branch({ next: next('8.4.29', '2026-11-26') }),
         branch({ branch: '8.5', next: next('8.5.14', '2026-11-26') }),
         branch({ branch: '8.3', next: next('8.3.38', '2026-12-17') }),
       ]),
-      NOW,
     );
     expect(lines).toEqual([{ kind: 'next', text: 'Next: PHP 8.4.29 and 8.5.14, expected Thu 26 Nov' }]);
-    expect(phpLines(data([branch({ next: next('8.4.29', '2026-11-18') })]), NOW)).toEqual([{ kind: 'next', text: 'Next: PHP 8.4.29, due now' }]);
-    expect(phpLines(data([branch({ next: next('8.4.29', '2026-11-01') })]), NOW)).toEqual([]);
+    expect(coming(data([branch({ next: next('8.4.29', '2026-11-18') })]))).toEqual([{ kind: 'next', text: 'Next: PHP 8.4.29, due now' }]);
+    expect(coming(data([branch({ next: next('8.4.29', '2026-11-01') })]))).toEqual([]);
   });
 });
 
@@ -135,7 +153,13 @@ describe('the details of a PHP branch', () => {
     );
     expect(phpSummary(branch({ ...behind, updating: true }), data([])).text).toBe('Moving the sites onto PHP 8.4.28: 5 of 12 done. Each one restarts for a second or two.');
     expect(phpSummary(branch(behind), data([])).text).toBe('7 of 12 sites still on an older PHP than 8.4.28.');
-    expect(phpSummary(branch(), data([])).text).toBe('All 12 sites run PHP 8.4.28.');
+    expect(phpSummary(branch(), data([])).text).toBe('12 sites run PHP 8.4.28.');
+    expect(phpSummary(branch({ sites: 1, current: 1 }), data([])).text).toBe('1 site runs PHP 8.4.28.');
+    // Some on a release newer than php.net was read to list, some on its newest.
+    expect(phpSummary(branch({ release: null }), data([])).text).toBe('12 sites run PHP 8.4.28 or newer.');
+    expect(phpSummary(branch({ sites: 3, current: 2, release: null }), data([])).text).toBe(
+      "2 of 3 sites run PHP 8.4.28. The others' PHP is read at their next check.",
+    );
   });
 });
 

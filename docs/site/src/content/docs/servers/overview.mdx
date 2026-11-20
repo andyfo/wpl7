@@ -50,7 +50,7 @@ record. An unreachable server that passes them is **ok** again.
 | Each site's CPU and memory | Every minute | The site's **Overview** tab, and CPU in the dashboard's site list |
 | Each site's disk use | About every 30 minutes | **Disk** on the site's **Overview** tab and on the server's page |
 | Each site's PHP release | <Since v="0.3.3" /> Hourly, and as a job that starts, stops or rebuilds the site ends | **PHP** in the site lists and on the site's **Overview** tab |
-| PHP's newest releases | <Since v="0.4.1" /> Every 15 minutes, from php.net | The **PHP** card on the dashboard, while something is happening. See [PHP updates](/docs/sites/php-updates/). |
+| PHP's newest releases | <Since v="0.4.1" /> Every 15 minutes, from php.net | The **PHP** card on the dashboard. See [PHP updates](/docs/sites/php-updates/). |
 
 The uptime check asks each running site for its home page through its server's Traefik, under
 the site's own hostname. An answer below 400, a 401 or a 403 counts as up. A 404, a 5xx or no
