@@ -64,6 +64,8 @@ for a reason; remove one once there is nothing left to watch.
 | [The WordPress image's entrypoint, as an import and `wpl7-start` rely on it](#the-wordpress-images-entrypoint-as-an-import-and-wpl7-start-rely-on-it) | Medium | 2026-11-01 09:08 UTC | Acts on a `php-fpm` first argument; seeds only an empty folder; writes wp-config.php only when absent |
 | [WPL7 Connect's floor: WordPress 5.2 and PHP 7.0](#wpl7-connects-floor-wordpress-52-and-php-70) | Medium | 2026-11-08 17:27 UTC | PHP 7.0 on 0.54% of sites, WordPress before 5.2 on 3.0%; CI installs 7.0; Docker test not run at this check |
 | [WordPress's upgrader, as WPL7 Connect drives it](#wordpresss-upgrader-as-wpl7-connect-drives-it) | Medium | 2026-11-08 17:30 UTC | 7.1.4 is the latest; it unpacks into a randomly named folder, which WPL7 Connect does not use; Docker test not run at this check |
+| [WordPress's shutdown, as WPL7 Connect answers an activation that ended PHP](#wordpresss-shutdown-as-wpl7-connect-answers-an-activation-that-ended-php) | Medium | 2026-11-20 09:48 UTC | WordPress 7.1.4 and 7.1.5: output is flushed at `shutdown` priority 1, and the fatal error handler stays out of an activation; the Docker test passes |
+| [WP-CLI: a plugin's status after a failed install or activation](#wp-cli-a-plugins-status-after-a-failed-install-or-activation) | Low | 2026-11-20 09:58 UTC | WP-CLI 2.12.0: `--skip-plugins` lets go of `active_plugins` at `plugins_loaded`, so the listing has each plugin's real status; an activation that fails during `install --activate` is only a warning |
 | [WordPress 7.2: sudo mode and Application Passwords](#wordpress-72-sudo-mode-and-application-passwords) | Medium | 2026-11-08 17:30 UTC | Beta 4 is out: no sudo mode; Application Passwords only gain an email on creation; beta tests not run at this check |
 | [WP Godmode's `godmode` command on WPL7 Connect](#wp-godmodes-godmode-command-on-wpl7-connect) | Medium | 2026-11-08 17:31 UTC | Not released: 1.3.2, the latest, registers no command with WPL7 Connect |
 | [WordPress's answer to a fatal error](#wordpresss-answer-to-a-fatal-error) | Low | 2026-10-09 15:55 UTC | 500, as relied on |
@@ -1193,6 +1195,49 @@ for a reason; remove one once there is nothing left to watch.
 - **When it changes:** read the change against `class-wpl7-connect-updates.php`, then run the
   Docker test (`WPL7_CONNECT_E2E=1 npx vitest run test/e2e/connect` in `panel`) on the release's
   image. A change in what the upgrader returns goes into `upgrade_error()` and the vectors.
+
+## WordPress's shutdown, as WPL7 Connect answers an activation that ended PHP
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-20 09:48 UTC. In WordPress 7.1.4, `default-filters.php` hooks
+  `wp_ob_end_flush_all` to `shutdown` at priority 1, `wp-settings.php` registers
+  `shutdown_action_hook` as a shutdown function, and `WP_Fatal_Error_Handler::handle()` returns at
+  once while `WP_SANDBOX_SCRAPING` is defined, which `plugin_sandbox_scrape()` does. The Docker
+  test's activation cases pass on 7.1.5.
+- **The problem:** a plugin can end PHP while WordPress activates it, after WordPress saved it as
+  active. Breakdance's first activation does: `exit(wp_redirect(...))` to its onboarding page.
+  WPL7 Connect then answers the panel from WordPress's `shutdown` action, at `PHP_INT_MIN`, ahead
+  of `wp_ob_end_flush_all()`. Once that flush has sent the redirect, the panel sees no answer and
+  asks again the other way in; an install then fails on its own folder. A fatal error during an
+  activation reaches the same answer only while WordPress's fatal error handler stays out of it.
+- **Check:** `gh api 'repos/WordPress/wordpress-develop/commits?path=<file>&since=<last check>'`
+  for `src/wp-includes/default-filters.php` (the `shutdown` hooks), `src/wp-settings.php`,
+  `src/wp-includes/class-wp-fatal-error-handler.php` and `src/wp-admin/includes/plugin.php`
+  (`activate_plugin`, `plugin_sandbox_scrape`). Or run the Docker test's activation cases on the
+  latest image.
+- **When it changes:** move the answer ahead of whatever sends output first
+  (`answer_if_php_ends()` in `class-wpl7-connect-server.php`), raise the plugin's version, and run
+  `WPL7_CONNECT_E2E=1 npx vitest run test/e2e/connect` in `panel`.
+
+## WP-CLI: a plugin's status after a failed install or activation
+
+- **Priority:** Low
+- **Last checked:** 2026-11-20 09:58 UTC. In WP-CLI 2.12.0, `Runner::setup_skip_plugins_filters()`
+  filters `active_plugins` while WordPress loads and removes the filters at `plugins_loaded`, so
+  `wp plugin list --skip-plugins` gives each plugin's real status. `CommandWithUpgrade::install()`
+  counts only the installs, and an activation that fails during `--activate` is a warning.
+- **The problem:** WP-CLI's exit code does not say whether a plugin install or activation worked.
+  A plugin that ends PHP after WordPress saved it as active makes it exit non-zero (Breakdance's
+  first activation, exit status 1 on PHP 8.4). A failed activation during `install --activate`
+  exits 0. After a run that failed, `WpService.settle()` lists the plugins with
+  `--skip-plugins --skip-themes --skip-update-check`, and goes by the status. If that listing hid
+  the real status, an active plugin would read as installed but not active.
+- **Check:** `gh api 'repos/wp-cli/wp-cli/commits?path=php/WP_CLI/Runner.php&since=<last check>'`
+  and `gh api 'repos/wp-cli/extension-command/commits?path=src/WP_CLI/CommandWithUpgrade.php&since=<last check>'`,
+  then read what changed in `setup_skip_plugins_filters()` and `install()`.
+- **When it changes:** read the status another way in `pluginState()` (`wp option get
+  active_plugins --format=json`), and run `test/unit/wpPluginChange.test.ts` against the new
+  output.
 
 ## WordPress 7.2: sudo mode and Application Passwords
 

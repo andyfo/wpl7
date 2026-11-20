@@ -25,7 +25,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { backups, siteConnections, sites } from '../../../src/db/schema.js';
+import { backups, plugins, siteConnections, sites } from '../../../src/db/schema.js';
 import { hostExec } from '../../../src/lib/exec.js';
 import { zipOf } from '../../../src/lib/zipWriter.js';
 import { ConnectClient } from '../../../src/services/connectClient.js';
@@ -201,6 +201,14 @@ add_filter('site_transient_update_plugins', function ($value) {
 add_action('upgrader_process_complete', function () {
     update_option('e2e_upgraded_by', get_current_user_id());
 });
+// The test's panel listens on a port of its own, which WordPress downloads from no other host on;
+// a real panel answers on 443. (WordPress 5.9 added a filter for the ports; this works on 5.2 too.)
+add_filter('http_request_args', function ($args, $url) {
+    if (parse_url($url, PHP_URL_HOST) === 'host.docker.internal') {
+        $args['reject_unsafe_urls'] = false;
+    }
+    return $args;
+}, 10, 2);
 add_filter('wpl7_connect_commands', function (array $commands) {
     $commands['hello'] = array(
         'summary' => 'Says hello',
@@ -217,6 +225,72 @@ add_filter('wpl7_connect_commands', function (array $commands) {
 
 const pluginFile = (slug: string, version: string, body = '') =>
   `<?php\n/**\n * Plugin Name: ${slug === 'e2e-breaker' ? 'E2E Breaker' : 'E2E Sample'}\n * Version: ${version}\n */\n${body}\n`;
+
+/**
+ * A plugin that ends PHP on its first activation, as Breakdance's does: it sends the browser to
+ * its welcome page and exits, after WordPress has saved it as active. It counts its activations.
+ */
+const REDIRECTING_PLUGIN = `<?php
+/**
+ * Plugin Name: E2E Welcome Redirect
+ * Version: 1.0
+ */
+register_activation_hook(__FILE__, function () {
+    update_option('e2e_redirect_activations', (int) get_option('e2e_redirect_activations', 0) + 1);
+    if (get_option('e2e_redirect_seen') === 'yes') {
+        return;
+    }
+    update_option('e2e_redirect_seen', 'yes');
+    add_action('activated_plugin', function ($plugin) {
+        if ($plugin === plugin_basename(__FILE__)) {
+            exit(wp_redirect(admin_url('admin.php?page=e2e-welcome')));
+        }
+    });
+});
+`;
+
+/** Activations that go wrong: before WordPress saves the plugin as active, after it, and by printing. */
+const CRASH_BEFORE = `<?php
+/**
+ * Plugin Name: E2E Crash Before
+ * Version: 1.0
+ */
+register_activation_hook(__FILE__, function () {
+    throw new RuntimeException('setup failed');
+});
+`;
+const CRASH_AFTER = `<?php
+/**
+ * Plugin Name: E2E Crash After
+ * Version: 1.0
+ */
+add_action('activated_plugin', function ($plugin) {
+    if ($plugin === plugin_basename(__FILE__)) {
+        throw new RuntimeException('welcome page failed');
+    }
+});
+`;
+const NOISY = `<?php
+/**
+ * Plugin Name: E2E Noisy
+ * Version: 1.0
+ */
+register_activation_hook(__FILE__, function () {
+    echo 'Thanks for installing!';
+});
+`;
+/** A fatal error that is no exception: PHP ends, after WordPress saved the plugin as active. */
+const FATAL_AFTER = `<?php
+/**
+ * Plugin Name: E2E Fatal After
+ * Version: 1.0
+ */
+add_action('activated_plugin', function ($plugin) {
+    if ($plugin === plugin_basename(__FILE__)) {
+        @trigger_error('welcome page broke', E_USER_ERROR);
+    }
+});
+`;
 
 const PRETTY_HTACCESS = `# BEGIN WordPress
 <IfModule mod_rewrite.c>
@@ -274,6 +348,37 @@ describe.skipIf(!ENABLED).each(cases)('a site on $wp with $db, through WPL7 Conn
     app.inject({ method, url, headers, ...(payload !== undefined ? { payload: payload as Record<string, unknown> } : {}) });
   const site = () => w.db.select().from(sites).where(eq(sites.slug, 'shop')).get()!;
   const pluginVersion = async (slug: string) => (await wp(['plugin', 'get', slug, '--field=version'])).stdout.trim();
+  const isActive = async (slug: string) => (await wp(['plugin', 'is-active', slug], { allowFail: true })).status === 0;
+  /** A zip of one plugin file in the panel's catalog, by its folder; its catalog id. */
+  const catalogZip = (folder: string, php: string) => {
+    const zipPath = path.join(w.config.paths.plugins, `${folder}-1a2b3c4d.zip`);
+    fs.mkdirSync(path.dirname(zipPath), { recursive: true });
+    fs.writeFileSync(zipPath, zipOf([{ name: `${folder}/` }, { name: `${folder}/${folder}.php`, data: php }]));
+    return w.db.insert(plugins).values({ kind: 'zip', slug: folder, name: folder, zipPath, isDefault: 0, createdAt: Date.now() }).returning().get().id;
+  };
+  const installFromCatalog = async (id: number) => {
+    const res = await api('POST', '/api/sites/shop/wp/plugins', { source: { kind: 'catalog', id }, activate: true });
+    expect(res.statusCode, res.body).toBe(202);
+    return runJob(w, res.json().job.id, 5 * 60_000);
+  };
+  /**
+   * The component requests the panel sends while `work` runs. A redirect in place of the plugin's
+   * answer had it ask again the other way in.
+   */
+  const componentRequests = async (work: () => Promise<void>) => {
+    const asked: string[] = [];
+    const transport = w.core.connections.transport!;
+    w.core.connections.transport = (req) => {
+      if (req.url.href.includes('component')) asked.push(req.url.href);
+      return transport(req);
+    };
+    try {
+      await work();
+    } finally {
+      w.core.connections.transport = transport;
+    }
+    return asked;
+  };
 
   beforeAll(async () => {
     // -------------------------------------------------------------- the site
@@ -506,6 +611,65 @@ describe.skipIf(!ENABLED).each(cases)('a site on $wp with $db, through WPL7 Conn
     // Once only.
     const twice = await request(port, 'GET', `${link.pathname}${link.search}`);
     expect(withCookies(new Map(), twice)).not.toMatch(/wordpress_logged_in/);
+  }, 20 * 60_000);
+
+  it('installs and activates a plugin that ends PHP on its first activation, and asks the site once', async () => {
+    const activations = async () => (await wp(['option', 'get', 'e2e_redirect_activations'])).stdout.trim();
+    const id = catalogZip('e2e-welcome-redirect', REDIRECTING_PLUGIN);
+    let asked = await componentRequests(async () => {
+      const installed = await installFromCatalog(id);
+      expect(installed.job.status, installed.log.join('\n')).toBe('succeeded');
+    });
+    expect(asked).toHaveLength(1);
+    expect(await isActive('e2e-welcome-redirect')).toBe(true);
+    expect(await activations()).toBe('1');
+
+    // Its first activation again, on its own: the redirect comes back with it.
+    await wp(['plugin', 'deactivate', 'e2e-welcome-redirect']);
+    await wp(['option', 'delete', 'e2e_redirect_seen']);
+    asked = await componentRequests(async () => {
+      const activate = await api('POST', '/api/sites/shop/wp/plugins/e2e-welcome-redirect/activate');
+      expect(activate.statusCode, activate.body).toBe(202);
+      const activated = await runJob(w, activate.json().job.id, 5 * 60_000);
+      expect(activated.job.status, activated.log.join('\n')).toBe('succeeded');
+    });
+    expect(asked).toHaveLength(1);
+    expect(await isActive('e2e-welcome-redirect')).toBe(true);
+    expect(await activations()).toBe('2');
+  }, 20 * 60_000);
+
+  it('says how an activation that went wrong came out: a failure while inactive, a warning while active', async () => {
+    let before: Awaited<ReturnType<typeof installFromCatalog>> | undefined;
+    let asked = await componentRequests(async () => {
+      before = await installFromCatalog(catalogZip('e2e-crash-before', CRASH_BEFORE));
+    });
+    expect(before!.job.status, before!.log.join('\n')).toBe('failed');
+    expect(before!.job.error).toMatch(/^Plugin "e2e-crash-before" was installed but not activated: RuntimeException: setup failed in \S+\/e2e-crash-before\.php:\d+$/);
+    expect(asked).toHaveLength(1);
+    expect(await isActive('e2e-crash-before')).toBe(false);
+
+    let after: Awaited<ReturnType<typeof installFromCatalog>> | undefined;
+    asked = await componentRequests(async () => {
+      after = await installFromCatalog(catalogZip('e2e-crash-after', CRASH_AFTER));
+    });
+    expect(after!.job.status, after!.log.join('\n')).toBe('succeeded');
+    expect(after!.log.join('\n')).toMatch(/warn: Plugin "e2e-crash-after" was installed and activated\. RuntimeException: welcome page failed in \S+\/e2e-crash-after\.php:\d+$/m);
+    expect(asked).toHaveLength(1);
+    expect(await isActive('e2e-crash-after')).toBe(true);
+
+    const noisy = await installFromCatalog(catalogZip('e2e-noisy', NOISY));
+    expect(noisy.job.status, noisy.log.join('\n')).toBe('succeeded');
+    expect(noisy.log).toContain('warn: Plugin "e2e-noisy" was installed and activated. The plugin generated unexpected output.');
+    expect(await isActive('e2e-noisy')).toBe(true);
+
+    let fatal: Awaited<ReturnType<typeof installFromCatalog>> | undefined;
+    asked = await componentRequests(async () => {
+      fatal = await installFromCatalog(catalogZip('e2e-fatal-after', FATAL_AFTER));
+    });
+    expect(fatal!.job.status, fatal!.log.join('\n')).toBe('succeeded');
+    expect(fatal!.log).toContain('warn: Plugin "e2e-fatal-after" was installed and activated. PHP stopped: welcome page broke');
+    expect(asked).toHaveLength(1);
+    expect(await isActive('e2e-fatal-after')).toBe(true);
   }, 20 * 60_000);
 
   it('lets go on Disconnect: the plugin refuses the key afterwards', async () => {

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WPL7 Connect
  * Description: Connects this site to a WPL7 panel, which then keeps it updated, backed up and watched.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Requires at least: 5.2
  * Requires PHP: 7.0
  * Author: WPL7
@@ -33,7 +33,7 @@
 
 defined('ABSPATH') || exit;
 
-define('WPL7_CONNECT_VERSION', '1.0.0');
+define('WPL7_CONNECT_VERSION', '1.0.1');
 define('WPL7_CONNECT_FILE', __FILE__);
 
 if (version_compare(PHP_VERSION, '7.0', '<')) {

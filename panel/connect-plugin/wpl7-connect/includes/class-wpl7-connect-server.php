@@ -28,6 +28,14 @@ final class WPL7_Connect_Server
     /** Rows the activity log keeps; older ones go as rows are added. */
     const LOG_ROWS = 200;
 
+    /** The signed request being answered, [action, params], for an answer given at shutdown. */
+    private static $request = null;
+    /** What answer_at_shutdown() answers with, while an action is where PHP may end. */
+    private static $if_php_ends = null;
+    private static $shutdown_registered = false;
+    /** Whether the answer has gone out. */
+    private static $sent = false;
+
     public static function register_routes()
     {
         // One route for every action, and every method: an unknown action or a GET must still get
@@ -88,6 +96,7 @@ final class WPL7_Connect_Server
             $signed = true;
             WPL7_Connect_Plugin::mark_request();
             $params = self::params($body);
+            self::$request = [$action, $params];
             if (function_exists('wp_raise_memory_limit')) {
                 wp_raise_memory_limit('admin');
             }
@@ -114,6 +123,44 @@ final class WPL7_Connect_Server
             }
         }
         exit;
+    }
+
+    /**
+     * What to answer if PHP ends before the action returns; null once it is past that point. A
+     * plugin can end PHP while WordPress activates it: Breakdance's first activation sends the
+     * browser to its onboarding with exit(wp_redirect(...)), after WordPress saved it as active.
+     * The panel would get that redirect instead of an answer, and ask again the other way in.
+     * `$answer` gives the data the action would have answered with. It is called at shutdown,
+     * and its answer is logged and sent as handle() does: first thing in WordPress's `shutdown`
+     * action, whose wp_ob_end_flush_all() would otherwise send the redirect first, and from PHP's
+     * own shutdown should that action not run.
+     */
+    public static function answer_if_php_ends($answer)
+    {
+        if ($answer !== null && !self::$shutdown_registered) {
+            add_action('shutdown', [__CLASS__, 'answer_at_shutdown'], PHP_INT_MIN);
+            register_shutdown_function([__CLASS__, 'answer_at_shutdown']);
+            self::$shutdown_registered = true;
+        }
+        self::$if_php_ends = $answer;
+    }
+
+    /** At shutdown: the answer to a request that PHP ended where answer_if_php_ends() said what it is. */
+    public static function answer_at_shutdown()
+    {
+        $answer = self::$if_php_ends;
+        if ($answer === null || self::$sent || self::$request === null) {
+            return;
+        }
+        self::$if_php_ends = null;
+        list($action, $params) = self::$request;
+        try {
+            $response = self::json(200, call_user_func($answer));
+        } catch (Throwable $e) {
+            $response = self::error_response(new WPL7_Connect_Error(500, 'internal', ['detail' => self::describe($e)]));
+        }
+        self::log_request($action, $params, $response);
+        self::send($response);
     }
 
     private static function dispatch($action, $params)
@@ -686,6 +733,7 @@ final class WPL7_Connect_Server
 
     private static function send($response)
     {
+        self::$sent = true;
         while (ob_get_level() > 0) {
             if (!@ob_end_clean()) {
                 break;
@@ -699,6 +747,9 @@ final class WPL7_Connect_Server
         if (ini_get('zlib.output_compression')) {
             @ini_set('zlib.output_compression', '0');
         }
+        // A redirect that something the action ran asked for (a plugin being activated) is not the answer.
+        header_remove('Location');
+        header_remove('X-Redirect-By');
         http_response_code($response['status']);
         header('X-WPL7-Connect: ' . WPL7_Connect_Plugin::PROTOCOL);
         header('Cache-Control: no-store, no-transform');

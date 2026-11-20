@@ -15,7 +15,7 @@ import { pluginFolderEntries, pluginHeaderVersion } from '../../src/lib/zipWrite
  * its version - the header of wpl7-connect.php, WPL7_CONNECT_VERSION in the same file, and the
  * Stable tag in readme.txt - then pin the new version and hash here.
  */
-const PINNED = { version: '1.0.0', sha256: 'a6f8426e6c7de3e34a50f1af1faca0f0dd7ac398a334dfb67857cce2a04518cb' };
+const PINNED = { version: '1.0.1', sha256: '77cecbd6494ce85217e8156bbdfbf24194319482c9e9a38c8d23900d85980ac5' };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../connect-plugin/wpl7-connect');
 
