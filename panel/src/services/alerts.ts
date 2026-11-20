@@ -524,7 +524,12 @@ export class AlertService {
   /** That every site on a security release's branch runs it, for a release told by `phpReleases`. Once. */
   async phpRolloutDone(version: string, total: number): Promise<void> {
     if (!this.said(`php-release:${version}`)) return;
-    await this.once(`php-rollout-done:${version}`, () => [`All sites run PHP ${version}`, [`Every site on its branch runs PHP ${version} now: ${total} in all.`]]);
+    // Named by its branch: sites on another PHP version run another release.
+    const branch = /^\d+\.\d+/.exec(version)?.[0] ?? version;
+    await this.once(`php-rollout-done:${version}`, () => [
+      `All PHP ${branch} sites run ${version}`,
+      [`Every site on PHP ${branch} runs ${version} now: ${total} in all.`],
+    ]);
   }
 
   /**

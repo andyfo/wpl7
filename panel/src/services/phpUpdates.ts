@@ -49,7 +49,7 @@ const BASE_CHECK_MS = 30 * MIN;
 const PLAN_TIMEOUT_MS = 2 * MIN;
 /** A refresh that failed is not queued again on its server before this. */
 const RETRY_AFTER_MS = HOUR;
-/** "All sites run PHP 8.4.28" stays on the Overview this long. */
+/** A branch's sites count as `doneRecently` this long after the last one moved onto its newest release. */
 const DONE_SHOWN_MS = 24 * HOUR;
 /** An advance notice stays on the Overview until this long after the time it names. */
 const NOTICE_AFTER_MS = 24 * HOUR;
@@ -120,7 +120,7 @@ interface ImagesState {
    * `doneAt`: sites that ran it from the start, as after an install, did not move.
    */
   behindAt: Record<string, number>;
-  /** By release version: when the last site moved onto it, for the Overview. */
+  /** By release version: when the last site moved onto it, for `doneRecently`. */
   doneAt: Record<string, number>;
 }
 
@@ -569,7 +569,7 @@ export class PhpUpdatesService {
       if (branch.behindCount === 0) {
         // A site whose release is not known yet is not done: it waits, and so does the email.
         if (branch.current < branch.sites) continue;
-        // On the Overview only once sites moved onto it: not for sites that ran it from the start.
+        // Done only once sites moved onto it: not for sites that ran it from the start.
         if (state.behindAt[latest.version] && !state.doneAt[latest.version]) this.mark(state, 'doneAt', latest.version, now);
         if (latest.security) await this.s.alerts.phpRolloutDone(latest.version, branch.sites);
         continue;
@@ -647,6 +647,8 @@ export class PhpUpdatesService {
         const mine = rows.filter((r) => r.phpVersion === branch);
         // A site whose release is not known yet, or that has no container, is neither behind nor current.
         const behind = latest ? mine.filter((r) => behindOf(r.phpRelease, latest.version)) : [];
+        // What they run: a release is named only when every one of them is known to run it.
+        const runs = new Set(mine.map((r) => r.phpRelease));
         const current = latest ? mine.filter((r) => r.phpRelease && compareVersions(r.phpRelease, latest.version) >= 0).length : 0;
         const doneAt = latest ? (state.doneAt[latest.version] ?? null) : null;
         const listed = behind.slice(0, BEHIND_LISTED);
@@ -666,6 +668,7 @@ export class PhpUpdatesService {
             : null,
           next: facts.candidates[branch] ?? null,
           sites: mine.length,
+          release: runs.size === 1 ? ([...runs][0] ?? null) : null,
           current,
           behind: listed.map((r) => {
             const move = moves.find((job) => job.siteId === r.id);

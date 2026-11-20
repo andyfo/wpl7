@@ -1891,6 +1891,8 @@ export interface PhpBranchDto {
   next: { version: string; release: string; date: string; expected: string } | null;
   /** Sites set to this branch, hosted ones: those the panel updates. */
   sites: number;
+  /** The release all of them run, as last read; null when they differ, or one's is not known. */
+  release: string | null;
   /** Of them, the ones on the newest release. */
   current: number;
   /** The first few of the others. */

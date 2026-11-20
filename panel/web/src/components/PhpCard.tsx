@@ -6,8 +6,9 @@ import { usePhpDetails } from './PhpDetails';
 import { Card, OutLink } from './ui';
 
 /**
- * The Overview's PHP card: a security release coming, one out, sites moving onto it. Nothing
- * otherwise. A release's line opens its details (PhpDetails).
+ * The Overview's PHP card: the PHP each version's sites run, and in its place, while some are
+ * behind a new release, how that release is reaching them. Also a security release coming, and
+ * the next releases. A version's line opens its details (PhpDetails).
  */
 export function PhpCard() {
   const query = usePhpUpdates();

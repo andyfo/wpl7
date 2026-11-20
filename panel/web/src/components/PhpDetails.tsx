@@ -45,9 +45,11 @@ export function PhpDetails() {
         <p className="text-sm text-neutral-500">Loading…</p>
       ) : b?.latest && php.data ? (
         <Details b={b} data={php.data} />
-      ) : (
-        <p className="text-sm text-neutral-500">php.net lists no release of PHP {branch}.</p>
-      )}
+      ) : php.data ? (
+        <p className="text-sm text-neutral-500">
+          {php.data.checkedAt === null ? 'php.net has not been read yet.' : `php.net lists no release of PHP ${branch}.`}
+        </p>
+      ) : null}
     </Modal>
   );
 }

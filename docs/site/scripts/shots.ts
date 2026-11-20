@@ -82,7 +82,7 @@ export const SHOTS: Shot[] = [
   },
   {
     name: 'overview-php',
-    what: "The Overview's PHP card: a site still on an older PHP than a security release",
+    what: "The Overview's PHP card: the PHP release each version's sites run, and a site still on an older PHP than a security release",
     path: '/',
     theme: 'light',
     prepare: scrollTo('PHP'),

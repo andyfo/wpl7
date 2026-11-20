@@ -21,7 +21,7 @@ export type PhpLine =
       kind: 'release';
       branch: string;
       text: string;
-      tone: 'waiting' | 'updating' | 'behind' | 'done';
+      tone: PhpTone;
       /** "Security · 2 critical", for a security release. */
       badge: string | null;
       /** The sites still behind, for `behind`. */
@@ -37,7 +37,8 @@ const SOON_MS = 7 * 24 * 3600_000;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-export type PhpTone = 'waiting' | 'updating' | 'behind' | 'done';
+/** `unknown`: no site is known to be behind, and not every one is known to be current either. */
+export type PhpTone = 'waiting' | 'updating' | 'behind' | 'done' | 'unknown';
 
 /** The dot beside a line, by how things stand. */
 export const PHP_TONES: Record<PhpTone, string> = {
@@ -45,7 +46,11 @@ export const PHP_TONES: Record<PhpTone, string> = {
   updating: 'bg-sky-500',
   behind: 'bg-red-500',
   done: 'bg-emerald-500',
+  unknown: 'bg-neutral-300',
 };
+
+/** "3 sites run PHP 8.4.28", or "3 sites run PHP 8.4" when they do not all run one known release. */
+const sitesRun = (b: PhpBranchDto, release = b.release ?? b.branch) => `${plural(b.sites, 'site')} ${b.sites === 1 ? 'runs' : 'run'} PHP ${release}`;
 
 const hasRelease = (release: string | null, version: string) => release !== null && compareRelease(release, version) >= 0;
 const running = (job: { status: string } | null) => job !== null && (job.status === 'queued' || job.status === 'running');
@@ -85,7 +90,7 @@ export function phpSummary(b: PhpBranchDto, data: PhpUpdatesDto): { text: string
     return {
       text:
         b.current === b.sites
-          ? `${b.sites === 1 ? 'The site runs' : `All ${b.sites} sites run`} PHP ${version}.`
+          ? `${sitesRun(b, b.release ?? `${version} or newer`)}.`
           : `${b.current} of ${plural(b.sites, 'site')} run PHP ${version}. The others' PHP is read at their next check.`,
       update: false,
     };
@@ -107,7 +112,10 @@ export function phpSummary(b: PhpBranchDto, data: PhpUpdatesDto): { text: string
   return { text: `${b.behindCount} of ${plural(b.sites, 'site')} still on an older PHP than ${version}.`, update: false };
 }
 
-/** What the Overview's PHP card says: nothing at all when nothing is happening. */
+/**
+ * What the Overview's PHP card says: a line for each PHP version sites run, telling how its newest
+ * release is reaching them while some are behind it, and what is coming.
+ */
 export function phpLines(data: PhpUpdatesDto, now: number): PhpLine[] {
   const lines: PhpLine[] = [];
   if (data.notice) {
@@ -115,12 +123,14 @@ export function phpLines(data: PhpUpdatesDto, now: number): PhpLine[] {
     lines.push({ kind: 'notice', text: when ? `PHP security release on ${when}` : 'A PHP security release is coming', url: data.notice.url });
   }
   for (const b of data.branches) {
+    if (b.sites === 0) continue;
     const latest = b.latest;
-    if (!latest || b.sites === 0) continue;
-    const badge = latest.security ? ['Security', severityCounts(latest.advisories)].filter(Boolean).join(' · ') : null;
+    const quiet = !latest || b.behindCount === 0;
+    const badge = !quiet && latest.security ? ['Security', severityCounts(latest.advisories)].filter(Boolean).join(' · ') : null;
     const base = { kind: 'release' as const, branch: b.branch, badge, sites: [] as PhpBranchDto['behind'], more: 0, update: false };
-    if (b.behindCount === 0) {
-      if (b.doneRecently) lines.push({ ...base, tone: 'done', text: `All sites run PHP ${latest.version}`, badge: null });
+    // None behind: what its sites run, green once every one is known to run the newest release.
+    if (quiet) {
+      lines.push({ ...base, tone: latest && b.current === b.sites ? 'done' : 'unknown', text: sitesRun(b) });
       continue;
     }
     const has = (release: string | null) => release !== null && compareRelease(release, latest.version) >= 0;

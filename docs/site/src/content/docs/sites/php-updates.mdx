@@ -23,19 +23,21 @@ A site runs the PHP release in its server's site image, such as 8.4.27. When PHP
 release, each server gets a new image with it, and every site moves onto it. Nobody has to start
 anything.
 
-<Screenshot name="overview-php" alt="The Overview's PHP card: one site still on an older PHP than a security release, with what that release fixed" />
+<Screenshot name="overview-php" alt="The Overview's PHP card: the PHP release each version's sites run, and one site still on an older PHP than a security release" />
 
 ## What the Overview shows
 
-The **PHP** card on the **Overview** is there only while something is happening. It says, for example:
+The **PHP** card on the **Overview** has a line for each PHP version your sites run. While some
+of a version's sites are on an older release than its newest, the line says how that release is
+reaching them. Sites hosted elsewhere are not counted, because WPL7 does not run their PHP.
 
 | Line | When |
 |---|---|
+| 3 sites run PHP 8.4.28 | None of them is on an older release. The dot stays gray until the panel knows they run the newest. |
 | PHP security release on Wed 21 Oct, 14:00 UTC | php.net has announced a security release ahead of time |
 | PHP 8.4.28 is out. Waiting for its image. | The release is out, and no server has its image yet |
 | Updating sites to PHP 8.4.28: 5 of 12 | Sites are moving onto it |
 | 2 of 12 sites still on an older PHP than 8.4.28 | Those sites did not move. The line's details say why. |
-| All sites run PHP 8.4.28 | For a day after the last site moved |
 | Next: PHP 8.4.28 and 8.5.13, expected Thu 19 Nov | A release candidate is out, and its release is due within a week |
 
 A line opens the details of its PHP version: each server's image, the sites still on an older PHP
