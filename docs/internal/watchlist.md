@@ -40,8 +40,8 @@ for a reason; remove one once there is nothing left to watch.
 | [Docker: the build cache and image names, as the nightly clean-up reads them](#docker-the-build-cache-and-image-names-as-the-nightly-clean-up-reads-them) | Medium | 2026-10-27 17:47 UTC | Docker 29.9.2: both prune parameters trim, `all` would remove shared layers first |
 | [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
 | [Docker: a signal counts as stopping a container by hand](#docker-a-signal-counts-as-stopping-a-container-by-hand) | Medium | 2026-11-01 06:30 UTC | Docker 28.1.1: after `docker kill --signal USR1`, a container with `unless-stopped` that exits stays down |
-| [Traefik: a router on web beside the HTTPS redirect](#traefik-a-router-on-web-beside-the-https-redirect) | High | 2026-11-14 20:51 UTC | Traefik 3.7.19: with the redirect at priority 1, an app's http router answers, everything else still redirects, the ACME router stays above |
-| [Docker: an image's labels on its container](#docker-an-images-labels-on-its-container) | High | 2026-11-14 20:51 UTC | Docker 28.1.1, Traefik 3.7.19: labels are inherited; `traefik.enable=false` on the container wins; the default router answers on 80 and 443 |
+| [Traefik: a router on web beside the HTTPS redirect](#traefik-a-router-on-web-beside-the-https-redirect) | High | 2026-11-21 20:34 UTC | No Traefik release since 3.7.19 (2026-11-13), as measured on 2026-11-14: an app's http router answers at redirect priority 1, everything else still redirects, the ACME router stays above; engine test not run at this check |
+| [Docker: an image's labels on its container](#docker-an-images-labels-on-its-container) | High | 2026-11-21 20:34 UTC | Docker 29.10.0 (2026-11-16) changes nothing about labels, and Traefik has no release since 3.7.19; as measured on 2026-11-14: labels are inherited, `traefik.enable=false` on the container wins; engine test not run at this check |
 | [Docker: the names in an image archive](#docker-the-names-in-an-image-archive) | Medium | 2026-11-14 20:51 UTC | Docker 28.1.1 and 27.5.1: the classic store reads `manifest.json`, containerd's `index.json`; renamed in both, only the panel's name lands |
 | [Docker: the registry's distribution answer and pulls with a login](#docker-the-registrys-distribution-answer-and-pulls-with-a-login) | Medium | 2026-11-14 20:51 UTC | Docker 28.1.1 and 27.5.1: a digest without a pull, with the login; platforms for a list only on containerd's store |
 | [Docker: unprivileged ports from 0](#docker-unprivileged-ports-from-0) | Low | 2026-11-14 20:51 UTC | Docker 28.1.1 sets `ip_unprivileged_port_start=0` in a container's namespace |
@@ -78,6 +78,7 @@ for a reason; remove one once there is nothing left to watch.
 | [Google's crawler address lists](#googles-crawler-address-lists) | Medium | 2026-11-03 09:35 UTC | Both answer: 589 prefixes, none wider than a /27 or a /64 |
 | [ssh2: how a channel closes, as the panel's SSH channels rely on it](#ssh2-how-a-channel-closes-as-the-panels-ssh-channels-rely-on-it) | Low | 2026-11-15 10:57 UTC | 1.17.0 is the latest; channels half-open by default, `destroy()` never marks one destroyed, `'close'` waits for `'end'` or an unreadable stream |
 | [rclone: what install.sh --restore reads from it](#rclone-what-installsh---restore-reads-from-it) | Medium | 2026-11-21 10:15 UTC | `rclone/rclone:1.71` (v1.71.2): `lsf -R --files-only` lists the snapshots, exit 3 is a missing folder, crypt reads back with the pair; the engine test passes |
+| [Docker Compose: a quoted value in deploy/.env](#docker-compose-a-quoted-value-in-deployenv) | Medium | 2026-11-21 20:15 UTC | Compose v5.8.0, the newest, and v2.35.1: all 30 test values reach a container as `wpl7_env_set` was given them; the engine test passes |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -611,7 +612,9 @@ for a reason; remove one once there is nothing left to watch.
 ## Traefik: a router on web beside the HTTPS redirect
 
 - **Priority:** High
-- **Last checked:** 2026-11-14 20:51 UTC. On Traefik 3.7.19, with `deploy/docker-compose.yml`'s own
+- **Last checked:** 2026-11-21 20:34 UTC. No Traefik release since v3.7.19 and v3.8.0-rc.3, both
+  2026-11-13; the engine test was not run at this check. Measured 2026-11-14 20:51 UTC: on Traefik
+  3.7.19, with `deploy/docker-compose.yml`'s own
   flags plus `--entrypoints.web.http.redirections.entrypoint.priority=1`, a container app's router on
   `web` answers plain http, and every other request on port 80 still redirects: a WordPress and a PHP
   site under the panel's labels and protection files, and a host nobody has. The ACME challenge router
@@ -635,7 +638,9 @@ for a reason; remove one once there is nothing left to watch.
 ## Docker: an image's labels on its container
 
 - **Priority:** High
-- **Last checked:** 2026-11-14 20:51 UTC. On Docker 28.1.1 with Traefik 3.7.19, an image's `traefik.*`
+- **Last checked:** 2026-11-21 20:34 UTC. Docker 29.10.0 (2026-11-16) has nothing on labels in its
+  release notes, and Traefik has no release since v3.7.19; the engine test was not run at this check.
+  Measured 2026-11-14 20:51 UTC: on Docker 28.1.1 with Traefik 3.7.19, an image's `traefik.*`
   and `wpl7.*` labels land on a container made without labels: Traefik routed another site's domain to
   it at once, and `listManaged(['wpl7.role=wordpress'])` counted it as that site's. `traefik.enable=false`
   on the container wins over the image's. A container with `traefik.enable=true` and only a service label
@@ -1650,3 +1655,30 @@ for a reason; remove one once there is nothing left to watch.
   changelog since the pinned version for `lsf` output and exit codes.
 - **When it changes:** adjust `snapshotsIn` or `RCLONE_DIRECTORY_NOT_FOUND`, and the engine test,
   before moving `rcloneImage` in `panel/src/config.ts`.
+
+## Docker Compose: a quoted value in deploy/.env
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-21 20:15 UTC. Docker Compose v5.8.0, the newest release (2026-11-17),
+  and v2.35.1: `test/engine/envFile.test.ts` passes, all 30 values reaching a container as given.
+  v5.8.0 was its release binary for macOS, checked against its `.sha256`.
+- **What we rely on:** every service in `deploy/docker-compose.yml` takes its settings from
+  `deploy/.env` through Compose, which reads the file by rules of its own. A value written plain has
+  `$` expanded and ` #…` cut off as a comment, and loses its quotes; one in double quotes reads
+  `\\` as `\`, `\"` as `"` and `$$` as `$`, and keeps the rest as it is, `#`, `'` and spaces
+  included. `wpl7_env_set` (`provision/lib.sh`) writes a value Compose would change in double quotes
+  with those escapes, and `wpl7_env_get` reads it back the same way. A value of characters Compose
+  leaves alone is written plain, so the scripts that grep the file read it as before.
+- **The problem:** a change to how Compose reads a double-quoted value would change the values on
+  their way into the containers: the smarthost login, the admin password of a first boot, a DNS
+  provider's token, the values `install.sh --restore` brings back. It would show as a login that
+  fails.
+- **Check:** with Docker running, in `panel/`:
+  `WPL7_ENGINE_TESTS=1 npx vitest run test/engine/envFile.test.ts`, once with the installed Compose
+  and once with the newest release's binary from `github.com/docker/compose/releases`, checked
+  against its `.sha256`, in `WPL7_ENGINE_COMPOSE`. Read the release notes since the last check for
+  `.env`, dotenv and interpolation. The `Env file` workflow runs the test with the runner's Compose
+  whenever `provision/lib.sh` changes.
+- **When it changes:** adjust `wpl7_env_quote` and `wpl7_env_get` in `provision/lib.sh`, and the
+  values in the engine test and in `test/unit/restoreScripts.test.ts`.
+

@@ -65,11 +65,12 @@ async function makeSite(w: TestWorld): Promise<SiteRow> {
   return w.db.select().from(sites).where(eq(sites.id, site.id)).get()!;
 }
 
-/** A server whose SSH does not answer until `down` is cleared. */
-function switchableExec(): ExecPort & { down: boolean } {
-  const fail = () => new Error('connect ETIMEDOUT 203.0.113.66:22');
+/** A server whose SSH does not answer until `down` is cleared; `error` is what the connection says. */
+function switchableExec(): ExecPort & { down: boolean; error: string } {
+  const fail = () => new Error(exec.error);
   const exec = {
     down: true,
+    error: 'connect ETIMEDOUT 203.0.113.66:22',
     async run(cmd: string, args: string[], opts?: Parameters<ExecPort['run']>[2]) {
       if (exec.down) throw fail();
       return fakeExecOk.run(cmd, args, opts);
@@ -206,6 +207,25 @@ describe('recovery', () => {
     expect(await autoFinalizeMoves(w.core, w.worker, w.core.log, resolvers)).toBe(0);
     w.db.update(moveCleanups).set({ handedOverAt: Date.now() - 25 * 3600_000 }).run();
     expect(await autoFinalizeMoves(w.core, w.worker, w.core.log, resolvers)).toBe(1);
+  });
+
+  it("recovers nothing from a server that answers but refuses the panel's SSH key", async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const s2 = w.addSshServer('s2', { real: true, publicIp: '203.0.113.20' });
+    const { site, backup, lost, exec } = await siteOnLostServer(w, s2);
+    // A panel installed again, whose new key the server does not know yet.
+    exec.error = 'Server "lost" (#2) is unreachable over SSH: All configured authentication methods failed';
+    const refusal = `"lost" answers, but refuses the panel's SSH key, so its sites most likely still run there. Add the panel's key there instead, as its page shows.`;
+
+    expect((await siteRecoveryReport(w.core, site)).refusal).toBe(refusal);
+    expect((await serverRecoveryReport(w.core, lost.id)).sites[0]!.refusal).toBe(refusal);
+    await expect(queueSiteRecovery(w.core, site, { backupId: backup.id, targetServerId: s2.id })).rejects.toThrow(refusal);
+    await expect(queueServerRecovery(w.core, lost.id, { targetServerId: s2.id })).rejects.toThrow(refusal);
+    expect(w.db.select().from(jobs).where(eq(jobs.type, 'site.recover')).all()).toEqual([]);
+
+    // A server that does not answer at all is another matter.
+    exec.error = 'connect ETIMEDOUT 203.0.113.66:22';
+    expect((await siteRecoveryReport(w.core, site)).refusal).toBeNull();
   });
 
   it('refuses a site that is still on its server, and one whose server answers', async () => {
@@ -664,18 +684,24 @@ describe('recovery', () => {
     fs.cpSync(kept.path, gone.path, { recursive: true });
     expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 0, back: 1, missing: new Set([uncopied.id]) });
 
+    // A folder without its sums is not there: Docker leaves an empty one where a missing folder was mounted.
+    fs.rmSync(gone.path, { recursive: true, force: true });
+    fs.mkdirSync(gone.path);
+    expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 1, back: 0, missing: new Set([gone.id, uncopied.id]) });
+    fs.cpSync(kept.path, gone.path, { recursive: true });
+
     // A backup root that is not there at all says nothing about its backups.
     const elsewhere = path.join(w.config.srvRoot, 'not-mounted');
     w.db.update(backups).set({ rootPath: elsewhere, path: path.join(elsewhere, site.slug, 'x') }).where(eq(backups.id, kept.id)).run();
-    expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 0, back: 0, missing: new Set([kept.id, uncopied.id]) });
+    expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 0, back: 1, missing: new Set([kept.id, uncopied.id]) });
 
     // Nor does a folder that can't be listed.
     fs.rmSync(gone.path, { recursive: true, force: true });
     const files = w.servers.handleFor(1).files;
-    const readdir = files.readdir.bind(files);
-    files.readdir = async (dir: string) => {
-      if (dir === path.dirname(gone.path)) throw new Error(`ls ${dir} failed: Permission denied`);
-      return readdir(dir);
+    const tree = files.tree.bind(files);
+    files.tree = async (dir: string) => {
+      if (dir === path.dirname(gone.path)) throw new Error(`find ${dir} failed: Permission denied`);
+      return tree(dir);
     };
     expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 0, back: 0, missing: new Set([kept.id]) });
     expect(w.db.select().from(backups).where(eq(backups.id, gone.id)).get()!.filesPresent).toBe(1);
@@ -724,6 +750,29 @@ describe('around a recovery', () => {
     expect(sent[1]!.body).toMatch(/recovered on another server meanwhile: bakery/);
   });
 
+  it("says to add the panel's key, not to recover anything, when a server refuses it", async () => {
+    const w = await makeWorld();
+    const sent: { subject: string; body: string }[] = [];
+    w.core.settings.set('alertEmail', 'ops@example.com');
+    w.core.mail.notifyOperator = async (subject: string, body: string) => {
+      sent.push({ subject, body });
+      return true;
+    };
+    const lost = w.addSshServer('lost');
+    const refused = 'Server "lost" (#2) is unreachable over SSH: All configured authentication methods failed';
+    await w.core.alerts.serverChecked({ id: lost.id, name: 'lost' }, false, refused);
+    w.db.update(alertStates).set({ since: Date.now() - 11 * 60_000 }).run();
+    await w.core.alerts.serverChecked({ id: lost.id, name: 'lost' }, false, refused);
+    expect(sent.map((m) => m.subject)).toEqual(["lost refuses the panel's SSH key"]);
+    expect(sent[0]!.body).toContain('Its sites most likely still run there');
+    expect(sent[0]!.body).toContain("If the panel was installed again, it has a new SSH key: add it on the server, as the server's page shows.");
+    expect(sent[0]!.body).not.toMatch(/Recover|backups on another server/);
+
+    await w.core.alerts.serverChecked({ id: lost.id, name: 'lost' }, true, null);
+    expect(sent.map((m) => m.subject)).toEqual(["lost refuses the panel's SSH key", "lost accepts the panel's SSH key again"]);
+    expect(sent[1]!.body).toMatch(/^lost accepts the panel's SSH key again\. It refused it for /);
+  });
+
   it("takes server 1's address from a changed SERVER_PUBLIC_IP, and keeps an edit while .env stays as it was", async () => {
     const db = createTestDb();
     await seed(db, makeTestConfig({ SERVER_PUBLIC_IP: '198.51.100.1' }));
@@ -762,7 +811,7 @@ describe('around a recovery', () => {
     });
   });
 
-  it('refuses Finalize now while the old server has not answered since the site left it', async () => {
+  it('refuses Finalize now and a change of server while the old server has not answered, and says what ends the wait', async () => {
     const w = await makeWorld({ exec: hostExec });
     const s2 = w.addSshServer('s2', { real: true, publicIp: '203.0.113.20' });
     const { site, backup } = await siteOnLostServer(w, s2);
@@ -775,9 +824,13 @@ describe('around a recovery', () => {
     try {
       const detail = await app.inject({ method: 'GET', url: `/api/sites/${site.slug}`, headers });
       expect(detail.json().pendingMoveCleanup).toMatchObject({ sourceServerName: 'lost', handoverPending: true });
+      const ends = 'It is stopped once "lost" answers again, and removed a day later, or with Finalize now from then on. If "lost" is gone for good, remove it on its page instead.';
       const res = await app.inject({ method: 'POST', url: `/api/sites/${site.slug}/move/finalize`, headers });
       expect(res.statusCode).toBe(409);
-      expect(res.json().error.message).toMatch(/has not answered since the site left it/);
+      expect(res.json().error.message).toBe(`The site's old copy on "lost" is not stopped yet: "lost" has not answered since the site left it. ${ends}`);
+      const move = await app.inject({ method: 'POST', url: `/api/sites/${site.slug}/move`, headers, payload: { targetServerId: 1 } });
+      expect(move.statusCode).toBe(409);
+      expect(move.json().error.message).toBe(`The site can change server once its old copy on "lost" is removed. ${ends}`);
     } finally {
       await app.close();
     }

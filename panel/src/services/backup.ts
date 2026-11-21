@@ -458,6 +458,24 @@ export class BackupService {
     }
   }
 
+  /**
+   * What is wrong with a backup's folder on its server, or null when it holds its `sha256sums` and
+   * every file those list. Asked before anything mounts the folder: Docker makes a folder that is
+   * missing as an empty one, and an upload of that copies nothing, successfully.
+   */
+  async filesProblem(backup: BackupRow): Promise<string | null> {
+    const h = this.handleForBackup(backup);
+    const dir = this.backupDir(backup);
+    const found = (await h.files.tree(dir)).files;
+    if (!found.has('sha256sums')) return found.size === 0 ? `${dir} is not there, or empty` : `${dir} holds no sha256sums`;
+    const listed = (await h.files.readFile(path.join(dir, 'sha256sums')))
+      .split('\n')
+      .map((line) => line.split(/\s+/)[1])
+      .filter((file): file is string => Boolean(file));
+    const lacking = listed.filter((file) => !found.has(file));
+    return lacking.length > 0 ? `${dir} lacks ${lacking.join(', ')}` : null;
+  }
+
   /** Import db.sql.gz into the (recreated) site database, on the backup's server. */
   async importDatabase(backup: BackupRow, dbName: string): Promise<void> {
     const h = this.handleForBackup(backup);
@@ -1029,8 +1047,10 @@ export class BackupService {
    * (OffsiteService.dropEmptyBackups), and an empty mount point looks exactly like a lost disk.
    * Rows under a backup root that is not there at all are left alone too. Either way it is in
    * `missing`, with every other backup listed as present whose folder is not there: a recovery
-   * can't take its files from this server. A folder that can't be listed says nothing about the
-   * backups in it. Throws only when the server can't be asked. `slugs` narrows it to those sites'.
+   * can't take its files from this server. A folder without its `sha256sums` is not there either:
+   * Docker makes an empty one where something mounts a folder that is missing. A site folder that
+   * can't be listed says nothing about the backups in it. Throws only when the server can't be
+   * asked. `slugs` narrows it to those sites'.
    */
   async checkFiles(serverId: number, opts: { slugs?: string[] } = {}): Promise<{ gone: number; back: number; missing: Set<number> }> {
     const h = this.servers.handleFor(serverId);
@@ -1058,10 +1078,10 @@ export class BackupService {
     );
     const roots = new Map<string, boolean>();
     // One listing per site folder rather than one question per backup: over SSH each is a round trip.
-    // readdir answers [] for a folder that is not there; null here is one it could not list.
+    // tree answers nothing for a folder that is not there; null here is one it could not list.
     const listings = new Map<string, Set<string> | null>();
     const listed = async (folder: string): Promise<Set<string> | null> => {
-      if (!listings.has(folder)) listings.set(folder, await h.files.readdir(folder).then((names) => new Set(names), () => null));
+      if (!listings.has(folder)) listings.set(folder, await h.files.tree(folder).then((t) => new Set(t.files.keys()), () => null));
       return listings.get(folder)!;
     };
     let gone = 0;
@@ -1081,7 +1101,8 @@ export class BackupService {
       }
       const listing = await listed(path.dirname(row.path));
       if (listing === null) continue;
-      const there = listing.has(path.basename(row.path));
+      const base = path.basename(row.path);
+      const there = listing.has(`${base}/sha256sums`);
       if (row.filesPresent === 1) {
         if (there) continue;
         missing.add(row.id);
@@ -1092,9 +1113,7 @@ export class BackupService {
           .where(and(eq(backups.id, row.id), eq(backups.filesPresent, 1)))
           .run().changes;
       } else {
-        if (!there) continue;
-        if (!(await h.files.exists(path.join(row.path, 'sha256sums')))) continue;
-        if (!(await h.files.exists(path.join(row.path, 'manifest.json')))) continue;
+        if (!there || !listing.has(`${base}/manifest.json`)) continue;
         back += this.db
           .update(backups)
           .set({ filesPresent: 1 })

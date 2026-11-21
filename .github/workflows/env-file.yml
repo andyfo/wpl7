@@ -1,0 +1,28 @@
+# deploy/.env through the real Docker Compose: each value provision/lib.sh writes reaches a container
+# as it was given. A minute or so, and only when the writer or its test changes. A new Compose is the
+# watchlist's to check (docs/internal/watchlist.md).
+name: Env file
+
+on:
+  pull_request:
+    paths:
+      - provision/lib.sh
+      - panel/test/engine/envFile.test.ts
+      - .github/workflows/env-file.yml
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    name: deploy/.env through Docker Compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/panel-deps
+      - name: Every value, as wpl7_env_set wrote it
+        run: npx vitest run test/engine/envFile.test.ts
+        working-directory: panel
+        env:
+          WPL7_ENGINE_TESTS: '1'

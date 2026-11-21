@@ -18,7 +18,7 @@ import { appRows } from '../../services/appSpec.js';
 import { pinned, pullAuthFor, pullPinned } from '../../services/appImages.js';
 import { repointSiteDns, writeForwarding, type DnsRepoint } from './siteHandover.js';
 import { finalizeCleanup } from './move.js';
-import { checkRecoverRequest, serverAnswers, siteRecoveryState, siteRowFromManifest, type BackupManifest } from '../../services/recovery.js';
+import { checkRecoverRequest, serverAnswers, serverReach, siteRecoveryState, siteRowFromManifest, type BackupManifest } from '../../services/recovery.js';
 import { TABLE_PREFIX_RE } from '../../../shared/schemas.js';
 import type { RecoveryState } from '../../../shared/types.js';
 
@@ -154,8 +154,8 @@ async function recoverSite(
     ctx.info(`Recovering "${site.slug}" from backup #${p.backupId} onto "${target.name}"…`);
     let state: RecoveryState = 'missing';
     if (!prepared) {
-      const answers = sameServer ? true : await serverAnswers(s, fromServerId);
-      const now = await siteRecoveryState(s, site, { answers, exceptJobId: ctx.jobId });
+      const reach = sameServer ? { answers: true, refusesKey: false } : await serverReach(s, fromServerId);
+      const now = await siteRecoveryState(s, site, { ...reach, exceptJobId: ctx.jobId });
       if (now.refusal) throw new Error(`${now.refusal} Nothing was changed.`);
       state = now.state;
     }

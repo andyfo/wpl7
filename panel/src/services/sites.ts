@@ -70,6 +70,13 @@ async function webRootMissingIn(docker: Pick<DockerPort, 'exec'>, site: Pick<Sit
 /** A backup reads the files and the database, and a save here reloads nothing it depends on. */
 const CACHE_SAFE_JOBS = new Set(['backup.create']);
 
+/**
+ * What ends the wait for a recovered site's old copy (jobs/handlers/recover.ts): the server it was
+ * recovered from answering again, or that server's removal, which closes its copies' cleanups.
+ */
+export const oldCopyWaits = (server: string): string =>
+  `It is stopped once "${server}" answers again, and removed a day later, or with Finalize now from then on. If "${server}" is gone for good, remove it on its page instead.`;
+
 export class SitesService {
   constructor(
     private readonly s: CoreServices,
@@ -399,11 +406,17 @@ export class SitesService {
     if (!target) throw notFound(`Server #${body.targetServerId} not found`);
     if (target.status !== 'ok') throw conflict(`Server "${target.name}" is ${target.status}`);
     const pending = this.s.db
-      .select({ id: moveCleanups.id })
+      .select({ handover: moveCleanups.handover, sourceServerId: moveCleanups.sourceServerId })
       .from(moveCleanups)
       .where(and(eq(moveCleanups.siteId, site.id), eq(moveCleanups.status, 'pending')))
-      .get();
-    if (pending) {
+      .all();
+    // A recovered site's old copy waits for its server, and only that server's return or removal ends it.
+    const waiting = pending.find((c) => c.handover === 'pending');
+    if (waiting) {
+      const name = this.s.servers.rowById(waiting.sourceServerId)?.name ?? `server #${waiting.sourceServerId}`;
+      throw conflict(`The site can change server once its old copy on "${name}" is removed. ${oldCopyWaits(name)}`);
+    }
+    if (pending.length > 0) {
       throw conflict('A previous move is still awaiting cleanup; finalize it first (site page banner)');
     }
     // A route borrows a path of a site on the same server only, both ways.

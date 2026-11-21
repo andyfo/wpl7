@@ -22,6 +22,7 @@ import {
   webRootSchema,
 } from '../../shared/schemas.js';
 import { parseSiteCacheRules } from '../../shared/cacheRules.js';
+import { refusesPanelKey } from '../../shared/servers.js';
 import type {
   RecoveryBackupDto,
   RecoveryState,
@@ -50,19 +51,32 @@ const SITE_REPORT_BACKUPS = 50;
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+/** What asking a server found: it answers, or it does not, or it answered and refused the panel's SSH key. */
+export interface ServerReach {
+  answers: boolean;
+  refusesKey: boolean;
+}
+
+const ANSWERS: ServerReach = { answers: true, refusesKey: false };
+
 /**
  * Whether the server answers now, whatever its row says, which it then says too. Server 1 is the
  * panel's own machine: it always answers.
  */
 export async function serverAnswers(s: Pick<CoreServices, 'servers'>, serverId: number): Promise<boolean> {
+  return (await serverReach(s, serverId)).answers;
+}
+
+/** serverAnswers, and when the server does not, whether it refused the panel's SSH key (shared/servers.ts). */
+export async function serverReach(s: Pick<CoreServices, 'servers'>, serverId: number): Promise<ServerReach> {
   const row = s.servers.rowById(serverId);
-  if (!row) return false;
-  if (row.kind === 'local') return true;
+  if (!row) return { answers: false, refusesKey: false };
+  if (row.kind === 'local') return ANSWERS;
   // A session that is up answers: its keepalives would have closed it within a minute otherwise.
   // A command would queue behind the server's busy channels, and a busy server is not a lost one.
   if (s.servers.sessionUp(serverId)) {
     s.servers.markReachable(serverId);
-    return true;
+    return ANSWERS;
   }
   let timer: NodeJS.Timeout | undefined;
   try {
@@ -74,10 +88,11 @@ export async function serverAnswers(s: Pick<CoreServices, 'servers'>, serverId: 
     ]);
     if (res.exitCode !== 0) throw new Error(`exit ${res.exitCode}: ${res.stderr.trim().slice(0, 200)}`);
     s.servers.markReachable(serverId);
-    return true;
+    return ANSWERS;
   } catch (err) {
-    s.servers.markUnreachable(serverId, err instanceof Error ? err : new Error(String(err)));
-    return false;
+    const error = err instanceof Error ? err : new Error(String(err));
+    s.servers.markUnreachable(serverId, error);
+    return { answers: false, refusesKey: refusesPanelKey(error.message) };
   } finally {
     clearTimeout(timer);
   }
@@ -116,6 +131,8 @@ async function missingOn(s: CoreServices, site: SiteRow, dbs: { names: Set<strin
 interface StateInput {
   /** Whether the site's server answers, asked once per server by the caller. */
   answers: boolean;
+  /** It does not, because it refused the panel's SSH key (serverReach). */
+  refusesKey?: boolean;
   /** Its server's databases, asked once per server; only when it answers. */
   dbs?: { names: Set<string> } | { error: string };
   /** The job asking, which is the site's active job itself (jobs/handlers/recover.ts). */
@@ -142,7 +159,7 @@ export async function siteRecoveryState(
     };
   }
   const serverName = s.servers.rowById(site.serverId)?.name ?? `server #${site.serverId}`;
-  if (!input.answers) return { state: 'unreachable', refusal: null };
+  if (!input.answers) return { state: 'unreachable', refusal: input.refusesKey ? keyRefusal(serverName) : null };
   const missing = await missingOn(s, site, input.dbs ?? (await databasesOn(s, site.serverId)));
   if (typeof missing === 'string') {
     return { state: 'present', refusal: `"${serverName}" answers, but the panel could not check the site there: ${missing}` };
@@ -150,6 +167,10 @@ export async function siteRecoveryState(
   if (missing) return { state: 'missing', refusal: null };
   return { state: 'present', refusal: `It is still on "${serverName}". Use Change server, or Restore.` };
 }
+
+/** A server that turned the panel's key away is up: its sites are not lost (shared/servers.ts). */
+const keyRefusal = (serverName: string) =>
+  `"${serverName}" answers, but refuses the panel's SSH key, so its sites most likely still run there. Add the panel's key there instead, as its page shows.`;
 
 /** A complete backup the site can come back from, with where it can come from. */
 export interface UsableBackup {
@@ -302,26 +323,26 @@ async function siteReport(
 
 /** `GET /api/sites/:slug/recovery`. */
 export async function siteRecoveryReport(s: CoreServices, site: SiteRow): Promise<SiteRecoveryDto> {
-  const answers = isExternal(site) ? false : await serverAnswers(s, site.serverId);
+  const { answers, refusesKey } = isExternal(site) ? { answers: false, refusesKey: false } : await serverReach(s, site.serverId);
   // Backups that left with a reinstalled disk must not be offered as there: asked of the servers
   // holding its backups' files, its own only when it answers.
   const servers = [site.serverId, ...serversHolding(s, [site.slug])].filter((id) => answers || id !== site.serverId);
   const gone = await filesGone(s, [site.slug], servers);
-  return siteReport(s, site, { answers }, SITE_REPORT_BACKUPS, gone);
+  return siteReport(s, site, { answers, refusesKey }, SITE_REPORT_BACKUPS, gone);
 }
 
 /** `GET /api/servers/:id/recovery`. */
 export async function serverRecoveryReport(s: CoreServices, serverId: number): Promise<ServerRecoveryDto> {
   const server = s.servers.rowById(serverId);
   if (!server) throw notFound(`Server #${serverId} not found`);
-  const answers = await serverAnswers(s, serverId);
+  const { answers, refusesKey } = await serverReach(s, serverId);
   const dbs = answers ? await databasesOn(s, serverId) : undefined;
   const hosted = s.db.select().from(sites).where(and(eq(sites.serverId, serverId), hostedSites())).orderBy(asc(sites.slug)).all();
   // Backups that left with a reinstalled disk must not be offered as there, as for one site.
   const slugs = hosted.map((site) => site.slug);
   const gone = await filesGone(s, slugs, [serverId, ...serversHolding(s, slugs)].filter((id) => answers || id !== serverId));
   const reports: SiteRecoveryDto[] = [];
-  for (const site of hosted) reports.push(await siteReport(s, site, { answers, dbs }, SERVER_REPORT_BACKUPS, gone));
+  for (const site of hosted) reports.push(await siteReport(s, site, { answers, refusesKey, dbs }, SERVER_REPORT_BACKUPS, gone));
   const external = s.db
     .select({ slug: sites.slug, title: sites.title })
     .from(sites)
@@ -384,8 +405,8 @@ export function checkRecoverRequest(
 
 /** `POST /api/sites/:slug/recover`: one site, from the backup asked for. */
 export async function queueSiteRecovery(s: CoreServices, site: SiteRow, req: RecoverRequest): Promise<JobRow> {
-  const answers = isExternal(site) ? false : await serverAnswers(s, site.serverId);
-  const { state, refusal } = await siteRecoveryState(s, site, { answers });
+  const reach = isExternal(site) ? { answers: false, refusesKey: false } : await serverReach(s, site.serverId);
+  const { state, refusal } = await siteRecoveryState(s, site, reach);
   if (refusal) throw conflict(refusal);
   // A backup whose files left with a reinstalled disk must not be picked as one that is there.
   const gone = await filesGone(s, [site.slug], [req.targetServerId]);
@@ -414,7 +435,9 @@ export async function queueServerRecovery(
   const target = s.servers.rowById(body.targetServerId);
   if (!target) throw notFound(`Server #${body.targetServerId} not found`);
   if (target.status !== 'ok') throw conflict(`"${target.name}" is ${target.status}: pick a server that is ok.`);
-  const answers = await serverAnswers(s, serverId);
+  const { answers, refusesKey } = await serverReach(s, serverId);
+  // Nor what it keeps for sites hosted elsewhere: it is up.
+  if (refusesKey) throw conflict(keyRefusal(server.name));
   if (target.id === serverId && !answers) {
     throw conflict(`"${server.name}" does not answer, so its sites can't come back there. Pick another server.`);
   }

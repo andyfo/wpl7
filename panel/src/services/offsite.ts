@@ -557,6 +557,10 @@ export class OffsiteService {
       .run();
 
     ctx.info(`Copying backup #${backup.id} to "${dest.name}" (${remote.display})…`);
+    // Docker mounts a folder that is missing as an empty one, and rclone copies that without a
+    // complaint: the copy would read as complete, and the backup as present ever after.
+    const problem = await this.backup.filesProblem(backup);
+    if (problem) throw new Error(`The backup's files are not all on "${handle.name}" (${problem}). Nothing was copied.`);
     await this.ensureImage(handle, ctx);
 
     const flags = [

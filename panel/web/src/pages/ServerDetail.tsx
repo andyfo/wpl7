@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ServerCheck, ServerDto, ServerSystemInfoDto } from '../../../shared/types';
+import { refusesPanelKey } from '../../../shared/servers';
 import {
   isTerminal,
   useMeta,
@@ -116,9 +117,10 @@ export function ServerDetail() {
   // here once they are gone from it. A rebuilt server's sites are all down, which is what offers it.
   const sitesDown = (monitor.data?.sites ?? []).filter((x) => x.serverId === serverId && x.up === false).length;
   const unreachable = server.status === 'unreachable';
-  const canRecover = server.sitesCount > 0 && (unreachable || sitesDown > 0);
-  // A panel installed again has a new SSH key, which the servers it had do not know yet.
-  const keyRefused = unreachable && /authentication methods failed|permission denied/i.test(server.lastError ?? '');
+  // A panel installed again has a new SSH key, which the servers it had do not know yet. Such a
+  // server answers: its sites most likely still run there, so it offers no recovery.
+  const keyRefused = unreachable && refusesPanelKey(server.lastError);
+  const canRecover = server.sitesCount > 0 && !keyRefused && (unreachable || sitesDown > 0);
 
   const memPct = stats && stats.memTotal > 0 ? (stats.memUsed / stats.memTotal) * 100 : null;
   const diskPct = stats && stats.diskTotal > 0 ? (stats.diskUsed / stats.diskTotal) * 100 : null;
@@ -156,8 +158,8 @@ export function ServerDetail() {
           {keyRefused && sshKey.data?.publicKey && (
             <div className="mt-3 space-y-1">
               <p>
-                If the panel was installed again, it has a new SSH key. Add it to <code>/home/{server.sshUser}/.ssh/authorized_keys</code> and{' '}
-                <code>/root/.ssh/authorized_keys</code> on this server:
+                The server answers, so its sites most likely still run. If the panel was installed again, it has a new SSH key. Add it to{' '}
+                <code>/home/{server.sshUser}/.ssh/authorized_keys</code> and <code>/root/.ssh/authorized_keys</code> on this server:
               </p>
               <CopyField value={sshKey.data.publicKey} tone="plain" />
             </div>
@@ -165,7 +167,7 @@ export function ServerDetail() {
         </div>
       )}
 
-      {unreachable && server.sitesCount > 0 && (
+      {unreachable && !keyRefused && server.sitesCount > 0 && (
         <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
           <div className="font-medium">{server.name} does not answer</div>
           <p className="mt-1">If it is gone, its sites can come back from their backups on another server.</p>

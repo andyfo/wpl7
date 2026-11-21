@@ -156,7 +156,7 @@ before. It then writes `/srv/panel/panel.db` with mode `0600`, and `setup.sh` re
 |---|---|
 | The panel's database, with its accounts, settings, sites, servers, destinations and DKIM keys | The snapshot |
 | `PANEL_DOMAIN`, `DEV_DOMAIN`, `ACME_EMAIL`, `DNS_PROVIDER`, `MAIL_HOSTNAME` | The snapshot, unless a flag of this run gives one |
-| `TLS_MODE`, `ACME_RESOLVER`, `SMTP_RELAYHOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `BACKUP_ROOT` | The snapshot |
+| `TLS_MODE`, `ACME_RESOLVER`, `SMTP_RELAYHOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `BACKUP_ROOT`, `HETZNER_API_KEY`, `DO_AUTH_TOKEN` | The snapshot |
 | `WPL7_CHANNEL` | The release `install.sh` installs. In a checkout, the snapshot |
 | `MARIADB_ROOT_PASSWORD`, `PANEL_SESSION_SECRET` | Generated new |
 | `SERVER_PUBLIC_IP` | Detected on this server, as on every install |
@@ -165,8 +165,9 @@ before. It then writes `/srv/panel/panel.db` with mode `0600`, and `setup.sh` re
 | The public IP of the panel's own server | Cleared, so the panel takes `SERVER_PUBLIC_IP` when it first starts |
 
 A snapshot without `manifest.json` gives the database only, and `setup.sh` asks for the domains
-as on a new install. Cloudflare's token is in the database. The token of another DNS provider is
-not in the snapshot, so add it to `deploy/.env` afterwards.
+as on a new install. One made before 0.4.3 gives the panel's domain, and none of the other values
+above: add a smarthost's login and a DNS provider's token to `deploy/.env` afterwards. Cloudflare's
+token is in the database either way.
 
 The restore refuses a snapshot from a newer WPL7 than the image, and a database that a newer build
 migrated. Either way it says what to install instead. It also refuses while a panel runs on the

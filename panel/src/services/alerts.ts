@@ -5,6 +5,7 @@ import type { Db } from '../db/index.js';
 import { alertStates, moveCleanups, siteConnections, sites, vulnNotices, type AlertStateRow, type SiteConnectionRow, type SiteRow } from '../db/schema.js';
 import { panelUrl } from '../lib/panelUrl.js';
 import { formatBytes } from '../../shared/bytes.js';
+import { refusesPanelKey } from '../../shared/servers.js';
 import type { SettingsService } from './settings.js';
 import type { Logger } from './index.js';
 import type { VulnFinding, WpInventoryService } from './wpInventory.js';
@@ -270,6 +271,9 @@ export class AlertService {
    * like the disk one, saying where its sites can be recovered. Answering again gets one too,
    * naming the sites that left it meanwhile, whose old copies there the panel now stops
    * (jobs/handlers/recover.ts). Server 1 is the panel itself, and never asked.
+   *
+   * A server that refuses the panel's SSH key answers: the email says to add the key, and nothing
+   * about recovering its sites, which most likely still run there (shared/servers.ts).
    */
   async serverChecked(server: { id: number; name: string }, answered: boolean, error: string | null): Promise<void> {
     const key = `server:${server.id}`;
@@ -288,8 +292,10 @@ export class AlertService {
         .all();
       const recovered = owed.filter((c) => c.targetServerId !== 0).map((c) => c.slug);
       const deleted = owed.filter((c) => c.targetServerId === 0).map((c) => c.slug);
-      await this.send(`${server.name} answers again`, [
-        `${server.name} answers again. It did not answer for ${duration(Date.now() - row.since)}, from ${utc(row.since)}.`,
+      const keyRefused = refusesPanelKey(detail.error);
+      const was = `for ${duration(Date.now() - row.since)}, from ${utc(row.since)}`;
+      await this.send(keyRefused ? `${server.name} accepts the panel's SSH key again` : `${server.name} answers again`, [
+        keyRefused ? `${server.name} accepts the panel's SSH key again. It refused it ${was}.` : `${server.name} answers again. It did not answer ${was}.`,
         ...(recovered.length > 0
           ? [
               '',
@@ -307,16 +313,28 @@ export class AlertService {
     let next: ServerDownDetail = { ...parse<ServerDownDetail>(row?.detail), error };
     let notifiedAt = row?.notifiedAt ?? null;
     if (Date.now() - since >= SERVER_DOWN_MS) {
-      ({ next, notifiedAt } = await this.deliver(next, notifiedAt, true, () => [
-        `${server.name} does not answer`,
-        [
-          `${server.name} has not answered since ${utc(since)}.`,
-          ...(error ? [`The last error: ${clip(error)}`] : []),
-          'Its sites can come back from their backups on another server: Recover sites, on its page.',
-          '',
-          page,
-        ],
-      ]));
+      ({ next, notifiedAt } = await this.deliver(next, notifiedAt, true, () =>
+        refusesPanelKey(error)
+          ? [
+              `${server.name} refuses the panel's SSH key`,
+              [
+                `${server.name} answers, but has refused the panel's SSH key since ${utc(since)}. Its sites most likely still run there, and the panel can't back them up or change them.`,
+                "If the panel was installed again, it has a new SSH key: add it on the server, as the server's page shows.",
+                '',
+                page,
+              ],
+            ]
+          : [
+              `${server.name} does not answer`,
+              [
+                `${server.name} has not answered since ${utc(since)}.`,
+                ...(error ? [`The last error: ${clip(error)}`] : []),
+                'Its sites can come back from their backups on another server: Recover sites, on its page.',
+                '',
+                page,
+              ],
+            ],
+      ));
     }
     this.put({ key, siteId: null, since, notifiedAt, detail: JSON.stringify(next) });
   }

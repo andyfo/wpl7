@@ -10,6 +10,7 @@ sources:
   - panel/src/jobs/handlers/siteHandover.ts
   - panel/web/src/components/RecoveryDialogs.tsx
   - panel/web/src/lib/recovery.ts
+  - panel/shared/servers.ts
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
@@ -31,7 +32,9 @@ from its [offsite copy](/docs/backups/offsite/) and builds the site on the serve
 ## Recover a server's sites
 
 1. Open the server's page. **Recover sites** is there while the server does not answer, or while
-   any of its sites is down.
+   any of its sites is down. A server that refuses the panel's SSH key answers, so it is not
+   offered: its sites most likely still run there. Add the key instead, as after
+   [installing the panel again](/docs/reference/manual-recovery/#rebuild-the-panels-server).
 2. Choose **Recover sites**, then the **Target server**.
 3. Check the list. Each site shows the backup it comes back from, or why it can't.
 4. Confirm. The button says how many sites come back.
@@ -64,7 +67,8 @@ The copy's files and database stay for a day, so anything written after the back
 copied out. Then they are removed, as after a move.
 
 An email goes to the address in **Settings → Monitoring** when a server has not answered for ten
-minutes, and another when it answers again. That one names the sites whose old copies it stops.
+minutes, and another when it answers again. That one names the sites whose old copies it stops. A
+server that has refused the panel's SSH key for ten minutes gets an email that says to add the key.
 
 ## Remove the lost server
 
@@ -83,6 +87,8 @@ The others are forgotten.
 - A container app whose image was uploaded comes back only when that image is on the target
   server. Upload it again first.
 - A database added to a site after its last backup does not come back.
+- A recovered site can't change server while its old copy is there. The copy goes a day after the
+  old server answers again, or with **Finalize now** from then on, or with the server's removal.
 - The lost server's mail queue and uploaded plugin zips are gone.
 - Sites hosted elsewhere keep their backups on the target server from then on. Their next backup
   there starts over.

@@ -41,6 +41,7 @@ import {
   RestoreBackupDialog,
 } from '../components/backups/BackupParts';
 import { describeCron } from '../../../shared/cron';
+import { refusesPanelKey } from '../../../shared/servers';
 import { KeepDaysSetting } from '../components/backups/KeepDays';
 import { BackupBeforeUpdatesSetting } from '../components/backups/BackupBeforeUpdates';
 import { WpAdminLoginButton } from '../components/WpAdminLoginButton';
@@ -269,8 +270,11 @@ function OverviewTab({ slug }: { slug: string }) {
   const servers = useServers();
   const s = site.data;
   if (!s) return <Spinner />;
-  // Its server does not answer: the site may have to come back from a backup elsewhere.
-  const serverDown = s.containerState === 'unknown' && servers.data?.find((srv) => srv.id === s.serverId)?.status === 'unreachable';
+  // Its server does not answer: the site may have to come back from a backup elsewhere. One that
+  // refuses the panel's SSH key answers, and the site most likely still runs there.
+  const siteServer = servers.data?.find((srv) => srv.id === s.serverId);
+  const serverDown = s.containerState === 'unknown' && siteServer?.status === 'unreachable';
+  const keyRefused = serverDown && refusesPanelKey(siteServer?.lastError);
 
   const samples = history.data ?? [];
   const multiServer = meta.data?.multiServer ?? false;
@@ -308,7 +312,19 @@ function OverviewTab({ slug }: { slug: string }) {
           )}
         </div>
       )}
-      {serverDown && (
+      {serverDown && keyRefused && (
+        <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
+          <div className="font-medium">Its server refuses the panel's SSH key</div>
+          <p className="mt-1">
+            The site most likely still runs on {s.serverName}. Add the panel's key there, as{' '}
+            <Link to={`/servers/${s.serverId}`} className="underline">
+              its page
+            </Link>{' '}
+            shows.
+          </p>
+        </div>
+      )}
+      {serverDown && !keyRefused && (
         <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
           <div className="font-medium">Its server does not answer</div>
           <p className="mt-1">If {s.serverName} is gone, the site can come back from a backup on another server.</p>
@@ -352,7 +368,8 @@ function OverviewTab({ slug }: { slug: string }) {
         <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
           <div className="font-medium">Old copy on {cleanup.sourceServerName}</div>
           <p className="mt-1">
-            {cleanup.sourceServerName} does not answer. If it answers again, the panel stops that copy and removes it a day later.
+            {cleanup.sourceServerName} does not answer. If it answers again, the panel stops that copy and removes it a day later. Until
+            then the site can't change server, unless {cleanup.sourceServerName} is removed.
           </p>
         </div>
       )}

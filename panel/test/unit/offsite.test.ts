@@ -176,6 +176,39 @@ describe('uploading', () => {
     expect(calls[1]!.argv).toContain('--one-way');
   });
 
+  it('copies nothing from a backup whose folder is gone, empty or short of a file, and never makes the folder', async () => {
+    const { w, backup } = await uploadWorld();
+    const attempt = async () => {
+      w.offsite.requeue(backup);
+      await expect(w.offsite.uploadBackup(backup.id)).rejects.toThrow(/every destination/);
+      return copiesOf(w, backup.id)[0]!;
+    };
+    const files = fs.readdirSync(backup.path);
+    const keep = path.join(w.config.srvRoot, 'kept');
+    fs.cpSync(backup.path, keep, { recursive: true });
+
+    // Gone, as after a reinstall of the disk, or with the disk not mounted.
+    fs.rmSync(backup.path, { recursive: true, force: true });
+    let copy = await attempt();
+    expect(copy).toMatchObject({ status: 'failed' });
+    expect(copy.error).toBe(`The backup's files are not all on "${w.servers.rowById(1)!.name}" (${backup.path} is not there, or empty). Nothing was copied.`);
+    expect(fs.existsSync(backup.path)).toBe(false);
+    // Empty, as Docker leaves a folder that was missing when something mounted it.
+    fs.mkdirSync(backup.path);
+    expect((await attempt()).error).toContain(`${backup.path} is not there, or empty`);
+    // Its sums, without the archive they list.
+    fs.cpSync(keep, backup.path, { recursive: true });
+    fs.rmSync(path.join(backup.path, 'files.tar.gz'));
+    expect((await attempt()).error).toContain(`${backup.path} lacks files.tar.gz`);
+    expect(rcloneCalls(w)).toEqual([]);
+
+    fs.cpSync(keep, backup.path, { recursive: true });
+    expect(fs.readdirSync(backup.path).sort()).toEqual(files.sort());
+    w.offsite.requeue(backup);
+    await w.offsite.uploadBackup(backup.id);
+    expect(copiesOf(w, backup.id)[0]!.status).toBe('complete');
+  });
+
   it('marks the copy complete and stamps the destination', async () => {
     const { w, dest, backup } = await uploadWorld();
     await w.offsite.uploadBackup(backup.id);

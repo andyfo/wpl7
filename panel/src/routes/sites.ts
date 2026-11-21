@@ -31,7 +31,7 @@ import { requireAccess } from '../plugins/auth.js';
 import { checkSiteUrl, clearSiteCaches, siteContainerStack } from '../services/siteCaches.js';
 import type { AppDeps } from './deps.js';
 import { isPhpSite, phpNoPageCache } from '../lib/siteKind.js';
-import { resolveTargetServer } from '../services/sites.js';
+import { oldCopyWaits, resolveTargetServer } from '../services/sites.js';
 import { queueSiteRecovery, siteRecoveryReport } from '../services/recovery.js';
 import { audit } from '../lib/audit.js';
 
@@ -314,7 +314,7 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
     const cleanup = pending.find((c) => c.handover === 'done');
     if (!cleanup) {
       const name = deps.servers.rowById(pending[0]!.sourceServerId)?.name ?? `server #${pending[0]!.sourceServerId}`;
-      throw conflict(`"${name}" has not answered since the site left it. Its old copy is stopped once it does, and removed a day later.`);
+      throw conflict(`The site's old copy on "${name}" is not stopped yet: "${name}" has not answered since the site left it. ${oldCopyWaits(name)}`);
     }
     const job = deps.worker.enqueue(
       'site.moveFinalize',
