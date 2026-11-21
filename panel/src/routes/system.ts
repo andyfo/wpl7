@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { z } from 'zod';
-import type { SystemAboutDto, UpdateStatusDto } from '../../shared/types.js';
+import type { PhpUpdatesDto, SystemAboutDto, UpdateStatusDto } from '../../shared/types.js';
 import { notFound } from '../lib/errors.js';
 import { jobToDto, viewerOf } from '../lib/dto.js';
 import type { AppDeps } from './deps.js';
@@ -14,6 +14,9 @@ export function registerSystemRoutes(app: FastifyInstance, deps: AppDeps): void 
 
   // Served entirely from the cached check - no page view ever waits on GitHub.
   r.get('/api/system/version', async () => deps.updates.status());
+
+  // PHP's releases as php.net said at the last read, and each branch's sites (services/phpUpdates.ts).
+  r.get('/api/php', async (): Promise<PhpUpdatesDto> => deps.phpUpdates.status());
 
   /**
    * What the About page shows about this install. Server 1 is the panel's own machine, so

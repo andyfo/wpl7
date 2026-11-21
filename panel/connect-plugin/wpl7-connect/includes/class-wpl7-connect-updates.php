@@ -307,13 +307,22 @@ final class WPL7_Connect_Updates
             return ['ok' => false, 'error' => self::SELF_REFUSAL];
         }
         if ($action === 'activate') {
-            $result = self::quietly(function () use ($file) {
-                return activate_plugin($file);
+            WPL7_Connect_Server::answer_if_php_ends(function () use ($file) {
+                $fatal = self::fatal_error();
+                return self::activated($file, $fatal !== null || is_plugin_active($file) ? $fatal : 'The plugin ended PHP before WordPress activated it.');
             });
-            if (is_wp_error($result)) {
-                return ['ok' => false, 'error' => self::message($result->get_error_message())];
+            try {
+                $result = self::quietly(function () use ($file) {
+                    return activate_plugin($file);
+                });
+                $problem = is_wp_error($result) ? self::message($result->get_error_message()) : null;
+            } catch (Throwable $e) {
+                // Thrown by the plugin's code. Answered as an internal error, the panel would ask again.
+                $problem = self::message(get_class($e) . ': ' . $e->getMessage() . ' in ' . $e->getFile() . ':' . $e->getLine());
+            } finally {
+                WPL7_Connect_Server::answer_if_php_ends(null);
             }
-            return ['ok' => true, 'status' => 'active'];
+            return self::activated($file, $problem);
         }
         if ($action === 'deactivate') {
             self::quietly(function () use ($file) {
@@ -339,6 +348,31 @@ final class WPL7_Connect_Updates
             return ['ok' => false, 'error' => 'WordPress did not delete the plugin.'];
         }
         return ['ok' => true, 'status' => 'deleted'];
+    }
+
+    /**
+     * An activation's answer, by whether WordPress has the plugin active. WordPress saves it as
+     * active before a plugin that printed while it was activated is an error, and a plugin can
+     * throw or end PHP after the save (answer_if_php_ends); one can also switch itself off again.
+     * What went wrong on the way is the `warning` of a plugin that is active, the `error` of one
+     * that is not.
+     */
+    private static function activated($file, $problem)
+    {
+        if (is_plugin_active($file)) {
+            return $problem === null ? ['ok' => true, 'status' => 'active'] : ['ok' => true, 'status' => 'active', 'warning' => $problem];
+        }
+        return ['ok' => false, 'status' => 'inactive', 'error' => $problem !== null ? $problem : 'WordPress did not activate the plugin.'];
+    }
+
+    /** The fatal error PHP stopped on, its first line, or null: for an answer given at shutdown. */
+    private static function fatal_error()
+    {
+        $error = error_get_last();
+        if (!is_array($error) || !in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) {
+            return null;
+        }
+        return self::message('PHP stopped: ' . strtok((string) $error['message'], "\n"));
     }
 
     private static function theme_action($action, $theme)

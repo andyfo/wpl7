@@ -61,13 +61,13 @@ export async function sweepPhpReleases(s: CoreServices): Promise<void> {
   }
 }
 
-const NO_ANSWER = Symbol('no answer');
+export const NO_ANSWER = Symbol('no answer');
 
 /**
  * What `asked` answers, or NO_ANSWER after `timeoutMs`. Docker can take a request and never answer
  * it, and nothing waiting on a reading here should wait for that.
  */
-async function within<T>(asked: Promise<T>, timeoutMs: number): Promise<T | typeof NO_ANSWER> {
+export async function within<T>(asked: Promise<T>, timeoutMs: number): Promise<T | typeof NO_ANSWER> {
   let timer: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([

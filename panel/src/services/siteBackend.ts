@@ -12,6 +12,8 @@ import { conflict } from '../lib/errors.js';
 import { CONNECT_PLUGIN, isExternal } from '../lib/siteKind.js';
 import type { RunResult } from './docker.js';
 import type { CoreServices } from './index.js';
+import type { PluginChange } from './wp.js';
+import { storedZipPluginFolder } from '../lib/pluginZip.js';
 import type { ScanLog } from './wpInventory.js';
 import { createAdminLoginLink, type AdminLoginLink } from './adminLogin.js';
 import { restTargetOf, sendWpRest, type WpRestResponse } from './wpRest.js';
@@ -65,8 +67,11 @@ export interface SiteBackend {
   actor(ctx: JobContext<unknown>): Promise<string | undefined>;
   /** Update these plugins or themes; one outcome per slug, failures included. */
   updateMany(ctx: JobContext<unknown>, kind: 'plugin' | 'theme', slugs: string[], actor: string | undefined): Promise<WpBulkOpResult[]>;
-  /** `update` only on a hosted site: an external one updates through updateMany, which keeps a rollback copy. */
-  componentAction(kind: 'plugin' | 'theme', slug: string, action: 'activate' | 'deactivate' | 'delete' | 'update', actor: string | undefined): Promise<void>;
+  /**
+   * `update` only on a hosted site: an external one updates through updateMany, which keeps a rollback copy.
+   * Answers with a warning for the log when the change was made but WP-CLI reported an error; null otherwise.
+   */
+  componentAction(kind: 'plugin' | 'theme', slug: string, action: 'activate' | 'deactivate' | 'delete' | 'update', actor: string | undefined): Promise<string | null>;
   /** Install a plugin; returns its slug. */
   install(ctx: JobContext<unknown>, source: InstallSource, activate: boolean, actor: string | undefined): Promise<string>;
   coreUpdate(ctx: JobContext<unknown>): Promise<{ from: string | null; to: string | null }>;
@@ -90,6 +95,16 @@ export function backendFor(s: CoreServices, site: SiteRow): SiteBackend {
 }
 
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/**
+ * An install job's plugin install: the job fails unless WordPress has the plugin as asked, and its
+ * log says so when WP-CLI reported an error all the same.
+ */
+function settleInstall(ctx: JobContext<unknown>, plugin: string, activate: boolean, change: PluginChange): void {
+  if (change.outcome === 'failed') throw new Error(`Plugin "${plugin}" failed to install: ${change.error}`);
+  if (change.outcome === 'inactive') throw new Error(`Plugin "${plugin}" was installed but not activated: ${change.error}`);
+  if (change.error) ctx.warn(`Plugin "${plugin}" was installed${activate ? ' and activated' : ''}, but WP-CLI reported an error: ${change.error}`);
+}
 
 // ------------------------------------------------------------------------- hosted
 
@@ -198,19 +213,26 @@ export class ContainerBackend implements SiteBackend {
     });
   }
 
-  async componentAction(kind: 'plugin' | 'theme', slug: string, action: 'activate' | 'deactivate' | 'delete' | 'update', actor: string | undefined): Promise<void> {
-    if (kind === 'plugin') await this.server.wp.pluginAction(this.site.containerName, slug, action, actor);
-    else {
-      if (action === 'deactivate') throw new Error('themes cannot be deactivated; activate another one instead');
-      await this.server.wp.themeAction(this.site.containerName, slug, action, actor);
+  async componentAction(kind: 'plugin' | 'theme', slug: string, action: 'activate' | 'deactivate' | 'delete' | 'update', actor: string | undefined): Promise<string | null> {
+    if (kind === 'plugin') {
+      if (action === 'activate') {
+        const change = await this.server.wp.activatePlugin(this.site.containerName, slug, actor);
+        if (change.outcome !== 'done') throw new Error(`Plugin "${slug}" was not activated: ${change.error}`);
+        return change.error && `Plugin "${slug}" was activated, but WP-CLI reported an error: ${change.error}`;
+      }
+      await this.server.wp.pluginAction(this.site.containerName, slug, action, actor);
+      return null;
     }
+    if (action === 'deactivate') throw new Error('themes cannot be deactivated; activate another one instead');
+    await this.server.wp.themeAction(this.site.containerName, slug, action, actor);
+    return null;
   }
 
   async install(ctx: JobContext<unknown>, source: InstallSource, activate: boolean, actor: string | undefined): Promise<string> {
     const { server, site } = this;
     if (source.kind === 'wporg') {
       ctx.info(`Installing plugin ${source.slug} from wordpress.org…`);
-      await server.wp.installPluginSlug(site.containerName, source.slug, activate, actor);
+      settleInstall(ctx, source.slug, activate, await server.wp.installPlugin(site.containerName, source.slug, source.slug, activate, actor));
       return source.slug;
     }
     const row = this.s.db.select().from(plugins).where(eq(plugins.id, source.id)).get();
@@ -220,10 +242,11 @@ export class ContainerBackend implements SiteBackend {
       ctx.info(`Installing plugin "${row.name}" from uploaded zip…`);
       const { PluginSyncService } = await import('./pluginSync.js');
       await new PluginSyncService(this.s.db, this.s.config, this.s.servers).ensureZipOnServer(server, row.zipPath);
-      await server.wp.installPluginZip(site.containerName, row.zipPath, activate, actor);
+      const folder = storedZipPluginFolder(row.zipPath);
+      settleInstall(ctx, folder ?? row.name, activate, await server.wp.installPlugin(site.containerName, row.zipPath, folder, activate, actor));
     } else {
       ctx.info(`Installing plugin ${row.slug} from wordpress.org…`);
-      await server.wp.installPluginSlug(site.containerName, row.slug, activate, actor);
+      settleInstall(ctx, row.slug, activate, await server.wp.installPlugin(site.containerName, row.slug, row.slug, activate, actor));
     }
     return row.slug;
   }
@@ -419,30 +442,37 @@ export class ConnectorBackend implements SiteBackend {
     return results;
   }
 
-  async componentAction(kind: 'plugin' | 'theme', slug: string, action: 'activate' | 'deactivate' | 'delete' | 'update', actor: string | undefined): Promise<void> {
+  async componentAction(kind: 'plugin' | 'theme', slug: string, action: 'activate' | 'deactivate' | 'delete' | 'update', actor: string | undefined): Promise<string | null> {
     if (action === 'update') throw new Error('An external site updates through updateMany, which keeps a copy to roll back to');
     if (kind === 'theme' && action === 'deactivate') throw new Error('themes cannot be deactivated; activate another one instead');
     const answer = await this.client().component({ kind, slug, action, ...(actor ? { user: actor } : {}) });
     this.remember();
-    if (!answer.ok) throw new Error(answer.error ?? `${action} failed`);
+    if (!answer.ok) {
+      if (kind === 'plugin' && action === 'activate') throw new Error(`Plugin "${slug}" was not activated: ${answer.error ?? 'no reason given'}`);
+      throw new Error(answer.error ?? `${action} failed`);
+    }
+    // What went wrong on the way to a plugin that is active all the same (WPL7 Connect 1.0.1).
+    return answer.warning ? `Plugin "${slug}" was activated. ${answer.warning}` : null;
   }
 
   async install(ctx: JobContext<unknown>, source: InstallSource, activate: boolean, actor: string | undefined): Promise<string> {
     let slug: string;
+    let plugin: string;
     let from: { wporg: string } | { url: string };
     if (source.kind === 'wporg') {
-      slug = source.slug;
+      slug = plugin = source.slug;
       from = { wporg: source.slug };
       ctx.info(`Installing plugin ${source.slug} from wordpress.org…`);
     } else {
       const row = this.s.db.select().from(plugins).where(eq(plugins.id, source.id)).get();
       if (!row) throw new Error(`Catalog plugin #${source.id} not found`);
-      slug = row.slug;
+      slug = plugin = row.slug;
       if (row.kind === 'zip') {
         if (!row.zipPath) throw new Error('Catalog entry has no zip file');
         ctx.info(`Installing plugin "${row.name}" from the panel's catalog…`);
         // A link only this install can use, for ten minutes: the site downloads the zip itself.
         from = { url: this.s.connections.catalogUrl(row.id, this.site.id) };
+        plugin = storedZipPluginFolder(row.zipPath) ?? row.name;
       } else {
         ctx.info(`Installing plugin ${row.slug} from wordpress.org…`);
         from = { wporg: row.slug };
@@ -450,7 +480,12 @@ export class ConnectorBackend implements SiteBackend {
     }
     const answer = await this.client(ctx).component({ kind: 'plugin', slug, action: 'install', source: from, activate, ...(actor ? { user: actor } : {}) });
     this.remember();
-    if (!answer.ok) throw new Error(answer.error ?? 'The install failed');
+    if (!answer.ok) {
+      // Installed, and the activation that followed failed (WPL7 Connect 1.0.1 says so).
+      if (answer.status === 'inactive') throw new Error(`Plugin "${plugin}" was installed but not activated: ${answer.error ?? 'no reason given'}`);
+      throw new Error(answer.error ?? 'The install failed');
+    }
+    if (answer.warning) ctx.warn(`Plugin "${plugin}" was installed and activated. ${answer.warning}`);
     return slug;
   }
 

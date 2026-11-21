@@ -251,6 +251,7 @@ export const jobTypes = [
   'server.syncPlugins',
   'server.relocateBackups',
   'server.applySiteLimits',
+  'server.refreshSiteImages',
   // Not a site or a server operation: the work the panel does for itself after an update.
   'system.postUpdate',
   // Commands run inside a site's container, on demand or from a schedule.

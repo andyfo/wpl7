@@ -57,6 +57,8 @@ import {
 import {
   serverApplySiteLimits,
   serverApplySiteLimitsPayload,
+  serverRefreshSiteImages,
+  serverRefreshSiteImagesPayload,
   serverProvision,
   serverProvisionPayload,
   serverProvisionQueuedCancel,
@@ -190,6 +192,8 @@ const registry: Partial<Record<JobType, RegistryEntry>> = {
   'server.provision': entry(serverProvisionPayload, serverProvision, 30 * 60_000, serverProvisionQueuedCancel) as RegistryEntry,
   'server.relocateBackups': entry(serverRelocateBackupsPayload, serverRelocateBackups, 12 * 3600_000) as RegistryEntry,
   'server.applySiteLimits': entry(serverApplySiteLimitsPayload, serverApplySiteLimits, 10 * 60_000) as RegistryEntry,
+  // A build of every PHP version on a small server is minutes each; a pull is less.
+  'server.refreshSiteImages': entry(serverRefreshSiteImagesPayload, serverRefreshSiteImages, 90 * 60_000) as RegistryEntry,
   'site.move': entry(siteMovePayload, siteMove, 180 * 60_000) as RegistryEntry,
   // A fetch from a destination may take as long as backup.fetch's 12 hours, and the restore comes after it.
   'site.recover': entry(siteRecoverPayload, siteRecover, 15 * 3600_000) as RegistryEntry,

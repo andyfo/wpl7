@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { jobLogs, jobs, siteLicenses, sites } from '../../src/db/schema.js';
-import { makeWorld, waitFor, type TestWorld } from '../helpers.js';
+import { jobLogs, jobs, plugins, siteLicenses, sites } from '../../src/db/schema.js';
+import { makeWorld, waitFor, zipOf, type TestWorld } from '../helpers.js';
 import { sitePaths } from '../../src/services/siteSpec.js';
 
 /** Simulate the wordpress image entrypoint: seed core files once the container starts. */
@@ -222,6 +222,74 @@ describe('site.create', () => {
     expect(w.docker.calls.some((c) => c.method === 'removeContainer' && c.args[0] === 'wp-demo-site')).toBe(true);
     expect(w.dbAdmin.databases.has('wp_demo_site')).toBe(false);
     expect(w.db.select().from(sites).where(eq(sites.id, site.id)).get()).toBeUndefined();
+  });
+});
+
+describe('site.create plugin installs', () => {
+  const ok = (stdout = '') => ({ stdout, stderr: '', exitCode: 0 });
+  // core install, the administrator check, permalinks, search visibility, the bundled-plugin listing.
+  const upToThePlugins = () => [ok(), ok('boss'), ok(), ok(), ok('[]')];
+  const listing = (rows: { name: string; status: string }[]) => ok(JSON.stringify(rows));
+  const redirected = { stdout: "Activating 'welcome-redirect'...\n", stderr: 'Warning: Some code is trying to do a URL redirect. Backtrace:\n#0 ...\n', exitCode: 1 };
+  const warnings = (w: TestWorld, jobId: number) =>
+    w.db
+      .select()
+      .from(jobLogs)
+      .where(eq(jobLogs.jobId, jobId))
+      .all()
+      .filter((l) => l.level === 'warn')
+      .map((l) => l.message);
+
+  it('takes a plugin WordPress activated as installed, though WP-CLI failed after it', async () => {
+    // A plugin that ends PHP in its own activated_plugin hook, as Breakdance's first activation does
+    // with exit(wp_redirect(...)) - exit status 1 on PHP 8.4. WordPress saved it as active before.
+    const w = await makeWorld();
+    seedCoreFilesOnStart(w);
+    w.docker.execQueue.push(...upToThePlugins(), redirected, listing([{ name: 'welcome-redirect', status: 'active' }]), ok('[]'));
+    const { job } = await runCreate(w, { ...baseBody, plugins: { catalogIds: [], extraWporgSlugs: ['welcome-redirect'] } });
+
+    expect(job.status).toBe('succeeded');
+    expect(warnings(w, job.id).filter((m) => m.includes('welcome-redirect'))).toEqual([]);
+  });
+
+  it("warns with WP-CLI's error when a plugin is not installed, or not active", async () => {
+    const w = await makeWorld();
+    seedCoreFilesOnStart(w);
+    w.docker.execQueue.push(
+      ...upToThePlugins(),
+      { stdout: '', stderr: "Warning: no-such: Plugin not found.\nError: No plugins installed.\n", exitCode: 1 },
+      listing([]),
+      { stdout: '', stderr: '[01-Jan-2026 12:00:00 UTC] PHP Fatal error:  Uncaught RuntimeException: setup failed in /x.php:6\nStack trace:\n#0 {main}\n', exitCode: 255 },
+      listing([{ name: 'crashes', status: 'inactive' }]),
+      { stdout: '', stderr: 'PHP Fatal error:  Uncaught RuntimeException: welcome page failed in /y.php:7\n', exitCode: 255 },
+      listing([{ name: 'crashes-later', status: 'active' }]),
+      ok('[]'),
+    );
+    const { job } = await runCreate(w, { ...baseBody, plugins: { catalogIds: [], extraWporgSlugs: ['no-such', 'crashes', 'crashes-later'] } });
+
+    expect(job.status).toBe('succeeded');
+    expect(warnings(w, job.id).filter((m) => m.startsWith('Plugin '))).toEqual([
+      'Plugin "no-such" failed to install: Warning: no-such: Plugin not found. Error: No plugins installed.',
+      'Plugin "crashes" was installed but not activated: PHP Fatal error: Uncaught RuntimeException: setup failed in /x.php:6',
+      'Plugin "crashes-later" was installed and activated, but WP-CLI reported an error: PHP Fatal error: Uncaught RuntimeException: welcome page failed in /y.php:7',
+    ]);
+  });
+
+  it("checks a zip's plugin by the folder inside it, and names it so", async () => {
+    const w = await makeWorld();
+    seedCoreFilesOnStart(w);
+    const file = path.join(w.config.paths.plugins, 'premium-pro-3-0-0-1a2b3c4d.zip');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, zipOf({ 'premium-pro/': '', 'premium-pro/premium-pro.php': '<?php\n/*\nPlugin Name: Premium Pro\n*/\n' }));
+    const zip = w.db.insert(plugins).values({ kind: 'zip', slug: 'premium-pro-3-0-0', name: 'Premium Pro', zipPath: file, isDefault: 0, createdAt: Date.now() }).returning().get();
+    w.docker.execQueue.push(...upToThePlugins(), redirected, listing([{ name: 'premium-pro', status: 'inactive' }]), ok('[]'));
+    const { job } = await runCreate(w, { ...baseBody, plugins: { catalogIds: [zip.id], extraWporgSlugs: [] } });
+
+    const execCmds = w.docker.calls.filter((c) => c.method === 'exec').map((c) => (c.args[1] as string[]).join(' '));
+    expect(execCmds).toContain(`wp plugin install ${file} --activate --user=boss`);
+    expect(warnings(w, job.id).filter((m) => m.startsWith('Plugin '))).toEqual([
+      'Plugin "premium-pro" was installed but not activated: Warning: Some code is trying to do a URL redirect.',
+    ]);
   });
 });
 

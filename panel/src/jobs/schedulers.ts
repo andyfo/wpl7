@@ -418,6 +418,20 @@ export class Schedulers {
         },
       },
       {
+        key: 'php-releases',
+        group: 'jobs',
+        name: 'PHP releases',
+        description:
+          "Reads PHP's newest releases and advance notices from php.net, and emails the security ones. A server whose site image is not the newest gets it: pulled, or built on a server that builds its own. Each site then moves onto it.",
+        pausable: true,
+        pauseWarning: 'Sites keep the PHP they have until you resume, and PHP security releases are not emailed. A WPL7 update still brings new images.',
+        cadence: () => ({ everyMs: 15 * MIN, text: 'Every 15 minutes' }),
+        tick: async () => {
+          const { message, error } = await s.phpUpdates.tick();
+          return error ? { outcome: 'failed', error, message } : { message };
+        },
+      },
+      {
         key: 'catalog',
         group: 'background',
         name: 'Recipe catalog',
@@ -666,6 +680,8 @@ export class Schedulers {
       // The public recipe catalog: a conditional GET an hour, so a recipe published there
       // reaches this install within the hour without a release (docs/licenses.md).
       every('catalog', 3600_000),
+      // PHP's releases: a security one should reach the sites within the hour its image is out.
+      every('php-releases', 15 * MIN),
       // An update that dies before it ever gets as far as replacing the panel - a pull that
       // fails, a pre-flight that aborts - leaves this process running with the read-only
       // flag it set for itself and no boot to clear it on. Nothing else asks.
@@ -678,6 +694,8 @@ export class Schedulers {
       after(CUSTOM_TICK_MS, () => void this.runDueCustom()),
       // A minute in, when the servers' MariaDBs are up, rather than an hour.
       after(MIN, () => void this.run('database-sizes', 'boot')),
+      // After the boot sweep has moved sites onto the images an update brought.
+      after(3 * MIN, () => void this.run('php-releases', 'boot')),
     ];
     // Half a minute after boot rather than now: a panel that just came up has a stack still
     // settling around it and a network that may not be there yet; and a failed fetch is

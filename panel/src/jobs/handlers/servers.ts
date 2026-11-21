@@ -9,7 +9,7 @@ import type { CoreServices } from '../../services/index.js';
 import type { JobContext } from '../context.js';
 import { PluginSyncService } from '../../services/pluginSync.js';
 import { CLOUDFLARE } from '../../services/dns.js';
-import { hasOwnLimits, limitsChange, NO_OWN_LIMITS, siteRuntimeFrom, type SiteRuntime } from '../../services/siteSpec.js';
+import { hasOwnLimits, limitsChange, NO_OWN_LIMITS, releaseImageTag, siteRuntimeFrom, type SiteRuntime } from '../../services/siteSpec.js';
 import { fitCpus } from '../../services/docker.js';
 import { ServerUnreachableError, SshConnection } from '../../servers/sshConnection.js';
 import { shellQuote } from '../../servers/sshExec.js';
@@ -39,6 +39,26 @@ export async function serverSyncPlugins(
 export const serverApplySiteLimitsPayload = z.object({
   serverId: z.number().int(),
 });
+
+export const serverRefreshSiteImagesPayload = z.object({
+  serverId: z.number().int(),
+  /** The PHP branches whose image to refresh: 8.4. */
+  versions: z.array(z.string().regex(/^\d+\.\d+$/)).min(1),
+  /** `published`: the registry names a new image. `php`: php.net has a newer release. `weekly`: the weekly rebuild. */
+  reason: z.enum(['published', 'php', 'weekly']),
+});
+
+/**
+ * A new site image for each PHP branch asked for, and the sites onto it (services/phpUpdates.ts).
+ * In the server's `images:<id>` lane: a build takes minutes, and the server's sites carry on with
+ * their own jobs meanwhile. The moves are a `site.reconcile` each, in the server's lane.
+ */
+export async function serverRefreshSiteImages(
+  ctx: JobContext<z.infer<typeof serverRefreshSiteImagesPayload>>,
+  s: CoreServices,
+): Promise<void> {
+  await s.phpUpdates.refreshImages(ctx);
+}
 
 const describeLimits = (l: SiteRuntime): string =>
   [
@@ -198,7 +218,7 @@ export function releaseIdentity(config: CoreServices['config']): string {
     // The tag is not the version on edge, where every build is published as the moving
     // `edge` while calling itself 0.3.0-edge.<commit>. .env normally says so outright; the
     // fallback is the same rule update.sh applies when it writes it.
-    `WPL7_IMAGE_TAG=${config.imageTag || (config.channel === 'edge' ? 'edge' : PANEL_VERSION)}`,
+    `WPL7_IMAGE_TAG=${releaseImageTag(config)}`,
     `WPL7_CHANNEL=${config.channel}`,
     `WPL7_REPO=${config.updateRepo}`,
   ];

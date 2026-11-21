@@ -22,6 +22,7 @@ import { seedImports } from './imports.js';
 import { installDemoTerminal } from './terminal.js';
 import { seedDatabases } from './databases.js';
 import { seedApps } from './apps.js';
+import { seedPhp } from './php.js';
 
 export async function seedAll(world: TestWorld): Promise<void> {
   seedServers(world);
@@ -42,6 +43,7 @@ export async function seedAll(world: TestWorld): Promise<void> {
   seedImports(world);
   installDemoTerminal(world);
   seedReminders(world);
+  seedPhp(world);
   // Last: none of the seeds above is for a container app.
   seedApps(world);
 }

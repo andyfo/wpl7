@@ -171,3 +171,42 @@ describe('a site hosted elsewhere: inventory and updates', () => {
     expect(fake.actedAs).toEqual(['activate:plugin:hello=admin', 'install:plugin:classic-editor=admin', 'activate:theme:twentytwentyfour=admin']);
   });
 });
+
+describe('a site hosted elsewhere: a plugin activation that went wrong on the way', () => {
+  // WPL7 Connect 1.0.1 answers an activation by whether WordPress has the plugin active: a plugin
+  // that printed, threw or ended PHP after WordPress saved it is active, with a warning.
+  const task = async (w: Awaited<ReturnType<typeof externalWorld>>['w'], payload: Record<string, unknown>) => {
+    const site = siteRow(w);
+    return runJob(w, w.worker.enqueue('wp.pluginTask', { siteId: site.id, ...payload } as never, { id: site.id, slug: site.slug, serverId: site.serverId }).id);
+  };
+
+  it('is done with a warning in the log when the plugin is active all the same', async () => {
+    const { w, fake } = await externalWorld();
+    await scan(w);
+    fake.componentAnswers.set('activate:plugin:hello', { ok: true, status: 'active', warning: 'PHP stopped: welcome page broke' });
+    fake.componentAnswers.set('install:plugin:classic-editor', { ok: true, status: 'active', warning: 'The plugin generated unexpected output.' });
+    const activated = await task(w, { action: 'activate', name: 'hello' });
+    expect(activated.job.status, activated.log.join('\n')).toBe('succeeded');
+    expect(activated.log).toContain('warn: Plugin "hello" was activated. PHP stopped: welcome page broke');
+    const installed = await task(w, { action: 'install', source: { kind: 'wporg', slug: 'classic-editor' }, activate: true });
+    expect(installed.job.status, installed.log.join('\n')).toBe('succeeded');
+    expect(installed.log).toContain('warn: Plugin "classic-editor" was installed and activated. The plugin generated unexpected output.');
+  });
+
+  it('fails with what went wrong when it is not, and says an install did install', async () => {
+    const { w, fake } = await externalWorld();
+    await scan(w);
+    const error = 'RuntimeException: setup failed in /var/www/html/wp-content/plugins/x/x.php:8';
+    fake.componentAnswers.set('activate:plugin:hello', { ok: false, status: 'inactive', error });
+    fake.componentAnswers.set('install:plugin:classic-editor', { ok: false, status: 'inactive', error });
+    const activated = await task(w, { action: 'activate', name: 'hello' });
+    expect(activated.job.status).toBe('failed');
+    expect(activated.job.error).toBe(`Plugin "hello" was not activated: ${error}`);
+    const installed = await task(w, { action: 'install', source: { kind: 'wporg', slug: 'classic-editor' }, activate: true });
+    expect(installed.job.status).toBe('failed');
+    expect(installed.job.error).toBe(`Plugin "classic-editor" was installed but not activated: ${error}`);
+    // An older WPL7 Connect says nothing of the install: its error, as before.
+    fake.componentAnswers.set('install:plugin:classic-editor', { ok: false, error: 'Download failed.' });
+    expect((await task(w, { action: 'install', source: { kind: 'wporg', slug: 'classic-editor' }, activate: true })).job.error).toBe('Download failed.');
+  });
+});

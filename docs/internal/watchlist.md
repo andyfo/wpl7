@@ -24,7 +24,7 @@ for a reason; remove one once there is nothing left to watch.
 | [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-11-15 19:04 UTC | 0.21.20 is out as a tag and an image, with no release yet; same definitions as the pinned 0.21.12; its Lite mode skips more signatures and no longer errors on oversized scripts |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-11-01 09:08 UTC | Both overrides still match in 0.21.15, the latest; `@preg_replace` is still 22c684e7; engine test not run at this check |
 | [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-11-15 19:04 UTC | 2.7.6 is the latest; patch still needed |
-| [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-11-15 19:04 UTC | Floor at 8.2.35, 8.3.36, 8.4.27, 8.5.12, still the latest; CVE-2026-115560 unfixed, mitigated by upload progress off |
+| [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-11-19 19:51 UTC | 8.2.36, 8.3.37, 8.4.28 and 8.5.13 out today, all security releases: floor raised to them, released in 0.4.1; Docker's bases and the edge images carry them; the refresh workflow has had no scheduled run on `main` yet |
 | [phpredis: the pinned 6.3.0](#phpredis-the-pinned-630) | Medium | 2026-11-01 09:08 UTC | 6.3.0 is the latest on PECL and GitHub |
 | [Redis in the site image](#redis-in-the-site-image) | Medium | 2026-11-01 09:08 UTC | Debian's 5:8.0.2-3+deb13u3; three open issues on trixie, none reachable here; `LICENSE.txt` still offers AGPLv3 |
 | [The Redis Object Cache plugin: its constants and `wp redis`](#the-redis-object-cache-plugin-its-constants-and-wp-redis) | Medium | 2026-11-01 09:08 UTC | 3.0.0 is the latest; all seven constants and `status`, `enable`, `disable` are in its code |
@@ -64,15 +64,17 @@ for a reason; remove one once there is nothing left to watch.
 | [The WordPress image's entrypoint, as an import and `wpl7-start` rely on it](#the-wordpress-images-entrypoint-as-an-import-and-wpl7-start-rely-on-it) | Medium | 2026-11-01 09:08 UTC | Acts on a `php-fpm` first argument; seeds only an empty folder; writes wp-config.php only when absent |
 | [WPL7 Connect's floor: WordPress 5.2 and PHP 7.0](#wpl7-connects-floor-wordpress-52-and-php-70) | Medium | 2026-11-08 17:27 UTC | PHP 7.0 on 0.54% of sites, WordPress before 5.2 on 3.0%; CI installs 7.0; Docker test not run at this check |
 | [WordPress's upgrader, as WPL7 Connect drives it](#wordpresss-upgrader-as-wpl7-connect-drives-it) | Medium | 2026-11-08 17:30 UTC | 7.1.4 is the latest; it unpacks into a randomly named folder, which WPL7 Connect does not use; Docker test not run at this check |
+| [WordPress's shutdown, as WPL7 Connect answers an activation that ended PHP](#wordpresss-shutdown-as-wpl7-connect-answers-an-activation-that-ended-php) | Medium | 2026-11-20 09:48 UTC | WordPress 7.1.4 and 7.1.5: output is flushed at `shutdown` priority 1, and the fatal error handler stays out of an activation; the Docker test passes |
+| [WP-CLI: a plugin's status after a failed install or activation](#wp-cli-a-plugins-status-after-a-failed-install-or-activation) | Low | 2026-11-20 09:58 UTC | WP-CLI 2.12.0: `--skip-plugins` lets go of `active_plugins` at `plugins_loaded`, so the listing has each plugin's real status; an activation that fails during `install --activate` is only a warning |
 | [WordPress 7.2: sudo mode and Application Passwords](#wordpress-72-sudo-mode-and-application-passwords) | Medium | 2026-11-08 17:30 UTC | Beta 4 is out: no sudo mode; Application Passwords only gain an email on creation; beta tests not run at this check |
 | [WP Godmode's `godmode` command on WPL7 Connect](#wp-godmodes-godmode-command-on-wpl7-connect) | Medium | 2026-11-08 17:31 UTC | Not released: 1.3.2, the latest, registers no command with WPL7 Connect |
 | [WordPress's answer to a fatal error](#wordpresss-answer-to-a-fatal-error) | Low | 2026-10-09 15:55 UTC | 500, as relied on |
 | [WordPress's default From address](#wordpresss-default-from-address) | Medium | 2026-11-13 13:00 UTC | `wordpress@` and the home URL's host without `www.`, on 7.1.4, trunk and 7.2 Beta 5 |
 | [msmtp: one envelope sender, as `wpl7-sendmail` relies on it](#msmtp-one-envelope-sender-as-wpl7-sendmail-relies-on-it) | Low | 2026-11-11 23:04 UTC | msmtp 1.8.28 in the image, 1.8.34 upstream; nothing since changes the four behaviours; the engine mail tests pass |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
-| [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-10-19 22:05 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
+| [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-11-19 08:16 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04, rebuilt 2026-11-11) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
 | [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-11-15 19:04 UTC | 6.3.0 (2026-11-03) is the latest, 6.2.0 still pinned; its sign-in answers 303, which the panel refuses; no new advisory; base is PHP 8.4.27 |
-| [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-10-20 12:22 UTC | The feed calls five listed bbPress plugins closed and misses `captcha`; the directory answers as `wporgListing` reads them |
+| [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-11-19 11:43 UTC | The feed still calls `bbpress` and `bbpress-private-replies` closed and misses `captcha`; the directory answers as `wporgListing` reads them |
 | [Google's crawler address lists](#googles-crawler-address-lists) | Medium | 2026-11-03 09:35 UTC | Both answer: 589 prefixes, none wider than a /27 or a /64 |
 | [ssh2: how a channel closes, as the panel's SSH channels rely on it](#ssh2-how-a-channel-closes-as-the-panels-ssh-channels-rely-on-it) | Low | 2026-11-15 10:57 UTC | 1.17.0 is the latest; channels half-open by default, `destroy()` never marks one destroyed, `'close'` waits for `'end'` or an unreadable stream |
 
@@ -208,34 +210,63 @@ for a reason; remove one once there is nothing left to watch.
 ## PHP security releases and the site image's floor
 
 - **Priority:** High
-- **Last checked:** 2026-11-15 19:04 UTC. No PHP release and no GitHub advisory since the last
-  check. PHP 8.5.12, 8.4.27, 8.3.36 and 8.2.35 (2026-10-21) are still the latest; they fix two
-  critical remote code execution bugs, CVE-2026-109618 and CVE-2026-109619 (GHSA-w8hw-w9fx-j79w,
-  GHSA-6wmf-4rv5-p3rp), and the floor is set to them. The official `php` images carry the same
-  four. CVE-2026-115560, from php.net's informational advisory of 2026-10-23, is still unfixed:
-  an unlikely remote code execution through session upload progress, when an application
-  switches `session.serialize_handler` to `php` at runtime. php.net asks for
-  `session.upload_progress.enabled=0` until the next regular release, which will carry the fix
-  and the full advisory; the site image already sets it off. That release is near: 8.5.13RC1 and
-  8.4.28RC1 were tagged on 2026-11-03 and 2026-11-04, and are still the newest tags of their
-  branches. php.net's only news since the last check is 8.6.0 RC7 (2026-11-12), with 8.6.0
-  planned for 2026-11-19; `WP_PHP_VERSIONS` does not offer 8.6, so it needs no floor yet.
-- **The problem:** a site's PHP is whatever its `wordpress:php<X.Y>-fpm` base had when the site
-  image was built. A stale base, cached on a server or in CI, ships an old PHP without anyone
-  noticing, and a running container keeps its image until it is rebuilt.
-- **What we do about it:** `deploy/wordpress-image/Dockerfile` refuses to build on a PHP below the
-  floor of its branch. Every build pulls its base (CI's `pull: true`, `--pull` in the provision
-  scripts, `pull` in the panel's own builds). The panel rebuilds site containers onto the image
-  their server has now (`services/siteImages.ts`). Upload progress tracking stays off, as the
-  advisory for CVE-2026-109619 recommends even after patching.
-- **Check:** the security releases on [php.net](https://www.php.net/archive/2026.php) and
-  `gh api repos/php/php-src/security-advisories --jq '.[] | [.published_at, .severity, .summary] | @tsv'`
-  since the last check. Then the versions the official images carry:
-  `curl -s https://raw.githubusercontent.com/docker-library/php/master/versions.json`.
+- **Last checked:** 2026-11-19 19:51 UTC. PHP 8.5.13, 8.4.28, 8.3.37 and 8.2.36 came out today,
+  all security releases. GitHub lists 12 to 17 advisories for them, several critical: among them
+  CVE-2026-115560, the session upload progress bug php.net warned of on 2026-10-23, remote code
+  execution through session files and the timezone cache, and request smuggling in PHP-FPM. The
+  floor is raised to the four, and 0.4.1 ships it. 8.6.0 came out too; `WP_PHP_VERSIONS` does not
+  offer 8.6, so it needs no floor yet. The official `php` images and `wordpress:php<X.Y>-fpm`
+  carry all four, and so do the newest edge build's images. The published 0.4.0 images do not: the
+  refresh workflow has had no scheduled run on `main` in the two hours since it merged, and an
+  install on 0.4.0 has no `php-releases` schedule to follow them anyway, so 0.4.1 is what brings
+  the new PHP to installs that pull their images. A panel on `main` read today's releases and
+  advisories as its fixtures have them, built its 8.4 images on the new base and moved its sites
+  onto 8.4.28.
+- **The problem:** a site's PHP is whatever its server's `wpl7-wordpress:php<X.Y>` image has, and
+  that image is built on `wordpress:php<X.Y>-fpm`. Docker rebuilds that base a few hours after
+  each PHP release: on 2026-10-21 the `php` images had the release after about two hours and the
+  `wordpress` images after four or five. A site gets the release only once its server's image is
+  rebuilt on the new base and the site is recreated on it. A stale base, cached on a server or in
+  CI, would ship an old PHP without anyone noticing.
+- **What we do about it:**
+  - The `php-releases` schedule (`panel/src/services/phpUpdates.ts`) reads php.net every 15
+    minutes. It gives each server the newest site image of its install's release, pulled, or
+    built on the server when the install builds its own, and the site image sweep
+    (`services/siteImages.ts`) recreates the sites on it.
+  - `.github/workflows/site-images-refresh.yml` rebuilds the newest release's and edge's published
+    site images when Docker's base has a newer PHP, and on Mondays when a package changed, and
+    pushes them under the same tags; edge's under its commit's tag, which edge installs follow.
+  - `deploy/wordpress-image/Dockerfile` refuses to build on a PHP below the floor of its branch.
+    Every build pulls its base (CI's `pull: true`, `--pull` in the provision scripts, `pull` in
+    the panel's own builds).
+  - Upload progress tracking stays off, as the advisory for CVE-2026-109619 recommends even after
+    patching.
+- **Check:**
+  - The security releases and news on [php.net](https://www.php.net/archive/2026.php), and
+    `gh api repos/php/php-src/security-advisories --jq '.[] | [.published_at, .severity, .summary] | @tsv'`,
+    since the last check. Then the versions the official images carry:
+    `curl -s https://raw.githubusercontent.com/docker-library/php/master/versions.json`.
+  - What the panel reads, against its fixtures in `panel/test/phpFixtures.ts`:
+    `curl -s https://www.php.net/releases/active.php`,
+    `curl -s 'https://www.php.net/pre-release-builds.php?format=json'`, the newest "Upcoming"
+    security notice in `https://www.php.net/feed.atom`, and an advisory's `patched_versions`.
+  - `gh run list -R andyfo/wpl7 --workflow site-images-refresh.yml --limit 5`: it ran within the
+    hour, and its last runs passed. GitHub turns a scheduled workflow off after 60 days without
+    activity in the repository.
+  - For each offered branch, `scripts/site-image-refresh.sh php wordpress:php<X.Y>-fpm` and
+    `scripts/site-image-refresh.sh php ghcr.io/andyfo/wpl7/wordpress:php<X.Y>-<newest release>`
+    name the same release, and so do edge's `php<X.Y>-sha-<commit>` images, for the commit the
+    `edge` release's manifest names. `php<X.Y>-edge` keeps what its edge build had.
 - **When it changes:**
-  - **A security release:** once `wordpress:php<X.Y>-fpm` carries it, raise that branch's floor
-    in the Dockerfile and cut a release. CI builds the site images on the new base, and updated
-    installs rebuild their sites on them.
+  - **A security release:** within a day, check that the published images carry it (the line
+    above) and that the sites of an install on the newest release moved. Raise that branch's
+    floor in the Dockerfile in a pull request of its own. An install whose panel predates the
+    `php-releases` schedule never pulls a refreshed image: until every install runs a release
+    that has it, cut a release too, as before.
+  - **A shape the panel reads:** fix `phpUpstream.ts` and the fixtures. Until then the schedule
+    fails or the card misses a notice, while servers still follow the published images.
+  - **The workflow failing or turned off:** fix it, or run it by hand (**Run workflow**). Until
+    then installs that pull their images get no new PHP.
   - **A new PHP branch offered (`WP_PHP_VERSIONS`):** give it a floor too. A branch missing from the
     table is not checked.
   - **An advisory with a configuration mitigation:** weigh putting it in the site image, as the
@@ -650,13 +681,21 @@ for a reason; remove one once there is nothing left to watch.
   the classic store and nothing on containerd's. A list without the server's platform fails the pull.
   Docker 28.1.1 and 27.5.1.
 - **The problem:** app-updates asks the registry every interval instead of pulling, and the platform
-  check rests on what the answer says.
+  check rests on what the answer says. The PHP releases schedule asks it too, and tells a tag the
+  registry does not have (a branch its release does not publish) from a registry it cannot reach or
+  that refuses it. On 2026-11-19, Docker 28.1.1 answered the first with 404 `manifest unknown`, and an
+  unknown host or a refused repository with 500. dockerode words a 401 `no such image`.
 - **What we do about it:** `resolveDigest` and `pullPinned` in `panel/src/services/appImages.ts`. A single
   image's platform is checked after the pull. `test/engine/containerImages.test.ts` items 4 and 6.
+  `unpublished` in `panel/src/services/phpUpdates.ts` takes a 404 or `manifest unknown` alone.
 - **Check:** the Engine API changelog for `/distribution/{name}/json` and image pulls with
-  `X-Registry-Auth`. To measure: items 4 and 6 of the image engine test.
+  `X-Registry-Auth`. To measure: items 4 and 6 of the image engine test, and
+  `curl --unix-socket /var/run/docker.sock http://localhost/distribution/ghcr.io/andyfo/wpl7/wordpress:php7.4-0.4.0/json`
+  for a tag that does not exist.
 - **When it changes:** if the answer stops giving a digest, app-updates has to pull to compare. If it
-  gives a single image's platform on every store, the check can move before the pull.
+  gives a single image's platform on every store, the check can move before the pull. If a missing
+  tag stops answering 404, every branch a release does not publish shows as a server the PHP
+  releases schedule could not check: change `unpublished`.
 
 ## Docker: unprivileged ports from 0
 
@@ -1157,6 +1196,49 @@ for a reason; remove one once there is nothing left to watch.
   Docker test (`WPL7_CONNECT_E2E=1 npx vitest run test/e2e/connect` in `panel`) on the release's
   image. A change in what the upgrader returns goes into `upgrade_error()` and the vectors.
 
+## WordPress's shutdown, as WPL7 Connect answers an activation that ended PHP
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-20 09:48 UTC. In WordPress 7.1.4, `default-filters.php` hooks
+  `wp_ob_end_flush_all` to `shutdown` at priority 1, `wp-settings.php` registers
+  `shutdown_action_hook` as a shutdown function, and `WP_Fatal_Error_Handler::handle()` returns at
+  once while `WP_SANDBOX_SCRAPING` is defined, which `plugin_sandbox_scrape()` does. The Docker
+  test's activation cases pass on 7.1.5.
+- **The problem:** a plugin can end PHP while WordPress activates it, after WordPress saved it as
+  active. Breakdance's first activation does: `exit(wp_redirect(...))` to its onboarding page.
+  WPL7 Connect then answers the panel from WordPress's `shutdown` action, at `PHP_INT_MIN`, ahead
+  of `wp_ob_end_flush_all()`. Once that flush has sent the redirect, the panel sees no answer and
+  asks again the other way in; an install then fails on its own folder. A fatal error during an
+  activation reaches the same answer only while WordPress's fatal error handler stays out of it.
+- **Check:** `gh api 'repos/WordPress/wordpress-develop/commits?path=<file>&since=<last check>'`
+  for `src/wp-includes/default-filters.php` (the `shutdown` hooks), `src/wp-settings.php`,
+  `src/wp-includes/class-wp-fatal-error-handler.php` and `src/wp-admin/includes/plugin.php`
+  (`activate_plugin`, `plugin_sandbox_scrape`). Or run the Docker test's activation cases on the
+  latest image.
+- **When it changes:** move the answer ahead of whatever sends output first
+  (`answer_if_php_ends()` in `class-wpl7-connect-server.php`), raise the plugin's version, and run
+  `WPL7_CONNECT_E2E=1 npx vitest run test/e2e/connect` in `panel`.
+
+## WP-CLI: a plugin's status after a failed install or activation
+
+- **Priority:** Low
+- **Last checked:** 2026-11-20 09:58 UTC. In WP-CLI 2.12.0, `Runner::setup_skip_plugins_filters()`
+  filters `active_plugins` while WordPress loads and removes the filters at `plugins_loaded`, so
+  `wp plugin list --skip-plugins` gives each plugin's real status. `CommandWithUpgrade::install()`
+  counts only the installs, and an activation that fails during `--activate` is a warning.
+- **The problem:** WP-CLI's exit code does not say whether a plugin install or activation worked.
+  A plugin that ends PHP after WordPress saved it as active makes it exit non-zero (Breakdance's
+  first activation, exit status 1 on PHP 8.4). A failed activation during `install --activate`
+  exits 0. After a run that failed, `WpService.settle()` lists the plugins with
+  `--skip-plugins --skip-themes --skip-update-check`, and goes by the status. If that listing hid
+  the real status, an active plugin would read as installed but not active.
+- **Check:** `gh api 'repos/wp-cli/wp-cli/commits?path=php/WP_CLI/Runner.php&since=<last check>'`
+  and `gh api 'repos/wp-cli/extension-command/commits?path=src/WP_CLI/CommandWithUpgrade.php&since=<last check>'`,
+  then read what changed in `setup_skip_plugins_filters()` and `install()`.
+- **When it changes:** read the status another way in `pluginState()` (`wp option get
+  active_plugins --format=json`), and run `test/unit/wpPluginChange.test.ts` against the new
+  output.
+
 ## WordPress 7.2: sudo mode and Application Passwords
 
 - **Priority:** Medium
@@ -1353,10 +1435,11 @@ for a reason; remove one once there is nothing left to watch.
 ## The MariaDB image's bash and client, as the database browser and imports rely on them
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-19 22:05 UTC. `mariadb:11.4`, rebuilt 2026-10-17, is MariaDB
-  11.4.13 on Ubuntu 24.04.5. Its bash is 5.2.21 and opens `/dev/tcp`. Its client, 15.2, refuses
-  `\!`, `system`, `source` and `LOAD DATA LOCAL INFILE` with the import flags. The engine test
-  `panel/test/engine/dbBrowser.test.ts` passes on it: 19 of 19.
+- **Last checked:** 2026-11-19 08:16 UTC. `mariadb:11.4` was rebuilt on 2026-11-11 and is still
+  MariaDB 11.4.13 on Ubuntu 24.04.5. Its bash is 5.2.21 and opens `/dev/tcp`. Its client, 15.2,
+  refuses `\!`, `system`, `source` and `LOAD DATA LOCAL INFILE` with the import flags. The engine
+  test `panel/test/engine/dbBrowser.test.ts` passes on it, 19 of 19, run on the image's arm64
+  build.
 - **The problem:** two things lean on the image.
   - A site's **Database** tab reaches MariaDB through `docker exec`. The relay (`RELAY_CMD` in
     `panel/src/services/dbBrowser.ts`) is `bash -c 'exec 3<>/dev/tcp/127.0.0.1/3306 …'` inside
@@ -1426,8 +1509,13 @@ for a reason; remove one once there is nothing left to watch.
 ## wordpress.org's directory, as the panel's closed flag reads it
 
 - **Priority:** Medium
-- **Last checked:** 2026-10-20 12:22 UTC. The feed says `closed: 1` for five plugins that
-  wordpress.org lists: `bbpress` (2.6.20, updated 2026-10-15), `bbpress-private-replies`,
+- **Last checked:** 2026-11-19 11:43 UTC. Unchanged: the feed still says `closed: 1` for
+  `bbpress` (2.6.22 now) and `bbpress-private-replies`, and `closed: null` for `captcha`. The
+  directory answers as below: a 200 with `slug` and `version` for `bbpress`, a 404 with
+  `error: "closed"`, `closed: true`, `reason: "author-request"` and the sentence for
+  `wp-gdpr-compliance`, "Plugin not found." and "Theme not found" for slugs it does not have, and
+  a 200 for `twentytwentyfive`.
+  At 2026-10-20 12:22 UTC the feed said `closed: 1` for five plugins that wordpress.org lists: `bbpress` (2.6.20, updated 2026-10-15), `bbpress-private-replies`,
   `bbpress-new-topic-notifications`, `bbpress-enable-tinymce-visual-tab` and
   `bbpress-direct-quotes`. Archived copies of bbPress's page from 2026-09-11 to 2026-10-15 show
   it open each time, so the flag is not a closure the feed failed to clear. The feed has

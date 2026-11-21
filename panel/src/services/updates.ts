@@ -42,6 +42,12 @@ interface CachedCheck {
   checkedAt: number | null;
   /** Last attempt, whatever came of it. */
   attemptedAt: number | null;
+  /**
+   * The build that made the last attempt, and the last check that got an answer. A panel an
+   * update or a deploy replaced has neither: what is cached may name the very build it runs.
+   */
+  attemptedBy: string | null;
+  checkedBy: string | null;
   /** ETag of the release the cached manifest came from. */
   etag: string | null;
   error: string | null;
@@ -55,12 +61,25 @@ const CHECK_INTERVAL_MS = 60 * 60_000;
 /** Long enough for the boot rush (migrations, network reconcile, mail sync) to be over. */
 export const FIRST_CHECK_DELAY_MS = 2 * 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
+/** This panel's build, as a check records it. */
+const THIS_BUILD = `${PANEL_VERSION} ${PANEL_GIT_SHA}`;
+
+/**
+ * Whether the cached answer says where this build stands. On edge, only one this build got: the
+ * update or deploy that replaced the build before it may have brought the very commit it names,
+ * or a newer one, and a commit does not say which.
+ */
+function speaksForThisBuild(cache: CachedCheck): cache is CachedCheck & { manifest: UpdateManifest } {
+  return cache.manifest !== null && (cache.manifest.channel !== 'edge' || cache.checkedBy === THIS_BUILD);
+}
 
 const EMPTY: CachedCheck = {
   manifest: null,
   announced: null,
   checkedAt: null,
   attemptedAt: null,
+  attemptedBy: null,
+  checkedBy: null,
   etag: null,
   error: null,
   retryAfter: null,
@@ -116,7 +135,7 @@ export class UpdateService {
       channel: this.config.channel,
       source: this.config.source,
       latest: latest ? toReleaseDto(latest) : null,
-      updateAvailable: latest ? isBehind(PANEL_VERSION, PANEL_GIT_SHA, latest) : false,
+      updateAvailable: speaksForThisBuild(cache) && isBehind(PANEL_VERSION, PANEL_GIT_SHA, cache.manifest),
       checkedAt: cache.checkedAt,
       error: cache.error,
       nextCheckAt: cache.checkedAt === null ? null : cache.checkedAt + CHECK_INTERVAL_MS,
@@ -130,10 +149,12 @@ export class UpdateService {
   async tick(now = new Date()): Promise<boolean> {
     const cache = this.cached();
     if (cache.retryAfter !== null && Date.now() < cache.retryAfter) return false;
-    const due = cache.checkedAt === null || Date.now() - cache.checkedAt >= CHECK_INTERVAL_MS;
+    // A panel an update or a deploy replaced asks once, at once: what is cached is the old one's.
+    const replaced = cache.attemptedBy !== THIS_BUILD;
+    const due = cache.checkedAt === null || replaced || Date.now() - cache.checkedAt >= CHECK_INTERVAL_MS;
     if (!due) return false;
     // First check ever: go as soon as the boot rush is over, whatever minute it is.
-    if (cache.attemptedAt !== null && now.getMinutes() !== this.minuteOffset()) return false;
+    if (cache.attemptedAt !== null && !replaced && now.getMinutes() !== this.minuteOffset()) return false;
     await this.check();
     return true;
   }
@@ -141,7 +162,7 @@ export class UpdateService {
   /** Ask GitHub now. Never throws: a failed check is a recorded state, not an exception. */
   async check(): Promise<SystemVersionDto> {
     const cache = this.cached();
-    const next: CachedCheck = { ...cache, attemptedAt: Date.now() };
+    const next: CachedCheck = { ...cache, attemptedAt: Date.now(), attemptedBy: THIS_BUILD };
     const tag = this.config.channel === 'edge' ? 'edge' : null;
 
     try {
@@ -163,6 +184,7 @@ export class UpdateService {
         next.checkedAt = Date.now();
         next.error = null;
       }
+      next.checkedBy = THIS_BUILD;
       next.retryAfter = null;
     } catch (err) {
       next.error = err instanceof Error ? err.message : String(err);
@@ -170,8 +192,9 @@ export class UpdateService {
       this.log.warn(`Update check failed: ${next.error}`);
     }
 
-    const latest = next.manifest;
-    if (latest && next.announced !== latest.version && isBehind(PANEL_VERSION, PANEL_GIT_SHA, latest)) {
+    // Told only of a release this build is behind: not of the one an update or a deploy replaced.
+    if (speaksForThisBuild(next) && next.announced !== next.manifest.version && isBehind(PANEL_VERSION, PANEL_GIT_SHA, next.manifest)) {
+      const latest = next.manifest;
       next.announced = latest.version;
       try {
         this.onNewRelease?.(latest);
@@ -314,7 +337,17 @@ export function isBehind(version: string, gitSha: string, latest: UpdateManifest
     if (!latest.gitSha || gitSha === 'unknown') return compareVersions(version, latest.version) < 0;
     return !shaMatches(gitSha, latest.gitSha);
   }
-  return compareVersions(version, latest.version) < 0;
+  return compareVersions(releaseIn(version), latest.version) < 0;
+}
+
+/**
+ * The release a build has in it. A checkout-mode build is stamped with package.json's version
+ * and `-source` (provision/lib.sh, wpl7_stamp), and a release commit raises that version, so
+ * `0.4.1-source` was built from a checkout that has 0.4.1 in it. Compared as it is, `-source`
+ * makes it a prerelease of 0.4.1, and a panel built from main offered the release it runs.
+ */
+function releaseIn(version: string): string {
+  return version.endsWith('-source') ? version.slice(0, -'-source'.length) : version;
 }
 
 /** One may be a short sha (a local build) and the other full (CI stamps github.sha). */

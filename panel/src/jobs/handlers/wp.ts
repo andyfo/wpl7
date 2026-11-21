@@ -119,7 +119,8 @@ async function runPluginTask(ctx: JobContext<z.infer<typeof wpPluginTaskPayload>
     return;
   } else {
     ctx.info(`Running plugin ${ctx.payload.action} for ${name}…`);
-    await backend.componentAction('plugin', name, ctx.payload.action, actor);
+    const warning = await backend.componentAction('plugin', name, ctx.payload.action, actor);
+    if (warning) ctx.warn(warning);
   }
   ctx.setResult({ [ctx.payload.action]: name });
 }
@@ -428,7 +429,8 @@ async function runOps(ctx: JobContext<BulkPayload>, backend: SiteBackend, ops: B
           }
         }
         ctx.info(`Plugin ${op.action}: ${slug}`);
-        await backend.componentAction('plugin', slug, op.action, actor);
+        const warning = await backend.componentAction('plugin', slug, op.action, actor);
+        if (warning) ctx.warn(warning);
       } else {
         if (op.action === 'deactivate') throw new Error('themes cannot be deactivated; activate another one instead');
         ctx.info(`Theme ${op.action}: ${slug}`);

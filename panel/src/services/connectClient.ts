@@ -205,10 +205,10 @@ export class ConnectClient extends PluginClient {
     activate?: boolean;
     /** The administrator it runs as (section 6): hooks of the change see who made it. */
     user?: string;
-  }): Promise<{ ok: boolean; status?: string; error?: string }> {
+  }): Promise<{ ok: boolean; status?: string; error?: string; warning?: string }> {
     const answer = await this.call('component', params, { attempts: 2, timeoutMs: 10 * 60_000, pass: [404] });
     if (answer.status === 404) return { ok: false, error: `${params.kind === 'plugin' ? 'Plugin' : 'Theme'} "${params.slug}" is not installed on the site.` };
-    return answer.json as unknown as { ok: boolean; status?: string; error?: string };
+    return answer.json as unknown as { ok: boolean; status?: string; error?: string; warning?: string };
   }
 
   async rest(params: { method: string; route: string; query?: string; body?: unknown; user?: string }, timeoutMs = 50_000): Promise<RestAnswer> {

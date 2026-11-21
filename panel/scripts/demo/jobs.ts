@@ -12,6 +12,7 @@ import { DAY, HOUR, MINUTE, ago, DEMO_NOW } from './clock.js';
 import { SITES, isPhp, isPhpSlug, rng, seedOf } from './data.js';
 import { BULK_AT, BULK_UPDATED } from './backups.js';
 import { LATEST } from './plugins.js';
+import { PHP_BEHIND, PHP_MOVE_AT } from './php.js';
 import { LAST_CRON_TICK, siteIds } from './sites.js';
 
 type Origin = 'user' | 'api' | 'mcp' | 'schedule' | 'system';
@@ -94,6 +95,28 @@ export function seedJobs(world: TestWorld): void {
       ['info', 'Copied to fra1 and verified (sha256)', 260_000],
       ['info', 'Restored on fra1; the site answers there', 330_000],
       ['info', 'Traffic switched to fra1. nyc1 forwards visitors until DNS has caught up.', 365_000],
+    ],
+  });
+  // The move onto September's PHP that did not take: the new container would not start, and the
+  // old one came back (demo/php.ts).
+  const refused = '(HTTP code 500) server error - failed to create task for container: cannot allocate memory';
+  list.push({
+    type: 'site.reconcile',
+    site: PHP_BEHIND.slug,
+    payload: { siteId: siteIds.get(PHP_BEHIND.slug) },
+    status: 'failed',
+    createdAt: PHP_MOVE_AT,
+    durationMs: 14_000,
+    origin: 'system',
+    createdBy: 'panel',
+    error: refused,
+    logs: [
+      ['info', 'Writing the files the container mounts (msmtp configuration, PHP limits)…', 0],
+      ['info', 'Creating/repairing the site network…', 600],
+      ['info', 'Registering the site with the mail relay…', 1_100],
+      ['info', 'Recreating the container with the current isolation policy…', 1_700],
+      ['error', `Replacing the container failed (${refused}); putting the previous one back…`, 9_800],
+      ['info', 'Previous container restored.', 13_600],
     ],
   });
   list.push({

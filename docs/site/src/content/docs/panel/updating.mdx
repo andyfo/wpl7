@@ -41,7 +41,8 @@ install to edge.
 
 ## Check for a new version
 
-The hourly check runs at a minute picked for your install, and downloads nothing. **Check now** on
+The hourly check runs at a minute picked for your install, and downloads nothing. Right after an
+update, the new panel asks once without waiting for that minute. **Check now** on
 **Settings → Updates** asks at once. With an alert address set in **Settings → Monitoring**, it
 also emails you once per new version.
 
@@ -100,6 +101,10 @@ beside it, and a healthy update removes the copies of earlier ones.
 The button in the panel works in [image mode](/docs/reference/glossary/#image-mode) only.
 `update.sh --force` moves a checkout-mode install to image mode, replacing the panel built there.
 
+In checkout mode the version reads like `0.4.1-source`: the panel was built from a checkout that
+has 0.4.1 in it. Only a newer release counts as an update. **Settings → Updates** shows the commit
+beside the version.
+
 ## What the panel does afterwards
 
 Once up, the new panel runs the **Finish panel update** job. It runs the steps each skipped release
@@ -110,9 +115,12 @@ A failed step is a failed job, never a rollback, because the new version is alre
 what it reports, then choose **Re-run**.
 
 <Since v="0.3.2" /> The panel then rebuilds every site container that runs an older site image than
-its server now has. That is how a PHP security release reaches the sites. Each rebuild is a job of
-its own, with its own rollback. Sites on a worker server follow within the hour after that server
-updates. A site busy with another job is rebuilt at the next hourly check.
+its server now has. Each rebuild is a job of its own, with its own rollback. Sites on a worker
+server follow within the hour after that server updates. A site busy with another job is rebuilt
+at the next hourly check.
+
+<Since v="0.4.1" /> A new PHP patch release does not wait for an update. Each server gets a new site
+image with it, and its sites move the same way, as [PHP updates](/docs/sites/php-updates/) explains.
 
 In checkout mode, the same happens when a rebuild changes the site images. `deploy.sh` and
 `build.sh --images` pull the newest WordPress base image for each rebuild.
@@ -166,7 +174,7 @@ moves and stays stopped, without a check.
 ## Related
 
 - [Settings](/docs/panel/settings/)
-- [Caching](/docs/sites/caching/)
+- [PHP updates](/docs/sites/php-updates/)
 - [Installer and scripts](/docs/reference/installer-and-scripts/)
 - [How WPL7 works](/docs/get-started/how-it-works/)
 - [Changelog](/docs/help/changelog/)

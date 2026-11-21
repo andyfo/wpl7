@@ -38,7 +38,8 @@ import { ResourceCharts } from '../components/ResourceCharts';
 import { StorageModal } from '../components/StorageModal';
 import { RecoverServerDialog } from '../components/RecoveryDialogs';
 import { serverFtpSummary } from '../lib/ftpStatus';
-import { formatBytes, formatDate, formatUptime, sitePhp, timeAgo } from '../lib/format';
+import { formatBytes, formatDate, formatUptime, timeAgo } from '../lib/format';
+import { PhpRelease } from '../components/PhpRelease';
 
 /**
  * One machine, end to end: what it is, what it is doing right now, where its backups go,
@@ -210,7 +211,7 @@ export function ServerDetail() {
               small
               variant="ghost"
               disabled={server.sitesCount > 0}
-              title={server.sitesCount > 0 ? 'It still hosts sites: move, recover or delete them first.' : undefined}
+              title={server.sitesCount > 0 ? 'It still hosts sites: change their server, recover or delete them first.' : undefined}
               onClick={() => setRemoveOpen(true)}
             >
               Remove server
@@ -404,7 +405,16 @@ function MachineCard({ serverId }: { serverId: number }) {
         <FactRow label="Docker" value={dto.dockerVersion ?? '–'} />
         <FactRow
           label="Site PHP"
-          value={dto.php.length > 0 ? dto.php.map((image) => image.release ?? image.version).join(' · ') : '–'}
+          value={
+            dto.php.length > 0
+              ? dto.php.map((image, i) => (
+                  <span key={image.version}>
+                    {i > 0 && ' · '}
+                    <PhpRelease site={{ phpVersion: image.version, phpRelease: image.release }} image />
+                  </span>
+                ))
+              : '–'
+          }
         />
       </dl>
       <p className="mt-3 text-xs text-neutral-400">Read {timeAgo(dto.readAt)}</p>
@@ -499,7 +509,9 @@ function SitesOnServer({ serverId, serverName }: { serverId: number; serverName:
                   <td className="py-2.5 pr-3">
                     <StatusBadge status={site.isLive ? 'live' : 'dev'} />
                   </td>
-                  <td className="py-2.5 pr-3 text-neutral-600">{sitePhp(site)}</td>
+                  <td className="py-2.5 pr-3 text-neutral-600">
+                    <PhpRelease site={site} />
+                  </td>
                   <td className="py-2.5 pr-3 text-right text-xs text-neutral-500">
                     {m?.cpuPct != null ? `${m.cpuPct.toFixed(1)}%` : '–'}
                   </td>

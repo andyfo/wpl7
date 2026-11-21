@@ -131,7 +131,7 @@ export async function siteRecoveryState(
     return { state: 'present', refusal: `"${serverName}" answers, but the panel could not check the site there: ${missing}` };
   }
   if (missing) return { state: 'missing', refusal: null };
-  return { state: 'present', refusal: `It is still on "${serverName}". Use Move, or Restore.` };
+  return { state: 'present', refusal: `It is still on "${serverName}". Use Change server, or Restore.` };
 }
 
 /** A complete backup the site can come back from, with where it can come from. */

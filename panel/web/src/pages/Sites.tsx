@@ -5,7 +5,8 @@ import type { SiteSummary } from '../../../shared/types';
 import { useMeta, useSites } from '../api/hooks';
 import { Button, Card, EmptyState, ExternalLinkIcon, inputClass, Segmented, SiteHealthBadge, StatusBadge } from '../components/ui';
 import { SeverityBadge } from '../components/wp/severity';
-import { formatBytes, sitePhp, timeAgo } from '../lib/format';
+import { formatBytes, timeAgo } from '../lib/format';
+import { PhpRelease } from '../components/PhpRelease';
 import { siteHealth } from '../lib/siteHealth';
 import { layoutFrom, sitesView, type SitesLayout } from './sitesLayout';
 import { PhpLabel } from '../components/php/PhpLabel';
@@ -52,7 +53,7 @@ export function Sites() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="page-title">Sites</h1>
         <div className="flex flex-wrap items-center justify-end gap-2">
-          {view.choice && <Segmented label="Layout" options={LAYOUTS} value={layout} onChange={chooseLayout} />}
+          {view.choice && <Segmented muted label="Layout" options={LAYOUTS} value={layout} onChange={chooseLayout} />}
           {multiServer && (
             <select
               className={`${inputClass} w-auto`}
@@ -151,7 +152,7 @@ function SitesTable({ sites, multiServer, scheme, single }: { sites: SiteSummary
                   {external ? '–' : site.serverName}
                 </td>
               )}
-              <td className="py-2.5 pr-3 text-neutral-600">{sitePhp(site)}</td>
+              <td className="py-2.5 pr-3 text-neutral-600"><PhpRelease site={site} /></td>
               <td className="py-2.5 pr-3 text-right whitespace-nowrap">
                 <UpdatesCell site={site} />
               </td>
@@ -241,7 +242,7 @@ function ExternalSitesCard({ sites }: { sites: SiteSummary[] }) {
               <td className="py-2.5 pr-3">
                 <SiteHealthBadge health={siteHealth(site)} />
               </td>
-              <td className="py-2.5 pr-3 text-neutral-600">{sitePhp(site)}</td>
+              <td className="py-2.5 pr-3 text-neutral-600"><PhpRelease site={site} /></td>
               <td className="py-2.5 pr-3 text-right whitespace-nowrap">
                 <UpdatesCell site={site} />
               </td>

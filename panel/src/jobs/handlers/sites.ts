@@ -32,6 +32,8 @@ import {
 import { mailLogin } from '../../services/mailAuth.js';
 import { generateSecret } from '../../lib/crypto.js';
 import { PluginSyncService } from '../../services/pluginSync.js';
+import type { PluginChange } from '../../services/wp.js';
+import { storedZipPluginFolder } from '../../lib/pluginZip.js';
 import { assertDomainsFree } from '../../services/domainGuard.js';
 import { safeJoin } from '../../lib/slug.js';
 import {
@@ -64,6 +66,17 @@ import { writeMailFrom } from '../../services/siteCaches.js';
 import { parseSiteCacheRules } from '../../../shared/cacheRules.js';
 
 const errMsg = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/**
+ * A new site's plugin install, in its log: a warning when it did not come out as asked, or did but
+ * WP-CLI reported an error. `what` names the plugin while it is not there, `folder` once it is.
+ */
+function logPluginInstall(ctx: JobContext<unknown>, what: string, folder: string | null, change: PluginChange): void {
+  const plugin = folder ? `Plugin "${folder}"` : what;
+  if (change.outcome === 'failed') ctx.warn(`${what} failed to install: ${change.error}`);
+  else if (change.outcome === 'inactive') ctx.warn(`${plugin} was installed but not activated: ${change.error}`);
+  else if (change.error) ctx.warn(`${plugin} was installed and activated, but WP-CLI reported an error: ${change.error}`);
+}
 
 // ---------------------------------------------------------------------------
 
@@ -299,7 +312,7 @@ async function installWordPress(
     ctx.checkCanceled();
     ctx.info(`Installing plugin ${slug}…`);
     try {
-      await server.wp.installPluginSlug(site.containerName, slug, true, adminUser);
+      logPluginInstall(ctx, `Plugin "${slug}"`, slug, await server.wp.installPlugin(site.containerName, slug, slug, true, adminUser));
     } catch (err) {
       ctx.warn(`Plugin "${slug}" failed to install: ${errMsg(err)}`);
     }
@@ -309,7 +322,8 @@ async function installWordPress(
     ctx.info(`Installing plugin from ${zipPath}…`);
     try {
       await new PluginSyncService(s.db, s.config, s.servers).ensureZipOnServer(server, zipPath);
-      await server.wp.installPluginZip(site.containerName, zipPath, true, adminUser);
+      const folder = storedZipPluginFolder(zipPath);
+      logPluginInstall(ctx, `Plugin zip "${zipPath}"`, folder, await server.wp.installPlugin(site.containerName, zipPath, folder, true, adminUser));
     } catch (err) {
       ctx.warn(`Plugin zip "${zipPath}" failed to install: ${errMsg(err)}`);
     }

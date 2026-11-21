@@ -7,6 +7,7 @@ import type { SiteLimits } from '../../shared/types.js';
 import type { ContainerLimits, DockerPort, SiteContainerSpec } from './docker.js';
 import type { DnsService } from './dns.js';
 import { conflict } from '../lib/errors.js';
+import { PANEL_VERSION } from '../lib/version.js';
 import { assertSiteImage } from '../lib/siteKind.js';
 import { traefikLabels } from './labels.js';
 import type { PanelSettings } from './settings.js';
@@ -24,6 +25,13 @@ import { RUNTIME_DIR_IN_CONTAINER, SITE_STACK_LABEL, SITE_STACK_PORT, WP_CACHE_P
 export const SITE_IMAGE_REPO = 'wpl7-wordpress';
 
 export const siteImage = (phpVersion: string) => `${SITE_IMAGE_REPO}:php${phpVersion}`;
+
+/**
+ * The tag suffix a release's published images carry, as provision/setup.sh and update.sh pull
+ * them: `.env` says, and the fallback is `edge` on that channel and the version otherwise.
+ */
+export const releaseImageTag = (config: Pick<Config, 'imageTag' | 'channel'>): string =>
+  config.imageTag || (config.channel === 'edge' ? 'edge' : PANEL_VERSION);
 
 /**
  * The name a site's old container has, stopped, while its next one comes up: its way back

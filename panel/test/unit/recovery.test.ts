@@ -213,7 +213,7 @@ describe('recovery', () => {
     const site = await makeSite(w);
     const report = await siteRecoveryReport(w.core, site);
     expect(report.state).toBe('present');
-    expect(report.refusal).toMatch(/still on "local".*Move, or Restore/);
+    expect(report.refusal).toMatch(/still on "local".*Change server, or Restore/);
     const backup = await w.core.backup.create(site, 'manual', {});
     await expect(queueSiteRecovery(w.core, site, { backupId: backup.id, targetServerId: 1 })).rejects.toThrow(/still on/);
   });

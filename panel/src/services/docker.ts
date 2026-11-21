@@ -459,9 +459,16 @@ export interface DockerPort {
   imageTags(repository: string): Promise<string[]>;
   /**
    * Builds from every file in `contextDir` (a flat folder), on this server's daemon, always on a
-   * freshly pulled base image.
+   * freshly pulled base image. `noCache` runs every step again, for a rebuild that is about the
+   * packages a cached step would keep.
    */
-  buildImage(tag: string, contextDir: string, buildArgs: Record<string, string>, onProgress?: (line: string) => void): Promise<void>;
+  buildImage(
+    tag: string,
+    contextDir: string,
+    buildArgs: Record<string, string>,
+    onProgress?: (line: string) => void,
+    opts?: { noCache?: boolean },
+  ): Promise<void>;
   /** `platform` asks for one platform of a list, `linux/amd64`; without it the daemon takes its own. */
   pullImage(tag: string, onProgress?: (line: string) => void, opts?: { auth?: RegistryAuth; platform?: string }): Promise<void>;
   /** What a registry says of a reference, without a pull (see DistributionInfo). */
@@ -1227,6 +1234,7 @@ export class DockerService implements DockerPort {
     contextDir: string,
     buildArgs: Record<string, string>,
     onProgress?: (line: string) => void,
+    opts: { noCache?: boolean } = {},
   ): Promise<void> {
     // dockerode sends only the files it is given: every file of the context, which is a flat
     // folder (deploy/wordpress-image, deploy/sftpgo-image).
@@ -1239,7 +1247,7 @@ export class DockerService implements DockerPort {
     // pull: a cached base keeps the PHP it was pulled with, and misses every security release since.
     const stream = await this.docker.buildImage(
       { context: contextDir, src },
-      { t: tag, buildargs: buildArgs, rm: true, forcerm: true, pull: true },
+      { t: tag, buildargs: buildArgs, rm: true, forcerm: true, pull: true, ...(opts.noCache ? { nocache: true } : {}) },
     );
     await this.followProgress(stream, onProgress);
   }
