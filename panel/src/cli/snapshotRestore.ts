@@ -159,6 +159,8 @@ const ENV_RULES: [key: string, rule: RegExp][] = [
   ['SMTP_USERNAME', /^.+$/],
   ['SMTP_PASSWORD', /^.+$/],
   ['BACKUP_ROOT', /^\/(?!.*\.\.)[A-Za-z0-9._\-/]*$/],
+  ['HETZNER_API_KEY', /^[A-Za-z0-9._-]+$/],
+  ['DO_AUTH_TOKEN', /^[A-Za-z0-9._-]+$/],
 ];
 export const RESTORE_ENV_KEYS = ENV_RULES.map(([key]) => key);
 

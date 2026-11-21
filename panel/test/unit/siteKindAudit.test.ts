@@ -35,7 +35,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   'jobs/handlers/move.ts': { finalizeCleanup: hosted("owner.kind !== 'external'") },
   'jobs/handlers/recover.ts': {
     makeDeletedSite: both('a name is taken by a site of either kind; the row it makes is hosted'),
-    handOver: hosted('isExternal(owner)'),
+    handOverOnce: both('reads who owns the old copy, by id and by name; a site hosted elsewhere is left out right after (isExternal)'),
   },
   'jobs/handlers/servers.ts': { serverApplySiteLimits: hosted('hostedSites()') },
   'jobs/handlers/shared.ts': {
@@ -206,7 +206,7 @@ const SITE_APP_REVIEW: Record<string, Record<string, AppVerdict>> = {
   'jobs/handlers/move.ts': { finalizeCleanup: apps('who owns a source copy, by slug') },
   'jobs/handlers/recover.ts': {
     makeDeletedSite: apps('a name is taken by a site of either app; siteRowFromManifest makes WordPress and PHP sites'),
-    handOver: apps('who owns an old copy, by slug, of any app'),
+    handOverOnce: apps('who owns an old copy: the site that left by its id, a site of that name living there by slug'),
   },
   'jobs/handlers/servers.ts': { serverApplySiteLimits: apps('container limits and runtime files for every hosted site') },
   'jobs/handlers/shared.ts': {
@@ -365,7 +365,7 @@ const SITE_IMAGE_REVIEW: Record<string, Record<string, ImageVerdict>> = {
   },
   'jobs/handlers/recover.ts': {
     makeDeletedSite: images('a name is taken by a site of any app; siteRowFromManifest refuses a container app'),
-    handOver: images('who owns an old copy, by slug: an app\'s container goes with its volumes (isContainerApp)'),
+    handOverOnce: images('who owns an old copy: an app\'s container goes with its volumes (isContainerApp)'),
   },
   'jobs/handlers/servers.ts': {
     serverApplySiteLimits: images('container limits for every hosted site, a container app\'s too; the caches step is the site image\'s'),

@@ -73,6 +73,11 @@ export class SshConnection {
     this.hangUpCloseMs = opts.hangUpCloseMs ?? HANG_UP_CLOSE_MS;
   }
 
+  /** A session is open: its keepalives (15 s, three missed) close it within a minute once the server is gone. */
+  get up(): boolean {
+    return this.client !== null;
+  }
+
   private unreachable(err: Error): ServerUnreachableError {
     if (err instanceof ServerUnreachableError) return err;
     return new ServerUnreachableError(this.target.serverId, this.target.serverName, err);

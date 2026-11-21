@@ -181,11 +181,12 @@ export interface SiteDetail extends SiteSummary {
   /** 'unknown' = the hosting server could not be asked (unreachable); the rest of the detail is served from the registry. */
   containerState: 'running' | 'created' | 'exited' | 'missing' | 'unknown';
   /**
-   * Its own database is not on its server either: the site is gone from there, and comes back
-   * with Recover (services/recovery.ts), not Recreate container. Asked only when the container is
-   * missing; null when it was not asked, or the site has no database.
+   * The site is gone from its server, not only its container: its own database is not there, or,
+   * for a site without one, its folder is not either. It comes back with Recover
+   * (services/recovery.ts), not Recreate container. Asked only when the container is missing; null
+   * when it was not asked or could not be told.
    */
-  databaseMissing: boolean | null;
+  missingFromServer: boolean | null;
   url: string;
   keepDevAlias: boolean;
   /** False = the scheduled backup run skips this site; every other kind still runs. */

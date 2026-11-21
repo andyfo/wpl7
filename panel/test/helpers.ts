@@ -1107,6 +1107,12 @@ export class FakeDbAdmin implements DbAdminPort {
       bytes: this.sizes.get(name)?.bytes ?? 0,
     }));
   }
+  /** Who each database was granted to by grantDb, as a recovery hands a remade user its databases back. */
+  grants: { dbName: string; dbUser: string }[] = [];
+  async grantDb(dbName: string, dbUser: string): Promise<void> {
+    this.record('grantDb', [dbName, dbUser]);
+    this.grants.push({ dbName, dbUser });
+  }
   async createExtraDb(dbName: string, dbUser: string): Promise<void> {
     this.record('createExtraDb', [dbName, dbUser]);
     if (this.databases.has(dbName)) throw new Error(`Can't create database '${dbName}'; database exists`);

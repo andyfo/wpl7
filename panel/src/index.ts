@@ -71,7 +71,7 @@ import { hostPortFor } from './servers/hostPort.js';
 import type { CoreServices, Logger } from './services/index.js';
 import { PANEL_VERSION } from './lib/version.js';
 import { JobWorker } from './jobs/worker.js';
-import { queueHandovers } from './jobs/handlers/recover.js';
+import { queueDueHandovers, queueHandovers } from './jobs/handlers/recover.js';
 import { Schedulers } from './jobs/schedulers.js';
 import { buildServer } from './server.js';
 import type { AppDeps } from './routes/deps.js';
@@ -321,7 +321,7 @@ async function main(): Promise<void> {
       if (checked.gone > 0) log.warn(`${checked.gone} backup(s) on this server no longer have their files here`);
     })
     .catch((err: unknown) => log.warn(`Backups on this server not checked: ${String(err)}`));
-  queueHandovers(core);
+  void queueDueHandovers(core).catch((err: unknown) => log.warn(`Handovers owed to returning servers not queued: ${String(err)}`));
 
   // The relay reads its sender-authorization maps and credential database from disk, and
   // both are panel state. Publishing them at boot means a restored /srv/panel, a rebuilt

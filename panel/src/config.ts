@@ -227,6 +227,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       SMTP_USERNAME: e.SMTP_USERNAME,
       SMTP_PASSWORD: e.SMTP_PASSWORD,
       BACKUP_ROOT: e.BACKUP_ROOT,
+      // Another provider's token for the wildcard certificate: Cloudflare's is in the database.
+      HETZNER_API_KEY: e.HETZNER_API_KEY,
+      DO_AUTH_TOKEN: e.DO_AUTH_TOKEN,
     },
     /** Empty = server 1 uses `paths.backups`; otherwise the path mounted by the overlay. */
     backupRoot: e.BACKUP_ROOT ? path.resolve(e.BACKUP_ROOT) : '',

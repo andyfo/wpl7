@@ -402,7 +402,10 @@ export class MonitorService {
             this.servers.markReachable(row.id);
           } catch (err) {
             this.servers.markUnreachable(row.id, err instanceof Error ? err : new Error(String(err)));
-            await this.listeners?.serverChecked(row, false, err instanceof Error ? err.message : String(err)).catch(() => undefined);
+            // One still being set up is expected not to answer yet: that is no outage.
+            if (row.status !== 'provisioning') {
+              await this.listeners?.serverChecked(row, false, err instanceof Error ? err.message : String(err)).catch(() => undefined);
+            }
             return;
           }
           await this.listeners?.serverChecked(row, true, null).catch(() => undefined);

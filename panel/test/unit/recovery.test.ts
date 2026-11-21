@@ -236,10 +236,16 @@ describe('recovery', () => {
     expect(done.error).toBeNull();
     expect(w.dbAdmin.databases.has(site.dbName)).toBe(true);
     expect(w.docker.containers.get(site.containerName)).toBe('running');
-    // What was there is kept a day beside the site, where the restore keeps what it replaces.
-    const kept = fs.readdirSync(p.root).find((e) => e.startsWith('wordpress.pre-restore-'))!;
-    expect(fs.readFileSync(path.join(p.root, kept, 'left-behind.txt'), 'utf8')).toBe('was here');
-    expect(fs.readdirSync(w.config.paths.sites).some((e) => e.includes('.pre-recover-'))).toBe(false);
+    // What was there is kept whole for a day beside the site, as <slug>.pre-recover-<time>.
+    const kept = fs.readdirSync(w.config.paths.sites).find((e) => e.startsWith(`${site.slug}.pre-recover-`))!;
+    expect(fs.readFileSync(path.join(w.config.paths.sites, kept, 'wordpress', 'left-behind.txt'), 'utf8')).toBe('was here');
+    // Gone a day later, by the time in its name: the rename kept the folder's old mtime.
+    await w.core.backup.gcSafetyCopies();
+    expect(fs.existsSync(path.join(w.config.paths.sites, kept))).toBe(true);
+    const old = kept.replace(/\d{8}-\d{6}$/, '20200101-000000');
+    fs.renameSync(path.join(w.config.paths.sites, kept), path.join(w.config.paths.sites, old));
+    await w.core.backup.gcSafetyCopies();
+    expect(fs.existsSync(path.join(w.config.paths.sites, old))).toBe(false);
     expect(w.db.select().from(moveCleanups).all()).toHaveLength(0);
   });
 
@@ -408,15 +414,84 @@ describe('recovery', () => {
     expect(warnings.join('\n')).toMatch(/another site's now/);
   });
 
+  it("leaves out of a deleted site's row whatever in its manifest is not a valid hostname or web root", async () => {
+    const w = await makeWorld();
+    const { siteRowFromManifest } = await import('../../src/services/recovery.js');
+    const warnings: string[] = [];
+    const row = siteRowFromManifest(
+      w.core,
+      'shop',
+      {
+        slug: 'shop',
+        app: 'php',
+        domains: ['shop.example', 'a.example`) || HostRegexp(`.+'],
+        webRoot: '../../etc',
+        locale: 'en_US; rm -rf',
+        site: { cacheRules: 'not json', cpuLimit: 9999, backupBeforeUpdates: 'sometimes' },
+      },
+      w.servers.rowById(1)!,
+      (m) => warnings.push(m),
+    );
+    expect(JSON.parse(row.domains)).toEqual(['shop.example']);
+    expect(row.webRoot).toBe('');
+    expect(row.locale).toBe('en_US');
+    expect(row.cpuLimit).toBeNull();
+    expect(row.backupBeforeUpdates).toBeNull();
+    expect(JSON.parse(row.cacheRules!)).toMatchObject({ off: [] });
+    expect(warnings.join('\n')).toMatch(/not a valid hostname/);
+  });
+
+  it("removes the copy an earlier move parked on the target, its forwarding file too, before the site comes back there", async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const s2 = w.addSshServer('s2', { real: true, publicIp: '203.0.113.20' });
+    const { site, backup } = await siteOnLostServer(w, s2);
+    // The site once moved from s2 to the lost server: s2 still has that copy, and forwards it.
+    const forwarder = path.join(s2.root!, 'traefik', 'dynamic', `move-${site.slug}.yml`);
+    fs.mkdirSync(path.dirname(forwarder), { recursive: true });
+    fs.writeFileSync(forwarder, '# forwards to the lost server');
+    s2.dbAdmin.databases.add(site.dbName);
+    const parked = w.db
+      .insert(moveCleanups)
+      .values({
+        siteId: site.id,
+        siteSlug: site.slug,
+        sourceServerId: s2.id,
+        targetServerId: site.serverId,
+        containerName: site.containerName,
+        dbName: site.dbName,
+        dbUser: site.dbUser,
+        filesPath: sitePaths(w.config, site.slug).root,
+        verifyHosts: '[]',
+        targetIp: '203.0.113.66',
+        proxyConfigPath: path.join(w.config.srvRoot, 'traefik', 'dynamic', `move-${site.slug}.yml`),
+        status: 'pending',
+        createdAt: Date.now(),
+      })
+      .returning()
+      .get();
+    const job = await queueSiteRecovery(w.core, site, { backupId: backup.id, targetServerId: s2.id });
+    expect((await runJob(w, job.id)).status).toBe('succeeded');
+    expect(fs.existsSync(forwarder)).toBe(false);
+    expect(w.db.select().from(moveCleanups).where(eq(moveCleanups.id, parked.id)).get()!.status).toBe('done');
+    expect(s2.dbAdmin.databases.has(site.dbName)).toBe(true);
+  });
+
   it('reads backups whose folder is gone as remote only, unless their whole backup root is', async () => {
     const w = await makeWorld({ exec: hostExec });
     const site = await makeSite(w);
     const gone = await w.core.backup.create(site, 'manual', {});
     const kept = await w.core.backup.create(site, 'manual', {});
+    const uncopied = await w.core.backup.create(site, 'manual', {});
+    const remote = fs.mkdtempSync(path.join(w.config.srvRoot, 'remote-'));
+    const destinationId = offsiteCopy(w, gone.id, remote, null);
+    w.db.insert(backupCopies).values({ backupId: kept.id, destinationId, status: 'complete', remotePath: 'b/x/k', createdAt: Date.now() }).run();
     fs.rmSync(gone.path, { recursive: true, force: true });
+    fs.rmSync(uncopied.path, { recursive: true, force: true });
     expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 1, back: 0 });
     expect(w.db.select().from(backups).where(eq(backups.id, gone.id)).get()!.filesPresent).toBe(0);
     expect(w.db.select().from(backups).where(eq(backups.id, kept.id)).get()!.filesPresent).toBe(1);
+    // No copy: never flipped, so retention can't drop the record of what may be an unmounted disk's.
+    expect(w.db.select().from(backups).where(eq(backups.id, uncopied.id)).get()!.filesPresent).toBe(1);
 
     // The folder returns (a disk mounted again): present again.
     fs.cpSync(kept.path, gone.path, { recursive: true });

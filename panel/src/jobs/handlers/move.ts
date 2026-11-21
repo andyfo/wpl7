@@ -548,12 +548,3 @@ export async function finalizeCleanup(ctx: JobContext<unknown>, s: CoreServices,
   if (owner && isContainerApp(owner)) void s.appRoutes.kick(cleanup.sourceServerId);
   ctx.info('Source cleanup done.');
 }
-
-/** Pending cleanup for a site, if any (drives the SiteDetail banner + delete hook). */
-export function pendingCleanupFor(s: CoreServices, siteId: number): MoveCleanupRow | undefined {
-  return s.db
-    .select()
-    .from(moveCleanups)
-    .where(and(eq(moveCleanups.siteId, siteId), eq(moveCleanups.status, 'pending')))
-    .get();
-}

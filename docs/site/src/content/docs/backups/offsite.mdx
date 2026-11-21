@@ -87,9 +87,10 @@ delete.
 its checksums. **Restore** and **Download** then work as usual, also for a backup taken before the
 site moved. Retention leaves a fetched backup's files on the server for a week.
 
-The panel checks every night that each backup's files are still on its server. A backup whose
-folder is gone reads as **remote only**, or as **Files missing** when it has no copy either. A
-backup root that is not there at all, such as a disk that did not mount, is left as it was.
+The panel checks every night that the backups with an offsite copy still have their files on
+their server. One whose folder is gone reads as **remote only**, and comes back when the folder
+does. A backup without a copy is never changed by this, because an empty mount point looks just
+like a lost disk.
 
 ## When a copy fails
 

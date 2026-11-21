@@ -156,7 +156,7 @@ export function ServerDetail() {
           {keyRefused && sshKey.data?.publicKey && (
             <div className="mt-3 space-y-1">
               <p>
-                If the panel was installed again, it has a new SSH key. Add it to <code>/home/wpl7-panel/.ssh/authorized_keys</code> and{' '}
+                If the panel was installed again, it has a new SSH key. Add it to <code>/home/{server.sshUser}/.ssh/authorized_keys</code> and{' '}
                 <code>/root/.ssh/authorized_keys</code> on this server:
               </p>
               <CopyField value={sshKey.data.publicKey} tone="plain" />

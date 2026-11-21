@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
-import { appSettings, backups, jobs, moveCleanups, siteDatabases, sites, type BackupRow, type MoveCleanupRow, type SiteRow } from '../../db/schema.js';
+import { appRoutes, appSettings, backups, jobs, moveCleanups, siteDatabases, sites, type BackupRow, type MoveCleanupRow, type SiteRow } from '../../db/schema.js';
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
@@ -13,7 +13,9 @@ import { ensureSiteImage } from './sites.js';
 import { proxyConfigPathFor, rmOn } from './moveHelpers.js';
 import { extraDbFile, manifestDatabases, otherAppRefusal, tsStamp } from '../../services/backup.js';
 import { restoreSiteOnServer, type ProtectionHold } from './restoreSite.js';
-import { backupImage } from './apps.js';
+import { backupImage, type PlacedImage } from './apps.js';
+import { appRows } from '../../services/appSpec.js';
+import { pinned, pullAuthFor, pullPinned } from '../../services/appImages.js';
 import { repointSiteDns, writeForwarding, type DnsRepoint } from './siteHandover.js';
 import { finalizeCleanup } from './move.js';
 import { checkRecoverRequest, serverAnswers, siteRecoveryState, siteRowFromManifest, type BackupManifest } from '../../services/recovery.js';
@@ -243,7 +245,12 @@ async function recoverSite(
         throw new Error(`"${target.name}" has no object cache yet, because it still has the old site image. Update that server first, or switch this site's object cache off. Nothing was changed.`);
       }
     }
-    const appImage = isContainerApp(site) ? await backupImage(ctx, s, target, site, manifest) : null;
+    if (isContainerApp(site) && !sameServer) {
+      // Its plain http routes need a Traefik there that can answer them, as a move checks.
+      const enabled = s.db.select({ scheme: appRoutes.scheme }).from(appRoutes).where(and(eq(appRoutes.siteId, site.id), eq(appRoutes.enabled, 1))).all();
+      await s.apps.assertHttpRoutesOn(target.id, enabled);
+    }
+    const appImage = isContainerApp(site) ? await recoveryImage(ctx, s, target, site, manifest) : null;
     ctx.checkCanceled();
 
     // ------------------------------------------------------------ 3: clear the way on the target
@@ -272,8 +279,9 @@ async function recoverSite(
       // Leftovers of the slug there are garbage: an earlier attempt, or the copy a move away from
       // that server parked, which this recovery supersedes.
       for (const parked of pendingCleanupsOn(s, site.id, target.id)) {
-        s.db.update(moveCleanups).set({ status: 'done', handover: 'done', finalizedAt: Date.now() }).where(eq(moveCleanups.id, parked.id)).run();
-        ctx.info(`The copy an earlier move parked on "${target.name}" is replaced by this recovery.`);
+        // Removed as a finalize removes it, its forwarding file with it: this recovery takes its place.
+        ctx.info(`Removing the copy an earlier move parked on "${target.name}": this recovery takes its place.`);
+        await finalizeCleanup(ctx, s, parked);
       }
       if ((await target.docker.containerState(site.containerName)) !== 'missing') {
         ctx.warn(`Removing leftover container ${site.containerName} on "${target.name}"`);
@@ -325,6 +333,14 @@ async function recoverSite(
         ...(appImage ? { appImage: appImage.ref } : {}),
       },
     );
+
+    // On its own server its user was made again, without the grants it had on the databases it keeps there.
+    if (sameServer && hasDatabase(site)) {
+      for (const name of extrasBefore.filter((n) => !inBackup.includes(n) && onTarget.has(n))) {
+        await target.dbAdmin.grantDb(name, site.dbUser);
+        ctx.info(`Database ${name} is not in this backup and stays as it is there, the site's as before.`);
+      }
+    }
 
     // Its address may have changed since the backup: WordPress follows the site's current one.
     const listed = Array.isArray(manifest?.domains) ? (manifest.domains as unknown[]) : [];
@@ -405,27 +421,20 @@ async function recoverSite(
     s.databases.kick(target.id);
 
     if (aside) {
-      // Kept a day beside the site, as a restore keeps the files it replaced (BackupService.gcSafetyCopies).
-      const folder = isContainerApp(site) ? 'data' : 'wordpress';
-      const keep = path.join(paths.root, `${isContainerApp(site) ? 'app' : 'wordpress'}.pre-restore-${tsStamp(new Date())}`);
-      try {
-        if (await target.files.exists(path.join(aside, folder))) {
-          await target.files.rename(path.join(aside, folder), keep);
-          ctx.info(`The files that were there are kept for a day in ${keep}.`);
-        }
-        await target.files.rm(aside);
-      } catch (err) {
-        ctx.warn(`Could not tidy ${aside} (${errMsg(err)}); it is removed after a day.`);
-      }
+      // Whole - files, mounts kept out of backups, quarantine - and removed a day from now by
+      // BackupService.gcSafetyCopies, which reads the time in its name.
+      ctx.info(`What was left of the site there is kept for a day in ${aside}.`);
     }
 
     const dns: DnsRepoint = await repointSiteDns(ctx, s, site, target, { fromName, sameServer });
 
     // ------------------------------------------------------------ 6: the old server
     if (cleanupId !== null) {
-      const cleanup = s.db.select().from(moveCleanups).where(eq(moveCleanups.id, cleanupId)).get()!;
+      // One way to the old server, a job of its own in its lane: the server answering again queues
+      // the same job, and two of them must not stop the same copy at once.
       if (await serverAnswers(s, fromServerId)) {
-        await handOver(ctx, s, cleanup);
+        queueHandovers(s, fromServerId);
+        ctx.info(`"${fromName}" answers: a job of its own stops the old copy there and forwards its visitors here.`);
       } else {
         ctx.warn(
           `"${fromName}" does not answer. If it answers again, the panel stops the old copy there, ` +
@@ -505,17 +514,33 @@ export async function siteRecoverHandover(
   ctx.setResult({ cleanupId: cleanup.id, slug: cleanup.siteSlug });
 }
 
+/** Cleanups being handed over right now: a server that answers again can queue one twice. */
+const handingOver = new Set<number>();
+
 /**
  * Stop the old copy on a server that answers again, so it can't serve beside the recovered site or
- * run its cron a second time, and forward its visitors to where the site lives now. Its files and
- * databases stay parked until the move's finalize removes them, a day after this at the earliest.
- * A site deleted meanwhile has nothing to forward to: its copy goes at once.
+ * run its cron a second time, and forward its visitors to the server the site lives on now. Its
+ * files and databases stay parked until the move's finalize removes them, a day after this at the
+ * earliest. A site deleted meanwhile has nothing to forward to: its copy goes at once.
  */
 export async function handOver(ctx: JobContext<unknown>, s: CoreServices, cleanup: MoveCleanupRow): Promise<void> {
+  if (handingOver.has(cleanup.id)) {
+    ctx.info('Another job is handing this copy over already.');
+    return;
+  }
+  handingOver.add(cleanup.id);
+  try {
+    await handOverOnce(ctx, s, cleanup);
+  } finally {
+    handingOver.delete(cleanup.id);
+  }
+}
+
+async function handOverOnce(ctx: JobContext<unknown>, s: CoreServices, cleanup: MoveCleanupRow): Promise<void> {
   const old = s.servers.handleFor(cleanup.sourceServerId);
-  const owner = s.db.select().from(sites).where(eq(sites.slug, cleanup.siteSlug)).get();
   // Names are reused when a slug is: never touch what a site living on that server owns now.
-  if (owner && !isExternal(owner) && owner.serverId === cleanup.sourceServerId) {
+  const byName = s.db.select().from(sites).where(eq(sites.slug, cleanup.siteSlug)).get();
+  if (byName && !isExternal(byName) && byName.serverId === cleanup.sourceServerId) {
     s.db
       .update(moveCleanups)
       .set({ status: 'done', handover: 'done', handedOverAt: Date.now(), finalizedAt: Date.now() })
@@ -524,32 +549,76 @@ export async function handOver(ctx: JobContext<unknown>, s: CoreServices, cleanu
     ctx.warn(`"${cleanup.siteSlug}" lives on "${old.name}" itself now, so the container, database and files there are its own.`);
     return;
   }
+  // The site that left, by its id: one of the same name made since is another site.
+  const owner = s.db.select().from(sites).where(eq(sites.id, cleanup.siteId)).get();
   ctx.info(`Stopping the old copy of "${cleanup.siteSlug}" on "${old.name}"…`);
   await removeSiteContainers(old.docker, cleanup.containerName, owner && isContainerApp(owner) ? { volumes: true } : undefined);
-  // A site hosted elsewhere that took the name since is not the one that left: nothing goes to it.
   const forwardTo = owner && !isExternal(owner) && cleanup.targetServerId !== 0 ? owner : null;
   if (!forwardTo) {
+    // Teardown first: a handover is only done once nothing of the copy is left, so one that fails
+    // part-way is tried again the next time.
+    await finalizeCleanup(ctx, s, cleanup);
     s.db.update(moveCleanups).set({ handover: 'done', handedOverAt: Date.now() }).where(eq(moveCleanups.id, cleanup.id)).run();
-    await finalizeCleanup(ctx, s, { ...cleanup, handover: 'done' });
     ctx.info(`The site was deleted meanwhile, so its old copy on "${old.name}" is removed now.`);
     return;
   }
-  await writeForwarding(ctx, s, forwardTo, old, cleanup.targetIp);
-  s.db.update(moveCleanups).set({ handover: 'done', handedOverAt: Date.now() }).where(eq(moveCleanups.id, cleanup.id)).run();
+  // Where the site lives now, which a later move or recovery may have changed since this copy was parked.
+  const ip = s.servers.rowById(forwardTo.serverId)?.publicIp || cleanup.targetIp;
+  await writeForwarding(ctx, s, forwardTo, old, ip);
+  s.db
+    .update(moveCleanups)
+    .set({
+      handover: 'done',
+      handedOverAt: Date.now(),
+      targetServerId: forwardTo.serverId,
+      targetIp: ip,
+      verifyHosts: JSON.stringify(siteDomains(forwardTo)),
+    })
+    .where(eq(moveCleanups.id, cleanup.id))
+    .run();
   void s.security.kick(old.id);
   if (isContainerApp(forwardTo)) void s.appRoutes.kick(old.id);
   void s.ftp.kick(old.id);
   ctx.info(
-    `The old copy on "${old.name}" is stopped, and its visitors go to the site's new server. Its files and ` +
+    `The old copy on "${old.name}" is stopped, and its visitors go to the site's server. Its files and ` +
       'database are kept a day: anything written there after the backup is still in them until then.',
   );
+}
+
+/**
+ * The image a container app comes back on, on the target. The backup's, when it is the one the app
+ * runs: its settings fit it, its port and its user. Another one would need them read from the
+ * image as a deploy reads them, so the app comes back on the image it runs, with the backup's files
+ * and databases, and a restore of that backup afterwards brings its image back as restores do.
+ */
+async function recoveryImage(ctx: JobContext<unknown>, s: CoreServices, target: ServerHandle, site: SiteRow, manifest: unknown): Promise<PlacedImage> {
+  const rows = appRows(s.db, site.id);
+  if (!rows) throw new Error(`"${site.slug}" has no settings: delete it and create it again.`);
+  const now = rows.settings;
+  const c = (manifest as { container?: { digest?: string; imageId?: string } } | null)?.container;
+  const same = c ? (c.digest ? c.digest === now.digest : Boolean(c.imageId) && c.imageId === now.imageId) : false;
+  if (same) return backupImage(ctx, s, target, site, manifest);
+  ctx.warn(
+    c
+      ? 'The backup was taken on another image than the app runs now. It comes back on the one it runs, with the backup\'s files and databases. Restore the backup afterwards to go back to its image.'
+      : 'The backup names no image: the app comes back on the one it runs.',
+  );
+  if (now.source === 'registry' && now.reference && now.digest) {
+    const ref = pinned(now.reference, now.digest);
+    if (await target.docker.imageExists(ref)) return { ref, reference: now.reference, digest: now.digest, imageId: now.imageId, port: now.port };
+    ctx.info(`Pulling the app's image, ${now.digest.slice(0, 19)}…, onto "${target.name}" by its digest…`);
+    const pulled = await pullPinned(target, now.reference, now.digest, pullAuthFor(now, now.reference), (line) => ctx.info(line));
+    return { ref: pulled.ref, reference: now.reference, digest: pulled.digest, imageId: pulled.imageId, port: now.port };
+  }
+  if (now.imageId && (await target.docker.imageExists(now.imageId))) return { ref: now.imageId, reference: '', digest: '', imageId: now.imageId, port: now.port };
+  throw new Error(`The app's image was uploaded, and it is not on "${target.name}". Upload it again, then recover. Nothing was changed.`);
 }
 
 /**
  * Queue the handover of every recovered site whose old server answers again, once each. Called when
  * a server answers after it did not, at boot, and by the nightly housekeeping. Returns how many it queued.
  */
-export function queueHandovers(s: CoreServices, serverId?: number): number {
+export function queueHandovers(s: CoreServices, serverId?: number, opts: { answered?: boolean } = {}): number {
   const pending = s.db
     .select()
     .from(moveCleanups)
@@ -564,7 +633,7 @@ export function queueHandovers(s: CoreServices, serverId?: number): number {
   let queued = 0;
   for (const cleanup of pending) {
     const server = s.servers.rowById(cleanup.sourceServerId);
-    if (!server || server.status !== 'ok') continue;
+    if (!server || (server.status !== 'ok' && !opts.answered)) continue;
     const waiting = s.db
       .select({ id: jobs.id, payload: jobs.payload })
       .from(jobs)
@@ -577,6 +646,30 @@ export function queueHandovers(s: CoreServices, serverId?: number): number {
       siteSlug: cleanup.siteSlug,
     });
     queued++;
+  }
+  return queued;
+}
+
+/**
+ * At boot and every night: ask each server that is still owed a handover whether it answers,
+ * whatever its row says, and queue what it is owed. Its row can say unreachable while the server
+ * stats schedule is paused, or error after a failed update, and then nothing else asks it.
+ */
+export async function queueDueHandovers(s: CoreServices): Promise<number> {
+  const owing = new Set(
+    s.db
+      .select({ serverId: moveCleanups.sourceServerId })
+      .from(moveCleanups)
+      .where(and(eq(moveCleanups.status, 'pending'), eq(moveCleanups.handover, 'pending')))
+      .all()
+      .map((row) => row.serverId),
+  );
+  let queued = 0;
+  for (const serverId of owing) {
+    const row = s.servers.rowById(serverId);
+    if (!row) continue;
+    if (row.status !== 'ok' && !(await serverAnswers(s, serverId))) continue;
+    queued += queueHandovers(s, serverId, { answered: true });
   }
   return queued;
 }

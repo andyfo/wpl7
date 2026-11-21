@@ -10,7 +10,18 @@ import { AppError, badRequest, conflict, notFound } from '../lib/errors.js';
 import { generateSecret } from '../lib/crypto.js';
 import { containerName, dbIdentifier } from '../lib/slug.js';
 import { jobLabel } from '../../shared/jobTypes.js';
-import { TABLE_PREFIX_RE } from '../../shared/schemas.js';
+import {
+  MAX_BACKUP_KEEP_DAYS,
+  TABLE_PREFIX_RE,
+  backupBeforeUpdatesValues,
+  cpuLimitSchema,
+  domainSchema,
+  localeSchema,
+  memoryLimitMbSchema,
+  pidsLimitSchema,
+  webRootSchema,
+} from '../../shared/schemas.js';
+import { parseSiteCacheRules } from '../../shared/cacheRules.js';
 import type {
   RecoveryBackupDto,
   RecoveryState,
@@ -47,6 +58,12 @@ export async function serverAnswers(s: Pick<CoreServices, 'servers'>, serverId: 
   const row = s.servers.rowById(serverId);
   if (!row) return false;
   if (row.kind === 'local') return true;
+  // A session that is up answers: its keepalives would have closed it within a minute otherwise.
+  // A command would queue behind the server's busy channels, and a busy server is not a lost one.
+  if (s.servers.sessionUp(serverId)) {
+    s.servers.markReachable(serverId);
+    return true;
+  }
   let timer: NodeJS.Timeout | undefined;
   try {
     const res = await Promise.race([
@@ -208,9 +225,28 @@ function backupDto(u: UsableBackup): RecoveryBackupDto {
   };
 }
 
+/**
+ * The newest `limit`, and besides them the backup each target would get: the newest with a copy,
+ * and each server's newest with its files there. The dialog picks among them as the server does
+ * (lib/recovery.ts newestFor, sourceFor here), so it says what the button will do.
+ */
+function reportBackups(s: CoreServices, slug: string, limit: number): UsableBackup[] {
+  const all = usableBackups(s, slug, Number.MAX_SAFE_INTEGER);
+  const picked = new Set(all.slice(0, limit));
+  const copied = all.find((u) => u.copies.length > 0);
+  if (copied) picked.add(copied);
+  const localOn = new Set<number>();
+  for (const u of all) {
+    if (u.row.filesPresent !== 1 || localOn.has(u.row.serverId)) continue;
+    localOn.add(u.row.serverId);
+    picked.add(u);
+  }
+  return all.filter((u) => picked.has(u));
+}
+
 async function siteReport(s: CoreServices, site: SiteRow, input: StateInput, backupLimit: number): Promise<SiteRecoveryDto> {
   const { state, refusal } = await siteRecoveryState(s, site, input);
-  const usable = usableBackups(s, site.slug, backupLimit);
+  const usable = reportBackups(s, site.slug, backupLimit);
   const targets = targetsFor(s, site.serverId, state);
   return {
     slug: site.slug,
@@ -345,7 +381,8 @@ export async function queueServerRecovery(
   let hosted = s.db.select().from(sites).where(and(eq(sites.serverId, serverId), hostedSites())).orderBy(asc(sites.slug)).all();
   if (body.slugs) {
     const wanted = new Set(body.slugs);
-    const unknown = body.slugs.filter((slug) => !hosted.some((site) => site.slug === slug));
+    const keptHere = s.db.select({ slug: sites.slug }).from(sites).where(and(eq(sites.serverId, serverId), externalSites())).all();
+    const unknown = body.slugs.filter((slug) => !hosted.some((site) => site.slug === slug) && !keptHere.some((site) => site.slug === slug));
     if (unknown.length > 0) throw badRequest(`Not a site hosted on "${server.name}": ${unknown.join(', ')}`);
     hosted = hosted.filter((site) => wanted.has(site.slug));
   }
@@ -468,7 +505,13 @@ export function siteRowFromManifest(
     warn(`The backup was taken on PHP ${manifest.phpVersion}, which is no longer offered; the site comes back on PHP ${phpVersion}.`);
   }
 
-  const dev = str(manifest.devHostname) || null;
+  // A manifest comes out of a bucket: every value that reaches a label, a config file or a
+  // container goes through the schema the panel holds the same value to everywhere else.
+  const hostname = (v: unknown): string | null => {
+    const parsed = domainSchema.safeParse(v);
+    return parsed.success ? parsed.data : null;
+  };
+  const dev = hostname(manifest.devHostname);
   // A name under a dev domain is only ever the site's own dev hostname: the one it had, or the one it gets.
   const free = (domain: string, ownDev: string | null = dev): boolean => {
     try {
@@ -478,7 +521,9 @@ export function siteRowFromManifest(
       return false;
     }
   };
-  const listed = Array.isArray(manifest.domains) ? manifest.domains.filter((d): d is string => typeof d === 'string' && d !== '') : [];
+  const raw = Array.isArray(manifest.domains) ? manifest.domains : [];
+  const listed = raw.map(hostname).filter((d): d is string => d !== null);
+  if (listed.length < raw.length) warn('The backup lists a domain that is not a valid hostname: the site comes back without it.');
   const domains = [...new Set(listed)].filter((domain) => free(domain));
   for (const domain of listed.filter((d) => !domains.includes(d))) warn(`${domain} is another site's now: the site comes back without it.`);
   let devHostname = dev && domains.includes(dev) ? dev : null;
@@ -488,7 +533,14 @@ export function siteRowFromManifest(
     domains.push(devHostname);
     warn(`It comes back on ${devHostname}.`);
   }
-  const own = manifest.site ?? {};
+  const own = manifest.site && typeof manifest.site === 'object' ? manifest.site : {};
+  const valid = <T,>(schema: { safeParse(v: unknown): { success: true; data: T } | { success: false } }, v: unknown): T | null => {
+    const parsed = schema.safeParse(v);
+    return parsed.success ? parsed.data : null;
+  };
+  const webRoot = app === 'php' ? valid(webRootSchema, manifest.webRoot) : '';
+  if (app === 'php' && webRoot === null) warn("The backup's web root is not one the panel takes: the site's folder is its web root.");
+  const keepDays = num(own.backupKeepDays);
   const isLive = typeof own.isLive === 'boolean' ? own.isLive : devHostname === null || domains[0] !== devHostname;
   // A WordPress site always has a database; a PHP site has one when its backup says so.
   const withDatabase = app === 'wordpress' || manifest.database === true;
@@ -509,27 +561,28 @@ export function siteRowFromManifest(
     keepDevAlias: own.keepDevAlias === false ? 0 : 1,
     phpVersion,
     app,
-    webRoot: app === 'php' ? (str(manifest.webRoot) ?? '') : '',
-    locale: str(manifest.locale) ?? s.settings.get('defaultLocale') ?? 'en_US',
+    webRoot: webRoot ?? '',
+    locale: valid(localeSchema, manifest.locale) ?? s.settings.get('defaultLocale') ?? 'en_US',
     status: 'provisioning',
     dbName,
     dbUser,
     dbPassword: withDatabase ? generateSecret(24) : '',
     mailPassword: generateSecret(24),
-    wpAdminUser: app === 'php' ? null : str(own.wpAdminUser),
-    wpAdminEmail: app === 'php' ? null : str(own.wpAdminEmail),
+    wpAdminUser: app === 'php' ? null : (str(own.wpAdminUser)?.slice(0, 60) ?? null),
+    wpAdminEmail: app === 'php' ? null : (str(own.wpAdminEmail)?.slice(0, 254) ?? null),
     containerName: containerName(slug),
     tablePrefix: manifest.tablePrefix && TABLE_PREFIX_RE.test(manifest.tablePrefix) ? manifest.tablePrefix : 'wp_',
     pageCache: own.pageCache === 'on' || own.pageCache === 'off' ? own.pageCache : null,
     objectCache: own.objectCache === true ? 1 : 0,
-    cacheRules: str(own.cacheRules),
-    cpuLimit: num(own.cpuLimit),
-    memoryLimitMb: num(own.memoryLimitMb),
-    pidsLimit: num(own.pidsLimit),
+    // Read back through the parser the renderers use, which drops what can't be a rule.
+    cacheRules: str(own.cacheRules) ? JSON.stringify(parseSiteCacheRules(own.cacheRules)) : null,
+    cpuLimit: valid(cpuLimitSchema, own.cpuLimit),
+    memoryLimitMb: valid(memoryLimitMbSchema, own.memoryLimitMb),
+    pidsLimit: valid(pidsLimitSchema, own.pidsLimit),
     backupsEnabled: own.backupsEnabled === false ? 0 : 1,
     offsiteEnabled: own.offsiteEnabled === false ? 0 : 1,
-    backupKeepDays: num(own.backupKeepDays),
-    backupBeforeUpdates: str(own.backupBeforeUpdates),
+    backupKeepDays: keepDays !== null && Number.isInteger(keepDays) && keepDays >= 0 && keepDays <= MAX_BACKUP_KEEP_DAYS ? keepDays : null,
+    backupBeforeUpdates: (backupBeforeUpdatesValues as readonly string[]).includes(String(own.backupBeforeUpdates)) ? String(own.backupBeforeUpdates) : null,
     createdAt: now,
     updatedAt: now,
   };

@@ -1,4 +1,5 @@
 // @docs sites/caching, sites/create, sites/move, sites/overview, sites/settings
+import path from 'node:path';
 import { and, asc, eq, inArray, isNotNull, or } from 'drizzle-orm';
 import type { BackupBeforeUpdates, JobType, SiteCacheBody, SiteCreateBody, SiteLimitsBody } from '../../shared/schemas.js';
 import { CACHE_RULE_GROUPS, cacheGroupInUse, cacheOffProblem, parseSiteCacheRules, withCacheRuleIds } from '../../shared/cacheRules.js';
@@ -33,7 +34,7 @@ import type { DockerPort } from './docker.js';
 import { SITE_ROOT_IN_CONTAINER } from './siteHardening.js';
 import { asSiteUser } from './wp.js';
 import { RuntimeRefusedError, applySiteCaches, effectivePageCache, siteContainerStack } from './siteCaches.js';
-import { assertPhpImage, defaultSiteLimits, limitsChange, siteImage, siteRuntimeFrom, type OwnSiteLimits } from './siteSpec.js';
+import { assertPhpImage, defaultSiteLimits, limitsChange, siteImage, sitePaths, siteRuntimeFrom, type OwnSiteLimits } from './siteSpec.js';
 
 /** The server a new site goes on: the one asked for, else the default in Settings - and it has to be up. */
 export function resolveTargetServer(s: Pick<CoreServices, 'settings' | 'servers'>, requestedId?: number): ServerRow {
@@ -647,16 +648,24 @@ export class SitesService {
     let containerState: SiteDetail['containerState'];
     let stack: SiteDetail['stack'] = null;
     let webRootMissing: SiteDetail['webRootMissing'] = site.webRoot === '' ? false : null;
-    let databaseMissing: SiteDetail['databaseMissing'] = null;
+    let missingFromServer: SiteDetail['missingFromServer'] = null;
     try {
       const { docker } = this.s.servers.handleFor(site.serverId);
       containerState = await docker.containerState(site.containerName);
       // A container app's has no stack: none of its labels would read as the old PHP setup.
       if (!isContainerApp(site)) stack = await siteContainerStack(docker, site.containerName);
       if (site.webRoot !== '' && containerState === 'running') webRootMissing = await webRootMissingIn(docker, site);
-      if (containerState === 'missing' && hasDatabase(site)) {
-        const names = (await this.s.servers.handleFor(site.serverId).dbAdmin.inventory().catch(() => null))?.map((r) => r.name);
-        databaseMissing = names ? !names.includes(site.dbName) : null;
+      // As a recovery tells it (services/recovery.ts missingOn): its database, else its folder.
+      if (containerState === 'missing') {
+        const handle = this.s.servers.handleFor(site.serverId);
+        if (hasDatabase(site)) {
+          const names = (await handle.dbAdmin.inventory().catch(() => null))?.map((r) => r.name);
+          missingFromServer = names ? !names.includes(site.dbName) : null;
+        } else {
+          const p = sitePaths(this.s.config, site.slug);
+          const folder = isContainerApp(site) ? path.join(p.root, 'data') : p.wordpress;
+          missingFromServer = await handle.files.exists(folder).then((there) => !there, () => null);
+        }
       }
     } catch (err) {
       // The registry still answers when the hosting server cannot be reached: the metadata,
@@ -684,7 +693,7 @@ export class SitesService {
       webRootMissing,
       tablePrefix: site.tablePrefix,
       containerState,
-      databaseMissing,
+      missingFromServer,
       url: `${siteScheme(this.s.config.tlsMode)}://${summary.primaryDomain}`,
       keepDevAlias: site.keepDevAlias === 1,
       backupsEnabled: site.backupsEnabled === 1,
@@ -873,7 +882,7 @@ export class SitesService {
       webRootMissing: false,
       tablePrefix: site.tablePrefix,
       containerState: 'missing',
-      databaseMissing: null,
+      missingFromServer: null,
       url: summary.external?.home ?? `https://${summary.primaryDomain}`,
       keepDevAlias: false,
       backupsEnabled: site.backupsEnabled === 1,

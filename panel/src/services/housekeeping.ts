@@ -6,7 +6,7 @@ import type { JobWorker } from '../jobs/worker.js';
 import { ApiActivityService } from './apiActivity.js';
 import { cleanDocker } from './dockerCleanup.js';
 import { pruneOAuth } from './oauth.js';
-import { queueHandovers } from '../jobs/handlers/recover.js';
+import { queueDueHandovers } from '../jobs/handlers/recover.js';
 import type { CoreServices } from './index.js';
 
 /**
@@ -126,7 +126,7 @@ export async function runHousekeeping(
 
   // A recovered site's old server that answers again and was not handed over yet (the server
   // check that saw it come back queues it too; this catches one that was missed).
-  result.handoversQueued = queueHandovers(s);
+  result.handoversQueued = await queueDueHandovers(s);
   if (result.handoversQueued > 0) log.info(`Recovered sites: stopping ${result.handoversQueued} old copies on servers that answer again`);
   result.movesFinalized = await autoFinalizeMoves(s, s.worker, log, resolvers);
   checkCanceled();

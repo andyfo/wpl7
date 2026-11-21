@@ -76,6 +76,8 @@ The others are forgotten.
 - What a site wrote after its last backup is only on the old server.
 - For up to a minute after the old server answers, both copies of a site can serve visitors and
   run their scheduled tasks.
+- A container app whose backup was taken on another image comes back on the image it runs now,
+  with the backup's files and databases. Restore the backup afterwards to go back to its image.
 - A container app whose image was uploaded comes back only when that image is on the target
   server. Upload it again first.
 - A database added to a site after its last backup does not come back.

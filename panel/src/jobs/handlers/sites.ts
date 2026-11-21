@@ -593,16 +593,6 @@ async function removeExternalSite(ctx: JobContext<z.infer<typeof siteDeletePaylo
 }
 
 /**
- * Queue the deletion of the backups a deleted site already had - all but the one it is left
- * with, which is the final backup just taken. When one was asked for and could not be taken
- * (the files were already gone: a second attempt after a teardown that failed half-way), the
- * newest complete backup stays in its place, rather than nothing being left of a site whose
- * owner asked for a last backup.
- *
- * Queued rather than done here: removing remote copies is minutes of rclone, and this job
- * holds the server's lane - every other site on the machine would wait for the bucket.
- */
-/**
  * Remove every copy of the site that a move or a recovery parked on another server, before the site
  * itself goes: left behind, a cleanup outlives its site, and a later site that re-used the slug
  * would inherit it. A server that is gone has nothing left to clean. One that does not answer keeps
@@ -627,7 +617,8 @@ async function finalizeParkedCopies(ctx: JobContext<unknown>, s: CoreServices, s
       continue;
     }
     if (!(await serverAnswers(s, cleanup.sourceServerId))) {
-      s.db.update(moveCleanups).set({ handover: 'pending' }).where(eq(moveCleanups.id, cleanup.id)).run();
+      // The site is going, so there is nothing to forward to: its handover removes the copy at once.
+      s.db.update(moveCleanups).set({ handover: 'pending', targetServerId: 0 }).where(eq(moveCleanups.id, cleanup.id)).run();
       ctx.warn(`"${source.name}" does not answer: the old copy there is removed if it answers again.`);
       continue;
     }
@@ -703,6 +694,16 @@ async function removeFromLostServer(ctx: JobContext<z.infer<typeof siteDeletePay
   });
 }
 
+/**
+ * Queue the deletion of the backups a deleted site already had - all but the one it is left
+ * with, which is the final backup just taken. When one was asked for and could not be taken
+ * (the files were already gone: a second attempt after a teardown that failed half-way), the
+ * newest complete backup stays in its place, rather than nothing being left of a site whose
+ * owner asked for a last backup.
+ *
+ * Queued rather than done here: removing remote copies is minutes of rclone, and this job
+ * holds the server's lane - every other site on the machine would wait for the bucket.
+ */
 function queueBackupDeletion(
   ctx: JobContext<z.infer<typeof siteDeletePayload>>,
   s: CoreServices,

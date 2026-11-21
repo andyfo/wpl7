@@ -364,12 +364,13 @@ if [ ! -f "$ENV_FILE" ]; then
   if [ "$RESTORE" = 1 ]; then
     # The rest of what the old .env said. The database and session secrets above stay new: the
     # old MariaDB is gone with its server, and the old sessions are worth nothing here.
-    for restored_key in TLS_MODE ACME_RESOLVER WPL7_CHANNEL SMTP_RELAYHOST SMTP_USERNAME SMTP_PASSWORD BACKUP_ROOT; do
+    for restored_key in TLS_MODE ACME_RESOLVER WPL7_CHANNEL SMTP_RELAYHOST SMTP_USERNAME SMTP_PASSWORD BACKUP_ROOT HETZNER_API_KEY DO_AUTH_TOKEN; do
       restored_var="RESTORED_$restored_key"
       if [ -n "${!restored_var:-}" ]; then set_env_value "$restored_key" "${!restored_var}"; fi
     done
     # Cloudflare's token is in the restored database. Another provider's lived only in the old .env.
-    if [ -n "$DNS_PROVIDER_ARG" ] && [ "$DNS_PROVIDER_ARG" != cloudflare ] && [ -z "$DNS_TOKEN" ]; then
+    if [ -n "$DNS_PROVIDER_ARG" ] && [ "$DNS_PROVIDER_ARG" != cloudflare ] && [ -z "$DNS_TOKEN" ] \
+      && [ -z "${RESTORED_HETZNER_API_KEY:-}${RESTORED_DO_AUTH_TOKEN:-}" ]; then
       echo "NOTE: the old install got wildcard certificates through $DNS_PROVIDER_ARG, whose token is not in the" >&2
       echo "      snapshot. Add it to $ENV_FILE, then run $0 again." >&2
     fi

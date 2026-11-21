@@ -223,6 +223,11 @@ export class ServerRegistry {
     return /^[0-9a-fA-F:.]{2,45}$/.test(address) ? address : null;
   }
 
+  /** Whether the panel holds an SSH session to the server that is up now (keepalives close a dead one). */
+  sessionUp(serverId: number): boolean {
+    return this.cache.get(serverId)?.conn?.up ?? false;
+  }
+
   /** Drop the cached handle + SSH connection (after PATCH, delete, host-key retrust). */
   invalidate(serverId: number): void {
     const entry = this.cache.get(serverId);

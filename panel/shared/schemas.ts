@@ -1824,17 +1824,17 @@ export function siteLimitProblem(key: keyof typeof SITE_LIMIT_RANGES, label: str
   return inRange && Number.isInteger(n) ? null : `${label}: a whole number from ${min} to ${max}.`;
 }
 
-const cpuLimitSchema = z
+export const cpuLimitSchema = z
   .number()
   .min(SITE_LIMIT_RANGES.cpuLimit.min)
   .max(SITE_LIMIT_RANGES.cpuLimit.max)
   .refine(cpuLimitAllowed, `A CPU limit is 0 for none, or at least ${MIN_CPU_CAP} cores`);
-const memoryLimitMbSchema = z
+export const memoryLimitMbSchema = z
   .number()
   .int()
   .min(SITE_LIMIT_RANGES.memoryLimitMb.min)
   .max(SITE_LIMIT_RANGES.memoryLimitMb.max);
-const pidsLimitSchema = z
+export const pidsLimitSchema = z
   .number()
   .int()
   .min(SITE_LIMIT_RANGES.pidsLimit.min)
