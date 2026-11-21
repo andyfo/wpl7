@@ -94,6 +94,18 @@ export const JOB_TYPE_INFO = {
     description: 'Removes the copy a move parked on the old server, once every hostname resolves to the new one.',
     category: 'sites',
   },
+  'site.recover': {
+    label: 'Recover site',
+    description:
+      "Brings a site back from one of its backups, on another server when its own does not answer, or on its own once it is gone from it. Anything written since the backup is not in it.",
+    category: 'sites',
+  },
+  'site.recoverHandover': {
+    label: 'Stop old copy',
+    description:
+      "Stops a recovered site's old copy on a server that answers again, and forwards its visitors to where the site lives now. The copy is removed a day later.",
+    category: 'sites',
+  },
   'site.import': {
     label: 'Import site',
     description:

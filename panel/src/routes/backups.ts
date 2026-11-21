@@ -15,6 +15,7 @@ import {
   backupIdsQuery,
   backupOffsiteBody,
   backupRestoreBody,
+  backupRestoreSiteBody,
   backupsListQuery,
   MAX_BULK_BACKUP_DELETE,
   siteSlugParam,
@@ -29,6 +30,7 @@ import { offsiteLane } from '../services/offsite.js';
 import { requireAccess } from '../plugins/auth.js';
 import type { AppDeps } from './deps.js';
 import { isExternal } from '../lib/siteKind.js';
+import { queueDeletedSiteRestore } from '../services/recovery.js';
 import { attachmentDisposition } from '../lib/contentDisposition.js';
 
 /** What restoring a site hosted elsewhere gets: it is restored by hand, from its downloads. */
@@ -198,6 +200,13 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
       return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
     },
   );
+
+  /** A deleted site made again from this backup, under its own name (services/recovery.ts). */
+  r.post('/api/backups/:id/restore-site', { schema: { params: idParams, body: backupRestoreSiteBody } }, async (req, reply) => {
+    const job = queueDeletedSiteRestore(deps, req.params.id, req.body.targetServerId);
+    req.log.info({ backup: req.params.id, restoreSite: { targetServerId: req.body.targetServerId, job: job.id } }, 'backups: restore a deleted site');
+    return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
+  });
 
   /** Copy now, or retry a copy that gave up. Resets the attempt counter either way. */
   r.post('/api/backups/:id/offsite', { schema: { params: idParams, body: backupOffsiteBody } }, async (req, reply) => {

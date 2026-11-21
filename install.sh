@@ -12,6 +12,9 @@
 #   --channel=edge    follow the rolling build of main (maintainers; see docs/updating.md)
 #   --dir=PATH        where to install (default /opt/wpl7)
 #   --dry-run         print what it would do, change nothing
+#   --restore         install from the panel's newest snapshot at a backup destination; it asks
+#                     for the destination, so run it from a terminal (setup.sh does the restore)
+#   --restore-from=PATH  the same from a snapshot folder or panel.db.gz downloaded by hand
 #
 # Everything else is passed straight to setup.sh (--role=worker, --dns-provider=, --ssh-port=,
 # --no-firewall, …).
@@ -20,7 +23,7 @@ set -euo pipefail
 
 REPO="${WPL7_REPO:-andyfo/wpl7}"
 DIR="/opt/wpl7"
-VERSION="" CHANNEL="stable" DRY=0 ASKED_NON_INTERACTIVE=0
+VERSION="" CHANNEL="stable" DRY=0 ASKED_NON_INTERACTIVE=0 RESTORE=0 RESTORE_FROM="" ROLE=""
 SETUP_ARGS=()
 
 for arg in "$@"; do
@@ -29,8 +32,12 @@ for arg in "$@"; do
     --channel=*) CHANNEL="${arg#*=}" ;;
     --dir=*) DIR="${arg#*=}" ;;
     --dry-run) DRY=1 ;;
-    -h|--help) sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
+    -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
     --non-interactive) ASKED_NON_INTERACTIVE=1; SETUP_ARGS+=("$arg") ;;
+    # setup.sh's, looked at here only to refuse a restore that cannot work before anything is downloaded.
+    --restore) RESTORE=1; SETUP_ARGS+=("$arg") ;;
+    --restore-from=*) RESTORE=1; RESTORE_FROM="${arg#*=}"; SETUP_ARGS+=("$arg") ;;
+    --role=*) ROLE="${arg#*=}"; SETUP_ARGS+=("$arg") ;;
     *) SETUP_ARGS+=("$arg") ;;
   esac
 done
@@ -40,6 +47,17 @@ die()  { printf '\n\033[1;31mxx %s\033[0m\n' "$*" >&2; exit 1; }
 run()  { if [ "$DRY" = 1 ]; then printf '   would run: %s\n' "$*"; else "$@"; fi; }
 # run, with the command's output dropped - but not the line a dry run prints in its place.
 runq() { if [ "$DRY" = 1 ]; then run "$@"; else "$@" >/dev/null; fi; }
+
+# The restore asks for the backup destination on the terminal, which `curl … | bash` does not
+# give it; a snapshot downloaded by hand needs no questions.
+if [ "$RESTORE" = 1 ]; then
+  [ "$ROLE" != worker ] || die "--restore installs the panel's server. A worker has no panel database to restore."
+  if [ -n "$RESTORE_FROM" ]; then
+    [ -e "$RESTORE_FROM" ] || die "--restore-from: $RESTORE_FROM does not exist."
+  elif [ ! -t 0 ] || [ "$ASKED_NON_INTERACTIVE" = 1 ]; then
+    die "--restore asks where the backups are copied to, so it needs a terminal. Download install.sh and run 'sudo bash install.sh --restore', or download the snapshot and use --restore-from=<path>."
+  fi
+fi
 
 # The released panel and site images, and the third-party DKIM signer's, are built for x86-64
 # only. Anywhere else they exit at once with "exec format error", and the install would still
@@ -58,8 +76,12 @@ esac
 if [ ! -t 0 ] && [ "$ASKED_NON_INTERACTIVE" = 0 ]; then
   SETUP_ARGS+=(--non-interactive)
   log "stdin is not a terminal, so setup.sh runs non-interactively"
-  echo "   Every answer has to be a flag, and the panel admin password is generated - the end"
-  echo "   of the run says where to read it. Run 'bash install.sh …' from a terminal to be asked."
+  if [ "$RESTORE" = 1 ]; then
+    echo "   Every answer has to be a flag or come from the snapshot, which brings the accounts back."
+  else
+    echo "   Every answer has to be a flag, and the panel admin password is generated - the end"
+    echo "   of the run says where to read it. Run 'bash install.sh …' from a terminal to be asked."
+  fi
 fi
 
 [ "$(id -u)" = 0 ] || die "Run as root (sudo bash install.sh …)."
@@ -163,4 +185,7 @@ EOF
 fi
 
 log "Provisioning"
+if [ "$DRY" = 1 ] && [ "$RESTORE" = 1 ]; then
+  echo "   would restore the panel's database from ${RESTORE_FROM:-the newest snapshot at the destination it asks for}"
+fi
 run "$DIR/provision/setup.sh" "${SETUP_ARGS[@]+"${SETUP_ARGS[@]}"}"

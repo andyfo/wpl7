@@ -295,6 +295,12 @@ services:
       PANEL_ADMIN_USER: ${PANEL_ADMIN_USER:-admin}
       PANEL_ADMIN_PASSWORD: ${PANEL_ADMIN_PASSWORD:-}
       SMTP_RELAYHOST: ${SMTP_RELAYHOST:-}
+      # Not used by the panel itself: kept in its nightly snapshot, so `install.sh --restore` can
+      # write this .env again on a rebuilt server (jobs/handlers/offsite.ts panelSnapshot).
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME:-}
+      ACME_EMAIL: ${ACME_EMAIL:-}
       BACKUP_CRON: ${BACKUP_CRON:-0 3 * * *}
       BACKUP_RETENTION: ${BACKUP_RETENTION:-10}
       WP_DEFAULT_PHP: ${WP_DEFAULT_PHP:-8.3}

@@ -66,6 +66,7 @@ import {
   serverSyncPluginsPayload,
 } from './handlers/servers.js';
 import { siteMove, siteMoveFinalize, siteMoveFinalizePayload, siteMovePayload } from './handlers/move.js';
+import { siteRecover, siteRecoverHandover, siteRecoverHandoverPayload, siteRecoverPayload } from './handlers/recover.js';
 import { siteImport, siteImportFinish, siteImportFinishPayload, siteImportPayload, siteImportQueuedCancel } from './handlers/import.js';
 import { siteImportRefresh, siteImportRefreshPayload } from './handlers/importRefresh.js';
 import { systemPostUpdate, systemPostUpdatePayload } from './handlers/systemUpdate.js';
@@ -194,6 +195,9 @@ const registry: Partial<Record<JobType, RegistryEntry>> = {
   // A build of every PHP version on a small server is minutes each; a pull is less.
   'server.refreshSiteImages': entry(serverRefreshSiteImagesPayload, serverRefreshSiteImages, 90 * 60_000) as RegistryEntry,
   'site.move': entry(siteMovePayload, siteMove, 180 * 60_000) as RegistryEntry,
+  // A fetch from a destination may take as long as backup.fetch's 12 hours, and the restore comes after it.
+  'site.recover': entry(siteRecoverPayload, siteRecover, 15 * 3600_000) as RegistryEntry,
+  'site.recoverHandover': entry(siteRecoverHandoverPayload, siteRecoverHandover) as RegistryEntry,
   'site.moveFinalize': entry(siteMoveFinalizePayload, siteMoveFinalize, 15 * 60_000) as RegistryEntry,
   // A whole day: a big site over a slow old host is hours of requests, in a lane of its own.
   'site.import': entry(siteImportPayload, siteImport, 24 * 3600_000, siteImportQueuedCancel) as RegistryEntry,
@@ -260,6 +264,7 @@ export const SITE_INTERRUPTING_JOBS: ReadonlySet<JobType> = new Set<JobType>([
   'site.reconcile',
   'site.updateDomains',
   'site.move',
+  'site.recover',
   'site.importFinish',
   'site.importRefresh',
   'backup.restore',

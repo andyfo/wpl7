@@ -28,6 +28,8 @@ export interface ProbeListeners {
   probed(site: SiteRow, reading: { ok: boolean; status: number | null; error?: string | null }): Promise<void>;
   certificate(site: SiteRow, expiresAt: number | null): Promise<void>;
   diskChecked(server: ServerRow, stats: ServerStatsDto): Promise<void>;
+  /** An added server asked how it is: whether it answered, and what went wrong when it did not. */
+  serverChecked(server: ServerRow, answered: boolean, error: string | null): Promise<void>;
 }
 /** How long the check at the end of a job gives a container that has just started to answer. */
 const SETTLE_MS = 10_000;
@@ -400,8 +402,13 @@ export class MonitorService {
             this.servers.markReachable(row.id);
           } catch (err) {
             this.servers.markUnreachable(row.id, err instanceof Error ? err : new Error(String(err)));
+            // One still being set up is expected not to answer yet: that is no outage.
+            if (row.status !== 'provisioning') {
+              await this.listeners?.serverChecked(row, false, err instanceof Error ? err.message : String(err)).catch(() => undefined);
+            }
             return;
           }
+          await this.listeners?.serverChecked(row, true, null).catch(() => undefined);
         }
         if (!stats) return;
         this.latestServers.set(row.id, stats);

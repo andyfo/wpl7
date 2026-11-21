@@ -47,7 +47,7 @@ const DAY_MS = 24 * 3600_000;
 const FETCHED_STAYS_MS = 7 * DAY_MS;
 
 /** Job types that read or write a site's backup files while they run. */
-const BACKUP_USING_JOB_TYPES = ['backup.create', 'backup.restore', 'site.move', 'site.delete', 'site.importFinish', 'site.importRefresh'] as const;
+const BACKUP_USING_JOB_TYPES = ['backup.create', 'backup.restore', 'site.move', 'site.delete', 'site.importFinish', 'site.importRefresh', 'site.recover'] as const;
 /** Job types that read or write ONE backup's files, outside the site's job lane. */
 const COPY_JOB_TYPES = ['backup.offsite', 'backup.fetch'] as const;
 
@@ -94,6 +94,17 @@ export const tsStamp = (d: Date) =>
     .replace(/[-:]/g, '')
     .replace('T', '-')
     .slice(0, 15); // YYYYMMDD-HHMMSS (UTC)
+
+/**
+ * When a folder was set aside: the tsStamp at the end of its name. A rename keeps a folder's own
+ * mtime, so a site folder untouched for a week would read as a week old the moment it was set
+ * aside. The mtime stands in for a name without a stamp.
+ */
+async function setAsideAt(h: ServerHandle, full: string, name: string): Promise<number> {
+  const m = /(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})$/.exec(name);
+  if (m) return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+  return (await h.files.stat(full))?.mtimeMs ?? Date.now();
+}
 
 
 /** What a backup's site ran: one from before PHP sites names nothing, and is a WordPress site's. */
@@ -295,7 +306,8 @@ export class BackupService {
       // Only a note for a restore: not knowing it is no reason to fail the backup.
       const container = app ? null : await h.docker.containerStack(site.containerName).catch(() => null);
       const manifest = {
-        format: 1,
+        // 2: with `site`, what a deleted site is made again from (services/recovery.ts).
+        format: 2,
         slug: site.slug,
         title: site.title,
         type,
@@ -322,6 +334,26 @@ export class BackupService {
          * archive are what the site ran with. None from before there was a choice, or with no container.
          */
         stack: container?.stack ?? null,
+        /**
+         * The site's own settings beyond the ones above, so a deleted site comes back as it was
+         * (services/recovery.ts siteRowFromManifest). Nothing secret: no password of any kind.
+         */
+        site: {
+          isLive: site.isLive === 1,
+          keepDevAlias: site.keepDevAlias === 1,
+          wpAdminUser: site.wpAdminUser,
+          wpAdminEmail: site.wpAdminEmail,
+          pageCache: site.pageCache,
+          objectCache: site.objectCache === 1,
+          cacheRules: site.cacheRules,
+          cpuLimit: site.cpuLimit,
+          memoryLimitMb: site.memoryLimitMb,
+          pidsLimit: site.pidsLimit,
+          backupsEnabled: site.backupsEnabled === 1,
+          offsiteEnabled: site.offsiteEnabled === 1,
+          backupKeepDays: site.backupKeepDays,
+          backupBeforeUpdates: site.backupBeforeUpdates,
+        },
         /**
          * A container app's image, which a restore puts back (handlers/backups.ts), and the mounts in
          * this archive. Never a secret: no registry token, no environment value. The reference is the
@@ -869,7 +901,8 @@ export class BackupService {
     const fetches = this.db
       .select({ payload: jobs.payload })
       .from(jobs)
-      .where(and(eq(jobs.type, 'backup.fetch'), eq(jobs.status, 'succeeded'), gte(jobs.finishedAt, Date.now() - FETCHED_STAYS_MS)))
+      // A recovery fetches the backup it comes back from too, and somebody may want it again soon.
+      .where(and(inArray(jobs.type, ['backup.fetch', 'site.recover']), eq(jobs.status, 'succeeded'), gte(jobs.finishedAt, Date.now() - FETCHED_STAYS_MS)))
       .all();
     return fetches.some((job) => {
       try {
@@ -982,7 +1015,77 @@ export class BackupService {
     this.db.delete(backups).where(eq(backups.id, row.id)).run();
   }
 
-  /** GC wordpress.pre-restore-* (and a container app's app.pre-restore-*) safety copies older than 24h, on every reachable server. */
+  /**
+   * Bring `files_present` in line with what is on the server's disk, for the backups that have a
+   * complete offsite copy. One whose folder is gone - a reinstalled server, a panel database
+   * restored onto a new machine - reads as remote only, so Fetch back offers its copy. One at 0
+   * whose folder is back, with its `sha256sums` and `manifest.json`, reads as present again.
+   *
+   * A backup with no copy is never flipped: retention drops a row at 0 that has no copy
+   * (OffsiteService.dropEmptyBackups), and an empty mount point looks exactly like a lost disk.
+   * Rows under a backup root that is not there at all are left alone too. Throws only when the
+   * server can't be asked.
+   */
+  async checkFiles(serverId: number): Promise<{ gone: number; back: number }> {
+    const h = this.servers.handleFor(serverId);
+    const rows = this.db
+      .select()
+      .from(backups)
+      .where(and(eq(backups.serverId, serverId), eq(backups.status, 'complete')))
+      .all();
+    if (rows.length === 0) return { gone: 0, back: 0 };
+    const copied = new Set(
+      this.db
+        .select({ backupId: backupCopies.backupId })
+        .from(backupCopies)
+        .where(and(inArray(backupCopies.backupId, rows.map((r) => r.id)), eq(backupCopies.status, 'complete')))
+        .all()
+        .map((c) => c.backupId),
+    );
+    const roots = new Map<string, boolean>();
+    // One listing per site folder rather than one question per backup: over SSH each is a round trip.
+    const listings = new Map<string, Set<string> | null>();
+    const listed = async (folder: string): Promise<Set<string> | null> => {
+      if (!listings.has(folder)) listings.set(folder, await h.files.readdir(folder).then((names) => new Set(names), () => null));
+      return listings.get(folder)!;
+    };
+    let gone = 0;
+    let back = 0;
+    for (const row of rows) {
+      if (!copied.has(row.id)) continue;
+      const root = this.rootOf(row);
+      let rootThere = roots.get(root);
+      if (rootThere === undefined) {
+        rootThere = await h.files.exists(root);
+        roots.set(root, rootThere);
+      }
+      if (!rootThere) continue;
+      const there = (await listed(path.dirname(row.path)))?.has(path.basename(row.path)) ?? false;
+      if (row.filesPresent === 1) {
+        if (there) continue;
+        gone += this.db
+          .update(backups)
+          .set({ filesPresent: 0 })
+          .where(and(eq(backups.id, row.id), eq(backups.filesPresent, 1)))
+          .run().changes;
+      } else {
+        if (!there) continue;
+        if (!(await h.files.exists(path.join(row.path, 'sha256sums')))) continue;
+        if (!(await h.files.exists(path.join(row.path, 'manifest.json')))) continue;
+        back += this.db
+          .update(backups)
+          .set({ filesPresent: 1 })
+          .where(and(eq(backups.id, row.id), eq(backups.filesPresent, 0)))
+          .run().changes;
+      }
+    }
+    return { gone, back };
+  }
+
+  /**
+   * GC wordpress.pre-restore-* (and a container app's app.pre-restore-*) safety copies older than 24h, on every reachable
+   * server, and the `<slug>.pre-recover-*` folders a recovery left.
+   */
   async gcSafetyCopies(): Promise<void> {
     const cutoff = Date.now() - 24 * 3600_000;
     for (const server of this.servers.listRows()) {
@@ -994,13 +1097,22 @@ export class BackupService {
       }
       const slugs = await h.files.readdir(this.config.paths.sites).catch(() => [] as string[]);
       for (const slug of slugs) {
+        // What a recovery set aside and did not get to tidy (jobs/handlers/recover.ts): a folder of its own.
+        if (/\.pre-recover-\d{8}-\d{6}$/.test(slug)) {
+          const full = safeJoin(this.config.paths.sites, slug);
+          try {
+            if ((await setAsideAt(h, full, slug)) < cutoff) await h.files.rm(full);
+          } catch {
+            /* ignore */
+          }
+          continue;
+        }
         const entries = await h.files.readdir(path.join(this.config.paths.sites, slug)).catch(() => [] as string[]);
         for (const entry of entries) {
           if (!entry.startsWith('wordpress.pre-restore-') && !entry.startsWith('app.pre-restore-')) continue;
           const full = safeJoin(this.config.paths.sites, slug, entry);
           try {
-            const stat = await h.files.stat(full);
-            if (stat && stat.mtimeMs < cutoff) await h.files.rm(full);
+            if ((await setAsideAt(h, full, entry)) < cutoff) await h.files.rm(full);
           } catch {
             /* ignore */
           }

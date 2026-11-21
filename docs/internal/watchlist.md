@@ -77,6 +77,7 @@ for a reason; remove one once there is nothing left to watch.
 | [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-11-19 11:43 UTC | The feed still calls `bbpress` and `bbpress-private-replies` closed and misses `captcha`; the directory answers as `wporgListing` reads them |
 | [Google's crawler address lists](#googles-crawler-address-lists) | Medium | 2026-11-03 09:35 UTC | Both answer: 589 prefixes, none wider than a /27 or a /64 |
 | [ssh2: how a channel closes, as the panel's SSH channels rely on it](#ssh2-how-a-channel-closes-as-the-panels-ssh-channels-rely-on-it) | Low | 2026-11-15 10:57 UTC | 1.17.0 is the latest; channels half-open by default, `destroy()` never marks one destroyed, `'close'` waits for `'end'` or an unreadable stream |
+| [rclone: what install.sh --restore reads from it](#rclone-what-installsh---restore-reads-from-it) | Medium | 2026-11-21 10:15 UTC | `rclone/rclone:1.71` (v1.71.2): `lsf -R --files-only` lists the snapshots, exit 3 is a missing folder, crypt reads back with the pair; the engine test passes |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -1626,3 +1627,26 @@ for a reason; remove one once there is nothing left to watch.
   channel stops being half-open by default, ending the panel's half would close the whole channel:
   `execWithInput` would lose a command's output after its input, and the forwarded socket's channel
   would need `allowHalfOpen` passed where ssh2 then takes it.
+
+## rclone: what install.sh --restore reads from it
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-21 10:15 UTC. The pinned `rclone/rclone:1.71` is rclone v1.71.2.
+  `test/engine/snapshotRestore.test.ts` passes, 2 of 2, on a local folder remote in the clear and
+  through crypt.
+- **What we rely on:** `install.sh --restore` finds the panel's newest snapshot at a backup
+  destination with the panel's own rclone image (`panel/src/cli/snapshotRestore.ts`). Three
+  behaviours carry it:
+  - `rclone lsf -R --files-only --max-depth 2` on `<prefix>/panel` prints one relative path per
+    line, `<timestamp>/<file>`, which `snapshotsIn` reads.
+  - Exit code 3 means the folder is not there, and only that: the restore then says there is no
+    snapshot. Every run's output says "not found" in the config notice, so the words are no test.
+  - A crypt remote with the destination's passphrase and salt lists and copies the clear names;
+    without them it finds nothing, which the restore reports as "check the passphrase".
+- **The problem:** a change to any of the three would show as a restore that fails, or that finds
+  no snapshot where one is. Nothing else in the panel uses `lsf`.
+- **Check:** with Docker running, in `panel/`:
+  `WPL7_ENGINE_TESTS=1 npx vitest run test/engine/snapshotRestore.test.ts`. Read the rclone
+  changelog since the pinned version for `lsf` output and exit codes.
+- **When it changes:** adjust `snapshotsIn` or `RCLONE_DIRECTORY_NOT_FOUND`, and the engine test,
+  before moving `rcloneImage` in `panel/src/config.ts`.

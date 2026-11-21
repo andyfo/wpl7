@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import type {
+  ServerRecoveryDto,
+  SiteRecoveryDto,
   ApiActivityDto,
   ApiKeyDto,
   BackupDestinationDto,
@@ -219,6 +221,31 @@ export const useServerInfo = (serverId: number) =>
     queryFn: () => api<ServerSystemInfoDto>(`/api/servers/${serverId}/info`),
     enabled: Number.isFinite(serverId),
     staleTime: 60_000,
+    retry: false,
+  });
+
+/**
+ * What a server's sites can come back from (services/recovery.ts). It asks the server whether it
+ * answers, which takes up to 20 seconds when it does not, so it is read only while a dialog is open.
+ */
+export const useServerRecovery = (serverId: number, enabled: boolean) =>
+  useQuery({
+    queryKey: ['server-recovery', serverId],
+    queryFn: () => api<ServerRecoveryDto>(`/api/servers/${serverId}/recovery`),
+    enabled,
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+  });
+
+/** One site's recovery: its state, the backups it can come back from, and onto which servers. */
+export const useSiteRecovery = (slug: string, enabled: boolean) =>
+  useQuery({
+    queryKey: ['site-recovery', slug],
+    queryFn: () => api<SiteRecoveryDto>(`/api/sites/${slug}/recovery`),
+    enabled,
+    staleTime: 0,
+    gcTime: 0,
     retry: false,
   });
 

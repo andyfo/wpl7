@@ -72,6 +72,9 @@ backup behind. With only the second switch on, nothing of the site is left.
 <Since v="0.3.0-beta.3" /> **Remove from panel** on a [site hosted elsewhere](/docs/sites/external/)
 takes no final backup. Its backups stay, unless **Also delete its backups** is on.
 
+<Since v="0.4.3" /> A site whose server does not answer takes no final backup either, because nothing
+can be read there. Its backups stay in the same way.
+
 ## Limits
 
 - A deleted backup cannot be recovered, from the server or from a destination the panel cleared.

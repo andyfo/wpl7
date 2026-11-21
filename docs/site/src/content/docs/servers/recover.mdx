@@ -1,0 +1,94 @@
+---
+title: Recover a lost server
+description: "Bring a server's sites back from their offsite backups, on another server or on the same one rebuilt."
+since: 0.4.3
+sidebar:
+  order: 5
+sources:
+  - panel/src/services/recovery.ts
+  - panel/src/jobs/handlers/recover.ts
+  - panel/src/jobs/handlers/siteHandover.ts
+  - panel/web/src/components/RecoveryDialogs.tsx
+  - panel/web/src/lib/recovery.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A server that stops answering, or comes back from a reinstall without its sites, does not take
+them with it. Each site can come back from one of its backups. The panel downloads the backup
+from its [offsite copy](/docs/backups/offsite/) and builds the site on the server you pick.
+
+<Screenshot name="server-recover" alt="The Recover sites dialog of a server that does not answer, with the backup each site comes back from" />
+
+## Before you start
+
+- An offsite destination with copies of the sites' backups. A backup kept only on the lost server
+  is gone with it.
+- A server with room for the sites. A rebuilt server can take its own sites back.
+- If the panel's own server is the one lost, install the panel again first, as
+  [Rebuild the panel's server](/docs/reference/manual-recovery/#rebuild-the-panels-server) shows.
+
+## Recover a server's sites
+
+1. Open the server's page. **Recover sites** is there while the server does not answer, or while
+   any of its sites is down.
+2. Choose **Recover sites**, then the **Target server**.
+3. Check the list. Each site shows the backup it comes back from, or why it can't.
+4. Confirm. The button says how many sites come back.
+
+Each site gets a job of its own. The jobs run one after another on the target server.
+
+## Recover one site
+
+A site whose server does not answer shows **Recover** on its page. So does a site whose container
+and database are both gone, which shows as **Missing**. Pick the **Backup** and the **Target
+server**, then choose **Recover**.
+
+## What happens
+
+The job downloads the backup onto the target server and checks its checksums. It makes the site's
+database and database user, unpacks the files and starts the site. Then it points the site's DNS
+records at the new server where the Cloudflare token reaches them, as a [move](/docs/sites/move/)
+does. The job log lists the records to change by hand.
+
+On the site's own server, whatever is left of the site is set aside first, and kept for a day.
+
+The site comes back as it was in the backup. Anything written since is not in it.
+
+## When the old server answers again
+
+The panel stops each recovered site's old copy there, and forwards its visitors to the new server.
+The copy's files and database stay for a day, so anything written after the backup can still be
+copied out. Then they are removed, as after a move.
+
+An email goes to the address in **Settings → Monitoring** when a server has not answered for ten
+minutes, and another when it answers again. That one names the sites whose old copies it stops.
+
+## Remove the lost server
+
+Recover or delete each of its sites first. A site on a server that does not answer is deleted
+without a final backup, and its copy there goes if the server answers again. Then choose **Remove
+server** on the server's page. Its backups with an offsite copy stay listed, as **remote only**.
+The others are forgotten.
+
+## Limits
+
+- What a site wrote after its last backup is only on the old server.
+- For up to a minute after the old server answers, both copies of a site can serve visitors and
+  run their scheduled tasks.
+- A container app whose backup was taken on another image comes back on the image it runs now,
+  with the backup's files and databases. Restore the backup afterwards to go back to its image.
+- A container app whose image was uploaded comes back only when that image is on the target
+  server. Upload it again first.
+- A database added to a site after its last backup does not come back.
+- The lost server's mail queue and uploaded plugin zips are gone.
+- Sites hosted elsewhere keep their backups on the target server from then on. Their next backup
+  there starts over.
+
+## Related
+
+- [Offsite copies](/docs/backups/offsite/)
+- [Restore and download](/docs/backups/restore/)
+- [Move a site to another server](/docs/sites/move/)
+- [Manual recovery without the panel](/docs/reference/manual-recovery/)
+- [Servers and monitoring](/docs/servers/overview/)

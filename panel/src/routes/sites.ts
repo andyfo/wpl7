@@ -20,6 +20,7 @@ import {
   siteCronBody,
   siteMailTestBody,
   siteMoveBody,
+  siteRecoverBody,
   siteSlugParam,
   siteWebRootBody,
 } from '../../shared/schemas.js';
@@ -31,6 +32,7 @@ import { checkSiteUrl, clearSiteCaches, siteContainerStack } from '../services/s
 import type { AppDeps } from './deps.js';
 import { isPhpSite, phpNoPageCache } from '../lib/siteKind.js';
 import { resolveTargetServer } from '../services/sites.js';
+import { queueSiteRecovery, siteRecoveryReport } from '../services/recovery.js';
 import { audit } from '../lib/audit.js';
 
 /**
@@ -302,18 +304,37 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
   // Tear down the source copy of a moved site once its DNS points at the new server.
   r.post('/api/sites/:slug/move/finalize', { schema: { params: slugParams } }, async (req, reply) => {
     const site = deps.sites.bySlug(req.params.slug);
-    const cleanup = deps.db
+    const pending = deps.db
       .select()
       .from(moveCleanups)
       .where(and(eq(moveCleanups.siteId, site.id), eq(moveCleanups.status, 'pending')))
-      .get();
-    if (!cleanup) throw notFound('No pending move cleanup for this site');
+      .all();
+    if (pending.length === 0) throw notFound('No pending move cleanup for this site');
+    // A recovered site's old server has to answer first: its copy there is stopped then (recover.ts).
+    const cleanup = pending.find((c) => c.handover === 'done');
+    if (!cleanup) {
+      const name = deps.servers.rowById(pending[0]!.sourceServerId)?.name ?? `server #${pending[0]!.sourceServerId}`;
+      throw conflict(`"${name}" has not answered since the site left it. Its old copy is stopped once it does, and removed a day later.`);
+    }
     const job = deps.worker.enqueue(
       'site.moveFinalize',
       { cleanupId: cleanup.id },
       { id: site.id, slug: site.slug, serverId: cleanup.sourceServerId },
       { serverId: cleanup.sourceServerId },
     );
+    return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
+  });
+
+  /** Whether the site can come back from its backups, from which, and onto which servers (services/recovery.ts). */
+  r.get('/api/sites/:slug/recovery', { schema: { params: slugParams } }, async (req) => {
+    const site = deps.sites.bySlug(req.params.slug, { kinds: 'any' });
+    return siteRecoveryReport(deps, site);
+  });
+
+  r.post('/api/sites/:slug/recover', { schema: { params: slugParams, body: siteRecoverBody } }, async (req, reply) => {
+    const site = deps.sites.bySlug(req.params.slug, { kinds: 'any' });
+    const job = await queueSiteRecovery(deps, site, req.body);
+    audit(req, 'site', site.slug, 'recover', { ...req.body });
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });
 }

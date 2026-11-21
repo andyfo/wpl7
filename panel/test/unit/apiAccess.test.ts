@@ -23,6 +23,7 @@ const EXCEPTIONS: Record<string, string> = {
   'DELETE /api/sites/:slug': 'full',
   'POST /api/sites/:slug/move': 'full',
   'POST /api/sites/:slug/move/finalize': 'full',
+  'POST /api/sites/:slug/recover': 'full',
   'PUT /api/sites/:slug/backups-enabled': 'full',
   'PUT /api/sites/:slug/offsite-enabled': 'full',
   'PUT /api/sites/:slug/backups-keep-days': 'full',
@@ -72,6 +73,8 @@ const EXCEPTIONS: Record<string, string> = {
   'POST /api/mail/dkim/sync': 'manage',
   'POST /api/catalog/refresh': 'manage',
   'POST /api/system/update/check': 'manage',
+  // Makes a site, as creating one does.
+  'POST /api/backups/:id/restore-site': 'full',
 };
 
 /** Everything marked `danger`, sorted. */
@@ -116,6 +119,7 @@ const DESTRUCTIVE = [
   'POST /api/auth/logout-all',
   'POST /api/backup-destinations/:id/passphrase',
   'POST /api/backups/:id/restore',
+  'POST /api/backups/:id/restore-site',
   'POST /api/backups/bulk-delete',
   'POST /api/imports/:id/refresh',
   'POST /api/jobs/:id/cancel',
@@ -129,6 +133,7 @@ const DESTRUCTIVE = [
   'POST /api/security/never-block',
   'POST /api/servers',
   'POST /api/servers/:id/backups/relocate',
+  'POST /api/servers/:id/recover',
   'POST /api/servers/:id/update',
   'POST /api/sites/:slug/app/deploy',
   'POST /api/sites/:slug/app/deploy-token',
@@ -152,6 +157,7 @@ const DESTRUCTIVE = [
   'POST /api/sites/:slug/ftp/users/:id/password',
   'POST /api/sites/:slug/go-live',
   'POST /api/sites/:slug/move/finalize',
+  'POST /api/sites/:slug/recover',
   'POST /api/sites/:slug/security/findings/:id/put-back',
   'POST /api/sites/:slug/security/findings/:id/quarantine',
   'POST /api/sites/:slug/security/findings/:id/reinstall',

@@ -44,13 +44,16 @@ export function OffsiteBadges({ copies }: { copies: BackupCopyDto[] }) {
  * What can be done with a backup where it is listed. Only a complete one has files to download,
  * restore or fetch: a failed one never had any, and one being written has none yet.
  * `canRestore` is false where there is no site to restore onto - the panel's own snapshots, and
- * a deleted site's backups. One a deletion job is about to remove offers nothing but that job.
+ * a deleted site's backups, which offer `onRestoreSite` instead. A backup whose files are gone
+ * offers Fetch back from its copy, or says its files are missing. One a deletion job is about to
+ * remove offers nothing but that job.
  */
 export function BackupActions({
   backup,
   canRestore,
   busy = () => false,
   onRestore,
+  onRestoreSite,
   onFetch,
   onDelete,
 }: {
@@ -59,10 +62,13 @@ export function BackupActions({
   /** This backup's restore or fetch is still running, and its button shows a spinner meanwhile. */
   busy?: (action: 'restore' | 'fetch') => boolean;
   onRestore: () => void;
+  /** A deleted site's backup: Restore makes the site again from it (components/RecoveryDialogs.tsx). */
+  onRestoreSite?: () => void;
   onFetch: () => void;
   onDelete: () => void;
 }) {
   const complete = backup.status === 'complete';
+  const copied = backup.copies.some((c) => c.status === 'complete');
   if (backup.deletingJobId !== null) {
     return (
       <Link
@@ -93,10 +99,20 @@ export function BackupActions({
           )}
         </>
       )}
-      {complete && !backup.filesPresent && (
+      {complete && onRestoreSite && (backup.filesPresent || copied) && (
+        <Button small variant="secondary" onClick={onRestoreSite}>
+          Restore
+        </Button>
+      )}
+      {complete && !backup.filesPresent && copied && (
         <Button small variant="secondary" busy={busy('fetch')} onClick={onFetch}>
           <span className="whitespace-nowrap">Fetch back</span>
         </Button>
+      )}
+      {complete && !backup.filesPresent && !copied && (
+        <span className="whitespace-nowrap px-2 text-xs text-neutral-500" title="Its files are gone from its server, and it has no offsite copy.">
+          Files missing
+        </span>
       )}
       <Button
         small

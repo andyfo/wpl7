@@ -8,6 +8,8 @@ import { z } from 'zod';
 import { backupCopies, backupDestinations, backups } from '../../db/schema.js';
 import type { CoreServices } from '../../services/index.js';
 import type { JobContext } from '../context.js';
+import { PANEL_VERSION } from '../../lib/version.js';
+import { hostnameOverride } from '../../services/mailHostname.js';
 
 /** ctx.info/warn/error, which is the shape OffsiteService logs through. */
 const logOf = (ctx: JobContext<unknown>) => ({
@@ -133,14 +135,31 @@ export async function panelSnapshot(ctx: JobContext<Record<string, never>>, s: C
     // Same posture as panel.db itself: this file holds every credential the panel has.
     await fs.promises.chmod(gz, 0o600);
 
+    // What a rebuilt server is installed from besides panel.db (install.sh --restore): the parts of
+    // deploy/.env that the database does not hold, and the mail hostname set in the panel. Secrets
+    // among them are no worse kept here than the database itself, which holds every one the panel has.
+    const relayEnv = await handle.files.readOptional(path.join(s.config.srvRoot, 'mail', 'relay.env')).catch(() => null);
+    const env: Record<string, string> = {
+      PANEL_DOMAIN: s.config.panelDomain,
+      DEV_DOMAIN: s.config.devDomain,
+      TLS_MODE: s.config.tlsMode,
+      ACME_RESOLVER: s.config.acmeResolver,
+      DNS_PROVIDER: s.config.dnsProvider,
+      WPL7_CHANNEL: s.config.channel,
+      ...s.config.envForRestore,
+      MAIL_HOSTNAME: hostnameOverride(relayEnv) ?? s.config.envForRestore.MAIL_HOSTNAME,
+    };
     const manifest = {
-      format: 1,
+      // 2: with panelVersion and env, for install.sh --restore.
+      format: 2,
       slug: 'panel',
       type: 'panel',
       createdAt: new Date().toISOString(),
       panelDomain: s.config.panelDomain,
+      panelVersion: PANEL_VERSION,
+      env: Object.fromEntries(Object.entries(env).filter(([, value]) => value !== '')),
       servers: s.servers.listRows().map((srv) => ({ id: srv.id, name: srv.name, kind: srv.kind })),
-      note: 'Restore by hand: stop the panel, gunzip over /srv/panel/panel.db, start it again.',
+      note: 'Restore by hand: stop the panel, gunzip over /srv/panel/panel.db, start it again. Or install with install.sh --restore.',
     };
     await handle.files.writeFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
     const sum = await handle.files.sha256(gz);

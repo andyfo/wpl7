@@ -33,6 +33,10 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   'jobs/handlers/backups.ts': { backupRestore: hosted('isExternal(site)') },
   'jobs/handlers/import.ts': { siteImportQueuedCancel: hosted("'provisioning'") },
   'jobs/handlers/move.ts': { finalizeCleanup: hosted("owner.kind !== 'external'") },
+  'jobs/handlers/recover.ts': {
+    makeDeletedSite: both('a name is taken by a site of either kind; the row it makes is hosted'),
+    handOverOnce: both('reads who owns the old copy, by id and by name; a site hosted elsewhere is left out right after (isExternal)'),
+  },
   'jobs/handlers/servers.ts': { serverApplySiteLimits: hosted('hostedSites()') },
   'jobs/handlers/shared.ts': {
     loadSite: both('the guard itself: refuses an external site unless the job takes either kind'),
@@ -119,6 +123,11 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   },
   'services/offsite.ts': { reconcileDestination: both('backups of either kind'), fetchBackup: both('backups of either kind') },
   'services/quarantine.ts': { prune: both('quarantined files, which only hosted sites have') },
+  'services/recovery.ts': {
+    serverRecoveryReport: both('its hosted sites by hostedSites(), and by externalSites() the ones hosted elsewhere it keeps backups for'),
+    queueServerRecovery: both('its hosted sites by hostedSites(), and by externalSites() the ones hosted elsewhere it keeps backups for'),
+    queueDeletedSiteRestore: both('a name is taken by a site of either kind'),
+  },
   'services/security.ts': {
     plan: hosted("s.status === 'running'"),
     hardeningPlan: hosted("'running'"),
@@ -195,6 +204,10 @@ const SITE_APP_REVIEW: Record<string, Record<string, AppVerdict>> = {
   'jobs/handlers/backups.ts': { backupRestore: apps("restores either app; WordPress's steps inside ask isPhpSite") },
   'jobs/handlers/import.ts': { siteImportQueuedCancel: IMPORT_ROW },
   'jobs/handlers/move.ts': { finalizeCleanup: apps('who owns a source copy, by slug') },
+  'jobs/handlers/recover.ts': {
+    makeDeletedSite: apps('a name is taken by a site of either app; siteRowFromManifest makes WordPress and PHP sites'),
+    handOverOnce: apps('who owns an old copy: the site that left by its id, a site of that name living there by slug'),
+  },
   'jobs/handlers/servers.ts': { serverApplySiteLimits: apps('container limits and runtime files for every hosted site') },
   'jobs/handlers/shared.ts': {
     loadSite: apps("the guard itself: refuses a PHP site where the job asks for { app: 'wordpress' }"),
@@ -264,6 +277,11 @@ const SITE_APP_REVIEW: Record<string, Record<string, AppVerdict>> = {
   },
   'services/monitor.ts': { activeSites: apps('a PHP site has an uptime check too'), tickUptime: ANY_SITE, recheck: ANY_SITE },
   'services/offsite.ts': { reconcileDestination: EITHER_BACKUP, fetchBackup: EITHER_BACKUP },
+  'services/recovery.ts': {
+    serverRecoveryReport: apps('a site of any app comes back from its backups'),
+    queueServerRecovery: apps('a site of any app comes back from its backups'),
+    queueDeletedSiteRestore: apps('a name is taken by a site of either app'),
+  },
   'services/quarantine.ts': { prune: ANY_SITE },
   'services/security.ts': {
     plan: apps('effectivePolicy takes the app, and leaves WordPress\'s rules out for a PHP site'),
@@ -344,6 +362,10 @@ const SITE_IMAGE_REVIEW: Record<string, Record<string, ImageVerdict>> = {
   },
   'jobs/handlers/move.ts': {
     finalizeCleanup: images('who owns a source copy, by slug: an app\'s container, database and folder go by the same names'),
+  },
+  'jobs/handlers/recover.ts': {
+    makeDeletedSite: images('a name is taken by a site of any app; siteRowFromManifest refuses a container app'),
+    handOverOnce: images('who owns an old copy: an app\'s container goes with its volumes (isContainerApp)'),
   },
   'jobs/handlers/servers.ts': {
     serverApplySiteLimits: images('container limits for every hosted site, a container app\'s too; the caches step is the site image\'s'),
@@ -457,6 +479,11 @@ const SITE_IMAGE_REVIEW: Record<string, Record<string, ImageVerdict>> = {
   'services/offsite.ts': {
     fetchBackup: images('backups of every app'),
     reconcileDestination: images('backups of every app: an app\'s go offsite too'),
+  },
+  'services/recovery.ts': {
+    serverRecoveryReport: images('a container app comes back too, with the image its backup names (backupImage)'),
+    queueServerRecovery: images('a container app comes back too, with the image its backup names (backupImage)'),
+    queueDeletedSiteRestore: images('a name is taken by a site of any app; a container app is refused once its manifest is read'),
   },
   'services/phpReleases.ts': {
     readSitePhp: siteImage('isContainerApp('),

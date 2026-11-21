@@ -25,6 +25,12 @@ const envSchema = z.object({
   PANEL_ADMIN_USER: z.string().default('admin'),
   PANEL_ADMIN_PASSWORD: z.string().default(''),
   SMTP_RELAYHOST: z.string().default(''),
+  // Read only to be kept in the panel snapshot (jobs/handlers/offsite.ts), so an install from it
+  // can write deploy/.env again (install.sh --restore): the relay and Traefik read them themselves.
+  SMTP_USERNAME: z.string().default(''),
+  SMTP_PASSWORD: z.string().default(''),
+  MAIL_HOSTNAME: z.string().default(''),
+  ACME_EMAIL: z.string().default(''),
   BACKUP_CRON: z.string().default('0 3 * * *'),
   BACKUP_RETENTION: z.coerce.number().int().default(10),
   /**
@@ -210,6 +216,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     adminUser: e.PANEL_ADMIN_USER,
     adminInitialPassword: e.PANEL_ADMIN_PASSWORD,
     mailMode: (e.SMTP_RELAYHOST ? 'smarthost' : 'direct') as 'smarthost' | 'direct',
+    /**
+     * What deploy/.env says that the panel does not use itself, kept in each panel snapshot so a
+     * rebuilt server can be installed from it (install.sh --restore).
+     */
+    envForRestore: {
+      ACME_EMAIL: e.ACME_EMAIL,
+      MAIL_HOSTNAME: e.MAIL_HOSTNAME,
+      SMTP_RELAYHOST: e.SMTP_RELAYHOST,
+      SMTP_USERNAME: e.SMTP_USERNAME,
+      SMTP_PASSWORD: e.SMTP_PASSWORD,
+      BACKUP_ROOT: e.BACKUP_ROOT,
+      // Another provider's token for the wildcard certificate: Cloudflare's is in the database.
+      HETZNER_API_KEY: e.HETZNER_API_KEY,
+      DO_AUTH_TOKEN: e.DO_AUTH_TOKEN,
+    },
     /** Empty = server 1 uses `paths.backups`; otherwise the path mounted by the overlay. */
     backupRoot: e.BACKUP_ROOT ? path.resolve(e.BACKUP_ROOT) : '',
     seedDefaults: {

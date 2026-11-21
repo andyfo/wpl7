@@ -2,7 +2,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Config } from '../config.js';
 import type { Db } from '../db/index.js';
-import { alertStates, siteConnections, sites, vulnNotices, type AlertStateRow, type SiteConnectionRow, type SiteRow } from '../db/schema.js';
+import { alertStates, moveCleanups, siteConnections, sites, vulnNotices, type AlertStateRow, type SiteConnectionRow, type SiteRow } from '../db/schema.js';
 import { panelUrl } from '../lib/panelUrl.js';
 import { formatBytes } from '../../shared/bytes.js';
 import type { SettingsService } from './settings.js';
@@ -39,6 +39,8 @@ export const DISK_LOW = 0.1;
 export const DISK_OK = 0.15;
 /** Readings in a row below DISK_LOW before it counts: one odd reading is not worth an email. */
 export const DISK_LOW_AFTER = 2;
+/** An added server that has not answered for this long is worth an email, and its answering again too. */
+export const SERVER_DOWN_MS = 10 * 60_000;
 /** Raw errors in an email are cut here. */
 const MAX_ERROR = 500;
 /** An alert the relay did not take is tried again this long after. */
@@ -64,6 +66,10 @@ interface Delivery {
 interface DownDetail extends Delivery {
   fails: number;
   status?: number | null;
+  error?: string | null;
+}
+
+interface ServerDownDetail extends Delivery {
   error?: string | null;
 }
 
@@ -257,6 +263,62 @@ export class AlertService {
       ]));
     }
     this.put({ key, siteId: null, since: row?.since ?? Date.now(), notifiedAt, detail: JSON.stringify(next) });
+  }
+
+  /**
+   * One check of an added server. Not answering for SERVER_DOWN_MS is worth an email, always sent
+   * like the disk one, saying where its sites can be recovered. Answering again gets one too,
+   * naming the sites that left it meanwhile, whose old copies there the panel now stops
+   * (jobs/handlers/recover.ts). Server 1 is the panel itself, and never asked.
+   */
+  async serverChecked(server: { id: number; name: string }, answered: boolean, error: string | null): Promise<void> {
+    const key = `server:${server.id}`;
+    const row = this.state(key);
+    const base = panelUrl(this.s.config);
+    const page = base ? `${base}/servers/${server.id}` : `Servers → ${server.name}`;
+    if (answered) {
+      if (!row) return;
+      this.drop(key);
+      const detail = parse<ServerDownDetail>(row.detail);
+      if (Date.now() - row.since < SERVER_DOWN_MS || !this.recoveryDue(row, detail)) return;
+      const owed = this.s.db
+        .select({ slug: moveCleanups.siteSlug, targetServerId: moveCleanups.targetServerId })
+        .from(moveCleanups)
+        .where(and(eq(moveCleanups.sourceServerId, server.id), eq(moveCleanups.status, 'pending'), eq(moveCleanups.handover, 'pending')))
+        .all();
+      const recovered = owed.filter((c) => c.targetServerId !== 0).map((c) => c.slug);
+      const deleted = owed.filter((c) => c.targetServerId === 0).map((c) => c.slug);
+      await this.send(`${server.name} answers again`, [
+        `${server.name} answers again. It did not answer for ${duration(Date.now() - row.since)}, from ${utc(row.since)}.`,
+        ...(recovered.length > 0
+          ? [
+              '',
+              `These sites were recovered on another server meanwhile: ${recovered.join(', ')}.`,
+              'Their old copies there are stopped now, and removed in a day. Anything written there after their backups is in those copies until then.',
+            ]
+          : []),
+        ...(deleted.length > 0 ? ['', `These sites were deleted meanwhile, and their copies there are removed now: ${deleted.join(', ')}.`] : []),
+        '',
+        page,
+      ]);
+      return;
+    }
+    const since = row?.since ?? Date.now();
+    let next: ServerDownDetail = { ...parse<ServerDownDetail>(row?.detail), error };
+    let notifiedAt = row?.notifiedAt ?? null;
+    if (Date.now() - since >= SERVER_DOWN_MS) {
+      ({ next, notifiedAt } = await this.deliver(next, notifiedAt, true, () => [
+        `${server.name} does not answer`,
+        [
+          `${server.name} has not answered since ${utc(since)}.`,
+          ...(error ? [`The last error: ${clip(error)}`] : []),
+          'Its sites can come back from their backups on another server: Recover sites, on its page.',
+          '',
+          page,
+        ],
+      ]));
+    }
+    this.put({ key, siteId: null, since, notifiedAt, detail: JSON.stringify(next) });
   }
 
   /** A backup job that failed: one email per site a day at most. */
