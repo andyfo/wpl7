@@ -223,8 +223,9 @@ curl -fsSL -O https://github.com/andyfo/wpl7/releases/latest/download/install.sh
 sudo bash install.sh --restore
 ```
 
-`--restore-from=` takes a `panel.db.gz` you downloaded yourself instead, with its `manifest.json`
-beside it. An encrypted destination needs its passphrase and its salt.
+`--restore-from=` takes a snapshot folder or a `panel.db.gz` you downloaded yourself instead. With
+its `manifest.json` beside it, the domains and the mail settings come from there. Without one, the
+installer asks for them. An encrypted destination needs its passphrase and its salt.
 
 Then:
 

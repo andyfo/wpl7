@@ -479,7 +479,7 @@ export function siteRowFromManifest(
     }
   };
   const listed = Array.isArray(manifest.domains) ? manifest.domains.filter((d): d is string => typeof d === 'string' && d !== '') : [];
-  const domains = [...new Set(listed)].filter(free);
+  const domains = [...new Set(listed)].filter((domain) => free(domain));
   for (const domain of listed.filter((d) => !domains.includes(d))) warn(`${domain} is another site's now: the site comes back without it.`);
   let devHostname = dev && domains.includes(dev) ? dev : null;
   if (domains.length === 0) {

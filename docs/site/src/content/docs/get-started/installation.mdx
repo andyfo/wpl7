@@ -14,9 +14,11 @@ sources:
   - deploy/.env.example
   - panel/src/db/seed.ts
   - panel/src/index.ts
+  - "panel/src/cli/*.ts"
 ---
 
 import ManagedInstall from '~/components/ManagedInstall.astro';
+import Since from '~/components/Since.astro';
 
 One command turns a fresh Ubuntu server into a WPL7 host. The
 [Quick start](/docs/get-started/quick-start/) is the short version of this page.
@@ -104,6 +106,8 @@ From a terminal, it asks for anything you leave out, the admin password included
 | `--ssh-port=` | Keep this SSH port open too. The ports `sshd` listens on always stay open. |
 | `--no-firewall` | Leave the host's firewalls alone. Traefik alone then refuses blocked addresses. |
 | `--mail-hostname=` | The name the mail relay announces. For `panel.example.com` the default is `mail.example.com`. |
+| `--restore` | Install from the newest panel snapshot in your offsite destination. It asks for the destination. |
+| `--restore-from=` | Install from a panel snapshot you downloaded: its folder or its `panel.db.gz`. |
 | `--non-interactive` | Fail instead of asking for a missing value. |
 
 The full list is in [Installer and scripts](/docs/reference/installer-and-scripts/).
@@ -157,6 +161,36 @@ sudo /opt/wpl7/provision/setup.sh --panel-domain=panel.example.com --dev-domain=
 `setup.sh` notices the checkout, sets `WPL7_SOURCE=build` and builds the panel and the site
 images on the server. The install takes longer, and updates then run `provision/deploy.sh`.
 
+## Install from a panel snapshot
+
+<Since v="0.4.1" /> When the panel's own server is lost, install WPL7 on a new one from the
+panel's nightly snapshot in your offsite destination. Its database comes back with your accounts,
+settings, sites, servers, destinations and DKIM keys. The installer asks questions, so download it
+and run it from a terminal:
+
+```bash
+curl -fsSL -O https://github.com/andyfo/wpl7/releases/latest/download/install.sh
+```
+
+```bash
+sudo bash install.sh --restore
+```
+
+It asks for the provider and its fields as **Add remote destination** does. An encrypted
+destination also needs its passphrase and its salt. The installer takes the newest snapshot there,
+checks its checksums, and writes `deploy/.env` from it. A flag you pass still wins over the
+snapshot.
+
+A snapshot you downloaded needs no questions. Give its folder or its `panel.db.gz`:
+
+```bash
+sudo bash install.sh --restore-from=/root/panel-snapshot
+```
+
+The installer refuses a snapshot from a newer WPL7 and says what to install instead. At the end it
+prints the panel's new SSH key and the steps that bring the rest back, which
+[Rebuild the panel's server](/docs/reference/manual-recovery/#rebuild-the-panels-server) explains.
+
 ## Add a second server
 
 More servers run sites only, as [workers](/docs/reference/glossary/#worker) the panel drives
@@ -173,6 +207,9 @@ fresh Ubuntu 26.04 VPS itself. [Add a server](/docs/servers/add/) says what that
 - The generated password is printed once. Editing `PANEL_ADMIN_PASSWORD` in `.env` later
   changes nothing.
 - An install from a checkout cannot use the update button in the panel.
+- `--restore` cannot run piped into `bash`, because it asks for the destination. Use
+  `--restore-from=` there.
+- A restore refuses a snapshot from a newer WPL7 than the one it installs.
 
 ## Related
 
@@ -182,3 +219,4 @@ fresh Ubuntu 26.04 VPS itself. [Add a server](/docs/servers/add/) says what that
 - [Updating WPL7](/docs/panel/updating/)
 - [Add a server](/docs/servers/add/)
 - [DNS records](/docs/integrations/dns/)
+- [Recover a lost server](/docs/servers/recover/)

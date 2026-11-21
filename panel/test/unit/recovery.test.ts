@@ -373,6 +373,8 @@ describe('recovery', () => {
       wpAdminEmail: 'boss@example.com',
     });
     expect(back.dbPassword).not.toBe(site.dbPassword);
+    // Its own dev hostname is its own, not "another site's".
+    expect(await logOf(w, job.id)).not.toContain("another site's now");
     expect(w.dbAdmin.databases.has(site.dbName)).toBe(true);
     expect(w.docker.containers.get(site.containerName)).toBe('running');
     expect(w.db.select().from(jobs).where(eq(jobs.id, job.id)).get()!.siteId).toBe(back.id);

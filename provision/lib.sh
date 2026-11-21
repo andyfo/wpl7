@@ -141,6 +141,52 @@ wpl7_hold_image_lock() {
   flock --exclusive --wait "${WPL7_IMAGE_LOCK_WAIT_SEC:-600}" 9
 }
 
+# Put the panel's database back from a snapshot (setup.sh --restore, --restore-from=), before the
+# panel's first start. panel/src/cli/restore.ts does it, in the panel image about to be started:
+# its migrations are the ones the database has to suit. SRV_ROOT is mounted at the same path, as
+# compose mounts it into the panel, because the rclone container the restore starts beside itself
+# binds a folder under it and the daemon reads that path on the host. The restore container needs
+# no network of its own: it talks to the daemon over the socket.
+#
+#   wpl7_restore_snapshot IMAGE SRV_ROOT ENV_OUT FROM PREFIX INTERACTIVE
+#
+# FROM is a snapshot downloaded by hand, or empty to be asked for the destination, which needs
+# INTERACTIVE=1 and a terminal. A file is mounted with its folder, for the manifest beside it.
+# PREFIX is offered as the destination's path prefix. ENV_OUT is where the values for .env go.
+wpl7_restore_snapshot() {
+  local image=$1 srv=$2 env_out=$3 from=$4 prefix=$5 interactive=$6
+  local docker_args=(run --rm --network none -v /var/run/docker.sock:/var/run/docker.sock -v "$srv:$srv" -e "SRV_ROOT=$srv")
+  local cli_args=(--env-out="$env_out")
+  if [ "$interactive" = 1 ]; then docker_args+=(-it); fi
+  if [ -n "$prefix" ]; then cli_args+=(--prefix="$prefix"); fi
+  if [ -d "$from" ]; then
+    docker_args+=(-v "$from:/restore-from:ro")
+    cli_args+=(--from=/restore-from)
+  elif [ -n "$from" ]; then
+    docker_args+=(-v "$(dirname "$from"):/restore-from:ro")
+    cli_args+=(--from="/restore-from/$(basename "$from")")
+  fi
+  docker "${docker_args[@]}" "$image" node dist/src/cli/restore.js "${cli_args[@]}"
+}
+
+# What a snapshot gives deploy/.env, and what the snapshot is, as the restore writes them to ENV_OUT
+# (panel/src/cli/snapshotRestore.ts, envFileText).
+WPL7_RESTORE_KEYS="SNAPSHOT_TS SNAPSHOT_VERSION SNAPSHOT_SERVER PANEL_DOMAIN DEV_DOMAIN ACME_EMAIL TLS_MODE ACME_RESOLVER DNS_PROVIDER WPL7_CHANNEL MAIL_HOSTNAME SMTP_RELAYHOST SMTP_USERNAME SMTP_PASSWORD BACKUP_ROOT"
+
+# Read ENV_OUT into RESTORED_<KEY>, for each key above. Read line by line and never sourced: the
+# values came out of a bucket. A key not on the list is skipped.
+wpl7_restore_env_read() {
+  local file=$1 line key
+  while IFS= read -r line || [ -n "$line" ]; do
+    key="${line%%=*}"
+    [ "$key" != "$line" ] || continue
+    case "$key" in ''|*[!A-Z0-9_]*) continue ;; esac
+    case " $WPL7_RESTORE_KEYS " in
+      *" $key "*) printf -v "RESTORED_$key" '%s' "${line#*=}" ;;
+    esac
+  done < "$file"
+}
+
 # Remove the copies earlier updates took (`panel.db.pre-<version>`, with their -wal and -shm),
 # all but `keep` and its own. Only the newest can still undo anything: it is the database as it
 # was before the version now running migrated it. Each is as big as the database.
