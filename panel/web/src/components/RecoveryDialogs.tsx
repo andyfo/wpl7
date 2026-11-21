@@ -242,7 +242,9 @@ export function RestoreDeletedSiteDialog({ backup, onClose }: { backup: BackupDt
   return (
     <Modal title={`Restore ${backup.siteSlug}`} onClose={onClose}>
       <div className="space-y-4 text-sm">
-        <p className="text-neutral-600">The site is made again from this backup, with its name, domains and settings.</p>
+        <p className="text-neutral-600">
+          The site is made again from this backup, with its name, domains and settings. Its domains' DNS records are left as they are.
+        </p>
         {ok.length > 1 && (
           <Field label="Target server">
             <select className={inputClass} value={target?.id ?? ''} onChange={(e) => setTargetId(Number(e.target.value))}>

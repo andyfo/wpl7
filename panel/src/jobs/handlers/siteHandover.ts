@@ -27,14 +27,15 @@ const errMsg = (err: unknown): string => (err instanceof Error ? err.message : S
  *
  * `fromName` is where the site was, for the log. `sameServer` is a recovery onto the server the
  * site was already on: its records should already point there, unless the server came back with
- * another address, so there is nothing to say about a server it left.
+ * another address, so there is nothing to say about a server it left. `madeAgain` is a deleted
+ * site made again from its backup: its own domains' records are listed, never changed.
  */
 export async function repointSiteDns(
   ctx: JobContext<unknown>,
   s: CoreServices,
   site: SiteRow,
   target: ServerHandle,
-  opts: { fromName: string; sameServer?: boolean },
+  opts: { fromName: string; sameServer?: boolean; madeAgain?: boolean },
 ): Promise<DnsRepoint> {
   const dns: DnsRepoint = { updated: [], manual: [] };
   const domains = siteDomains(site);
@@ -85,7 +86,8 @@ export async function repointSiteDns(
     }
   }
   for (const host of customHosts) {
-    if (s.dns.enabled && ip && (await s.dns.canManage(host))) {
+    // A deleted site's domains may serve it from another host by now: made again, it only lists them.
+    if (!opts.madeAgain && s.dns.enabled && ip && (await s.dns.canManage(host))) {
       try {
         await s.dns.upsertA(host, ip);
         dns.updated.push(host);
@@ -98,8 +100,11 @@ export async function repointSiteDns(
     dns.manual.push({ host, ip });
   }
   if (dns.manual.length > 0) {
+    const hosts = dns.manual.map((d) => d.host).join(', ');
     ctx.warn(
-      `${opts.sameServer ? 'Make sure these A records point at' : 'Update these A records to'} ${ip}: ${dns.manual.map((d) => d.host).join(', ')}` +
+      (opts.madeAgain
+        ? `DNS records are left as they were. For the site to answer on these here, point them at ${ip}: ${hosts}`
+        : `${opts.sameServer ? 'Make sure these A records point at' : 'Update these A records to'} ${ip}: ${hosts}`) +
         (s.config.mailMode === 'direct' ? ' - and add the new server IP to their SPF records (docs/dns.md).' : ''),
     );
   }

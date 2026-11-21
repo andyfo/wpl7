@@ -17,6 +17,7 @@ import {
 import type { Config } from '../config.js';
 import type { BackupType, SiteApp } from '../../shared/schemas.js';
 import { backupRootProblem } from '../../shared/backupRoot.js';
+import { extraDbNameSchema } from '../../shared/databases.js';
 import { conflict } from '../lib/errors.js';
 import { safeJoin } from '../lib/slug.js';
 import type { ServerHandle, ServerRegistry } from '../servers/registry.js';
@@ -85,7 +86,10 @@ export const extraDbFile = (name: string) => `${EXTRA_DB_DIR}/${name}.sql.gz`;
 /** The other databases a backup's manifest lists; none for one from before sites had any. */
 export function manifestDatabases(manifest: { databases?: unknown } | null): string[] {
   const list = manifest?.databases;
-  return Array.isArray(list) ? list.filter((n): n is string => typeof n === 'string' && /^[a-z0-9_]{1,64}$/.test(n)) : [];
+  // Only names a site's other database can have, never the site's own (wp_) nor MariaDB's: a
+  // restore makes each one and grants it to the site's user, and whoever can write a backup's
+  // files can write its manifest.
+  return Array.isArray(list) ? list.filter((n): n is string => extraDbNameSchema.safeParse(n).success) : [];
 }
 
 export const tsStamp = (d: Date) =>
@@ -1023,17 +1027,27 @@ export class BackupService {
    *
    * A backup with no copy is never flipped: retention drops a row at 0 that has no copy
    * (OffsiteService.dropEmptyBackups), and an empty mount point looks exactly like a lost disk.
-   * Rows under a backup root that is not there at all are left alone too. Throws only when the
-   * server can't be asked.
+   * Rows under a backup root that is not there at all are left alone too. Either way it is in
+   * `missing`, with every other backup listed as present whose folder is not there: a recovery
+   * can't take its files from this server. A folder that can't be listed says nothing about the
+   * backups in it. Throws only when the server can't be asked. `slugs` narrows it to those sites'.
    */
-  async checkFiles(serverId: number): Promise<{ gone: number; back: number }> {
+  async checkFiles(serverId: number, opts: { slugs?: string[] } = {}): Promise<{ gone: number; back: number; missing: Set<number> }> {
     const h = this.servers.handleFor(serverId);
+    const missing = new Set<number>();
+    if (opts.slugs?.length === 0) return { gone: 0, back: 0, missing };
     const rows = this.db
       .select()
       .from(backups)
-      .where(and(eq(backups.serverId, serverId), eq(backups.status, 'complete')))
+      .where(
+        and(
+          eq(backups.serverId, serverId),
+          eq(backups.status, 'complete'),
+          ...(opts.slugs ? [inArray(backups.siteSlug, opts.slugs)] : []),
+        ),
+      )
       .all();
-    if (rows.length === 0) return { gone: 0, back: 0 };
+    if (rows.length === 0) return { gone: 0, back: 0, missing };
     const copied = new Set(
       this.db
         .select({ backupId: backupCopies.backupId })
@@ -1044,6 +1058,7 @@ export class BackupService {
     );
     const roots = new Map<string, boolean>();
     // One listing per site folder rather than one question per backup: over SSH each is a round trip.
+    // readdir answers [] for a folder that is not there; null here is one it could not list.
     const listings = new Map<string, Set<string> | null>();
     const listed = async (folder: string): Promise<Set<string> | null> => {
       if (!listings.has(folder)) listings.set(folder, await h.files.readdir(folder).then((names) => new Set(names), () => null));
@@ -1052,17 +1067,25 @@ export class BackupService {
     let gone = 0;
     let back = 0;
     for (const row of rows) {
-      if (!copied.has(row.id)) continue;
+      const copy = copied.has(row.id);
+      if (!copy && row.filesPresent !== 1) continue;
       const root = this.rootOf(row);
       let rootThere = roots.get(root);
       if (rootThere === undefined) {
         rootThere = await h.files.exists(root);
         roots.set(root, rootThere);
       }
-      if (!rootThere) continue;
-      const there = (await listed(path.dirname(row.path)))?.has(path.basename(row.path)) ?? false;
+      if (!rootThere) {
+        if (row.filesPresent === 1) missing.add(row.id);
+        continue;
+      }
+      const listing = await listed(path.dirname(row.path));
+      if (listing === null) continue;
+      const there = listing.has(path.basename(row.path));
       if (row.filesPresent === 1) {
         if (there) continue;
+        missing.add(row.id);
+        if (!copy) continue;
         gone += this.db
           .update(backups)
           .set({ filesPresent: 0 })
@@ -1079,7 +1102,7 @@ export class BackupService {
           .run().changes;
       }
     }
-    return { gone, back };
+    return { gone, back, missing };
   }
 
   /**

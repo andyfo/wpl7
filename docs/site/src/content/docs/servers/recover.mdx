@@ -46,7 +46,9 @@ server**, then choose **Recover**.
 
 ## What happens
 
-The job downloads the backup onto the target server and checks its checksums. It makes the site's
+The job downloads the backup onto the target server and checks its checksums. A backup listed
+on the target whose folder is gone, as after a reinstall, is passed over for an older one with an
+offsite copy. It makes the site's
 database and database user, unpacks the files and starts the site. Then it points the site's DNS
 records at the new server where the Cloudflare token reaches them, as a [move](/docs/sites/move/)
 does. The job log lists the records to change by hand.

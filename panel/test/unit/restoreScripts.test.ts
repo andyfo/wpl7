@@ -37,6 +37,37 @@ function stubDocker(exitCode = 0): string {
   return dir;
 }
 
+describe('wpl7_env_set', () => {
+  // As compose v2 reads deploy/.env: it expands $ and cuts " #..." off a value written plain, and
+  // reads a double-quoted one with \\, \" and $$ as \, " and $. Checked against docker compose
+  // v2.35 on the values below, through to what a container got.
+  const values: [value: string, line: string][] = [
+    ['smtp.example.com', 'smtp.example.com'],
+    ['[smtp.example.com]:587', '[smtp.example.com]:587'],
+    ['pa$word', '"pa$$word"'],
+    ['a #b', '"a #b"'],
+    ["it's", `"it's"`],
+    ['q"q', '"q\\"q"'],
+    ['ends\\', '"ends\\\\"'],
+    ['${HOME}`id`', '"$${HOME}`id`"'],
+    [' spaced ', '" spaced "'],
+  ];
+
+  it('writes a value compose would change in double quotes, and wpl7_env_get reads it back as it was', () => {
+    const file = path.join(tmp(), '.env');
+    fs.writeFileSync(file, 'KEEP=as it was\nV0=old\n');
+    const env = Object.fromEntries(values.map(([value], i) => [`IN${i}`, value]));
+    const res = shell(
+      `${values.map((_, i) => `wpl7_env_set "$F" V${i} "$IN${i}"`).join('\n')}\n` +
+        `${values.map((_, i) => `printf '%s\\0' "$(wpl7_env_get "$F" V${i})"`).join('\n')}`,
+      { ...env, F: file },
+    );
+    expect(res.stderr).toBe('');
+    expect(res.stdout.split('\0').slice(0, -1)).toEqual(values.map(([value]) => value));
+    expect(fs.readFileSync(file, 'utf8')).toBe(`KEEP=as it was\n${values.map(([, line], i) => `V${i}=${line}\n`).join('')}`);
+  });
+});
+
 describe('wpl7_restore_env_read', () => {
   it('takes each known key as it is, runs nothing in it, and skips everything else', () => {
     const dir = tmp();

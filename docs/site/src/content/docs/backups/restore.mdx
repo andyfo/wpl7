@@ -90,7 +90,8 @@ kept only offsite is downloaded first.
 A domain another site has taken since is left out. The site's database gets a new password, which
 WordPress reads by itself. A PHP site with its own database config needs it there, from the
 **Database** tab. A site that does not answer once it is back is a warning in the log, not a failed
-job, so it can be repaired. A container app's settings are not in its backups: create the app
+job, so it can be repaired. Its domains' DNS records are left as they are: the job's log lists the
+ones to point at the server. A container app's settings are not in its backups: create the app
 again, then restore the backup into it.
 
 ## Restore a site hosted elsewhere

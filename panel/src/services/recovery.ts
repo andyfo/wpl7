@@ -155,13 +155,18 @@ export async function siteRecoveryState(
 export interface UsableBackup {
   row: BackupRow;
   copies: { destinationId: number; name: string }[];
+  /** The server its files are on, or null when they are on none. */
+  localServerId: number | null;
 }
+
+const NONE: ReadonlySet<number> = new Set();
 
 /**
  * The site's complete backups that a recovery can use, newest first: each has an offsite copy, or
  * its files on a server. A panel snapshot is not a site's, and one being deleted is left out.
+ * `gone` are backups listed with their files on a server that has no folder for them (filesGone).
  */
-export function usableBackups(s: CoreServices, slug: string, limit = SITE_REPORT_BACKUPS): UsableBackup[] {
+export function usableBackups(s: CoreServices, slug: string, limit = SITE_REPORT_BACKUPS, gone: ReadonlySet<number> = NONE): UsableBackup[] {
   const rows = s.db
     .select()
     .from(backups)
@@ -184,8 +189,9 @@ export function usableBackups(s: CoreServices, slug: string, limit = SITE_REPORT
       continue;
     }
     const copies = copyRows.filter((c) => c.backupId === row.id).map(({ destinationId, name }) => ({ destinationId, name }));
-    if (copies.length === 0 && row.filesPresent !== 1) continue;
-    out.push({ row, copies });
+    const localServerId = row.filesPresent === 1 && !gone.has(row.id) ? row.serverId : null;
+    if (copies.length === 0 && localServerId === null) continue;
+    out.push({ row, copies, localServerId });
     if (out.length >= limit) break;
   }
   return out;
@@ -196,8 +202,35 @@ export function usableBackups(s: CoreServices, slug: string, limit = SITE_REPORT
  * a destination id for a copy, undefined when it can't reach that server at all.
  */
 export function sourceFor(backup: UsableBackup, targetServerId: number): number | null | undefined {
-  if (backup.row.filesPresent === 1 && backup.row.serverId === targetServerId) return null;
+  if (backup.localServerId === targetServerId) return null;
   return backup.copies[0]?.destinationId;
+}
+
+/**
+ * Which of these sites' backups are listed with their files on one of `serverIds` that has no
+ * folder for them: a reinstalled disk took them, and only a copy can bring them back. Each server
+ * that is ok is asked once (BackupService.checkFiles), which also lists the backups there that
+ * have a copy as remote only, or present again. One that can't be asked keeps its backups as listed.
+ */
+export async function filesGone(s: CoreServices, slugs: string[], serverIds: Iterable<number>): Promise<Set<number>> {
+  const gone = new Set<number>();
+  for (const id of new Set(serverIds)) {
+    if (s.servers.rowById(id)?.status !== 'ok') continue;
+    const checked = await s.backup.checkFiles(id, { slugs }).catch(() => null);
+    for (const backupId of checked?.missing ?? []) gone.add(backupId);
+  }
+  return gone;
+}
+
+/** The servers that hold files of these sites' complete backups, as listed. */
+function serversHolding(s: CoreServices, slugs: string[]): number[] {
+  if (slugs.length === 0) return [];
+  return s.db
+    .selectDistinct({ serverId: backups.serverId })
+    .from(backups)
+    .where(and(inArray(backups.siteSlug, slugs), eq(backups.status, 'complete'), eq(backups.filesPresent, 1)))
+    .all()
+    .map((r) => r.serverId);
 }
 
 function targetDto(row: ServerRow): RecoveryTargetDto {
@@ -221,7 +254,7 @@ function backupDto(u: UsableBackup): RecoveryBackupDto {
     phpVersion: u.row.phpVersion,
     note: u.row.note,
     copies: u.copies,
-    localServerId: u.row.filesPresent === 1 ? u.row.serverId : null,
+    localServerId: u.localServerId,
   };
 }
 
@@ -230,23 +263,29 @@ function backupDto(u: UsableBackup): RecoveryBackupDto {
  * and each server's newest with its files there. The dialog picks among them as the server does
  * (lib/recovery.ts newestFor, sourceFor here), so it says what the button will do.
  */
-function reportBackups(s: CoreServices, slug: string, limit: number): UsableBackup[] {
-  const all = usableBackups(s, slug, Number.MAX_SAFE_INTEGER);
+function reportBackups(s: CoreServices, slug: string, limit: number, gone: ReadonlySet<number>): UsableBackup[] {
+  const all = usableBackups(s, slug, Number.MAX_SAFE_INTEGER, gone);
   const picked = new Set(all.slice(0, limit));
   const copied = all.find((u) => u.copies.length > 0);
   if (copied) picked.add(copied);
   const localOn = new Set<number>();
   for (const u of all) {
-    if (u.row.filesPresent !== 1 || localOn.has(u.row.serverId)) continue;
-    localOn.add(u.row.serverId);
+    if (u.localServerId === null || localOn.has(u.localServerId)) continue;
+    localOn.add(u.localServerId);
     picked.add(u);
   }
   return all.filter((u) => picked.has(u));
 }
 
-async function siteReport(s: CoreServices, site: SiteRow, input: StateInput, backupLimit: number): Promise<SiteRecoveryDto> {
+async function siteReport(
+  s: CoreServices,
+  site: SiteRow,
+  input: StateInput,
+  backupLimit: number,
+  gone: ReadonlySet<number>,
+): Promise<SiteRecoveryDto> {
   const { state, refusal } = await siteRecoveryState(s, site, input);
-  const usable = reportBackups(s, site.slug, backupLimit);
+  const usable = reportBackups(s, site.slug, backupLimit, gone);
   const targets = targetsFor(s, site.serverId, state);
   return {
     slug: site.slug,
@@ -264,8 +303,11 @@ async function siteReport(s: CoreServices, site: SiteRow, input: StateInput, bac
 /** `GET /api/sites/:slug/recovery`. */
 export async function siteRecoveryReport(s: CoreServices, site: SiteRow): Promise<SiteRecoveryDto> {
   const answers = isExternal(site) ? false : await serverAnswers(s, site.serverId);
-  if (answers) await s.backup.checkFiles(site.serverId).catch(() => undefined);
-  return siteReport(s, site, { answers }, SITE_REPORT_BACKUPS);
+  // Backups that left with a reinstalled disk must not be offered as there: asked of the servers
+  // holding its backups' files, its own only when it answers.
+  const servers = [site.serverId, ...serversHolding(s, [site.slug])].filter((id) => answers || id !== site.serverId);
+  const gone = await filesGone(s, [site.slug], servers);
+  return siteReport(s, site, { answers }, SITE_REPORT_BACKUPS, gone);
 }
 
 /** `GET /api/servers/:id/recovery`. */
@@ -273,12 +315,13 @@ export async function serverRecoveryReport(s: CoreServices, serverId: number): P
   const server = s.servers.rowById(serverId);
   if (!server) throw notFound(`Server #${serverId} not found`);
   const answers = await serverAnswers(s, serverId);
-  // Backups that left with a reinstalled disk read as remote only before anyone picks them.
-  if (answers) await s.backup.checkFiles(serverId).catch(() => undefined);
   const dbs = answers ? await databasesOn(s, serverId) : undefined;
   const hosted = s.db.select().from(sites).where(and(eq(sites.serverId, serverId), hostedSites())).orderBy(asc(sites.slug)).all();
+  // Backups that left with a reinstalled disk must not be offered as there, as for one site.
+  const slugs = hosted.map((site) => site.slug);
+  const gone = await filesGone(s, slugs, [serverId, ...serversHolding(s, slugs)].filter((id) => answers || id !== serverId));
   const reports: SiteRecoveryDto[] = [];
-  for (const site of hosted) reports.push(await siteReport(s, site, { answers, dbs }, SERVER_REPORT_BACKUPS));
+  for (const site of hosted) reports.push(await siteReport(s, site, { answers, dbs }, SERVER_REPORT_BACKUPS, gone));
   const external = s.db
     .select({ slug: sites.slug, title: sites.title })
     .from(sites)
@@ -311,6 +354,7 @@ export function checkRecoverRequest(
   site: SiteRow,
   state: RecoveryState,
   req: RecoverRequest,
+  gone: ReadonlySet<number> = NONE,
 ): { target: ServerRow; backup: UsableBackup; destinationId: number | null } {
   const target = s.servers.rowById(req.targetServerId);
   if (!target) throw notFound(`Server #${req.targetServerId} not found`);
@@ -318,13 +362,13 @@ export function checkRecoverRequest(
   if (target.id === site.serverId && state !== 'missing') {
     throw conflict(`"${target.name}" does not answer, so "${site.slug}" can't come back there. Pick another server.`);
   }
-  const backup = usableBackups(s, site.slug, Number.MAX_SAFE_INTEGER).find((u) => u.row.id === req.backupId);
+  const backup = usableBackups(s, site.slug, Number.MAX_SAFE_INTEGER, gone).find((u) => u.row.id === req.backupId);
   if (!backup) throw badRequest(`Backup #${req.backupId} is not a complete backup of "${site.slug}" with an offsite copy or its files on a server.`);
   let destinationId: number | null | undefined;
   if (req.destinationId === undefined) {
     destinationId = sourceFor(backup, target.id);
   } else if (req.destinationId === null) {
-    destinationId = backup.row.filesPresent === 1 && backup.row.serverId === target.id ? null : undefined;
+    destinationId = backup.localServerId === target.id ? null : undefined;
   } else {
     destinationId = backup.copies.some((c) => c.destinationId === req.destinationId) ? req.destinationId : undefined;
   }
@@ -344,8 +388,8 @@ export async function queueSiteRecovery(s: CoreServices, site: SiteRow, req: Rec
   const { state, refusal } = await siteRecoveryState(s, site, { answers });
   if (refusal) throw conflict(refusal);
   // A backup whose files left with a reinstalled disk must not be picked as one that is there.
-  if (s.servers.rowById(req.targetServerId)?.status === 'ok') await s.backup.checkFiles(req.targetServerId).catch(() => undefined);
-  const { target, backup, destinationId } = checkRecoverRequest(s, site, state, req);
+  const gone = await filesGone(s, [site.slug], [req.targetServerId]);
+  const { target, backup, destinationId } = checkRecoverRequest(s, site, state, req, gone);
   return s.worker.enqueue(
     'site.recover',
     { siteId: site.id, backupId: backup.row.id, destinationId, targetServerId: target.id, asNew: false },
@@ -374,8 +418,6 @@ export async function queueServerRecovery(
   if (target.id === serverId && !answers) {
     throw conflict(`"${server.name}" does not answer, so its sites can't come back there. Pick another server.`);
   }
-  if (answers) await s.backup.checkFiles(serverId).catch(() => undefined);
-  if (target.id !== serverId) await s.backup.checkFiles(target.id).catch(() => undefined);
   const dbs = answers ? await databasesOn(s, serverId) : undefined;
 
   let hosted = s.db.select().from(sites).where(and(eq(sites.serverId, serverId), hostedSites())).orderBy(asc(sites.slug)).all();
@@ -387,6 +429,8 @@ export async function queueServerRecovery(
     hosted = hosted.filter((site) => wanted.has(site.slug));
   }
 
+  // A backup whose files left with a reinstalled disk must not be picked as one that is there.
+  const gone = await filesGone(s, hosted.map((site) => site.slug), [target.id, ...(answers ? [serverId] : [])]);
   const jobs: JobRow[] = [];
   const skipped: { slug: string; reason: string }[] = [];
   for (const site of hosted) {
@@ -395,13 +439,13 @@ export async function queueServerRecovery(
       skipped.push({ slug: site.slug, reason: refusal });
       continue;
     }
-    const newest = usableBackups(s, site.slug, Number.MAX_SAFE_INTEGER).find((u) => sourceFor(u, target.id) !== undefined);
+    const newest = usableBackups(s, site.slug, Number.MAX_SAFE_INTEGER, gone).find((u) => sourceFor(u, target.id) !== undefined);
     if (!newest) {
       skipped.push({ slug: site.slug, reason: 'It has no complete backup with an offsite copy.' });
       continue;
     }
     try {
-      const checked = checkRecoverRequest(s, site, state, { backupId: newest.row.id, targetServerId: target.id });
+      const checked = checkRecoverRequest(s, site, state, { backupId: newest.row.id, targetServerId: target.id }, gone);
       jobs.push(
         s.worker.enqueue(
           'site.recover',
@@ -470,7 +514,6 @@ export interface BackupManifest {
   };
 }
 
-const DB_NAME_RE = /^[a-z0-9_]{1,64}$/;
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 
@@ -544,9 +587,14 @@ export function siteRowFromManifest(
   const isLive = typeof own.isLive === 'boolean' ? own.isLive : devHostname === null || domains[0] !== devHostname;
   // A WordPress site always has a database; a PHP site has one when its backup says so.
   const withDatabase = app === 'wordpress' || manifest.database === true;
-  // A PHP site's own config names its database and user, so they keep their names.
-  const dbName = withDatabase ? (manifest.dbName && DB_NAME_RE.test(manifest.dbName) ? manifest.dbName : dbIdentifier(slug)) : '';
-  const dbUser = withDatabase ? (manifest.dbUser && DB_NAME_RE.test(manifest.dbUser) ? manifest.dbUser : dbIdentifier(slug)) : '';
+  // Named after the slug, as every site's are: the job drops whatever has these names on the target
+  // first, so a name read from the manifest could be another site's database or user, or MariaDB's.
+  // A PHP site's own config names the same ones, as they were never named otherwise.
+  const dbName = withDatabase ? dbIdentifier(slug) : '';
+  const dbUser = dbName;
+  const other = (value: unknown, what: string) => (typeof value === 'string' && value !== '' && value !== dbName ? [`its ${what} ${value}`] : []);
+  const named = [...other(manifest.dbName, 'database'), ...other(manifest.dbUser, 'user')];
+  if (withDatabase && named.length > 0) warn(`The backup names ${named.join(' and ')}; the site gets ${dbName}, the name the panel gives it.`);
   if (withDatabase && app === 'php') {
     warn("The site's database user gets a new password, which its own config can't know: put it there from the Database tab.");
   }
@@ -593,7 +641,7 @@ export function siteRowFromManifest(
  * name, on `targetServerId`. The job reads the manifest once the backup is on the target and
  * makes the site's row from it (siteRowFromManifest), so a backup kept only offsite can do it too.
  */
-export function queueDeletedSiteRestore(s: CoreServices, backupId: number, targetServerId: number): JobRow {
+export async function queueDeletedSiteRestore(s: CoreServices, backupId: number, targetServerId: number): Promise<JobRow> {
   const row = s.db.select().from(backups).where(eq(backups.id, backupId)).get();
   if (!row) throw notFound(`Backup #${backupId} not found`);
   if (row.type === 'panel') throw badRequest("A panel snapshot is not a site's backup.");
@@ -604,7 +652,8 @@ export function queueDeletedSiteRestore(s: CoreServices, backupId: number, targe
   const target = s.servers.rowById(targetServerId);
   if (!target) throw notFound(`Server #${targetServerId} not found`);
   if (target.status !== 'ok') throw conflict(`"${target.name}" is ${target.status}: pick a server that is ok.`);
-  const usable = usableBackups(s, row.siteSlug, Number.MAX_SAFE_INTEGER).find((u) => u.row.id === row.id);
+  const gone = await filesGone(s, [row.siteSlug], [target.id]);
+  const usable = usableBackups(s, row.siteSlug, Number.MAX_SAFE_INTEGER, gone).find((u) => u.row.id === row.id);
   const destinationId = usable ? sourceFor(usable, target.id) : undefined;
   if (destinationId === undefined) {
     throw conflict(`Backup #${row.id} has no complete offsite copy, and its files are not on "${target.name}".`);

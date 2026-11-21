@@ -61,6 +61,18 @@ export async function siteRecover(ctx: JobContext<z.infer<typeof siteRecoverPayl
   return recoverSite(ctx, s, made.siteId, made);
 }
 
+/**
+ * A backup's files where they are listed, on the target, checked. A reinstalled disk can take a
+ * backup that has no copy without the panel knowing, until someone asks (BackupService.checkFiles).
+ */
+async function checkFilesOn(ctx: JobContext<unknown>, s: CoreServices, target: ServerHandle, backup: BackupRow): Promise<void> {
+  if (!(await target.files.exists(path.join(backup.path, 'sha256sums')))) {
+    throw new Error(`Backup #${backup.id}'s files are not on "${target.name}" any more: pick another backup, or its offsite copy. Nothing was changed.`);
+  }
+  ctx.info(`Backup #${backup.id}'s files are on "${target.name}"; checking them…`);
+  await s.backup.verifyChecksums(backup);
+}
+
 /** The backup a deleted site was made again from, already on the target and checked (makeDeletedSite). */
 interface Prepared {
   backup: BackupRow;
@@ -88,8 +100,7 @@ async function makeDeletedSite(
   const alive = await target.exec.run('true', [], { timeoutMs: 30_000 });
   if (alive.exitCode !== 0) throw new Error(`"${target.name}" does not answer: ${alive.stderr.trim().slice(0, 200)}`);
   if (p.destinationId === null) {
-    ctx.info(`Backup #${backup.id}'s files are on "${target.name}"; checking them…`);
-    await s.backup.verifyChecksums(backup);
+    await checkFilesOn(ctx, s, target, backup);
   } else {
     backup = await s.offsite.fetchBackup(backup.id, p.destinationId, ctx, { targetServerId: target.id });
   }
@@ -179,8 +190,7 @@ async function recoverSite(
     if (prepared) {
       // Fetched and checked already, to read the manifest the site was made from.
     } else if (checked.destinationId === null) {
-      ctx.info(`Backup #${backup.id}'s files are on "${target.name}"; checking them…`);
-      await s.backup.verifyChecksums(backup);
+      await checkFilesOn(ctx, s, target, backup);
     } else {
       backup = await s.offsite.fetchBackup(backup.id, checked.destinationId, ctx, { targetServerId: target.id });
     }
@@ -454,7 +464,7 @@ async function recoverSite(
       }
     }
 
-    const dns: DnsRepoint = await repointSiteDns(ctx, s, site, target, { fromName, sameServer });
+    const dns: DnsRepoint = await repointSiteDns(ctx, s, site, target, { fromName, sameServer, madeAgain: prepared !== null });
 
     // ------------------------------------------------------------ 6: the old server
     if (cleanupId !== null) {

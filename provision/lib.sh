@@ -8,16 +8,53 @@
 
 # Read KEY=... out of an .env file. `VAR="$(grep … | cut …)"` looks harmless but aborts the
 # caller under `set -euo pipefail` whenever grep matches nothing, which makes every
-# "${VAR:-fallback}" downstream unreachable. `|| true` keeps the assignment succeeding.
+# "${VAR:-fallback}" downstream unreachable. `|| true` keeps the assignment succeeding. A value
+# wpl7_env_set wrote in quotes comes back as it was given.
 wpl7_env_get() {
-  grep -m1 "^$2=" "$1" 2>/dev/null | cut -d= -f2- || true
+  local value out="" char i
+  value="$(grep -m1 "^$2=" "$1" 2>/dev/null | cut -d= -f2-)" || true
+  if [ "${#value}" -ge 2 ] && [ "${value:0:1}" = '"' ] && [ "${value: -1}" = '"' ]; then
+    value=${value:1:${#value}-2}
+    for (( i = 0; i < ${#value}; i++ )); do
+      char=${value:i:1}
+      if [ "$char" = '\' ] || { [ "$char" = '$' ] && [ "${value:i+1:1}" = '$' ]; }; then
+        i=$((i + 1))
+        char=${value:i:1}
+      fi
+      out+=$char
+    done
+    value=$out
+  fi
+  [ -z "$value" ] || printf '%s\n' "$value"
+}
+
+# A value as deploy/.env must hold it for compose to read it back unchanged. Compose expands `$`,
+# cuts ` #…` off as a comment and takes quotes off a value written plain, and stops at a lone
+# quote. A value of characters it leaves alone is written as it is, so the scripts that grep the
+# file read it as before; any other goes in double quotes, with \, " and $ escaped ("$$" is "$").
+wpl7_env_quote() {
+  local value=$1 out="" char i
+  case "$value" in
+    *[!]A-Za-z0-9._@:/+,=%[-]*) ;;
+    *) printf '%s' "$value"; return 0 ;;
+  esac
+  for (( i = 0; i < ${#value}; i++ )); do
+    char=${value:i:1}
+    case "$char" in
+      '\' | '"') out+="\\$char" ;;
+      '$') out+='$$' ;;
+      *) out+=$char ;;
+    esac
+  done
+  printf '"%s"' "$out"
 }
 
 # Replace KEY=... in an .env file, appending when the key is absent. Pure bash on purpose:
 # values (passwords especially) may contain &, \ or | which sed would interpret, silently
 # corrupting the file that holds this install's database password.
 wpl7_env_set() {
-  local file=$1 key=$2 value=$3 line out="" found=0
+  local file=$1 key=$2 value line out="" found=0
+  value="$(wpl7_env_quote "$3")"
   while IFS= read -r line || [ -n "$line" ]; do
     if [ "${line%%=*}" = "$key" ] && [ "${line#"$key"=}" != "$line" ]; then
       out+="$key=$value"$'\n'

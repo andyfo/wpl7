@@ -364,8 +364,8 @@ describe('recovery', () => {
     w.docker.containers.delete(site.containerName);
     fs.rmSync(sitePaths(w.config, site.slug).root, { recursive: true, force: true });
 
-    const job = queueDeletedSiteRestore(w.core, backup.id, 1);
-    expect(() => queueDeletedSiteRestore(w.core, backup.id, 1)).toThrow(/making "bakery" again already/);
+    const job = await queueDeletedSiteRestore(w.core, backup.id, 1);
+    await expect(queueDeletedSiteRestore(w.core, backup.id, 1)).rejects.toThrow(/making "bakery" again already/);
     const done = await runJob(w, job.id);
     expect(done.error).toBeNull();
     const back = w.db.select().from(sites).where(eq(sites.slug, site.slug)).get()!;
@@ -384,7 +384,7 @@ describe('recovery', () => {
     expect(w.dbAdmin.databases.has(site.dbName)).toBe(true);
     expect(w.docker.containers.get(site.containerName)).toBe('running');
     expect(w.db.select().from(jobs).where(eq(jobs.id, job.id)).get()!.siteId).toBe(back.id);
-    expect(() => queueDeletedSiteRestore(w.core, backup.id, 1)).toThrow(/is a site already/);
+    await expect(queueDeletedSiteRestore(w.core, backup.id, 1)).rejects.toThrow(/is a site already/);
   });
 
   it("keeps a deleted PHP site that does not answer once it is back, for its config to get the database's new password", async () => {
@@ -411,7 +411,7 @@ describe('recovery', () => {
       if (name === site.containerName) w.docker.containers.set(name, 'exited');
     };
 
-    const job = queueDeletedSiteRestore(w.core, backup.id, 1);
+    const job = await queueDeletedSiteRestore(w.core, backup.id, 1);
     const done = await runJob(w, job.id);
     expect(done.status).toBe('succeeded');
     const back = w.db.select().from(sites).where(eq(sites.slug, site.slug)).get()!;
@@ -448,13 +448,63 @@ describe('recovery', () => {
       w.docker.execDefault = { stdout: '', stderr: 'PHP Fatal error: Uncaught Error', exitCode: 255 };
     };
 
-    const job = queueDeletedSiteRestore(w.core, backup.id, 1);
+    const job = await queueDeletedSiteRestore(w.core, backup.id, 1);
     const done = await runJob(w, job.id);
     expect(done.status).toBe('succeeded');
     expect(w.db.select().from(sites).where(eq(sites.slug, site.slug)).get()).toMatchObject({ domains: JSON.stringify([site.devHostname]) });
     const log = await logOf(w, job.id);
     expect(log).toContain(`WordPress's URLs still say bakery.example, as they could not be rewritten to ${site.devHostname}`);
     expect(log).toContain('The site does not answer yet. It stays as the backup brought it back');
+  });
+
+  it("names a deleted site's database and user after it, whatever its manifest says", async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const backup = await w.core.backup.create(site, 'final', {});
+    const other = addPhpSite(w, 'other', { database: true });
+    w.dbAdmin.databases.add(other.dbName);
+    w.dbAdmin.users.set(other.dbUser, other.dbPassword);
+    // manifest.json is not among the checked sums: whoever can write a backup's files can change it.
+    const manifestFile = path.join(backup.path, 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+    fs.writeFileSync(manifestFile, JSON.stringify({ ...manifest, dbName: 'mysql', dbUser: other.dbUser, databases: ['mysql', other.dbName, 'sys'] }));
+    w.db.delete(sites).where(eq(sites.id, site.id)).run();
+    w.dbAdmin.databases.delete(site.dbName);
+    w.dbAdmin.users.delete(site.dbUser);
+    w.docker.containers.delete(site.containerName);
+    fs.rmSync(sitePaths(w.config, site.slug).root, { recursive: true, force: true });
+
+    const done = await runJob(w, (await queueDeletedSiteRestore(w.core, backup.id, 1)).id);
+    expect(done.error).toBeNull();
+    expect(w.db.select().from(sites).where(eq(sites.slug, site.slug)).get()).toMatchObject({ dbName: site.dbName, dbUser: site.dbUser });
+    expect(w.dbAdmin.users.get(other.dbUser)).toBe(other.dbPassword);
+    const named = w.dbAdmin.calls.flatMap((c) => c.args);
+    for (const name of ['mysql', 'sys', other.dbUser]) expect(named).not.toContain(name);
+    expect(await logOf(w, done.id)).toContain(`The backup names its database mysql and its user ${other.dbUser}; the site gets ${site.dbName}, the name the panel gives it.`);
+  });
+
+  it("leaves the DNS records of a deleted site's own domains as they are", async () => {
+    const dns = new FakeDnsProvider();
+    dns.zones = ['dev.example.test', 'bakery.example'];
+    const w = await makeWorld({ exec: hostExec, dnsProvider: dns });
+    const made = await makeSite(w);
+    w.db.update(sites).set({ domains: JSON.stringify(['bakery.example', made.devHostname]), isLive: 1 }).where(eq(sites.id, made.id)).run();
+    const site = w.db.select().from(sites).where(eq(sites.id, made.id)).get()!;
+    const backup = await w.core.backup.create(site, 'final', {});
+    w.db.delete(sites).where(eq(sites.id, site.id)).run();
+    w.dbAdmin.databases.delete(site.dbName);
+    w.dbAdmin.users.delete(site.dbUser);
+    w.docker.containers.delete(site.containerName);
+    fs.rmSync(sitePaths(w.config, site.slug).root, { recursive: true, force: true });
+    // Deleted because it moved to another host, which serves its domain now.
+    dns.records.set('bakery.example', '192.0.2.80');
+    w.db.update(servers).set({ publicIp: '198.51.100.7' }).where(eq(servers.id, 1)).run();
+
+    const done = await runJob(w, (await queueDeletedSiteRestore(w.core, backup.id, 1)).id);
+    expect(done.error).toBeNull();
+    expect(dns.records.get('bakery.example')).toBe('192.0.2.80');
+    expect(dns.calls.filter((c) => c.fqdn === 'bakery.example' && c.method !== 'findZone')).toEqual([]);
+    expect(await logOf(w, done.id)).toContain('DNS records are left as they were. For the site to answer on these here, point them at 198.51.100.7: bakery.example');
   });
 
   it("gives a deleted site a dev address of its own when another site took all of the backup's", async () => {
@@ -546,6 +596,52 @@ describe('recovery', () => {
     expect(s2.dbAdmin.databases.has(site.dbName)).toBe(true);
   });
 
+  it("passes over a backup whose folder went with the disk and that has no copy, for an older one that has", async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const older = await w.core.backup.create(site, 'scheduled', {});
+    const remote = fs.mkdtempSync(path.join(w.config.srvRoot, 'remote-'));
+    fs.cpSync(older.path, remote, { recursive: true });
+    offsiteCopy(w, older.id, remote, null);
+    // Newer, and of a kind destinations skip: no copy.
+    const newest = await w.core.backup.create(site, 'pre_update', {});
+    // A reinstalled server: no database, no container, and no backups on its disk.
+    w.dbAdmin.databases.delete(site.dbName);
+    w.docker.containers.delete(site.containerName);
+    fs.rmSync(older.path, { recursive: true, force: true });
+    fs.rmSync(newest.path, { recursive: true, force: true });
+
+    const report = await siteRecoveryReport(w.core, site);
+    expect(report.backups.map((b) => b.id)).toEqual([older.id]);
+    expect(report.backups[0]).toMatchObject({ localServerId: null, copies: [{ destinationId: expect.any(Number) }] });
+    // Not flipped: retention would drop a row at 0 that has no copy.
+    expect(w.db.select().from(backups).where(eq(backups.id, newest.id)).get()!.filesPresent).toBe(1);
+    await expect(queueSiteRecovery(w.core, site, { backupId: newest.id, targetServerId: 1 })).rejects.toThrow(
+      `Backup #${newest.id} is not a complete backup of "${site.slug}"`,
+    );
+
+    const { jobs: queued, skipped } = await queueServerRecovery(w.core, 1, { targetServerId: 1 });
+    expect(skipped).toEqual([]);
+    expect(JSON.parse(queued[0]!.payload)).toMatchObject({ backupId: older.id, destinationId: expect.any(Number) });
+    const done = await runJob(w, queued[0]!.id);
+    expect(done.error).toBeNull();
+    expect(w.dbAdmin.databases.has(site.dbName)).toBe(true);
+  });
+
+  it("stops before it changes anything when a backup's files left the target after it was picked", async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = await makeSite(w);
+    const backup = await w.core.backup.create(site, 'manual', {});
+    w.dbAdmin.databases.delete(site.dbName);
+    w.docker.containers.delete(site.containerName);
+    const job = await queueSiteRecovery(w.core, site, { backupId: backup.id, targetServerId: 1 });
+    fs.rmSync(backup.path, { recursive: true, force: true });
+    const done = await runJob(w, job.id);
+    expect(done.status).toBe('failed');
+    expect(done.error).toContain(`Backup #${backup.id}'s files are not on "${w.servers.rowById(1)!.name}" any more`);
+    expect(fs.existsSync(sitePaths(w.config, site.slug).wordpress)).toBe(true);
+  });
+
   it('reads backups whose folder is gone as remote only, unless their whole backup root is', async () => {
     const w = await makeWorld({ exec: hostExec });
     const site = await makeSite(w);
@@ -557,7 +653,8 @@ describe('recovery', () => {
     w.db.insert(backupCopies).values({ backupId: kept.id, destinationId, status: 'complete', remotePath: 'b/x/k', createdAt: Date.now() }).run();
     fs.rmSync(gone.path, { recursive: true, force: true });
     fs.rmSync(uncopied.path, { recursive: true, force: true });
-    expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 1, back: 0 });
+    // Both are missing to a recovery; only the one with a copy reads as remote only.
+    expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 1, back: 0, missing: new Set([gone.id, uncopied.id]) });
     expect(w.db.select().from(backups).where(eq(backups.id, gone.id)).get()!.filesPresent).toBe(0);
     expect(w.db.select().from(backups).where(eq(backups.id, kept.id)).get()!.filesPresent).toBe(1);
     // No copy: never flipped, so retention can't drop the record of what may be an unmounted disk's.
@@ -565,12 +662,23 @@ describe('recovery', () => {
 
     // The folder returns (a disk mounted again): present again.
     fs.cpSync(kept.path, gone.path, { recursive: true });
-    expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 0, back: 1 });
+    expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 0, back: 1, missing: new Set([uncopied.id]) });
 
     // A backup root that is not there at all says nothing about its backups.
     const elsewhere = path.join(w.config.srvRoot, 'not-mounted');
     w.db.update(backups).set({ rootPath: elsewhere, path: path.join(elsewhere, site.slug, 'x') }).where(eq(backups.id, kept.id)).run();
-    expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 0, back: 0 });
+    expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 0, back: 0, missing: new Set([kept.id, uncopied.id]) });
+
+    // Nor does a folder that can't be listed.
+    fs.rmSync(gone.path, { recursive: true, force: true });
+    const files = w.servers.handleFor(1).files;
+    const readdir = files.readdir.bind(files);
+    files.readdir = async (dir: string) => {
+      if (dir === path.dirname(gone.path)) throw new Error(`ls ${dir} failed: Permission denied`);
+      return readdir(dir);
+    };
+    expect(await w.core.backup.checkFiles(1)).toEqual({ gone: 0, back: 0, missing: new Set([kept.id]) });
+    expect(w.db.select().from(backups).where(eq(backups.id, gone.id)).get()!.filesPresent).toBe(1);
   });
 });
 

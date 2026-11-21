@@ -203,7 +203,7 @@ export function registerBackupRoutes(app: FastifyInstance, deps: AppDeps): void 
 
   /** A deleted site made again from this backup, under its own name (services/recovery.ts). */
   r.post('/api/backups/:id/restore-site', { schema: { params: idParams, body: backupRestoreSiteBody } }, async (req, reply) => {
-    const job = queueDeletedSiteRestore(deps, req.params.id, req.body.targetServerId);
+    const job = await queueDeletedSiteRestore(deps, req.params.id, req.body.targetServerId);
     req.log.info({ backup: req.params.id, restoreSite: { targetServerId: req.body.targetServerId, job: job.id } }, 'backups: restore a deleted site');
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });
