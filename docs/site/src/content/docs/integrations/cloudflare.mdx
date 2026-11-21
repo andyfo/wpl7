@@ -61,8 +61,9 @@ wildcard record for each server.
 
 ### Moves without DNS work
 
-When a site [moves to another server](/docs/sites/move/), the panel re-points its dev address at
-the new server. It re-points the site's customer domains too, when the token reaches their zone.
+When a site [moves to another server](/docs/sites/move/), or is
+[recovered](/docs/servers/recover/) on one, the panel re-points its dev address at the new server.
+It re-points the site's customer domains too, when the token reaches their zone.
 The nightly cleanup then removes the old copy once the move is a day old.
 
 Without a token, you change each record by hand. Until you do, the old server keeps its copy and

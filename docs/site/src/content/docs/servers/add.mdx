@@ -83,8 +83,9 @@ and is safe to repeat.
 ## Remove a server
 
 **Remove server** on its page unregisters a server that runs no sites, once you type its name. It
-is refused while a moved site's old copy is still parked there. Files on the machine stay, and the
-panel forgets the backups stored on it. To end the panel's access, delete its key from
+is refused while a moved site's old copy is still parked there, unless the server does not answer.
+Files on the machine stay. Its backups with an offsite copy stay listed, as **remote only**, and
+the panel forgets the others. To end the panel's access, delete its key from
 `/home/wpl7-panel/.ssh/authorized_keys` and `/root/.ssh/authorized_keys` on that server.
 
 ## Limits

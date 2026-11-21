@@ -146,6 +146,9 @@ the container, the FTP logins, the databases, the files and the site's network. 
 the site, under **Backups → All backups**. If a step fails, the site is left as **Error**, and
 deleting it again finishes the job.
 
+<Since v="0.4.3" /> A site whose server does not answer is deleted without a final backup. It
+leaves the panel at once, and its copy on that server is removed if the server answers again.
+
 :::danger
 With **Take a final backup first (kept until you delete it)** off and the existing backups
 deleted, nothing of the site is left: no files, no database and no backup.

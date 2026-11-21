@@ -71,13 +71,14 @@ ends.
 | **Checking** | Started, and no check has finished since the panel started. |
 | **Offline** | Started, but not serving: the check failed, or the container exited or never ran. |
 | **No container** | The panel expects the site to run, and Docker has no container for it. |
+| **Missing** | Its container and its database are gone from its server. [Recover](/docs/servers/recover/) brings it back. |
 | **Stopped** | Stopped on purpose. |
 | **Unknown** | The site's server could not be reached, so nothing shown is current. |
 | **Creating**, **Deleting** | A job is creating or removing the site. |
 | **Error** | A job failed and left the site half-changed. |
 
 The list only knows the check. The site page also asks Docker about the container, so only it
-shows **No container** and **Unknown**.
+shows **No container**, **Missing** and **Unknown**.
 
 A site hosted elsewhere is checked at its own address, from the panel. Its plugin is asked every
 hour. It has badges of its own:

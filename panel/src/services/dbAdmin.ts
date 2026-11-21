@@ -46,6 +46,11 @@ export interface DbAdminPort {
    * is taken, like createSiteDb: a stray database must surface, not be adopted.
    */
   createExtraDb(dbName: string, dbUser: string): Promise<void>;
+  /**
+   * Grant a database that is there already to a site's own user: a user made again (a recovery
+   * onto the site's own server) has lost the grants it had on the site's other databases.
+   */
+  grantDb(dbName: string, dbUser: string): Promise<void>;
   /** Drop a database; one already gone is fine. Quoted, so any name a server can hold is taken. */
   dropDb(dbName: string): Promise<void>;
   /** Drop a user (at any host it has); one already gone is fine. */
@@ -322,6 +327,18 @@ export class DbAdminService implements DbAdminPort {
         await conn.query(`DROP DATABASE IF EXISTS \`${dbName}\``).catch(() => undefined);
         throw err;
       }
+    } finally {
+      conn.release();
+    }
+  }
+
+  async grantDb(dbName: string, dbUser: string): Promise<void> {
+    assertDbIdentifier(dbName);
+    assertDbIdentifier(dbUser);
+    const conn = await this.pool.getConnection();
+    try {
+      await conn.query(`GRANT ALL PRIVILEGES ON \`${grantPattern(dbName)}\`.* TO '${dbUser}'@'%'`);
+      await conn.query('FLUSH PRIVILEGES');
     } finally {
       conn.release();
     }

@@ -1,4 +1,5 @@
 // @docs sites/caching, sites/create, sites/move, sites/overview, sites/settings
+import path from 'node:path';
 import { and, asc, eq, inArray, isNotNull, or } from 'drizzle-orm';
 import type { BackupBeforeUpdates, JobType, SiteCacheBody, SiteCreateBody, SiteLimitsBody } from '../../shared/schemas.js';
 import { CACHE_RULE_GROUPS, cacheGroupInUse, cacheOffProblem, parseSiteCacheRules, withCacheRuleIds } from '../../shared/cacheRules.js';
@@ -33,7 +34,7 @@ import type { DockerPort } from './docker.js';
 import { SITE_ROOT_IN_CONTAINER } from './siteHardening.js';
 import { asSiteUser } from './wp.js';
 import { RuntimeRefusedError, applySiteCaches, effectivePageCache, siteContainerStack } from './siteCaches.js';
-import { assertPhpImage, defaultSiteLimits, limitsChange, siteImage, siteRuntimeFrom, type OwnSiteLimits } from './siteSpec.js';
+import { assertPhpImage, defaultSiteLimits, limitsChange, siteImage, sitePaths, siteRuntimeFrom, type OwnSiteLimits } from './siteSpec.js';
 
 /** The server a new site goes on: the one asked for, else the default in Settings - and it has to be up. */
 export function resolveTargetServer(s: Pick<CoreServices, 'settings' | 'servers'>, requestedId?: number): ServerRow {
@@ -68,6 +69,13 @@ async function webRootMissingIn(docker: Pick<DockerPort, 'exec'>, site: Pick<Sit
 
 /** A backup reads the files and the database, and a save here reloads nothing it depends on. */
 const CACHE_SAFE_JOBS = new Set(['backup.create']);
+
+/**
+ * What ends the wait for a recovered site's old copy (jobs/handlers/recover.ts): the server it was
+ * recovered from answering again, or that server's removal, which closes its copies' cleanups.
+ */
+export const oldCopyWaits = (server: string): string =>
+  `It is stopped once "${server}" answers again, and removed a day later, or with Finalize now from then on. If "${server}" is gone for good, remove it on its page instead.`;
 
 export class SitesService {
   constructor(
@@ -268,6 +276,12 @@ export class SitesService {
     // A path of one of its domains is a container app's: that app would answer for a host nobody holds.
     const routedOn = routedOnRefusal(site.slug, appsRoutingOn(this.db, site));
     if (routedOn) throw conflict(routedOn);
+    // The job asks the server itself (jobs/handlers/sites.ts removeFromLostServer); one already known
+    // to be down is refused a final backup here, before anything is queued.
+    const server = this.s.servers.rowById(site.serverId);
+    if (finalBackup && server?.status === 'unreachable') {
+      throw conflict(`"${server.name}" does not answer, so no final backup can be taken. Delete the site without one: its backups stay.`);
+    }
     // A recently-moved site still has a parked copy on its old server, and site.delete
     // tears that down too. Claim the source lane as well, or that teardown races whatever
     // else the source server is doing.
@@ -392,11 +406,17 @@ export class SitesService {
     if (!target) throw notFound(`Server #${body.targetServerId} not found`);
     if (target.status !== 'ok') throw conflict(`Server "${target.name}" is ${target.status}`);
     const pending = this.s.db
-      .select({ id: moveCleanups.id })
+      .select({ handover: moveCleanups.handover, sourceServerId: moveCleanups.sourceServerId })
       .from(moveCleanups)
       .where(and(eq(moveCleanups.siteId, site.id), eq(moveCleanups.status, 'pending')))
-      .get();
-    if (pending) {
+      .all();
+    // A recovered site's old copy waits for its server, and only that server's return or removal ends it.
+    const waiting = pending.find((c) => c.handover === 'pending');
+    if (waiting) {
+      const name = this.s.servers.rowById(waiting.sourceServerId)?.name ?? `server #${waiting.sourceServerId}`;
+      throw conflict(`The site can change server once its old copy on "${name}" is removed. ${oldCopyWaits(name)}`);
+    }
+    if (pending.length > 0) {
       throw conflict('A previous move is still awaiting cleanup; finalize it first (site page banner)');
     }
     // A route borrows a path of a site on the same server only, both ways.
@@ -641,12 +661,25 @@ export class SitesService {
     let containerState: SiteDetail['containerState'];
     let stack: SiteDetail['stack'] = null;
     let webRootMissing: SiteDetail['webRootMissing'] = site.webRoot === '' ? false : null;
+    let missingFromServer: SiteDetail['missingFromServer'] = null;
     try {
       const { docker } = this.s.servers.handleFor(site.serverId);
       containerState = await docker.containerState(site.containerName);
       // A container app's has no stack: none of its labels would read as the old PHP setup.
       if (!isContainerApp(site)) stack = await siteContainerStack(docker, site.containerName);
       if (site.webRoot !== '' && containerState === 'running') webRootMissing = await webRootMissingIn(docker, site);
+      // As a recovery tells it (services/recovery.ts missingOn): its database, else its folder.
+      if (containerState === 'missing') {
+        const handle = this.s.servers.handleFor(site.serverId);
+        if (hasDatabase(site)) {
+          const names = (await handle.dbAdmin.inventory().catch(() => null))?.map((r) => r.name);
+          missingFromServer = names ? !names.includes(site.dbName) : null;
+        } else {
+          const p = sitePaths(this.s.config, site.slug);
+          const folder = isContainerApp(site) ? path.join(p.root, 'data') : p.wordpress;
+          missingFromServer = await handle.files.exists(folder).then((there) => !there, () => null);
+        }
+      }
     } catch (err) {
       // The registry still answers when the hosting server cannot be reached: the metadata,
       // backups and recovery actions are exactly what an operator needs at that moment.
@@ -656,11 +689,13 @@ export class SitesService {
       );
       containerState = 'unknown';
     }
+    // One that can be finalized first: a recovered site may also have one its old server still owes.
     const cleanup = this.s.db
       .select()
       .from(moveCleanups)
       .where(and(eq(moveCleanups.siteId, site.id), eq(moveCleanups.status, 'pending')))
-      .get();
+      .all()
+      .sort((a, b) => (a.handover === b.handover ? a.id - b.id : a.handover === 'done' ? -1 : 1))[0];
     return {
       ...summary,
       locale: site.locale,
@@ -671,6 +706,7 @@ export class SitesService {
       webRootMissing,
       tablePrefix: site.tablePrefix,
       containerState,
+      missingFromServer,
       url: `${siteScheme(this.s.config.tlsMode)}://${summary.primaryDomain}`,
       keepDevAlias: site.keepDevAlias === 1,
       backupsEnabled: site.backupsEnabled === 1,
@@ -686,6 +722,7 @@ export class SitesService {
             targetIp: cleanup.targetIp,
             hostsPending: JSON.parse(cleanup.verifyHosts) as string[],
             since: cleanup.createdAt,
+            handoverPending: cleanup.handover === 'pending',
           }
         : null,
       importSource: this.s.imports.sourceForSite(site.id),
@@ -858,6 +895,7 @@ export class SitesService {
       webRootMissing: false,
       tablePrefix: site.tablePrefix,
       containerState: 'missing',
+      missingFromServer: null,
       url: summary.external?.home ?? `https://${summary.primaryDomain}`,
       keepDevAlias: false,
       backupsEnabled: site.backupsEnabled === 1,

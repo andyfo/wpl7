@@ -557,6 +557,10 @@ export class OffsiteService {
       .run();
 
     ctx.info(`Copying backup #${backup.id} to "${dest.name}" (${remote.display})…`);
+    // Docker mounts a folder that is missing as an empty one, and rclone copies that without a
+    // complaint: the copy would read as complete, and the backup as present ever after.
+    const problem = await this.backup.filesProblem(backup);
+    if (problem) throw new Error(`The backup's files are not all on "${handle.name}" (${problem}). Nothing was copied.`);
     await this.ensureImage(handle, ctx);
 
     const flags = [
@@ -649,9 +653,15 @@ export class OffsiteService {
    *
    * Fetching onto the site's *current* server is what quietly lifts the cross-server
    * restore limitation: a backup taken before a move can be brought to where the site
-   * lives now, and the ordinary restore then works.
+   * lives now, and the ordinary restore then works. A recovery names the server instead
+   * (`targetServerId`): the site's own may be the one that is gone.
    */
-  async fetchBackup(backupId: number, destinationId: number, ctx: CopyLog = silentLog): Promise<BackupRow> {
+  async fetchBackup(
+    backupId: number,
+    destinationId: number,
+    ctx: CopyLog = silentLog,
+    opts: { targetServerId?: number } = {},
+  ): Promise<BackupRow> {
     const backup = this.db.select().from(backups).where(eq(backups.id, backupId)).get();
     if (!backup) throw notFound(`Backup #${backupId} not found`);
     const dest = this.byId(destinationId);
@@ -666,7 +676,7 @@ export class OffsiteService {
 
     // Prefer the site's current server; fall back to the one the row remembers.
     const site = this.db.select().from(sites).where(eq(sites.slug, backup.siteSlug)).get();
-    const targetServerId = site?.serverId ?? backup.serverId;
+    const targetServerId = opts.targetServerId ?? site?.serverId ?? backup.serverId;
     const handle = this.servers.handleFor(targetServerId);
     // Download into a staging directory and swap it in only once the checksums agree: a
     // half-finished fetch must not be mistaken for a backup, and re-fetching one that is

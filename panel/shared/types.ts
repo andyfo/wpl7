@@ -180,6 +180,13 @@ export interface SiteDetail extends SiteSummary {
   tablePrefix: string;
   /** 'unknown' = the hosting server could not be asked (unreachable); the rest of the detail is served from the registry. */
   containerState: 'running' | 'created' | 'exited' | 'missing' | 'unknown';
+  /**
+   * The site is gone from its server, not only its container: its own database is not there, or,
+   * for a site without one, its folder is not either. It comes back with Recover
+   * (services/recovery.ts), not Recreate container. Asked only when the container is missing; null
+   * when it was not asked or could not be told.
+   */
+  missingFromServer: boolean | null;
   url: string;
   keepDevAlias: boolean;
   /** False = the scheduled backup run skips this site; every other kind still runs. */
@@ -195,6 +202,11 @@ export interface SiteDetail extends SiteSummary {
     targetIp: string;
     hostsPending: string[];
     since: number;
+    /**
+     * The old server has not answered since a recovery took the site off it: its copy there is
+     * not even stopped yet, and Finalize waits for it (jobs/handlers/recover.ts).
+     */
+    handoverPending: boolean;
   } | null;
   /**
    * The import this site came from, when it did. `connected`: the plugin on the old site still
@@ -1300,6 +1312,68 @@ export interface ServerDto {
   lastError: string | null;
   sitesCount: number;
   createdAt: number;
+}
+
+/**
+ * Whether a site can come back from its backups somewhere else (services/recovery.ts):
+ * `unreachable` its server does not answer, `missing` the server answers and the site is gone
+ * from it (its own database, or its container and folder), `present` it is still there (Move
+ * and Restore are for that), `busy` a job or a create or delete holds it, `external` it is
+ * hosted elsewhere, so only where its backups are kept can change.
+ */
+export type RecoveryState = 'unreachable' | 'missing' | 'present' | 'busy' | 'external';
+
+/** One backup a site can come back from. */
+export interface RecoveryBackupDto {
+  id: number;
+  createdAt: number;
+  type: BackupType;
+  sizeBytes: number | null;
+  phpVersion: string | null;
+  note: string | null;
+  /** Its complete offsite copies. */
+  copies: { destinationId: number; name: string }[];
+  /** The server whose disk holds its files, when the panel knows them there. */
+  localServerId: number | null;
+}
+
+export interface RecoveryTargetDto {
+  id: number;
+  name: string;
+  publicIp: string;
+}
+
+export interface SiteRecoveryDto {
+  slug: string;
+  title: string;
+  app: SiteApp;
+  serverId: number;
+  serverName: string;
+  state: RecoveryState;
+  /** Why it can't be recovered now, as the dialog says it; null when it can. */
+  refusal: string | null;
+  /** Newest first: complete backups with an offsite copy or with their files on a server. */
+  backups: RecoveryBackupDto[];
+  /** Servers it can come back on: ok ones, its own only while it is `missing` there. */
+  targets: RecoveryTargetDto[];
+}
+
+/** `GET /api/servers/:id/recovery`. */
+export interface ServerRecoveryDto {
+  server: { id: number; name: string; status: ServerStatus; answers: boolean };
+  /** Its hosted sites, each with its newest backups only. */
+  sites: SiteRecoveryDto[];
+  /** Sites hosted elsewhere whose backups it keeps: a recovery keeps them on the target instead. */
+  external: { slug: string; title: string }[];
+  targets: RecoveryTargetDto[];
+}
+
+/** `POST /api/servers/:id/recover`. */
+export interface ServerRecoverResultDto {
+  jobs: JobDto[];
+  skipped: { slug: string; reason: string }[];
+  /** Sites hosted elsewhere whose backups are kept on the target from now on. */
+  external: string[];
 }
 
 /**

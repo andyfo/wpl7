@@ -9,6 +9,10 @@
 #       --panel-key='ssh-ed25519 AAAA… wpl7-panel@panel.example.com'
 #   (The panel's "Add server" with provisioning runs exactly this for you.)
 #
+# A main server again, from the panel's nightly snapshot, after the old one was lost:
+#   ./provision/setup.sh --restore                           # asks where the backups are copied to
+#   ./provision/setup.sh --restore-from=/root/panel-snapshot  # a snapshot downloaded by hand
+#
 # Every step is guarded; the script is safe to re-run. It never overwrites an existing .env,
 # except for a value you pass explicitly on the re-run:
 #   ./provision/setup.sh --mail-hostname=smtp.example.com    # change the name postfix announces
@@ -23,7 +27,7 @@ SRV_ROOT="${SRV_ROOT:-/srv}"
 
 ROLE="main" PANEL_DOMAIN="" DEV_DOMAIN="" ACME_EMAIL="" ADMIN_USER="admin" ADMIN_PASSWORD=""
 DNS_PROVIDER_ARG="" MAIL_HOSTNAME_ARG="" NON_INTERACTIVE=0 DNS_TOKEN_STDIN=0 DNS_TOKEN="" SSH_PORT_ARG=""
-NO_FIREWALL=0
+NO_FIREWALL=0 RESTORE=0 RESTORE_FROM=""
 PANEL_KEYS=()
 for arg in "$@"; do
   case "$arg" in
@@ -43,11 +47,40 @@ for arg in "$@"; do
     --no-firewall) NO_FIREWALL=1 ;;
     # The DNS provider API token arrives on stdin (never argv - argv is visible in `ps`).
     --dns-token-stdin) DNS_TOKEN_STDIN=1 ;;
-    -h|--help) sed -n '2,12p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    # The panel's database from its nightly snapshot, put in place before the panel first starts:
+    # from the destination it was copied to, which the restore asks for, or from a folder or a
+    # panel.db.gz downloaded by hand. panel/src/cli/restore.ts does the work.
+    --restore) RESTORE=1 ;;
+    --restore-from=*) RESTORE=1; RESTORE_FROM="${arg#*=}" ;;
+    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) echo "Unknown flag: $arg" >&2; echo "Try: $0 --help" >&2; exit 1 ;;
   esac
 done
 case "$ROLE" in main|worker) ;; *) echo "--role must be main or worker" >&2; exit 1 ;; esac
+
+# Before anything is installed: each of these would stop a restore half way.
+if [ "$RESTORE" = 1 ]; then
+  if [ "$ROLE" != main ]; then
+    echo "--restore installs the panel's server. A worker has no panel database to restore." >&2
+    exit 1
+  fi
+  if [ -f "$ENV_FILE" ]; then
+    echo "--restore is for a new install, and this server already has $ENV_FILE." >&2
+    echo "If an earlier --restore stopped after writing it, run $0 again without --restore." >&2
+    echo "To restore a snapshot into a running install, see https://wpl7.com/docs/reference/manual-recovery/" >&2
+    exit 1
+  fi
+  if [ -n "$RESTORE_FROM" ]; then
+    [ -e "$RESTORE_FROM" ] || { echo "--restore-from: $RESTORE_FROM does not exist." >&2; exit 1; }
+    # Docker reads a colon in a bind mount as the separator, and the restore mounts this path.
+    case "$RESTORE_FROM" in *:*) echo "--restore-from: the path cannot contain a colon." >&2; exit 1 ;; esac
+    RESTORE_FROM="$(cd "$(dirname "$RESTORE_FROM")" && pwd)/$(basename "$RESTORE_FROM")"
+  elif [ "$NON_INTERACTIVE" = 1 ] || [ ! -t 0 ]; then
+    echo "--restore asks where the backups are copied to, so it needs a terminal." >&2
+    echo "Run it from one, or download the snapshot and use --restore-from=<path>." >&2
+    exit 1
+  fi
+fi
 if [ "$DNS_TOKEN_STDIN" = 1 ]; then
   IFS= read -r DNS_TOKEN || true
 fi
@@ -89,6 +122,29 @@ require_or_prompt() {
       exit 1
     fi
     read -rp "$prompt" "${var?}"
+  fi
+}
+
+# The panel image a restore runs in, which is the one this install is about to start: the
+# snapshot's database has to suit its migrations. install.sh recorded the release; a checkout
+# builds it now, as docker-compose.build.yml would, so `up --build` later finds it cached.
+restore_image() {
+  local record="$REPO_DIR/.wpl7-install" repo tag
+  if [ -f "$record" ] && [ "$(wpl7_env_get "$record" WPL7_SOURCE)" = image ]; then
+    repo="$(wpl7_env_get "$record" WPL7_PANEL_IMAGE)"
+    tag="$(wpl7_env_get "$record" WPL7_IMAGE_TAG)"
+    tag="${tag:-$(wpl7_env_get "$record" WPL7_VERSION)}"
+    [ -n "$tag" ] || { echo "$record names no release to restore with." >&2; exit 1; }
+    RESTORE_IMAGE="${repo:-ghcr.io/andyfo/wpl7/panel}:$tag"
+    docker pull "$RESTORE_IMAGE"
+  elif [ -d "$REPO_DIR/.git" ] && [ -f "$REPO_DIR/panel/package.json" ]; then
+    wpl7_stamp "$REPO_DIR" source
+    RESTORE_IMAGE="wpl7-panel:$WPL7_VERSION"
+    docker build -f "$REPO_DIR/panel/Dockerfile" --build-arg "VERSION=$WPL7_VERSION" \
+      --build-arg "GIT_SHA=$WPL7_GIT_SHA" -t "$RESTORE_IMAGE" "$REPO_DIR"
+  else
+    echo "Nothing here says which panel to restore with: no release recorded by install.sh, and no checkout." >&2
+    exit 1
   fi
 }
 
@@ -236,6 +292,33 @@ if [ "$(free -m | awk '/^Mem:/{print $2}')" -lt 4096 ] && [ "$(swapon --show --n
   grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 
+# The panel's database goes in place now, before the panel ever starts: a panel that started
+# without it would make up an owner account and a database of its own. What deploy/.env needs from
+# the old install comes back with it, and a flag given on this run still wins over it.
+if [ "$RESTORE" = 1 ]; then
+  log "Panel database from a snapshot"
+  restore_image
+  RESTORE_TMP="$(mktemp -d "$SRV_ROOT/panel/.restore-env.XXXXXX")"
+  # It holds the old install's mail relay password until it is read, a few lines down.
+  trap 'rm -rf "$RESTORE_TMP"' EXIT
+  RESTORE_INTERACTIVE=0
+  if [ "$NON_INTERACTIVE" = 0 ] && [ -t 0 ]; then RESTORE_INTERACTIVE=1; fi
+  if ! wpl7_restore_snapshot "$RESTORE_IMAGE" "$SRV_ROOT" "$RESTORE_TMP/env" "$RESTORE_FROM" "$PANEL_DOMAIN" "$RESTORE_INTERACTIVE"; then
+    echo "The restore stopped, and no panel database was put in place. Run the same command again to start over." >&2
+    exit 1
+  fi
+  # Until deploy/.env is written, the restored database is half an install. A run that stops
+  # before then, on a value it still needs, takes the database out again, so the same command
+  # can run again: the restore refuses a panel.db it finds already there.
+  trap 'rm -rf "$RESTORE_TMP"; [ -f "$ENV_FILE" ] || rm -f "$SRV_ROOT/panel/panel.db"' EXIT
+  wpl7_restore_env_read "$RESTORE_TMP/env"
+  rm -rf "$RESTORE_TMP"
+  PANEL_DOMAIN="${PANEL_DOMAIN:-${RESTORED_PANEL_DOMAIN:-}}"
+  DEV_DOMAIN="${DEV_DOMAIN:-${RESTORED_DEV_DOMAIN:-}}"
+  ACME_EMAIL="${ACME_EMAIL:-${RESTORED_ACME_EMAIL:-}}"
+  DNS_PROVIDER_ARG="${DNS_PROVIDER_ARG:-${RESTORED_DNS_PROVIDER:-}}"
+fi
+
 log "Configuration ($ENV_FILE)"
 if [ ! -f "$ENV_FILE" ]; then
   if [ "$ROLE" = main ]; then
@@ -243,7 +326,8 @@ if [ ! -f "$ENV_FILE" ]; then
   fi
   require_or_prompt DEV_DOMAIN "Dev domain with wildcard DNS (e.g. dev.example.com): "
   require_or_prompt ACME_EMAIL "Let's Encrypt email: "
-  if [ "$ROLE" = main ] && [ -z "$ADMIN_PASSWORD" ] && [ "$NON_INTERACTIVE" = 0 ]; then
+  # A restored database has its accounts already, so there is no owner to make up.
+  if [ "$ROLE" = main ] && [ -z "$ADMIN_PASSWORD" ] && [ "$NON_INTERACTIVE" = 0 ] && [ "$RESTORE" = 0 ]; then
     read -rsp "Panel admin password (empty = generate & print on first boot): " ADMIN_PASSWORD; echo
   fi
   PUBLIC_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' | head -1)"
@@ -262,7 +346,7 @@ if [ ! -f "$ENV_FILE" ]; then
     set_env_value PANEL_SESSION_SECRET "$(openssl rand -hex 24)"
     set_env_value PANEL_ADMIN_USER "$ADMIN_USER"
     set_env_value PANEL_ADMIN_PASSWORD "$ADMIN_PASSWORD"
-    set_env_value MAIL_HOSTNAME "${MAIL_HOSTNAME_ARG:-mail.${PANEL_DOMAIN#panel.}}"
+    set_env_value MAIL_HOSTNAME "${MAIL_HOSTNAME_ARG:-${RESTORED_MAIL_HOSTNAME:-mail.${PANEL_DOMAIN#panel.}}}"
   else
     set_env_value MAIL_HOSTNAME "${MAIL_HOSTNAME_ARG:-mail.$DEV_DOMAIN}"
   fi
@@ -275,6 +359,24 @@ if [ ! -f "$ENV_FILE" ]; then
         digitalocean) set_env_value DO_AUTH_TOKEN "$DNS_TOKEN" ;;
         *) echo "WARNING: no token variable known for provider '$DNS_PROVIDER_ARG'; set it in .env manually" >&2 ;;
       esac
+    fi
+  fi
+  if [ "$RESTORE" = 1 ]; then
+    # The rest of what the old .env said. The database and session secrets above stay new: the
+    # old MariaDB is gone with its server, and the old sessions are worth nothing here.
+    for restored_key in TLS_MODE ACME_RESOLVER WPL7_CHANNEL SMTP_RELAYHOST SMTP_USERNAME SMTP_PASSWORD BACKUP_ROOT HETZNER_API_KEY DO_AUTH_TOKEN; do
+      restored_var="RESTORED_$restored_key"
+      if [ -n "${!restored_var:-}" ]; then set_env_value "$restored_key" "${!restored_var}"; fi
+    done
+    # Cloudflare's token is in the restored database. Another provider's lived only in the old .env.
+    if [ -n "$DNS_PROVIDER_ARG" ] && [ "$DNS_PROVIDER_ARG" != cloudflare ] && [ -z "$DNS_TOKEN" ] \
+      && [ -z "${RESTORED_HETZNER_API_KEY:-}${RESTORED_DO_AUTH_TOKEN:-}" ]; then
+      echo "NOTE: the old install got wildcard certificates through $DNS_PROVIDER_ARG, whose token is not in the" >&2
+      echo "      snapshot. Add it to $ENV_FILE, then run $0 again." >&2
+    fi
+    if [ -n "${RESTORED_BACKUP_ROOT:-}" ] && [ ! -d "$RESTORED_BACKUP_ROOT" ]; then
+      echo "NOTE: the old install kept this server's backups in $RESTORED_BACKUP_ROOT. Mount the disk for them" >&2
+      echo "      there, or they go on this server's own disk." >&2
     fi
   fi
   echo "Wrote $ENV_FILE - review it (SMTP relay, DNS provider for wildcard certs) before going to production."
@@ -556,7 +658,21 @@ else
   else
     UPDATE_HINT="cd $REPO_DIR && git pull && ./provision/setup.sh"
   fi
-  cat <<EOF
+  if [ "$RESTORE" = 1 ]; then
+    cat <<EOF
+
+============================================================================
+ WPL7 is up, with the panel's database from the snapshot${RESTORED_SNAPSHOT_TS:+ of $RESTORED_SNAPSHOT_TS}.
+
+ Panel:      https://$PANEL_DOMAIN_FINAL
+
+ DNS needed: A  $PANEL_DOMAIN_FINAL      -> $PUBLIC_IP_FINAL
+             A  *.$DEV_DOMAIN_FINAL      -> $PUBLIC_IP_FINAL   (wildcard, for dev sites)
+             mail records (SPF/DKIM/DMARC/rDNS): Panel -> Mail -> Setup guide
+             Records that named the old server's address now have to name this one.
+EOF
+  else
+    cat <<EOF
 
 ============================================================================
  WPL7 is up.
@@ -568,6 +684,9 @@ else
  DNS needed: A  $PANEL_DOMAIN_FINAL      -> $PUBLIC_IP_FINAL
              A  *.$DEV_DOMAIN_FINAL      -> $PUBLIC_IP_FINAL   (wildcard, for dev sites)
              mail records (SPF/DKIM/DMARC/rDNS): Panel -> Mail -> Setup guide
+EOF
+  fi
+  cat <<EOF
 
  Traefik requests the panel's TLS certificate when it starts. If the panel
  DNS record did not resolve yet, run 'docker restart wpl7-traefik' once it
@@ -583,6 +702,23 @@ EOF
 
  To edit this server's code with Claude Code (git push, gh, tests):
              ./provision/dev-access.sh
+EOF
+  fi
+  if [ "$RESTORE" = 1 ]; then
+    # The key is new because the old one was never in a snapshot: it opens every server of the
+    # fleet, and a bucket is not where it belongs.
+    cat <<EOF
+
+ Next:
+  1. Sign in at https://$PANEL_DOMAIN_FINAL with your old account.
+  2. On each of your other servers, put the panel's new SSH key in place of
+     the old one, in /home/wpl7-panel/.ssh/authorized_keys and in
+     /root/.ssh/authorized_keys:
+
+$PANEL_PUB
+
+  3. Open Servers -> ${RESTORED_SNAPSHOT_SERVER:-this server} in the panel and choose Recover sites.
+     Do the same for any other server that was lost.
 EOF
   fi
   echo '============================================================================'

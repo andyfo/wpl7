@@ -87,6 +87,11 @@ delete.
 its checksums. **Restore** and **Download** then work as usual, also for a backup taken before the
 site moved. Retention leaves a fetched backup's files on the server for a week.
 
+The panel checks every night that the backups with an offsite copy still have their files on
+their server. One whose folder is gone reads as **remote only**, and comes back when the folder
+does. A backup without a copy is never changed by this, because an empty mount point looks just
+like a lost disk. A [recovery](/docs/servers/recover/) passes over it while its folder is gone.
+
 ## When a copy fails
 
 A failed copy is tried again after 10 minutes, an hour and 6 hours, then left. **Recent failures**
@@ -96,8 +101,10 @@ on **Backups → Storage** lists it with **Retry**. The address in **Send alerts
 ## The panel's own database
 
 The panel snapshot taken with each scheduled run holds what a fleet is rebuilt from, without the
-panel's SSH key. It is copied like any other backup. [Manual recovery](/docs/reference/manual-recovery/) shows how to
-restore it.
+panel's SSH key. It also holds the settings of `deploy/.env` that the database does not. It is
+copied like any other backup.
+[Rebuild the panel's server](/docs/reference/manual-recovery/#rebuild-the-panels-server) shows how
+to install from it, and [Recover a lost server](/docs/servers/recover/) brings the sites back.
 
 ## Remove a destination
 
@@ -123,3 +130,4 @@ destination's passphrase first.
 - [Backup storage](/docs/backups/storage/)
 - [Delete backups](/docs/backups/delete/)
 - [Manual recovery without the panel](/docs/reference/manual-recovery/)
+- [Recover a lost server](/docs/servers/recover/)

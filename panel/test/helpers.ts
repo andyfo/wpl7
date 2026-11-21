@@ -66,6 +66,7 @@ import { HostShell, type HostExecFn, type HostRunResult } from '../src/servers/h
 import { GeoIpService } from '../src/services/geoip.js';
 import { SettingsService } from '../src/services/settings.js';
 import { seed } from '../src/db/seed.js';
+import { queueHandovers } from '../src/jobs/handlers/recover.js';
 import { JobWorker } from '../src/jobs/worker.js';
 import { Schedulers } from '../src/jobs/schedulers.js';
 import { SystemInfoService } from '../src/servers/systemInfo.js';
@@ -1106,6 +1107,12 @@ export class FakeDbAdmin implements DbAdminPort {
       bytes: this.sizes.get(name)?.bytes ?? 0,
     }));
   }
+  /** Who each database was granted to by grantDb, as a recovery hands a remade user its databases back. */
+  grants: { dbName: string; dbUser: string }[] = [];
+  async grantDb(dbName: string, dbUser: string): Promise<void> {
+    this.record('grantDb', [dbName, dbUser]);
+    this.grants.push({ dbName, dbUser });
+  }
   async createExtraDb(dbName: string, dbUser: string): Promise<void> {
     this.record('createExtraDb', [dbName, dbUser]);
     if (this.databases.has(dbName)) throw new Error(`Can't create database '${dbName}'; database exists`);
@@ -1934,8 +1941,13 @@ export async function makeWorld(
     probed: (site, reading) => core.alerts.probed(site, reading),
     certificate: (site, expiresAt) => core.alerts.certificate(site, expiresAt),
     diskChecked: (server, stats) => core.alerts.diskChecked(server, stats),
+    serverChecked: (server, answered, error) => core.alerts.serverChecked(server, answered, error),
   });
   const worker = new JobWorker(db, core);
+  // As index.ts wires it: a recovered site's old server that answers again gets its handover.
+  servers.onReachableAgain = (serverId) => {
+    queueHandovers(core, serverId);
+  };
   offsite.attachWorker(worker);
   importsService.attachWorker(worker);
   connections.attachWorker(worker);

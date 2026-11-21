@@ -32,6 +32,8 @@ export interface SiteHealthInput {
   lastCheckedAt?: number | null;
   /** Live Docker state; omitted on screens that only have the sites list. */
   containerState?: 'running' | 'created' | 'exited' | 'missing' | 'unknown' | null;
+  /** The site is gone from its server, not only its container, as the site page reads it when the container is missing. */
+  missingFromServer?: boolean | null;
   /** A site hosted elsewhere: whether its WPL7 Connect answered the panel's last request. */
   external?: { reachable: boolean | null } | null;
   /** What it runs: a PHP site has no WordPress to blame, and a container app neither. */
@@ -55,7 +57,8 @@ export interface SiteHealth {
   action?: { label: string; path: SiteHealthAction };
 }
 
-export type SiteHealthAction = 'start' | 'restart' | 'reconcile';
+/** `recover` opens the Recover dialog (components/RecoveryDialogs.tsx) rather than running a job. */
+export type SiteHealthAction = 'start' | 'restart' | 'reconcile' | 'recover';
 
 /**
  * The repair for "the registry and the container no longer agree" - POST /sites/:slug/reconcile.
@@ -75,6 +78,17 @@ export function siteHealth(input: SiteHealthInput): SiteHealth {
   }
   if (status === 'deleting') {
     return { label: 'Deleting', tone: 'busy', detail: 'Being removed.' };
+  }
+  // Gone from its server, whatever the panel meant it to be: Recreate container would make an empty
+  // WordPress there. It comes back from a backup (services/recovery.ts).
+  if (containerState === 'missing' && input.missingFromServer === true) {
+    return {
+      label: 'Missing',
+      tone: 'bad',
+      detail: 'It is gone from its server, not only its container.',
+      fix: 'Bring it back from a backup.',
+      action: { label: 'Recover', path: 'recover' },
+    };
   }
   if (status === 'error') {
     return {

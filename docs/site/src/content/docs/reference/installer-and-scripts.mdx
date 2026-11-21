@@ -12,7 +12,10 @@ sources:
   - provision/apt-clean.conf
   - deploy/.env.example
   - deploy/docker-compose.yml
+  - "panel/src/cli/*.ts"
 ---
+
+import Since from '~/components/Since.astro';
 
 One script installs WPL7, and the scripts in `provision/` keep it running. They print their
 usage with `--help`. This page lists every flag, in the order you meet the scripts.
@@ -54,12 +57,14 @@ Every other flag goes to `setup.sh` unchanged.
 
 What it does, in order:
 
-1. Stops on a server that is not x86-64, such as an ARM server.
-2. Checks that it runs as root, and installs `jq` if it is missing.
-3. Finds the release on github.com: the latest one, the one `--version` names, or `edge`.
-4. Stops if the directory already holds an install, and prints the `update.sh` command to use instead.
-5. Reads the release's manifest, unpacks its bundle into the directory and records which release it is.
-6. Runs `provision/setup.sh`.
+1. Stops a restore that cannot work: `--restore` on a worker or without a terminal, or a
+   `--restore-from=` path that does not exist. Both flags then go on to `setup.sh`.
+2. Stops on a server that is not x86-64, such as an ARM server.
+3. Checks that it runs as root, and installs `jq` if it is missing.
+4. Finds the release on github.com: the latest one, the one `--version` names, or `edge`.
+5. Stops if the directory already holds an install, and prints the `update.sh` command to use instead.
+6. Reads the release's manifest, unpacks its bundle into the directory and records which release it is.
+7. Runs `provision/setup.sh`.
 
 Piped from `curl`, stdin is not a terminal, so every answer has to be a flag and the admin
 password is generated. Download the script and run `sudo bash install.sh` from a terminal to be
@@ -92,6 +97,8 @@ sudo /opt/wpl7/provision/setup.sh
 | `--ssh-port=` | An SSH port to keep open in the firewall, beside the ports sshd listens on |
 | `--dns-provider=` | The DNS provider for wildcard dev certificates: `cloudflare`, `hetzner` or `digitalocean` |
 | `--dns-token-stdin` | Reads the provider's API token from stdin, so it never shows in the process list |
+| `--restore` | Installs a main server from the newest panel snapshot in an offsite destination. It asks for the destination, so it needs a terminal |
+| `--restore-from=` | Installs from a panel snapshot you downloaded: its folder, its `panel.db.gz`, or a backup root's `panel` folder, of which it takes the newest |
 | `--non-interactive` | Fails on a missing value instead of asking for it |
 | `--no-firewall` | Leaves the host's firewall alone: no UFW rules and no `wpl7-firewall` helper |
 | `-h`, `--help` | Prints the usage |
@@ -113,8 +120,11 @@ What it does:
 - Has apt empty its package cache once a week, from `provision/apt-clean.conf`.
 - Creates the folders under `/srv`, and a 2 GB swap file when the machine has less than 4 GB of
   memory and no swap.
+- With `--restore` or `--restore-from=`, puts the panel's database in place from a snapshot, as
+  [Restore from a panel snapshot](#restore-from-a-panel-snapshot) describes.
 - Writes `deploy/.env` from `deploy/.env.example` on the first run, with generated database and
-  session secrets.
+  session secrets. A value with a character compose would read otherwise, such as `$`, `#`, a
+  quote, a space or `\`, goes in double quotes, escaped, so compose reads it back as given.
 - Adds `MARIADB_POOL_SIZE` to an existing `deploy/.env`: `auto`, or the size someone had set in the
   old `MARIADB_BUFFER_POOL`, unless that was the old default of `256M`. The old key stays, because a
   rollback to the old compose file reads it.
@@ -127,6 +137,42 @@ An install from `install.sh` is in [image mode](/docs/reference/glossary/#image-
 pulls the released panel and site images. In a git checkout, `setup.sh` sets
 `WPL7_SOURCE=build` and builds both on the server, starting the stack with
 `compose.sh up -d --build`. That is [checkout mode](/docs/reference/glossary/#checkout-mode).
+
+### Restore from a panel snapshot
+
+<Since v="0.4.3" /> A restore runs before `deploy/.env` is written and before the panel first
+starts. `setup.sh` pulls the panel image of the release it installs, or builds it in a checkout. It
+runs `node dist/src/cli/restore.js` in that image, with Docker's socket and `/srv` mounted at the
+same paths and no network of its own. The restore starts rclone in a container beside it, as the
+panel does for offsite copies.
+
+The restore asks for the destination with the fields of **Add remote destination**, and lists
+`panel/` there. It offers the newest snapshot whose upload finished, downloads it under
+`/srv/panel` and checks its `sha256sums`. If the snapshot does not check out, it offers the one
+before. It then writes `/srv/panel/panel.db` with mode `0600`, and `setup.sh` reads the values for
+`deploy/.env` from the restore:
+
+| Value | Comes from |
+|---|---|
+| The panel's database, with its accounts, settings, sites, servers, destinations and DKIM keys | The snapshot |
+| `PANEL_DOMAIN`, `DEV_DOMAIN`, `ACME_EMAIL`, `DNS_PROVIDER`, `MAIL_HOSTNAME` | The snapshot, unless a flag of this run gives one |
+| `TLS_MODE`, `ACME_RESOLVER`, `SMTP_RELAYHOST`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `BACKUP_ROOT`, `HETZNER_API_KEY`, `DO_AUTH_TOKEN` | The snapshot |
+| `WPL7_CHANNEL` | The release `install.sh` installs. In a checkout, the snapshot |
+| `MARIADB_ROOT_PASSWORD`, `PANEL_SESSION_SECRET` | Generated new |
+| `SERVER_PUBLIC_IP` | Detected on this server, as on every install |
+| The panel's SSH key | Generated new. A snapshot never holds it |
+| The SSH host key the panel pinned for its own server | Cleared, so the panel pins this server's key when it first connects |
+| The public IP of the panel's own server | Cleared, so the panel takes `SERVER_PUBLIC_IP` when it first starts |
+
+A snapshot without `manifest.json` gives the database only, and `setup.sh` asks for the domains
+as on a new install. One made before 0.4.3 gives the panel's domain, and none of the other values
+above: add a smarthost's login and a DNS provider's token to `deploy/.env` afterwards. Cloudflare's
+token is in the database either way.
+
+The restore refuses a snapshot from a newer WPL7 than the image, and a database that a newer build
+migrated. Either way it says what to install instead. It also refuses while a panel runs on the
+server. It asks before it replaces a `panel.db` that is there already, and refuses without a
+terminal to ask on.
 
 ### Ports
 
@@ -320,10 +366,16 @@ channel is `edge`, and refuses on `stable`.
 - `--dns-provider=hetzner` writes `HETZNER_API_KEY`. Traefik's ACME library reads that variable
   as a key for Hetzner's legacy DNS API, which it marks as deprecated.
 - `install.sh` refuses a directory that already holds an install. Use `update.sh` there.
+- `--restore` needs a terminal. Piped into `bash`, use `--restore-from=` with a snapshot you
+  downloaded.
+- `--restore` and `--restore-from=` refuse a server that already has `deploy/.env`. To restore a
+  snapshot into a running install, see
+  [Restore the panel's database](/docs/reference/manual-recovery/#restore-the-panels-database).
 
 ## Related
 
 - [Installation](/docs/get-started/installation/)
+- [Manual recovery without the panel](/docs/reference/manual-recovery/)
 - [Updating WPL7](/docs/panel/updating/)
 - [Add a server](/docs/servers/add/)
 - [Configuration](/docs/reference/configuration/)

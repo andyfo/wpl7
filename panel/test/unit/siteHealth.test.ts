@@ -17,6 +17,18 @@ describe('site health', () => {
     expect(siteHealth({ status: 'running', up: false, httpStatus: 502 }).detail).toContain('502');
   });
 
+  it('calls a site whose container and database are both gone Missing, and offers Recover rather than Recreate', () => {
+    for (const status of ['running', 'stopped', 'error'] as const) {
+      const health = siteHealth({ status, up: false, containerState: 'missing', missingFromServer: true });
+      expect(health.label).toBe('Missing');
+      expect(health.tone).toBe('bad');
+      expect(health.action).toEqual({ label: 'Recover', path: 'recover' });
+    }
+    // Its database still there: the container alone is the repair, as before.
+    expect(siteHealth({ status: 'running', up: false, containerState: 'missing', missingFromServer: false }).label).toBe('No container');
+    expect(siteHealth({ status: 'running', up: false, containerState: 'missing', missingFromServer: null }).label).toBe('No container');
+  });
+
   it('is Online only when the probe actually passed', () => {
     expect(siteHealth({ status: 'running', up: true }).tone).toBe('ok');
     expect(siteHealth({ status: 'running', up: null }).label).toBe('Checking');

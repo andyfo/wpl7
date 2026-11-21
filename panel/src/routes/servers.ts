@@ -1,12 +1,13 @@
 // @docs servers/add
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { z } from 'zod';
-import { alertStates, backups, moveCleanups, servers, serverStats } from '../db/schema.js';
+import { alertStates, backupCopies, backups, moveCleanups, servers, serverStats } from '../db/schema.js';
 import {
   backupRelocateBody,
   serverCreateBody,
+  serverRecoverBody,
   serverDeleteQuery,
   serverInfoQuery,
   serverStorageQuery,
@@ -18,6 +19,7 @@ import { jobToDto, serverToDto, viewerOf } from '../lib/dto.js';
 import { readPanelPublicKey } from '../servers/keys.js';
 import { CLOUDFLARE } from '../services/dns.js';
 import { sweepWildcardSites, wildcardProblem } from '../services/wildcardSites.js';
+import { queueServerRecovery, serverAnswers, serverRecoveryReport } from '../services/recovery.js';
 import type { AppDeps } from './deps.js';
 
 const idParams = z.object({ id: z.coerce.number().int().positive() });
@@ -225,6 +227,19 @@ export function registerServerRoutes(app: FastifyInstance, deps: AppDeps): void 
     return serverToDto(deps.servers.rowById(row.id)!, deps.servers.sitesCountFor(row.id));
   });
 
+  /** What can come back from this server's backups, and onto which servers (services/recovery.ts). */
+  r.get('/api/servers/:id/recovery', { schema: { params: idParams } }, async (req) => serverRecoveryReport(deps, req.params.id));
+
+  r.post('/api/servers/:id/recover', { schema: { params: idParams, body: serverRecoverBody } }, async (req, reply) => {
+    const result = await queueServerRecovery(deps, req.params.id, req.body);
+    req.log.info({ server: req.params.id, recover: { ...req.body, jobs: result.jobs.map((j) => j.id), skipped: result.skipped.length } }, 'servers: recover');
+    return reply.status(202).send({
+      jobs: result.jobs.map((job) => jobToDto(job, viewerOf(req))),
+      skipped: result.skipped,
+      external: result.external,
+    });
+  });
+
   r.delete('/api/servers/:id', { schema: { params: idParams, querystring: serverDeleteQuery } }, async (req, reply) => {
     const row = deps.servers.rowById(req.params.id);
     if (!row) throw notFound(`Server #${req.params.id} not found`);
@@ -238,13 +253,15 @@ export function registerServerRoutes(app: FastifyInstance, deps: AppDeps): void 
     // A parked source copy from a move still lives on this machine; deleting the server
     // strands the container, database and files with nothing left that knows how to
     // remove them (and the daily auto-finalize would keep queueing jobs for a server
-    // that no longer resolves).
+    // that no longer resolves). A server that does not answer can't be cleaned from here
+    // at all: its parked copies are closed with it, and stay on the machine.
     const stranded = deps.db
-      .select({ slug: moveCleanups.siteSlug })
+      .select({ id: moveCleanups.id, slug: moveCleanups.siteSlug })
       .from(moveCleanups)
       .where(and(eq(moveCleanups.sourceServerId, row.id), eq(moveCleanups.status, 'pending')))
       .all();
-    if (stranded.length > 0) {
+    const answers = await serverAnswers(deps, row.id);
+    if (stranded.length > 0 && answers) {
       throw conflict(
         `${stranded.length} moved site(s) still have their old copy parked here ` +
           `(${stranded.map((c) => c.slug).join(', ')}). Finalize those moves first ` +
@@ -252,11 +269,25 @@ export function registerServerRoutes(app: FastifyInstance, deps: AppDeps): void 
       );
     }
 
+    // A backup with a complete offsite copy outlives the server: it stays listed, as remote only,
+    // and is fetched onto whichever server it is wanted on. One that was only here is gone with it.
     const backupRows = deps.db.select({ id: backups.id }).from(backups).where(eq(backups.serverId, row.id)).all();
-    if (backupRows.length > 0 && !req.query.force) {
+    const copied = new Set(
+      backupRows.length === 0
+        ? []
+        : deps.db
+            .select({ backupId: backupCopies.backupId })
+            .from(backupCopies)
+            .where(and(inArray(backupCopies.backupId, backupRows.map((b) => b.id)), eq(backupCopies.status, 'complete')))
+            .all()
+            .map((c) => c.backupId),
+    );
+    const kept = backupRows.filter((b) => copied.has(b.id)).map((b) => b.id);
+    const dropped = backupRows.filter((b) => !copied.has(b.id)).map((b) => b.id);
+    if (dropped.length > 0 && !req.query.force) {
       throw conflict(
-        `${backupRows.length} backup(s) still live on this server. ` +
-          `Delete them, or pass ?force=true to drop the records (files on the server are left untouched).`,
+        `${dropped.length} backup(s) exist only on this server. ` +
+          `Delete them, or pass ?force=true to drop their records (files on the server are left untouched).`,
       );
     }
     // While the panel can still reach it: a gateway left running there would keep every
@@ -264,19 +295,32 @@ export function registerServerRoutes(app: FastifyInstance, deps: AppDeps): void 
     const ftpLeft = await deps.ftp.forgetServer(row.id);
     deps.servers.invalidate(row.id);
     deps.db.transaction(() => {
-      if (backupRows.length > 0) deps.db.delete(backups).where(eq(backups.serverId, row.id)).run();
+      if (kept.length > 0) {
+        deps.db.update(backups).set({ serverId: 1, filesPresent: 0 }).where(inArray(backups.id, kept)).run();
+      }
+      if (dropped.length > 0) deps.db.delete(backups).where(inArray(backups.id, dropped)).run();
+      if (stranded.length > 0) {
+        deps.db
+          .update(moveCleanups)
+          .set({ status: 'done', handover: 'done', finalizedAt: Date.now() })
+          .where(inArray(moveCleanups.id, stranded.map((c) => c.id)))
+          .run();
+      }
       // server_stats references servers(id) with no ON DELETE, and the monitor writes a
       // row per server per minute - so without this the DELETE below always failed the
       // foreign-key check (500) once the server had been registered for a minute.
       deps.db.delete(serverStats).where(eq(serverStats.serverId, row.id)).run();
       // Its disk alert (services/alerts.ts), which nothing would read or end again.
-      deps.db.delete(alertStates).where(eq(alertStates.key, `disk:${row.id}`)).run();
+      deps.db.delete(alertStates).where(inArray(alertStates.key, [`disk:${row.id}`, `server:${row.id}`])).run();
       deps.db.delete(servers).where(eq(servers.id, row.id)).run();
     });
     return reply.send({
       removed: row.name,
+      keptBackups: kept.length,
+      droppedBackups: dropped.length,
       note:
         `To revoke the panel's access, remove its key from ~${row.sshUser}/.ssh/authorized_keys on ${row.sshHost}.` +
+        (stranded.length > 0 ? ` The old copies of ${stranded.map((c) => c.slug).join(', ')} stay on that machine.` : '') +
         (ftpLeft ? ` ${ftpLeft}` : ''),
     });
   });

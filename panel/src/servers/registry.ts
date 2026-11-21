@@ -223,6 +223,11 @@ export class ServerRegistry {
     return /^[0-9a-fA-F:.]{2,45}$/.test(address) ? address : null;
   }
 
+  /** Whether the panel holds an SSH session to the server that is up now (keepalives close a dead one). */
+  sessionUp(serverId: number): boolean {
+    return this.cache.get(serverId)?.conn?.up ?? false;
+  }
+
   /** Drop the cached handle + SSH connection (after PATCH, delete, host-key retrust). */
   invalidate(serverId: number): void {
     const entry = this.cache.get(serverId);
@@ -237,13 +242,27 @@ export class ServerRegistry {
     entry.conn?.close();
   }
 
+  /**
+   * Told when a server answers after it did not (index.ts): what it was owed while it was gone -
+   * a recovered site's old copy to stop (jobs/handlers/recover.ts) - can run now.
+   */
+  onReachableAgain: ((serverId: number) => void) | null = null;
+
   markReachable(serverId: number): void {
     const row = this.rowById(serverId);
     if (!row) return;
     const patch: Partial<typeof servers.$inferInsert> = { lastSeenAt: Date.now(), lastError: null };
     // Don't clobber provisioning/error - those are managed by the provisioning flow.
-    if (row.status === 'unreachable') patch.status = 'ok';
+    const back = row.status === 'unreachable';
+    if (back) patch.status = 'ok';
     this.db.update(servers).set(patch).where(eq(servers.id, serverId)).run();
+    if (back) {
+      try {
+        this.onReachableAgain?.(serverId);
+      } catch (err) {
+        this.log.warn(`Server "${row.name}" answers again, but what it was owed was not queued: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   }
 
   markUnreachable(serverId: number, err: Error): void {

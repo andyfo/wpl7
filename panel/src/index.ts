@@ -71,6 +71,7 @@ import { hostPortFor } from './servers/hostPort.js';
 import type { CoreServices, Logger } from './services/index.js';
 import { PANEL_VERSION } from './lib/version.js';
 import { JobWorker } from './jobs/worker.js';
+import { queueDueHandovers, queueHandovers } from './jobs/handlers/recover.js';
 import { Schedulers } from './jobs/schedulers.js';
 import { buildServer } from './server.js';
 import type { AppDeps } from './routes/deps.js';
@@ -83,7 +84,10 @@ async function main(): Promise<void> {
 
   const db = openDb(config.paths.dbFile);
   runMigrations(db);
-  const { generatedOwnerPassword, adoptedLegacyAdmin } = await seed(db, config);
+  const { generatedOwnerPassword, adoptedLegacyAdmin, publicIpChanged } = await seed(db, config);
+  if (publicIpChanged) {
+    console.log(`[panel] This server's public IP is now ${publicIpChanged.to}, from SERVER_PUBLIC_IP (was ${publicIpChanged.from || 'not set'})`);
+  }
   await ensurePanelSshKey(config);
 
   // Server 1 may keep its backups somewhere other than <SRV_ROOT>/backups (a second disk
@@ -258,8 +262,13 @@ async function main(): Promise<void> {
     probed: (site, reading) => core.alerts.probed(site, reading),
     certificate: (site, expiresAt) => core.alerts.certificate(site, expiresAt),
     diskChecked: (server, stats) => core.alerts.diskChecked(server, stats),
+    serverChecked: (server, answered, error) => core.alerts.serverChecked(server, answered, error),
   });
   const worker = new JobWorker(db, core);
+  // A recovered site's old server that answers again gets its old copy stopped (jobs/handlers/recover.ts).
+  servers.onReachableAgain = (serverId) => {
+    queueHandovers(core, serverId);
+  };
   // Circular by nature: the reconciler enqueues jobs, the worker runs handlers that need
   // the service. Attached once here rather than threaded through every handler.
   offsite.attachWorker(worker);
@@ -303,6 +312,16 @@ async function main(): Promise<void> {
   importsService.reconcileOnBoot();
   worker.start();
   schedulers.start();
+  // A panel database restored onto a new machine lists backups whose files stayed on the old disk:
+  // they read as remote only before anyone tries to restore them. And whatever a recovered site's
+  // old server is still owed, for a server that answers.
+  void backup
+    .checkFiles(1)
+    .then((checked) => {
+      if (checked.gone > 0) log.warn(`${checked.gone} backup(s) on this server no longer have their files here`);
+    })
+    .catch((err: unknown) => log.warn(`Backups on this server not checked: ${String(err)}`));
+  void queueDueHandovers(core).catch((err: unknown) => log.warn(`Handovers owed to returning servers not queued: ${String(err)}`));
 
   // The relay reads its sender-authorization maps and credential database from disk, and
   // both are panel state. Publishing them at boot means a restored /srv/panel, a rebuilt

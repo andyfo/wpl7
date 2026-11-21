@@ -60,6 +60,7 @@ import {
 } from './shared.js';
 import { requireRunning } from './wp.js';
 import { hasDatabase, isContainerApp, isExternal, isPhpSite } from '../../lib/siteKind.js';
+import { serverAnswers } from '../../services/recovery.js';
 import { PLACEHOLDER_FILE, renderPlaceholderPage } from '../../services/phpSite.js';
 import { writeMailFrom } from '../../services/siteCaches.js';
 import { parseSiteCacheRules } from '../../../shared/cacheRules.js';
@@ -450,6 +451,8 @@ export const siteDeletePayload = z.object({
 export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayload>>, s: CoreServices): Promise<void> {
   const site = loadSite(s.db, ctx.payload.siteId, { kinds: 'any' });
   if (isExternal(site)) return removeExternalSite(ctx, s, site);
+  // A server that does not answer can't take part: the site leaves the panel without it.
+  if (!(await serverAnswers(s, site.serverId))) return removeFromLostServer(ctx, s, site);
   const server = s.servers.handleFor(site.serverId);
   updateSiteRow(s.db, site.id, { status: 'deleting' });
   // A site being deleted has no rules file: its routers would only point at a container
@@ -457,34 +460,8 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
   await s.security.kick(server.id);
   if (isContainerApp(site)) await s.appRoutes.kick(server.id);
 
-  // A recently-moved site may still have its old copy parked on the source server.
-  const { pendingCleanupFor, finalizeCleanup } = await import('./move.js');
-  const pendingCleanup = pendingCleanupFor(s, site.id);
-  if (pendingCleanup) {
-    if (!s.servers.rowById(pendingCleanup.sourceServerId)) {
-      ctx.warn(
-        `The old copy from the last move was parked on server #${pendingCleanup.sourceServerId}, ` +
-          `which no longer exists - nothing left to clean there.`,
-      );
-      s.db
-        .update(moveCleanups)
-        .set({ status: 'done', finalizedAt: Date.now() })
-        .where(eq(moveCleanups.id, pendingCleanup.id))
-        .run();
-    } else {
-      ctx.info('Cleaning up the parked copy from the last move first…');
-      try {
-        await finalizeCleanup(ctx, s, pendingCleanup);
-      } catch (err) {
-        // The row keeps the slug reserved until every resource this site owns is gone.
-        // Deleting it while the parked copy survived meant the pending cleanup outlived the
-        // site - and a later site that re-used the slug inherited it: the daily finalize then
-        // tore down the NEW site's container, database and files, which carry the same names.
-        updateSiteRow(s.db, site.id, { status: 'error' });
-        throw new Error(`Move cleanup on the old server failed - site NOT deleted; re-run delete to retry: ${errMsg(err)}`);
-      }
-    }
-  }
+  // A moved or recovered site may still have old copies parked on other servers.
+  await finalizeParkedCopies(ctx, s, site);
 
   const p = sitePaths(s.config, site.slug);
   let finalBackupId: number | null = null;
@@ -613,6 +590,108 @@ async function removeExternalSite(ctx: JobContext<z.infer<typeof siteDeletePaylo
   ctx.info(`"${site.slug}" was removed from the panel. The site keeps running elsewhere.`);
   const backupDeleteJobId = ctx.payload.deleteBackups ? queueBackupDeletion(ctx, s, site, null) : null;
   ctx.setResult({ slug: site.slug, removed: true, ...(backupDeleteJobId !== null ? { backupDeleteJobId } : {}) });
+}
+
+/**
+ * Remove every copy of the site that a move or a recovery parked on another server, before the site
+ * itself goes: left behind, a cleanup outlives its site, and a later site that re-used the slug
+ * would inherit it. A server that is gone has nothing left to clean. One that does not answer keeps
+ * its cleanup, which its handover finishes once it answers (jobs/handlers/recover.ts handOver):
+ * with the site gone there is nothing to forward to, so its copy is removed then.
+ */
+async function finalizeParkedCopies(ctx: JobContext<unknown>, s: CoreServices, site: SiteRow): Promise<void> {
+  const { finalizeCleanup } = await import('./move.js');
+  const pending = s.db
+    .select()
+    .from(moveCleanups)
+    .where(and(eq(moveCleanups.siteId, site.id), eq(moveCleanups.status, 'pending')))
+    .all();
+  for (const cleanup of pending) {
+    const source = s.servers.rowById(cleanup.sourceServerId);
+    if (!source) {
+      ctx.warn(
+        `The old copy from the last move was parked on server #${cleanup.sourceServerId}, ` +
+          `which no longer exists - nothing left to clean there.`,
+      );
+      s.db.update(moveCleanups).set({ status: 'done', finalizedAt: Date.now() }).where(eq(moveCleanups.id, cleanup.id)).run();
+      continue;
+    }
+    if (!(await serverAnswers(s, cleanup.sourceServerId))) {
+      // The site is going, so there is nothing to forward to: its handover removes the copy at once.
+      s.db.update(moveCleanups).set({ handover: 'pending', targetServerId: 0 }).where(eq(moveCleanups.id, cleanup.id)).run();
+      ctx.warn(`"${source.name}" does not answer: the old copy there is removed if it answers again.`);
+      continue;
+    }
+    ctx.info(`Cleaning up the copy parked on "${source.name}" first…`);
+    try {
+      await finalizeCleanup(ctx, s, cleanup);
+    } catch (err) {
+      // The row keeps the slug reserved until every resource this site owns is gone.
+      // Deleting it while the parked copy survived meant the pending cleanup outlived the
+      // site - and a later site that re-used the slug inherited it: the daily finalize then
+      // tore down the NEW site's container, database and files, which carry the same names.
+      updateSiteRow(s.db, site.id, { status: 'error' });
+      throw new Error(`Move cleanup on the old server failed - site NOT deleted; re-run delete to retry: ${errMsg(err)}`);
+    }
+  }
+}
+
+/**
+ * Delete a site whose server does not answer. Nothing can be backed up or torn down there, so the
+ * site leaves the panel now, and its container, databases and files on that server are owed to it:
+ * a cleanup with nothing to forward to, finished by its handover once the server answers again.
+ * Its backups stay, unless they were asked to go too.
+ */
+async function removeFromLostServer(ctx: JobContext<z.infer<typeof siteDeletePayload>>, s: CoreServices, site: SiteRow): Promise<void> {
+  const serverName = s.servers.rowById(site.serverId)?.name ?? `server #${site.serverId}`;
+  if (ctx.payload.finalBackup) {
+    throw new Error(`"${serverName}" does not answer, so no final backup can be taken. Delete the site without one: its backups stay. Nothing was changed.`);
+  }
+  ctx.warn(`"${serverName}" does not answer: "${site.slug}" leaves the panel now, and its copy there is removed if the server answers again.`);
+  updateSiteRow(s.db, site.id, { status: 'deleting' });
+  await finalizeParkedCopies(ctx, s, site);
+  const extras = s.databases.extraNames(site.id);
+  const hadFtp = s.ftp.hasLogins(site.id);
+  s.db.transaction(() => {
+    s.db
+      .insert(moveCleanups)
+      .values({
+        siteId: site.id,
+        siteSlug: site.slug,
+        sourceServerId: site.serverId,
+        // Nothing to forward to: the handover removes the copy at once (recover.ts handOver).
+        targetServerId: 0,
+        containerName: site.containerName,
+        dbName: site.dbName,
+        dbUser: site.dbUser,
+        extraDbs: extras.length > 0 ? JSON.stringify(extras) : null,
+        filesPath: sitePaths(s.config, site.slug).root,
+        verifyHosts: '[]',
+        targetIp: '',
+        proxyConfigPath: null,
+        status: 'pending',
+        handover: 'pending',
+        createdAt: Date.now(),
+      })
+      .run();
+    s.db.delete(sites).where(eq(sites.id, site.id)).run();
+  });
+  if (site.devHostname && s.dns.enabled) {
+    await s.dns
+      .deleteA(site.devHostname)
+      .then((res) => res === 'deleted' && ctx.info(`DNS: removed record for ${site.devHostname}`))
+      .catch((err) => ctx.warn(`DNS record cleanup failed: ${errMsg(err)}`));
+  }
+  await s.mail.syncMailAuthEverywhere().catch((err: unknown) => ctx.warn(`Mail relay cleanup failed: ${errMsg(err)}`));
+  void s.security.kick(site.serverId);
+  if (hadFtp) void s.ftp.kick(site.serverId);
+  ctx.info(`Site "${site.slug}" deleted.`);
+  const backupDeleteJobId = ctx.payload.deleteBackups ? queueBackupDeletion(ctx, s, site, null) : null;
+  ctx.setResult({
+    slug: site.slug,
+    finalBackup: false,
+    ...(backupDeleteJobId !== null ? { backupDeleteJobId } : {}),
+  });
 }
 
 /**

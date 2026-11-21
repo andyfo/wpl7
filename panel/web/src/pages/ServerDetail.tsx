@@ -1,8 +1,9 @@
-// @docs servers/overview
+// @docs servers/overview, servers/recover
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ServerCheck, ServerDto, ServerSystemInfoDto } from '../../../shared/types';
+import { refusesPanelKey } from '../../../shared/servers';
 import {
   isTerminal,
   useMeta,
@@ -13,12 +14,14 @@ import {
   useServerInfo,
   useServers,
   useSites,
+  useSshPublicKey,
 } from '../api/hooks';
 import { api } from '../api/client';
 import {
   Button,
   Card,
   ChecksList,
+  CopyField,
   ConfirmDialog,
   EmptyState,
   ErrorNote,
@@ -34,6 +37,7 @@ import {
 } from '../components/ui';
 import { ResourceCharts } from '../components/ResourceCharts';
 import { StorageModal } from '../components/StorageModal';
+import { RecoverServerDialog } from '../components/RecoveryDialogs';
 import { serverFtpSummary } from '../lib/ftpStatus';
 import { formatBytes, formatDate, formatUptime, timeAgo } from '../lib/format';
 import { PhpRelease } from '../components/PhpRelease';
@@ -56,6 +60,8 @@ export function ServerDetail() {
   const [storageOpen, setStorageOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [removeOpen, setRemoveOpen] = useState(false);
+  const [recoverOpen, setRecoverOpen] = useState(false);
+  const sshKey = useSshPublicKey();
   const [checks, setChecks] = useState<ServerCheck[] | null>(null);
   const [testing, setTesting] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
@@ -107,6 +113,15 @@ export function ServerDetail() {
     }
   };
 
+  // Sites that come back from their backups: on another server while this one does not answer, or
+  // here once they are gone from it. A rebuilt server's sites are all down, which is what offers it.
+  const sitesDown = (monitor.data?.sites ?? []).filter((x) => x.serverId === serverId && x.up === false).length;
+  const unreachable = server.status === 'unreachable';
+  // A panel installed again has a new SSH key, which the servers it had do not know yet. Such a
+  // server answers: its sites most likely still run there, so it offers no recovery.
+  const keyRefused = unreachable && refusesPanelKey(server.lastError);
+  const canRecover = server.sitesCount > 0 && !keyRefused && (unreachable || sitesDown > 0);
+
   const memPct = stats && stats.memTotal > 0 ? (stats.memUsed / stats.memTotal) * 100 : null;
   const diskPct = stats && stats.diskTotal > 0 ? (stats.diskUsed / stats.diskTotal) * 100 : null;
 
@@ -140,6 +155,27 @@ export function ServerDetail() {
           <p className="mt-1 text-xs">
             Cleared by the next successful check — run “Test connection” once the cause is fixed.
           </p>
+          {keyRefused && sshKey.data?.publicKey && (
+            <div className="mt-3 space-y-1">
+              <p>
+                The server answers, so its sites most likely still run. If the panel was installed again, it has a new SSH key. Add it to{' '}
+                <code>/home/{server.sshUser}/.ssh/authorized_keys</code> and <code>/root/.ssh/authorized_keys</code> on this server:
+              </p>
+              <CopyField value={sshKey.data.publicKey} tone="plain" />
+            </div>
+          )}
+        </div>
+      )}
+
+      {unreachable && !keyRefused && server.sitesCount > 0 && (
+        <div className="rounded-xl border border-red-300 bg-red-50 p-4 text-sm text-red-800">
+          <div className="font-medium">{server.name} does not answer</div>
+          <p className="mt-1">If it is gone, its sites can come back from their backups on another server.</p>
+          <div className="mt-2">
+            <Button small onClick={() => setRecoverOpen(true)}>
+              Recover sites
+            </Button>
+          </div>
         </div>
       )}
 
@@ -167,8 +203,19 @@ export function ServerDetail() {
               {updating ? <Spinner /> : 'Update stack'}
             </Button>
           )}
+          {canRecover && !unreachable && (
+            <Button small variant="secondary" onClick={() => setRecoverOpen(true)}>
+              Recover sites
+            </Button>
+          )}
           {server.kind !== 'local' && (
-            <Button small variant="ghost" disabled={server.sitesCount > 0} onClick={() => setRemoveOpen(true)}>
+            <Button
+              small
+              variant="ghost"
+              disabled={server.sitesCount > 0}
+              title={server.sitesCount > 0 ? 'It still hosts sites: change their server, recover or delete them first.' : undefined}
+              onClick={() => setRemoveOpen(true)}
+            >
               Remove server
             </Button>
           )}
@@ -259,6 +306,7 @@ export function ServerDetail() {
         <StorageModal serverId={serverId} serverName={server.name} onClose={() => setStorageOpen(false)} />
       )}
       {editOpen && <EditServerModal server={server} onClose={() => setEditOpen(false)} />}
+      {recoverOpen && <RecoverServerDialog server={server} onClose={() => setRecoverOpen(false)} />}
       {removeOpen && (
         <ConfirmDialog
           title={`Remove server "${server.name}"`}
@@ -266,8 +314,8 @@ export function ServerDetail() {
           confirmLabel="Remove"
           message={
             <>
-              This unregisters the server from the panel. Files on the machine are left untouched; backup records
-              stored there are dropped. Afterwards remove the panel&apos;s key from{' '}
+              This unregisters the server from the panel, and leaves the files on the machine. Its backups with an offsite
+              copy stay listed. The others are forgotten. Afterwards remove the panel&apos;s key from{' '}
               <code>~{server.sshUser}/.ssh/authorized_keys</code> to revoke access.
             </>
           }

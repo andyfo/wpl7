@@ -8,16 +8,53 @@
 
 # Read KEY=... out of an .env file. `VAR="$(grep … | cut …)"` looks harmless but aborts the
 # caller under `set -euo pipefail` whenever grep matches nothing, which makes every
-# "${VAR:-fallback}" downstream unreachable. `|| true` keeps the assignment succeeding.
+# "${VAR:-fallback}" downstream unreachable. `|| true` keeps the assignment succeeding. A value
+# wpl7_env_set wrote in quotes comes back as it was given.
 wpl7_env_get() {
-  grep -m1 "^$2=" "$1" 2>/dev/null | cut -d= -f2- || true
+  local value out="" char i
+  value="$(grep -m1 "^$2=" "$1" 2>/dev/null | cut -d= -f2-)" || true
+  if [ "${#value}" -ge 2 ] && [ "${value:0:1}" = '"' ] && [ "${value: -1}" = '"' ]; then
+    value=${value:1:${#value}-2}
+    for (( i = 0; i < ${#value}; i++ )); do
+      char=${value:i:1}
+      if [ "$char" = '\' ] || { [ "$char" = '$' ] && [ "${value:i+1:1}" = '$' ]; }; then
+        i=$((i + 1))
+        char=${value:i:1}
+      fi
+      out+=$char
+    done
+    value=$out
+  fi
+  [ -z "$value" ] || printf '%s\n' "$value"
+}
+
+# A value as deploy/.env must hold it for compose to read it back unchanged. Compose expands `$`,
+# cuts ` #…` off as a comment and takes quotes off a value written plain, and stops at a lone
+# quote. A value of characters it leaves alone is written as it is, so the scripts that grep the
+# file read it as before; any other goes in double quotes, with \, " and $ escaped ("$$" is "$").
+wpl7_env_quote() {
+  local value=$1 out="" char i
+  case "$value" in
+    *[!]A-Za-z0-9._@:/+,=%[-]*) ;;
+    *) printf '%s' "$value"; return 0 ;;
+  esac
+  for (( i = 0; i < ${#value}; i++ )); do
+    char=${value:i:1}
+    case "$char" in
+      '\' | '"') out+="\\$char" ;;
+      '$') out+='$$' ;;
+      *) out+=$char ;;
+    esac
+  done
+  printf '"%s"' "$out"
 }
 
 # Replace KEY=... in an .env file, appending when the key is absent. Pure bash on purpose:
 # values (passwords especially) may contain &, \ or | which sed would interpret, silently
 # corrupting the file that holds this install's database password.
 wpl7_env_set() {
-  local file=$1 key=$2 value=$3 line out="" found=0
+  local file=$1 key=$2 value line out="" found=0
+  value="$(wpl7_env_quote "$3")"
   while IFS= read -r line || [ -n "$line" ]; do
     if [ "${line%%=*}" = "$key" ] && [ "${line#"$key"=}" != "$line" ]; then
       out+="$key=$value"$'\n'
@@ -139,6 +176,52 @@ wpl7_hold_image_lock() {
   flock --exclusive --nonblock 9 && return 0
   echo "   waiting for the panel's Docker clean-up to finish"
   flock --exclusive --wait "${WPL7_IMAGE_LOCK_WAIT_SEC:-600}" 9
+}
+
+# Put the panel's database back from a snapshot (setup.sh --restore, --restore-from=), before the
+# panel's first start. panel/src/cli/restore.ts does it, in the panel image about to be started:
+# its migrations are the ones the database has to suit. SRV_ROOT is mounted at the same path, as
+# compose mounts it into the panel, because the rclone container the restore starts beside itself
+# binds a folder under it and the daemon reads that path on the host. The restore container needs
+# no network of its own: it talks to the daemon over the socket.
+#
+#   wpl7_restore_snapshot IMAGE SRV_ROOT ENV_OUT FROM PREFIX INTERACTIVE
+#
+# FROM is a snapshot downloaded by hand, or empty to be asked for the destination, which needs
+# INTERACTIVE=1 and a terminal. A file is mounted with its folder, for the manifest beside it.
+# PREFIX is offered as the destination's path prefix. ENV_OUT is where the values for .env go.
+wpl7_restore_snapshot() {
+  local image=$1 srv=$2 env_out=$3 from=$4 prefix=$5 interactive=$6
+  local docker_args=(run --rm --network none -v /var/run/docker.sock:/var/run/docker.sock -v "$srv:$srv" -e "SRV_ROOT=$srv")
+  local cli_args=(--env-out="$env_out")
+  if [ "$interactive" = 1 ]; then docker_args+=(-it); fi
+  if [ -n "$prefix" ]; then cli_args+=(--prefix="$prefix"); fi
+  if [ -d "$from" ]; then
+    docker_args+=(-v "$from:/restore-from:ro")
+    cli_args+=(--from=/restore-from)
+  elif [ -n "$from" ]; then
+    docker_args+=(-v "$(dirname "$from"):/restore-from:ro")
+    cli_args+=(--from="/restore-from/$(basename "$from")")
+  fi
+  docker "${docker_args[@]}" "$image" node dist/src/cli/restore.js "${cli_args[@]}"
+}
+
+# What a snapshot gives deploy/.env, and what the snapshot is, as the restore writes them to ENV_OUT
+# (panel/src/cli/snapshotRestore.ts, envFileText).
+WPL7_RESTORE_KEYS="SNAPSHOT_TS SNAPSHOT_VERSION SNAPSHOT_SERVER PANEL_DOMAIN DEV_DOMAIN ACME_EMAIL TLS_MODE ACME_RESOLVER DNS_PROVIDER WPL7_CHANNEL MAIL_HOSTNAME SMTP_RELAYHOST SMTP_USERNAME SMTP_PASSWORD BACKUP_ROOT HETZNER_API_KEY DO_AUTH_TOKEN"
+
+# Read ENV_OUT into RESTORED_<KEY>, for each key above. Read line by line and never sourced: the
+# values came out of a bucket. A key not on the list is skipped.
+wpl7_restore_env_read() {
+  local file=$1 line key
+  while IFS= read -r line || [ -n "$line" ]; do
+    key="${line%%=*}"
+    [ "$key" != "$line" ] || continue
+    case "$key" in ''|*[!A-Z0-9_]*) continue ;; esac
+    case " $WPL7_RESTORE_KEYS " in
+      *" $key "*) printf -v "RESTORED_$key" '%s' "${line#*=}" ;;
+    esac
+  done < "$file"
 }
 
 # Remove the copies earlier updates took (`panel.db.pre-<version>`, with their -wal and -shm),

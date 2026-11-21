@@ -8,6 +8,7 @@ sources:
   - panel/src/routes/backups.ts
   - panel/src/services/backup.ts
   - panel/src/services/externalBackup.ts
+  - panel/src/services/recovery.ts
   - panel/web/src/components/backups/BackupParts.tsx
 ---
 
@@ -80,6 +81,19 @@ and the backup's time, and streams from the server that keeps the backup.
 To restore a hosted site without the panel, follow [Manual recovery without the
 panel](/docs/reference/manual-recovery/).
 
+## Restore a deleted site
+
+On **Backups → All backups**, a deleted site's backup has **Restore**. Pick the **Target server**,
+and the site is made again under its name, with the domains and settings in the backup. A backup
+kept only offsite is downloaded first.
+
+A domain another site has taken since is left out. The site's database gets a new password, which
+WordPress reads by itself. A PHP site with its own database config needs it there, from the
+**Database** tab. A site that does not answer once it is back is a warning in the log, not a failed
+job, so it can be repaired. Its domains' DNS records are left as they are: the job's log lists the
+ones to point at the server. A container app's settings are not in its backups: create the app
+again, then restore the backup into it.
+
 ## Restore a site hosted elsewhere
 
 A [site hosted elsewhere](/docs/sites/external/) has no **Restore**. Put a backup back on its host by
@@ -111,13 +125,14 @@ one.
 - A restore replaces everything that changed since the backup: posts, orders, comments and uploads.
 - A restore stops before it changes anything when a database in the backup is now another site's,
   or sits on the server unused.
-- A backup restores only onto the site of the same name, on the server that holds the backup.
-  From another server, fetch it back from an offsite copy, or move the site back first.
+- A backup restores onto the site's own server. A site whose server does not answer, or that is
+  gone from it, comes back with [Recover](/docs/servers/recover/) instead.
 - A PHP site's backup restores only into a PHP site, and a WordPress site's only into a WordPress
   site. A container app's restores only into a container app.
 - A container app's backup of an uploaded image no longer on the server does not restore. Upload
   the image again first.
-- A deleted site's backup has no **Restore**. Create a site with the same name first.
+- An older backup holds a deleted site's domains, but not its settings such as its cache and
+  limits. A site made again from one gets the defaults for those.
 - A site hosted elsewhere is restored by hand, as above.
 - The panel's own database is restored by hand, never from the panel.
 - The files a restore set aside are deleted by the nightly housekeeping, a day or more later.
@@ -130,3 +145,4 @@ one.
 - [Manual recovery without the panel](/docs/reference/manual-recovery/)
 - [Sites hosted elsewhere](/docs/sites/external/)
 - [FTP and SFTP logins](/docs/sites/ftp-sftp/)
+- [Recover a lost server](/docs/servers/recover/)

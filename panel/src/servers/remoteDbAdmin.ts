@@ -171,6 +171,12 @@ export class RemoteDbAdminService implements DbAdminPort {
     return parseInventory(await this.sqlOutput(`${INVENTORY_SQL};\n`));
   }
 
+  async grantDb(dbName: string, dbUser: string): Promise<void> {
+    assertDbIdentifier(dbName);
+    assertDbIdentifier(dbUser);
+    await this.sql([`GRANT ALL PRIVILEGES ON \`${grantPattern(dbName)}\`.* TO '${dbUser}'@'%';`, `FLUSH PRIVILEGES;`].join('\n'));
+  }
+
   async createExtraDb(dbName: string, dbUser: string): Promise<void> {
     assertDbIdentifier(dbName);
     assertDbIdentifier(dbUser);

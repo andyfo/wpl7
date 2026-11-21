@@ -74,7 +74,10 @@ target, and the job log names the step that failed.
 - A hostname with an `AAAA` record is never finalized automatically. Use **Finalize now**.
 - Older backups stay on the old server. Restoring one needs its offsite copy, fetched back
   first.
-- The old server cannot be removed while a cleanup is pending.
+- A site on a server that does not answer can't move. It comes back from a backup with
+  [Recover](/docs/servers/recover/).
+- The old server cannot be removed while a cleanup is pending, unless it does not answer.
+  See [Recover a lost server](/docs/servers/recover/).
 - The site's added databases stay on the old server until the move is finalized, as its own does.
 - A live PHP site that is stopped for the move is offline while it is copied.
 - A PHP site moves only to a server whose site image can run one. Update that server first.

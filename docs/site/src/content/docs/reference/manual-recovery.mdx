@@ -209,6 +209,42 @@ docker start wpl7-panel
 The panel then brings every server in line with that database. FTP logins created after the
 snapshot are gone, and logins deleted since come back.
 
+## Rebuild the panel's server
+
+When the panel's own server is lost, install WPL7 on a new one from the panel snapshot in your
+offsite destination. The installer asks where the destination is, takes the newest snapshot, and
+writes `deploy/.env` from it. It asks questions, so download it first:
+
+```bash
+curl -fsSL -O https://github.com/andyfo/wpl7/releases/latest/download/install.sh
+```
+
+```bash
+sudo bash install.sh --restore
+```
+
+`--restore-from=` takes a snapshot folder or a `panel.db.gz` you downloaded yourself instead. With
+its `manifest.json` beside it, the domains and the mail settings come from there. Without one, the
+installer asks for them. An encrypted destination needs its passphrase and its salt.
+
+Then:
+
+1. Sign in with your old account.
+2. Add the panel's new SSH key to `/home/wpl7-panel/.ssh/authorized_keys` and
+   `/root/.ssh/authorized_keys` on each added server. Its page shows the key while it refuses it.
+3. Point the panel's domain and the dev domain's wildcard record at the new server.
+4. Open the new server's page and choose **Recover sites**. See
+   [Recover a lost server](/docs/servers/recover/).
+
+The snapshot leaves out the SSH key on purpose. The installer also clears the old server's public
+IP and SSH host key in the restored database. The panel takes the new server's when it first
+starts.
+
+By hand, install WPL7 with the old panel domain and dev domain, then restore `panel.db` as above.
+The mail hostname and the smarthost login are in the snapshot's `manifest.json`, under `env`. Then
+open the panel's own server under **Servers** and choose **Edit settings**. Check its **Public IP**,
+and switch on **Forget the pinned SSH host key**.
+
 ## Rebuild a site elsewhere
 
 `manifest.json` has what you need to run the site on any Docker host:
@@ -236,10 +272,13 @@ user and password. Make the new database and user match them, or change the conf
   back.
 - Restoring the panel's database rolls back everything the panel knows to that night, users and
   API keys included.
+- A panel installed from a snapshot gets a new SSH key, a new MariaDB root password and a new
+  session secret. Everyone signs in again.
 
 ## Related
 
 - [Restore and download](/docs/backups/restore/)
+- [Recover a lost server](/docs/servers/recover/)
 - [How backups work](/docs/backups/overview/)
 - [Offsite copies](/docs/backups/offsite/)
 - [Backup storage](/docs/backups/storage/)

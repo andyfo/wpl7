@@ -59,6 +59,74 @@ const steps =
     }
   };
 
+/**
+ * Server `id` as a server that stopped answering, in this tab only: the server list says so, and
+ * the Recover sites dialog's answer is made from the demo's own backups of the server's sites. The
+ * real recovery endpoint is never called, because it checks the backups' files on disk and would
+ * change what the other shots show.
+ */
+const unreachableServer = (id: number) => async (page: Page) => {
+  await page.route(
+    (url) => url.pathname === '/api/servers',
+    async (route) => {
+      const res = await route.fetch();
+      const body = (await res.json()) as { items: { id: number; status: string; lastError: string | null }[] };
+      for (const server of body.items) {
+        if (server.id === id) Object.assign(server, { status: 'unreachable', lastError: 'connect ETIMEDOUT' });
+      }
+      await route.fulfill({ response: res, json: body });
+    },
+  );
+  await page.route(
+    (url) => url.pathname === `/api/servers/${id}/recovery`,
+    async (route) => {
+      const get = async <T,>(path: string): Promise<T> => (await (await page.request.get(path, { headers: { 'x-csrf': '1' } })).json()) as T;
+      type Server = { id: number; name: string; status: string; publicIp: string };
+      type Site = { slug: string; title: string; app: string; serverId: number; kind: string };
+      type Backup = { id: number; siteSlug: string; type: string; status: string; createdAt: number; sizeBytes: number | null; phpVersion: string | null; note: string | null; serverId: number; filesPresent: boolean; copies: { destinationId: number; destinationName: string; status: string }[] };
+      const servers = (await get<{ items: Server[] }>('/api/servers')).items;
+      const sites = (await get<Site[] | { items: Site[] }>('/api/sites'));
+      const siteList = Array.isArray(sites) ? sites : sites.items;
+      const lost = servers.find((s) => s.id === id)!;
+      const targets = servers.filter((s) => s.id !== id).map((s) => ({ id: s.id, name: s.name, publicIp: s.publicIp }));
+      const backups = (await get<{ items: Backup[] }>(`/api/backups?serverId=${id}`)).items;
+      await route.fulfill({
+        json: {
+          server: { id, name: lost.name, status: 'unreachable', answers: false },
+          sites: siteList
+            .filter((site) => site.serverId === id && site.kind !== 'external')
+            .map((site) => ({
+              slug: site.slug,
+              title: site.title,
+              app: site.app,
+              serverId: id,
+              serverName: lost.name,
+              state: 'unreachable',
+              refusal: null,
+              backups: backups
+                .filter((b) => b.siteSlug === site.slug && b.status === 'complete')
+                .map((b) => ({
+                  id: b.id,
+                  createdAt: b.createdAt,
+                  type: b.type,
+                  sizeBytes: b.sizeBytes,
+                  phpVersion: b.phpVersion,
+                  note: b.note,
+                  copies: b.copies.filter((c) => c.status === 'complete').map((c) => ({ destinationId: c.destinationId, name: c.destinationName })),
+                  localServerId: b.filesPresent ? b.serverId : null,
+                }))
+                .slice(0, 5),
+              targets,
+            })),
+          external: [],
+          targets,
+        },
+      });
+    },
+  );
+  await page.reload({ waitUntil: 'networkidle' });
+};
+
 export const SHOTS: Shot[] = [
   { name: 'reminders', what: 'Reminders: a checklist with due and upcoming work', path: '/reminders', theme: 'both' },
   { name: 'reminders-new', what: 'A reminder with a repeat interval and an email recipient', path: '/reminders', theme: 'light', prepare: button('New reminder') },
@@ -273,6 +341,15 @@ export const SHOTS: Shot[] = [
   { name: 'servers-list', what: 'Servers → All servers', path: '/servers', theme: 'both' },
   { name: 'server-detail', what: 'A server’s page', path: '/servers/1', theme: 'light' },
   { name: 'server-add', what: 'The Add server dialog', path: '/servers', theme: 'light', prepare: button('Add server') },
+  {
+    name: 'server-recover',
+    what: 'Recover sites on a server that does not answer: the target server, and the backup each site comes back from',
+    path: '/servers/3',
+    theme: 'light',
+    prepare: steps(unreachableServer(3), button('Recover sites'), async (page) => {
+      await page.getByRole('dialog').getByText('From', { exact: true }).waitFor();
+    }),
+  },
   {
     name: 'terminal',
     what: 'Servers → Terminal with a shell session',

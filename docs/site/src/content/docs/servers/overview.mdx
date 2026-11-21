@@ -69,7 +69,9 @@ before it.
 
 Choose a server's name. The buttons at the top act on the whole machine: **Terminal**, **Test
 connection**, **Backup storage** and **Edit settings**, plus **Update stack** and **Remove server**
-on an added server.
+on an added server. **Recover sites** is there while the server does not answer or any of its sites
+is down, unless the server refuses the panel's SSH key. See
+[Recover a lost server](/docs/servers/recover/).
 
 <Screenshot name="server-detail" alt="A server's page with its resource charts and the Configuration and Machine cards" />
 
@@ -99,7 +101,9 @@ starts, for example after an update. **Container stats (seconds)** sets the serv
 ## Limits
 
 - The panel emails when a site goes down, with **Site down, and back up** on in
-  [Settings](/docs/panel/settings/#alerts). It sends no email when a server goes down.
+  [Settings](/docs/panel/settings/#alerts). An added server that has not answered for ten minutes
+  gets an email of its own, and so does one that has refused the panel's SSH key that long. The
+  panel's own server is not watched this way.
 - The email for a server low on disk, at 10% free, watches the disk that holds `/srv`. A backup
   location on a disk of its own is not watched.
 - The uptime check runs from the server itself, through its Traefik. It does not test DNS, or
@@ -115,3 +119,4 @@ starts, for example after an update. **Container stats (seconds)** sets the serv
 - [Terminal](/docs/servers/terminal/)
 - [The Sites list](/docs/sites/overview/)
 - [Settings](/docs/panel/settings/)
+- [Recover a lost server](/docs/servers/recover/)
