@@ -14,7 +14,9 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { afterAll, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
+import { connectDb } from '../../src/db/index.js';
 import { servers } from '../../src/db/schema.js';
+import { seed } from '../../src/db/seed.js';
 import { terminalPrompter, type Prompter } from '../../src/cli/prompt.js';
 import {
   RESTORE_ENV_KEYS,
@@ -35,7 +37,7 @@ import {
 } from '../../src/cli/snapshotRestore.js';
 import type { EphemeralOpts, RunResult } from '../../src/services/docker.js';
 import { BACKUP_PROVIDERS, rcloneRemoteFor } from '../../shared/backupProviders.js';
-import { createTestDb } from '../helpers.js';
+import { createTestDb, makeTestConfig } from '../helpers.js';
 
 const MIGRATIONS = fileURLToPath(new URL('../../src/db/migrations', import.meta.url));
 
@@ -438,6 +440,37 @@ describe('the restore', () => {
     expect(fs.readFileSync(envOut, 'utf8')).toContain('PANEL_DOMAIN=panel.example.com\n');
     expect(fs.statSync(envOut).mode & 0o777).toBe(0o600);
     expect(fs.readdirSync(d.workDir).filter((f) => f.endsWith('.db'))).toEqual([]);
+  });
+
+  // A snapshot from before 0.4.3 holds server 1's address but not the SERVER_PUBLIC_IP the panel
+  // last saw, which is how a boot tells a new machine's address from an edit in the panel.
+  const oldMachine = (sqlite: Database.Database) => {
+    sqlite.prepare("UPDATE servers SET public_ip = '198.51.100.1' WHERE id = 1").run();
+  };
+  const notedEnv = (sqlite: Database.Database) => {
+    oldMachine(sqlite);
+    sqlite.prepare("INSERT INTO settings (key, value, updated_at) VALUES ('server1.envPublicIp', '\"198.51.100.1\"', 0)").run();
+  };
+  const localIp = (db: ReturnType<typeof connectDb>) => db.select().from(servers).where(eq(servers.id, 1)).get()!.publicIp;
+
+  it.each([
+    ['made before the panel noted SERVER_PUBLIC_IP', oldMachine],
+    ['that noted it', notedEnv],
+  ])("leaves the old machine's address behind, from a snapshot %s", async (_, mutate) => {
+    const dir = writeSnapshot(path.join(tmp(), '20261004-030000'), { db: panelDb(mutate) });
+    const d = deps({ docker: fakeDocker().docker });
+    await restorePanel({ from: dir }, d);
+
+    const db = connectDb(new Database(d.dbFile));
+    await seed(db, makeTestConfig({ SERVER_PUBLIC_IP: '203.0.113.7' }));
+    expect(localIp(db)).toBe('203.0.113.7');
+    db.$client.close();
+  });
+
+  it("keeps the address on an upgrade, where nothing was restored", async () => {
+    const db = connectDb(new Database(panelDb(oldMachine)));
+    await seed(db, makeTestConfig({ SERVER_PUBLIC_IP: '203.0.113.7' }));
+    expect(localIp(db)).toBe('198.51.100.1');
   });
 
   it('offers the next older snapshot when the newest does not check out', async () => {

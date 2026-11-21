@@ -236,11 +236,14 @@ Then:
 4. Open the new server's page and choose **Recover sites**. See
    [Recover a lost server](/docs/servers/recover/).
 
-The snapshot leaves out the SSH key on purpose. The new server's public IP replaces the old one in
-the panel by itself, from `SERVER_PUBLIC_IP`.
+The snapshot leaves out the SSH key on purpose. The installer also clears the old server's public
+IP and SSH host key in the restored database. The panel takes the new server's when it first
+starts.
 
 By hand, install WPL7 with the old panel domain and dev domain, then restore `panel.db` as above.
-The mail hostname and the smarthost login are in the snapshot's `manifest.json`, under `env`.
+The mail hostname and the smarthost login are in the snapshot's `manifest.json`, under `env`. Then
+open the panel's own server under **Servers** and choose **Edit settings**. Check its **Public IP**,
+and switch on **Forget the pinned SSH host key**.
 
 ## Rebuild a site elsewhere
 

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { backupCopies, backups, jobs, moveCleanups, servers, sites, type SiteRow } from '../../src/db/schema.js';
-import { fakeExecOk, FakeDnsProvider, makeApp, makeWorld, waitFor, type FakeServerPorts, type TestWorld } from '../helpers.js';
+import { addPhpSite, fakeExecOk, FakeDnsProvider, makeApp, makeWorld, waitFor, type FakeServerPorts, type TestWorld } from '../helpers.js';
 import { sitePaths } from '../../src/services/siteSpec.js';
 import { hostExec, type ExecPort } from '../../src/lib/exec.js';
 import { externalWorld } from '../connectWorld.js';
@@ -385,6 +385,76 @@ describe('recovery', () => {
     expect(w.docker.containers.get(site.containerName)).toBe('running');
     expect(w.db.select().from(jobs).where(eq(jobs.id, job.id)).get()!.siteId).toBe(back.id);
     expect(() => queueDeletedSiteRestore(w.core, backup.id, 1)).toThrow(/is a site already/);
+  });
+
+  it("keeps a deleted PHP site that does not answer once it is back, for its config to get the database's new password", async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const site = addPhpSite(w, 'shop', { database: true });
+    const p = sitePaths(w.config, site.slug);
+    fs.mkdirSync(p.wordpress, { recursive: true });
+    fs.mkdirSync(p.configDir, { recursive: true });
+    fs.writeFileSync(path.join(p.wordpress, 'index.php'), "<?php new PDO('mysql:host=wpl7-mariadb;dbname=wp_shop', 'wp_shop', 'db-secret');");
+    w.dbAdmin.databases.add(site.dbName);
+    w.dbAdmin.users.set(site.dbUser, site.dbPassword);
+    const backup = await w.core.backup.create(site, 'final', {});
+    const remote = fs.mkdtempSync(path.join(w.config.srvRoot, 'remote-'));
+    fs.cpSync(backup.path, remote, { recursive: true });
+    offsiteCopy(w, backup.id, remote, null);
+    await w.core.backup.removeLocalFiles(backup);
+    w.db.delete(sites).where(eq(sites.id, site.id)).run();
+    w.dbAdmin.databases.delete(site.dbName);
+    w.dbAdmin.users.delete(site.dbUser);
+    w.docker.containers.delete(site.containerName);
+    fs.rmSync(p.root, { recursive: true, force: true });
+    // Its config names the old password, so the site fails on every request: here, its container ends.
+    w.docker.onStart = (name) => {
+      if (name === site.containerName) w.docker.containers.set(name, 'exited');
+    };
+
+    const job = queueDeletedSiteRestore(w.core, backup.id, 1);
+    const done = await runJob(w, job.id);
+    expect(done.status).toBe('succeeded');
+    const back = w.db.select().from(sites).where(eq(sites.slug, site.slug)).get()!;
+    expect(back).toMatchObject({ app: 'php', dbName: 'wp_shop', dbUser: 'wp_shop', serverId: 1 });
+    expect(back.dbPassword).not.toBe('db-secret');
+    expect(w.dbAdmin.users.get('wp_shop')).toBe(back.dbPassword);
+    expect(w.dbAdmin.databases.has('wp_shop')).toBe(true);
+    expect(fs.existsSync(path.join(p.wordpress, 'index.php'))).toBe(true);
+    expect(await logOf(w, job.id)).toContain(
+      "The site does not answer yet. Its database user has a new password: put it in the site's own config, from the Database tab.",
+    );
+  });
+
+  it("keeps a deleted WordPress site that does not run once it is back, its URLs left as the backup had them", async () => {
+    const w = await makeWorld({ exec: hostExec });
+    const made = await makeSite(w);
+    w.db.update(sites).set({ domains: JSON.stringify(['bakery.example', made.devHostname]), isLive: 1 }).where(eq(sites.id, made.id)).run();
+    const site = w.db.select().from(sites).where(eq(sites.id, made.id)).get()!;
+    const backup = await w.core.backup.create(site, 'final', {});
+    w.db.delete(sites).where(eq(sites.id, site.id)).run();
+    w.dbAdmin.databases.delete(site.dbName);
+    w.dbAdmin.users.delete(site.dbUser);
+    w.docker.containers.delete(site.containerName);
+    fs.rmSync(sitePaths(w.config, site.slug).root, { recursive: true, force: true });
+    // Its domain is another site's since, so it comes back on its dev address, and its URLs need rewriting.
+    w.db
+      .insert(sites)
+      .values({ ...site, id: undefined, slug: 'thief', containerName: 'wp-thief', dbName: 'wp_thief', dbUser: 'wp_thief', domains: JSON.stringify(['bakery.example']), devHostname: null, createdAt: Date.now(), updatedAt: Date.now() })
+      .run();
+    // A plugin in the backup ends PHP on every request, wp-cli's too.
+    w.docker.onStart = (name) => {
+      if (name !== site.containerName) return;
+      w.docker.containers.set(name, 'exited');
+      w.docker.execDefault = { stdout: '', stderr: 'PHP Fatal error: Uncaught Error', exitCode: 255 };
+    };
+
+    const job = queueDeletedSiteRestore(w.core, backup.id, 1);
+    const done = await runJob(w, job.id);
+    expect(done.status).toBe('succeeded');
+    expect(w.db.select().from(sites).where(eq(sites.slug, site.slug)).get()).toMatchObject({ domains: JSON.stringify([site.devHostname]) });
+    const log = await logOf(w, job.id);
+    expect(log).toContain(`WordPress's URLs still say bakery.example, as they could not be rewritten to ${site.devHostname}`);
+    expect(log).toContain('The site does not answer yet. It stays as the backup brought it back');
   });
 
   it("gives a deleted site a dev address of its own when another site took all of the backup's", async () => {

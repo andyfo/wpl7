@@ -8,7 +8,7 @@ import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
 import { assertPhpImage, siteImage, sitePaths } from '../../services/siteSpec.js';
 import { hasDatabase, isContainerApp, isExternal, isPhpSite } from '../../lib/siteKind.js';
-import { loadSite, removeSiteContainers, rewriteWordPressUrls, siteDomains, siteUrl, stopGraceOf, updateSiteRow, writeSiteJson } from './shared.js';
+import { loadSite, probeOptsFor, probeSite, removeSiteContainers, rewriteWordPressUrls, siteDomains, siteUrl, stopGraceOf, updateSiteRow, writeSiteJson } from './shared.js';
 import { ensureSiteImage } from './sites.js';
 import { proxyConfigPathFor, rmOn } from './moveHelpers.js';
 import { extraDbFile, manifestDatabases, otherAppRefusal, tsStamp } from '../../services/backup.js';
@@ -130,6 +130,7 @@ async function recoverSite(
   const primary = domains[0]!;
   // A stopped site comes back stopped: it runs on the target only for the probe.
   const wasStopped = site.status === 'stopped';
+  const probeTimeout = Math.max(s.config.probeTimeoutMs, 60_000);
   const extrasBefore = s.databases.extraNames(site.id);
 
   s.monitor.busySlugs.add(site.slug);
@@ -325,11 +326,16 @@ async function recoverSite(
         routing: true,
         requireWpConfig: site.app === 'wordpress',
         protection,
-        probe: {
-          host: primary,
-          timeoutMs: Math.max(s.config.probeTimeoutMs, 60_000),
-          message: wasStopped ? `Probing the site on "${target.name}" (it is started briefly for this)…` : `Probing the site on "${target.name}"…`,
-        },
+        // A deleted site made again has no other copy for a rollback to leave in place, and the
+        // same backup would fail the same way again: it stays, to be repaired, and is checked once
+        // it is in (step 5). A PHP site's own config still names its database user's old password.
+        probe: prepared
+          ? null
+          : {
+              host: primary,
+              timeoutMs: probeTimeout,
+              message: wasStopped ? `Probing the site on "${target.name}" (it is started briefly for this)…` : `Probing the site on "${target.name}"…`,
+            },
         ...(appImage ? { appImage: appImage.ref } : {}),
       },
     );
@@ -347,7 +353,13 @@ async function recoverSite(
     const backupPrimary = typeof listed[0] === 'string' ? listed[0] : undefined;
     if (backupPrimary && backupPrimary !== primary) {
       if (site.app === 'wordpress') {
-        await rewriteWordPressUrls(ctx, s, target, recovering, siteUrl(s.config, backupPrimary), siteUrl(s.config, primary), true);
+        const rewrite = rewriteWordPressUrls(ctx, s, target, recovering, siteUrl(s.config, backupPrimary), siteUrl(s.config, primary), true);
+        // A WordPress that does not run can't be rewritten either: a deleted site stays regardless.
+        await (prepared
+          ? rewrite.catch((err: unknown) => {
+              ctx.warn(`WordPress's URLs still say ${backupPrimary}, as they could not be rewritten to ${primary}: ${errMsg(err)}`);
+            })
+          : rewrite);
       } else if (!isContainerApp(site)) {
         ctx.info(`The backup used ${backupPrimary}. If the site's own config names its address, change it there to ${primary}.`);
       }
@@ -424,6 +436,22 @@ async function recoverSite(
       // Whole - files, mounts kept out of backups, quarantine - and removed a day from now by
       // BackupService.gcSafetyCopies, which reads the time in its name.
       ctx.info(`What was left of the site there is kept for a day in ${aside}.`);
+    }
+
+    if (prepared) {
+      ctx.info(`Checking that the site answers on "${target.name}"…`);
+      // No live HTTP in unit tests; the container state is the check there, as in restoreSiteOnServer.
+      const answers =
+        s.config.nodeEnv === 'test'
+          ? (await target.docker.containerState(site.containerName)) === 'running'
+          : await probeSite(target, site.containerName, primary, probeTimeout, probeOptsFor(site)).catch(() => false);
+      if (!answers) {
+        ctx.warn(
+          isPhpSite(site) && hasDatabase(site)
+            ? "The site does not answer yet. Its database user has a new password: put it in the site's own config, from the Database tab."
+            : 'The site does not answer yet. It stays as the backup brought it back: check its logs, or restore another backup.',
+        );
+      }
     }
 
     const dns: DnsRepoint = await repointSiteDns(ctx, s, site, target, { fromName, sameServer });

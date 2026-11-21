@@ -19,7 +19,8 @@ import Database from 'better-sqlite3';
 import { and, eq } from 'drizzle-orm';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { connectDb } from '../db/index.js';
-import { servers } from '../db/schema.js';
+import { servers, settings } from '../db/schema.js';
+import { LOCAL_ENV_IP } from '../db/seed.js';
 import {
   BACKUP_PROVIDERS,
   destinationProblems,
@@ -269,19 +270,27 @@ export function checkDatabase(file: string, migrationsFolder: string, made: { ve
 }
 
 /**
- * The restored database runs on a new machine: forget the host key server 1's row pinned for the
- * old one. The panel's web terminal and its updates reach this host over SSH, and would otherwise
- * refuse it as a changed key. The panel pins this machine's key on its first connection, as it did
- * on the old one's first install.
+ * The restored database runs on a new machine: forget what server 1's row knew of the old one.
+ *
+ * - The host key it pinned. The panel's web terminal and its updates reach this host over SSH, and
+ *   would refuse it as a changed key. The panel pins this machine's key on its first connection, as
+ *   it did on the old one's first install.
+ * - Its public IP, and the SERVER_PUBLIC_IP the old machine's last boot saw. The first boot then
+ *   fills the empty address from this machine's .env (db/seed.ts). A snapshot from before that
+ *   setting existed would otherwise keep the old address for good, and a recovery would point the
+ *   sites' DNS records back at the lost machine.
  */
-export function forgetLocalHostKey(file: string): void {
+export function forgetOldMachine(file: string): void {
   const sqlite = new Database(file, { fileMustExist: true });
   try {
-    connectDb(sqlite)
-      .update(servers)
-      .set({ hostKeySha256: null })
-      .where(and(eq(servers.id, 1), eq(servers.kind, 'local')))
-      .run();
+    const db = connectDb(sqlite);
+    db.transaction((tx) => {
+      tx.update(servers)
+        .set({ hostKeySha256: null, publicIp: '' })
+        .where(and(eq(servers.id, 1), eq(servers.kind, 'local')))
+        .run();
+      tx.delete(settings).where(eq(settings.key, LOCAL_ENV_IP)).run();
+    });
   } finally {
     sqlite.close();
   }
@@ -697,7 +706,7 @@ export async function restorePanel(req: RestoreRequest, deps: RestoreDeps): Prom
   const prepared = path.join(deps.workDir, 'panel.db');
   await unpackDatabase(snapshot.db, prepared);
   checkDatabase(prepared, deps.migrationsFolder, { version: manifest?.panelVersion ?? null, running: deps.runningVersion });
-  forgetLocalHostKey(prepared);
+  forgetOldMachine(prepared);
 
   const { values, dropped } = manifest ? envForSetup(manifest) : { values: {}, dropped: [] };
   if (dropped.length > 0) say(`Left out, as they do not look right: ${dropped.join(', ')}. setup.sh asks for these or uses its defaults.`);

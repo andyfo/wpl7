@@ -139,7 +139,7 @@ pulls the released panel and site images. In a git checkout, `setup.sh` sets
 
 ### Restore from a panel snapshot
 
-<Since v="0.4.1" /> A restore runs before `deploy/.env` is written and before the panel first
+<Since v="0.4.3" /> A restore runs before `deploy/.env` is written and before the panel first
 starts. `setup.sh` pulls the panel image of the release it installs, or builds it in a checkout. It
 runs `node dist/src/cli/restore.js` in that image, with Docker's socket and `/srv` mounted at the
 same paths and no network of its own. The restore starts rclone in a container beside it, as the
@@ -161,6 +161,7 @@ before. It then writes `/srv/panel/panel.db` with mode `0600`, and `setup.sh` re
 | `SERVER_PUBLIC_IP` | Detected on this server, as on every install |
 | The panel's SSH key | Generated new. A snapshot never holds it |
 | The SSH host key the panel pinned for its own server | Cleared, so the panel pins this server's key when it first connects |
+| The public IP of the panel's own server | Cleared, so the panel takes `SERVER_PUBLIC_IP` when it first starts |
 
 A snapshot without `manifest.json` gives the database only, and `setup.sh` asks for the domains
 as on a new install. Cloudflare's token is in the database. The token of another DNS provider is

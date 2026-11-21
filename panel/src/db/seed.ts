@@ -32,8 +32,11 @@ const LEGACY_ADMIN_KEYS = ['admin.username', 'admin.passwordHash', 'admin.totp',
 /** Server 1's DNS provider has been taken from DNS_PROVIDER, the one time it is. */
 const LOCAL_DNS_SEEDED = 'dns.localProviderSeeded';
 
-/** The SERVER_PUBLIC_IP the last boot saw: a value that differs from it is news (see seed). */
-const LOCAL_ENV_IP = 'server1.envPublicIp';
+/**
+ * The SERVER_PUBLIC_IP the last boot saw: a value that differs from it is news (see seed). A
+ * snapshot restore deletes it along with server 1's address (cli/snapshotRestore.ts).
+ */
+export const LOCAL_ENV_IP = 'server1.envPublicIp';
 
 /**
  * First-boot seeding: the owner account + default settings + default plugin catalog.
