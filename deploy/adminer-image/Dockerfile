@@ -16,8 +16,8 @@
 #   docker build -t "wpl7-adminer:$(cat deploy/adminer-image/VERSION)" deploy/adminer-image
 FROM php:8.4-cli-alpine
 
-ARG ADMINER_VERSION=6.2.0
-ARG ADMINER_SHA256=8daeb33d23967df1a309d2614d0e7fcdfe99f799e25b4fd5312e5a7db159e58c
+ARG ADMINER_VERSION=6.3.1
+ARG ADMINER_SHA256=5b6b64ea923f731871bef02cb69143392d91262056c37124b45cb5101ba12fd4
 
 # tini and coreutils: see the ENTRYPOINT below.
 RUN apk add --no-cache coreutils tini \

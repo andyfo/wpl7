@@ -73,7 +73,7 @@ for a reason; remove one once there is nothing left to watch.
 | [msmtp: one envelope sender, as `wpl7-sendmail` relies on it](#msmtp-one-envelope-sender-as-wpl7-sendmail-relies-on-it) | Low | 2026-11-11 23:04 UTC | msmtp 1.8.28 in the image, 1.8.34 upstream; nothing since changes the four behaviours; the engine mail tests pass |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
 | [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-11-19 08:16 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04, rebuilt 2026-11-11) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
-| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-11-24 09:20 UTC | 6.3.1 (2026-11-20) is the latest, 6.2.0 still pinned; its low `where` advisory is in 6.2.0's code too, the SQLite one not in the MySQL build; base PHP 8.4.28, image 8.4.27 |
+| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-11-24 10:07 UTC | 6.3.1, the latest, pinned as `6.3.1-wpl7.1` on PHP 8.4.28; the panel takes its 303 sign-in; engine test passes |
 | [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-11-19 11:43 UTC | The feed still calls `bbpress` and `bbpress-private-replies` closed and misses `captcha`; the directory answers as `wporgListing` reads them |
 | [Google's crawler address lists](#googles-crawler-address-lists) | Medium | 2026-11-03 09:35 UTC | Both answer: 589 prefixes, none wider than a /27 or a /64 |
 | [ssh2: how a channel closes, as the panel's SSH channels rely on it](#ssh2-how-a-channel-closes-as-the-panels-ssh-channels-rely-on-it) | Low | 2026-11-15 10:57 UTC | 1.17.0 is the latest; channels half-open by default, `destroy()` never marks one destroyed, `'close'` waits for `'end'` or an unreadable stream |
@@ -1496,28 +1496,22 @@ for a reason; remove one once there is nothing left to watch.
 ## Adminer: the pinned build and its advisories
 
 - **Priority:** High
-- **Last checked:** 2026-11-24 09:20 UTC. [Adminer 6.3.1](https://github.com/vrana/adminer/releases/tag/v6.3.1)
-  came out on 2026-11-20 and is the latest; the image still pins 6.2.0. It fixes two advisories
-  published that day, 24 in all now.
+- **Last checked:** 2026-11-24 10:07 UTC, moving the pin to 6.3.1 (2026-11-20, the latest). The
+  MySQL English build's SHA-256 matches GitHub's own digest of the file. 6.3.1 fixes two advisories.
   [GHSA-5xfm-7vgj-3f39](https://github.com/vrana/adminer/security/advisories/GHSA-5xfm-7vgj-3f39)
-  (medium, a `file:` URI as a database name, then a PHP file written) is in the SQLite driver, which
-  the pinned MySQL-only file leaves out: it has no `check_sqlite_name`.
+  (medium, a `file:` URI as a database name) is in the SQLite driver, which the MySQL-only build
+  leaves out.
   [GHSA-qjv8-pw8g-jw65](https://github.com/vrana/adminer/security/advisories/GHSA-qjv8-pw8g-jw65)
-  (low) puts keys of `where[]` from the URL into the Select page's search form unescaped, an HTML
-  attribute injection. It names only 6.3.0, but `selectSearchPrint` is the same in 6.2.0 and the
-  pinned file prints `name='where[$r][col]'`. The front door refuses a request another site starts
-  (`Sec-Fetch-Site`), which is how such a link would arrive. 6.3.1 also escapes, with no advisory, a
-  geometry column's name in conditions, edit and export (SQL injection) and a FULLTEXT index's name
-  in the search form (HTML injection); the pinned file has both unescaped. Both names come from the
-  site's own schema, and Adminer signs in as that site's own user. A POST sent with an expired
-  session now runs after the sign-in only if Adminer sent it, and the CSRF token is 128 bits. The
-  notes rename or remove no hook `wpl7.php` uses, and the 6.3.1 file still calls all ten,
-  `connection()` and `adminer_object()`. Moving the pin still needs `prepare()` in
-  `panel/src/adminer/index.ts` to take the 303 that 6.3.0 brought, the tests that expect 302
-  changed, and the engine test run on 6.3.1, which this check did not do. The base,
-  `php:8.4-cli-alpine`, has been PHP 8.4.28, a security release, since 2026-11-19; the published
-  `6.2.0-wpl7.1` image is still on 8.4.27. Its `php.ini` leaves `session.upload_progress.enabled`
-  at PHP's default, on, which the site image turns off.
+  (low) put keys of `where[]` from the URL into the Select page's search form unescaped. It names
+  only 6.3.0, but 6.2.0 had the same code: 6.3.1 keeps only the keys' digits. Without an advisory,
+  it also escapes a geometry column's name in conditions, edit and export (SQL injection), and a
+  FULLTEXT index's name in the search form (HTML injection). The 6.3.1 file still calls all ten
+  hooks `wpl7.php` uses, as often as 6.2.0, and `connection()` and `adminer_object()`. Since 6.3.0
+  the sign-in and Logout redirect with 303, not 302: `prepare()` in `panel/src/adminer/index.ts` now
+  takes either, 302 for an older Adminer in an image set with `WPL7_ADMINER_IMAGE`. The image,
+  `6.3.1-wpl7.1`, builds on `php:8.4-cli-alpine` at PHP 8.4.28, and the engine test passes on it (6
+  of 6). Its `php.ini` leaves `session.upload_progress.enabled` on, which the site image turns off:
+  Adminer's import shows its progress bar with it.
 - **The problem:** "Open in Adminer" runs Adminer's MySQL-only English build on every server
   that uses it, pinned in `deploy/adminer-image/Dockerfile` by `ADMINER_VERSION` and
   `ADMINER_SHA256`. It sits behind the panel's front door, signs in as a site's own database
