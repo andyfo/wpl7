@@ -1,6 +1,6 @@
 // @docs sites/caching, sites/create, sites/move, sites/overview, sites/settings
 import { and, asc, eq, inArray, isNotNull, or } from 'drizzle-orm';
-import type { BackupBeforeUpdates, JobType, SiteCacheBody, SiteCreateBody, SiteLimitsBody } from '../../shared/schemas.js';
+import type { BackupBeforeUpdates, JobType, SiteCacheBody, SiteCreateBody, SiteLimitsBody, SitePackageInput } from '../../shared/schemas.js';
 import { CACHE_RULE_GROUPS, cacheGroupInUse, cacheOffProblem, parseSiteCacheRules, withCacheRuleIds } from '../../shared/cacheRules.js';
 import { isBackupBeforeUpdates } from '../../shared/updateBackups.js';
 import type { SiteCacheDto, SiteDetail, SiteLimits, SiteSummary, SiteWpSummary } from '../../shared/types.js';
@@ -12,6 +12,7 @@ import type { CoreServices } from './index.js';
 import type { JobWorker } from '../jobs/worker.js';
 import { siteScheme } from './labels.js';
 import { assertDomainsFree } from './domainGuard.js';
+import { PackageError, checkPackageChoices } from './duplicator.js';
 import { appsRoutingOn, routedOnRefusal } from './appRoutes.js';
 import {
   APP_HOSTS_FROM_ROUTES,
@@ -69,6 +70,15 @@ async function webRootMissingIn(docker: Pick<DockerPort, 'exec'>, site: Pick<Sit
 /** A backup reads the files and the database, and a save here reloads nothing it depends on. */
 const CACHE_SAFE_JOBS = new Set(['backup.create']);
 
+/** What a create was checked for, and found, before anything was reserved (SitesService.assertCanCreate). */
+export interface PreparedCreate {
+  /**
+   * A Duplicator package's: its table prefix, the PHP version nearest the old site's, and the
+   * stamp of the file that was read, which the create's claim holds it to.
+   */
+  package?: { tablePrefix: string; phpVersion: string | null; stamp: string };
+}
+
 export class SitesService {
   constructor(
     private readonly s: CoreServices,
@@ -96,17 +106,38 @@ export class SitesService {
   }
 
   /**
-   * The early half of the image check for a new PHP site (services/siteSpec.ts siteContainerSpec):
-   * a server whose site image is from before PHP sites refuses one before anything is made. An
-   * image the server doesn't have yet is fine: the create job builds or pulls it at the panel's own
-   * version, which can run one.
+   * The checks a create waits for before anything is reserved: a container app's, a Duplicator
+   * package, read and refused while it cannot make a site, and a PHP site's image - a server whose
+   * image is from before PHP sites refuses one before anything is made, while an image the server
+   * doesn't have yet is fine (the create job builds or pulls it at the panel's own version). What
+   * it returns goes to create().
    */
-  async assertCanCreate(body: SiteCreateBody): Promise<void> {
-    if (body.app === 'container') return this.s.apps.assertCanCreate(body, resolveTargetServer(this.s, body.serverId));
-    if (body.app !== 'php') return;
+  async assertCanCreate(body: SiteCreateBody): Promise<PreparedCreate> {
+    if (body.app === 'container') {
+      await this.s.apps.assertCanCreate(body, resolveTargetServer(this.s, body.serverId));
+      return {};
+    }
+    if (body.package) return { package: await this.preparePackage(body.package) };
+    if (body.app !== 'php') return {};
     const server = resolveTargetServer(this.s, body.serverId);
     const phpVersion = body.phpVersion ?? this.s.settings.get('defaultPhpVersion');
     await assertPhpImage(this.s.servers.handleFor(server.id), siteImage(phpVersion), { missingIsFine: true });
+    return {};
+  }
+
+  /** A package a site is to be made from: read, refused while it cannot make one, its choices checked. */
+  private async preparePackage(input: SitePackageInput): Promise<NonNullable<PreparedCreate['package']>> {
+    let inspection;
+    try {
+      inspection = await this.s.packages.inspect(input.uploadId);
+    } catch (err) {
+      if (err instanceof PackageError) throw badRequest(err.message);
+      throw err;
+    }
+    if (inspection.dto.blockedReason || !inspection.report) throw conflict(inspection.dto.blockedReason ?? 'The package cannot be read.');
+    const problem = checkPackageChoices(inspection, { title: '', slug: '', serverId: undefined, phpVersion: undefined, ...input });
+    if (problem) throw badRequest(problem);
+    return { tablePrefix: inspection.report.table_prefix, phpVersion: inspection.dto.suggestions?.phpVersion ?? null, stamp: inspection.stamp };
   }
 
   /**
@@ -131,20 +162,23 @@ export class SitesService {
     await this.s.apps.assertHttpRoutesOn(serverId, enabled);
   }
 
-  create(body: SiteCreateBody): { site: SiteRow; job: JobRow } {
+  create(body: SiteCreateBody, prepared: PreparedCreate = {}): { site: SiteRow; job: JobRow } {
     // Its own rows and checks: no PHP version, no administrator, hosts from its routes (services/apps.ts).
     if (body.app === 'container') return this.s.apps.create(body, resolveTargetServer(this.s, body.serverId));
     // Left out by callers inside the panel that predate PHP sites.
     const php = (body.app ?? 'wordpress') === 'php';
+    // From a Duplicator package: its users, language and plugins come with it (handlers/sitePackage.ts).
+    const pkg = body.package ?? null;
+    if (pkg && !prepared.package) throw new Error('A package create was not prepared (assertCanCreate)');
     const offered = this.s.settings.get('phpVersions') ?? [];
-    const phpVersion = body.phpVersion ?? this.s.settings.get('defaultPhpVersion');
+    const phpVersion = body.phpVersion ?? prepared.package?.phpVersion ?? this.s.settings.get('defaultPhpVersion');
     if (!offered.includes(phpVersion)) {
       throw badRequest(`PHP ${phpVersion} is not offered (available: ${offered.join(', ')})`);
     }
     const locale = body.locale ?? this.s.settings.get('defaultLocale') ?? 'en_US';
-    // WordPress's administrator: a PHP site has none.
-    const adminEmail = php ? null : (body.adminEmail ?? (this.s.settings.get('defaultAdminEmail') || null));
-    if (!php && !adminEmail) throw badRequest('No default admin email is set in Settings; provide "adminEmail"');
+    // WordPress's administrator: a PHP site has none, a package's site the ones it brings.
+    const adminEmail = php || pkg ? null : (body.adminEmail ?? (this.s.settings.get('defaultAdminEmail') || null));
+    if (!php && !pkg && !adminEmail) throw badRequest('No default admin email is set in Settings; provide "adminEmail"');
     const server = resolveTargetServer(this.s, body.serverId);
 
     const slug = body.slug ?? slugify(body.domainMode === 'custom' ? body.domains![0]! : body.title);
@@ -172,7 +206,7 @@ export class SitesService {
     // Resolve plugin selection to concrete slugs/zips now, so the job is self-contained. No
     // catalog choice at all is the catalog's defaults, in the order the wizard lists them. A PHP
     // site gets none.
-    const catalogIds = php
+    const catalogIds = php || pkg
       ? []
       : (body.plugins?.catalogIds ??
         this.db
@@ -198,6 +232,9 @@ export class SitesService {
     // three columns are '' (lib/siteKind.ts hasDatabase), and it can be made later.
     const withDatabase = !php || body.database === true;
     const now = Date.now();
+    // Held from here until the job lets go: no chunk may land in it, and no second create may take it.
+    // The file has to be the one that was read: a delete or a new upload meanwhile turns the create away.
+    if (pkg) this.s.packages.claim(pkg.uploadId, prepared.package!.stamp);
     try {
       return this.db.transaction(() => {
         const site = this.db
@@ -221,9 +258,11 @@ export class SitesService {
             // The site's own relay credential; the relay uses it to tell whose mail this is,
             // and refuses senders belonging to another site (services/mailAuth.ts).
             mailPassword: generateSecret(24),
-            wpAdminUser: php ? null : body.adminUser,
+            wpAdminUser: php || pkg ? null : body.adminUser,
             wpAdminEmail: adminEmail,
             containerName: containerName(slug),
+            // A package's tables keep the old site's prefix; tables are never renamed.
+            ...(prepared.package ? { tablePrefix: prepared.package.tablePrefix } : {}),
             createdAt: now,
             updatedAt: now,
           })
@@ -233,6 +272,8 @@ export class SitesService {
           'site.create',
           php
             ? { siteId: site.id }
+            : pkg
+            ? { siteId: site.id, package: pkg, discourageSearchEngines: body.discourageSearchEngines ?? true }
             : {
                 siteId: site.id,
                 adminPassword,
@@ -246,6 +287,7 @@ export class SitesService {
         return { site, job };
       });
     } catch (err) {
+      if (pkg) this.s.packages.release(pkg.uploadId);
       if (err instanceof Error && /UNIQUE constraint failed: sites\.slug/.test(err.message)) {
         throw conflict(`Site name "${slug}" is already taken`);
       }

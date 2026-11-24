@@ -8,6 +8,7 @@ import mysql from 'mysql2/promise';
 import type { Config } from '../config.js';
 import type { DockerPort } from './docker.js';
 import { DB_OBJECT_NAME_RE, SYSTEM_DATABASES } from '../../shared/databases.js';
+import { redactSqlError } from '../lib/sqlErrors.js';
 
 /** One database as the inventory finds it: its tables and their size (services/databases.ts). */
 export interface DbInventoryRow {
@@ -256,7 +257,7 @@ export class DbAdminService implements DbAdminPort {
       timeoutMs: 60 * 60_000,
     });
     if (res.exitCode !== 0) {
-      throw new Error(`Database import failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
+      throw new Error(`Database import failed (exit ${res.exitCode}): ${redactSqlError(res.stderr).slice(0, 500)}`);
     }
   }
 
@@ -283,7 +284,7 @@ export class DbAdminService implements DbAdminPort {
       timeoutMs: opts.timeoutMs ?? 60 * 60_000,
     });
     if (res.exitCode !== 0) {
-      throw new Error(`Database import failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
+      throw new Error(`Database import failed (exit ${res.exitCode}): ${redactSqlError(res.stderr).slice(0, 500)}`);
     }
   }
 

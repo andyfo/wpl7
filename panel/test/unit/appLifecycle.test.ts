@@ -235,9 +235,9 @@ describe('creating a container app', () => {
     await expect(w.deps.sites.assertCanCreate(parsed({ ...shopBody, routes: [{ host: 'shop.example.com', scheme: 'both' }] }))).rejects.toThrow(
       `Traefik on "${server.name}" is from before plain http routes. Update the server, then try again.`,
     );
-    await expect(w.deps.sites.assertCanCreate(parsed(shopBody))).resolves.toBeUndefined();
+    await expect(w.deps.sites.assertCanCreate(parsed(shopBody))).resolves.toEqual({});
     w.docker.containerConfigs.set(TRAEFIK_CONTAINER, { cmd: ['--entrypoints.web.http.redirections.entrypoint.priority=1'], envSet: [] });
-    await expect(w.deps.sites.assertCanCreate(parsed({ ...shopBody, routes: [{ host: 'shop.example.com', scheme: 'both' }] }))).resolves.toBeUndefined();
+    await expect(w.deps.sites.assertCanCreate(parsed({ ...shopBody, routes: [{ host: 'shop.example.com', scheme: 'both' }] }))).resolves.toEqual({});
   });
 
   it('rolls everything back when the image is for another platform, or never answers its health path', async () => {

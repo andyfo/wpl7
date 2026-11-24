@@ -5,7 +5,7 @@ import type { BackupRow } from '../../db/schema.js';
 import type { ImportRunBody } from '../../../shared/schemas.js';
 import type { CoreServices } from '../../services/index.js';
 import type { JobContext } from '../context.js';
-import { initialCursor } from '../../services/imports.js';
+import { IMPORT_SKIPS, initialCursor } from '../../services/imports.js';
 import { NOT_READ, type ListedFile } from '../../services/importListing.js';
 import { PullCanceledError, type ImportPullClient } from '../../services/importPull.js';
 import { JobCanceledError } from '../../lib/errors.js';
@@ -219,7 +219,7 @@ export async function siteImportRefresh(ctx: JobContext<z.infer<typeof siteImpor
     keepalive.unref();
 
     const cursor = initialCursor([
-      'wp-config.php',
+      ...IMPORT_SKIPS,
       ...choices.removeDropins.map((d) => `wp-content/${d}`),
       ...choices.removeMuPlugins.map((m) => `wp-content/mu-plugins/${m}`),
     ]);

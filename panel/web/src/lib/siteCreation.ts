@@ -2,6 +2,7 @@
 import type { JobDto, WporgPluginDto } from '../../../shared/types';
 import type { SiteApp } from '../../../shared/schemas';
 import type { EnvEdit, MountEdit, RouteEdit } from './appForm';
+import type { LeaveBehindChoices } from '../components/imports/OldSite';
 
 /**
  * A new site goes from the New site form straight to its own page, which shows its `site.create`
@@ -59,6 +60,12 @@ export interface NewSiteDraft {
   webRoot: string;
   /** A container app's. */
   container?: NewAppDraft;
+  /** A WordPress site's start: a new install, or a Duplicator package. */
+  source?: 'install' | 'package';
+  /** The package's upload, when it starts from one. */
+  pkgUpload?: { id: string; name: string } | null;
+  /** What of the old host to leave behind, as chosen for that upload. */
+  leave?: { for: string; choices: LeaveBehindChoices } | null;
 }
 
 /** New site's Container steps, as they were left (components/app/NewAppSteps.tsx). */

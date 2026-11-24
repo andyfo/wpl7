@@ -20,10 +20,10 @@ for a reason; remove one once there is nothing left to watch.
 | [RDAP: registry endpoints and bootstrap](#rdap-registry-endpoints-and-bootstrap) | Medium | 2026-11-13 13:08 UTC | .co, .io, .me and .us still absent from IANA; all four supplement endpoints publish `expiration`; RFC 8056 and ICANN's profile unchanged |
 | [Reminders: PHP and OS support dates](#reminders-php-and-os-support-dates) | Medium | 2026-11-13 13:02 UTC | All dates match; PHP 8.6 not out (GA due 2026-11-19); the interim Ubuntu 26.10 is not in the map |
 | [Reminders: Cloudflare token lifetime](#reminders-cloudflare-token-lifetime) | Medium | 2026-11-13 13:15 UTC | Contracts unchanged; neither verify endpoint is documented to take `cfoat_` OAuth tokens, so one would get no date |
-| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-11-15 19:04 UTC | Open upstream, fix #13958 awaiting review; not in v3.7.19; worked around |
-| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-11-15 19:04 UTC | 0.21.20 is out as a tag and an image, with no release yet; same definitions as the pinned 0.21.12; its Lite mode skips more signatures and no longer errors on oversized scripts |
+| [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-11-23 17:02 UTC | Open upstream, fix #13958 still awaiting review; not in v3.7.20 or v3.8.0, both out today; worked around |
+| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-11-23 12:35 UTC | 0.21.20 now has a release, and nothing has followed it; the pin is still 0.21.12: moving it is due |
 | [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-11-01 09:08 UTC | Both overrides still match in 0.21.15, the latest; `@preg_replace` is still 22c684e7; engine test not run at this check |
-| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-11-15 19:04 UTC | 2.7.6 is the latest; patch still needed |
+| [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-11-23 12:35 UTC | 2.7.6 is the latest; patch still needed; `main` stopped creating links, which WPL7 never allows |
 | [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-11-19 19:51 UTC | 8.2.36, 8.3.37, 8.4.28 and 8.5.13 out today, all security releases: floor raised to them, released in 0.4.1; Docker's bases and the edge images carry them; the refresh workflow has had no scheduled run on `main` yet |
 | [phpredis: the pinned 6.3.0](#phpredis-the-pinned-630) | Medium | 2026-11-01 09:08 UTC | 6.3.0 is the latest on PECL and GitHub |
 | [Redis in the site image](#redis-in-the-site-image) | Medium | 2026-11-01 09:08 UTC | Debian's 5:8.0.2-3+deb13u3; three open issues on trixie, none reachable here; `LICENSE.txt` still offers AGPLv3 |
@@ -40,8 +40,8 @@ for a reason; remove one once there is nothing left to watch.
 | [Docker: the build cache and image names, as the nightly clean-up reads them](#docker-the-build-cache-and-image-names-as-the-nightly-clean-up-reads-them) | Medium | 2026-10-27 17:47 UTC | Docker 29.9.2: both prune parameters trim, `all` would remove shared layers first |
 | [Docker: a CPU cap stays on a running container](#docker-a-cpu-cap-stays-on-a-running-container) | Low | 2026-10-19 16:22 UTC | Open upstream; worked around by a new container |
 | [Docker: a signal counts as stopping a container by hand](#docker-a-signal-counts-as-stopping-a-container-by-hand) | Medium | 2026-11-01 06:30 UTC | Docker 28.1.1: after `docker kill --signal USR1`, a container with `unless-stopped` that exits stays down |
-| [Traefik: a router on web beside the HTTPS redirect](#traefik-a-router-on-web-beside-the-https-redirect) | High | 2026-11-14 20:51 UTC | Traefik 3.7.19: with the redirect at priority 1, an app's http router answers, everything else still redirects, the ACME router stays above |
-| [Docker: an image's labels on its container](#docker-an-images-labels-on-its-container) | High | 2026-11-14 20:51 UTC | Docker 28.1.1, Traefik 3.7.19: labels are inherited; `traefik.enable=false` on the container wins; the default router answers on 80 and 443 |
+| [Traefik: a router on web beside the HTTPS redirect](#traefik-a-router-on-web-beside-the-https-redirect) | High | 2026-11-23 17:02 UTC | Traefik 3.7.20 and 3.8.0 (today): nothing on redirections, priorities or HTTP-01; as measured on 3.7.19, an app's http router answers and everything else still redirects |
+| [Docker: an image's labels on its container](#docker-an-images-labels-on-its-container) | High | 2026-11-23 17:02 UTC | Docker 29.10.0, Traefik 3.7.20 and 3.8.0: nothing on labels, `exposedByDefault` or the default rule; as measured on Docker 28.1.1 and Traefik 3.7.19, `traefik.enable=false` on the container wins |
 | [Docker: the names in an image archive](#docker-the-names-in-an-image-archive) | Medium | 2026-11-14 20:51 UTC | Docker 28.1.1 and 27.5.1: the classic store reads `manifest.json`, containerd's `index.json`; renamed in both, only the panel's name lands |
 | [Docker: the registry's distribution answer and pulls with a login](#docker-the-registrys-distribution-answer-and-pulls-with-a-login) | Medium | 2026-11-14 20:51 UTC | Docker 28.1.1 and 27.5.1: a digest without a pull, with the login; platforms for a list only on containerd's store |
 | [Docker: unprivileged ports from 0](#docker-unprivileged-ports-from-0) | Low | 2026-11-14 20:51 UTC | Docker 28.1.1 sets `ip_unprivileged_port_start=0` in a container's namespace |
@@ -61,7 +61,7 @@ for a reason; remove one once there is nothing left to watch.
 | [The DKIM signer's image: x86-64 only](#the-dkim-signers-image-x86-64-only) | Low | 2026-10-07 11:05 UTC | Every tag is amd64 only |
 | [setup-php: PHP 7.0 in CI](#setup-php-php-70-in-ci) | Low | 2026-10-07 15:07 UTC | `v2` is the newest major, 2.37.2 the latest release; 7.0 and 8.5 supported |
 | [The migration plugin's floor: WordPress 5.0 and PHP 7.0](#the-migration-plugins-floor-wordpress-50-and-php-70) | Medium | 2026-11-08 17:27 UTC | PHP 7.0 on 0.54% of sites, WordPress before 5.0 on 2.5%; CI installs 7.0; PHP 8.6 due 2026-11-19 |
-| [The WordPress image's entrypoint, as an import and `wpl7-start` rely on it](#the-wordpress-images-entrypoint-as-an-import-and-wpl7-start-rely-on-it) | Medium | 2026-11-01 09:08 UTC | Acts on a `php-fpm` first argument; seeds only an empty folder; writes wp-config.php only when absent |
+| [The WordPress image's entrypoint, as an import and `wpl7-start` rely on it](#the-wordpress-images-entrypoint-as-an-import-and-wpl7-start-rely-on-it) | Medium | 2026-11-24 06:45 UTC | Acts on a `php-fpm` first argument; seeds only an empty folder; writes wp-config.php only when absent, from the site folder's `wp-config-docker.php` before its own |
 | [WPL7 Connect's floor: WordPress 5.2 and PHP 7.0](#wpl7-connects-floor-wordpress-52-and-php-70) | Medium | 2026-11-08 17:27 UTC | PHP 7.0 on 0.54% of sites, WordPress before 5.2 on 3.0%; CI installs 7.0; Docker test not run at this check |
 | [WordPress's upgrader, as WPL7 Connect drives it](#wordpresss-upgrader-as-wpl7-connect-drives-it) | Medium | 2026-11-08 17:30 UTC | 7.1.4 is the latest; it unpacks into a randomly named folder, which WPL7 Connect does not use; Docker test not run at this check |
 | [WordPress's shutdown, as WPL7 Connect answers an activation that ended PHP](#wordpresss-shutdown-as-wpl7-connect-answers-an-activation-that-ended-php) | Medium | 2026-11-20 09:48 UTC | WordPress 7.1.4 and 7.1.5: output is flushed at `shutdown` priority 1, and the fatal error handler stays out of an activation; the Docker test passes |
@@ -73,29 +73,30 @@ for a reason; remove one once there is nothing left to watch.
 | [msmtp: one envelope sender, as `wpl7-sendmail` relies on it](#msmtp-one-envelope-sender-as-wpl7-sendmail-relies-on-it) | Low | 2026-11-11 23:04 UTC | msmtp 1.8.28 in the image, 1.8.34 upstream; nothing since changes the four behaviours; the engine mail tests pass |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
 | [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-11-19 08:16 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04, rebuilt 2026-11-11) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
-| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-11-15 19:04 UTC | 6.3.0 (2026-11-03) is the latest, 6.2.0 still pinned; its sign-in answers 303, which the panel refuses; no new advisory; base is PHP 8.4.27 |
+| [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-11-23 12:35 UTC | 6.3.1 is out: its two advisories miss the pinned 6.2.0, but it fixes an SQL and an HTML injection in MySQL code; the base is now PHP 8.4.28; moving the pin is due |
 | [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-11-19 11:43 UTC | The feed still calls `bbpress` and `bbpress-private-replies` closed and misses `captcha`; the directory answers as `wporgListing` reads them |
 | [Google's crawler address lists](#googles-crawler-address-lists) | Medium | 2026-11-03 09:35 UTC | Both answer: 589 prefixes, none wider than a /27 or a /64 |
 | [ssh2: how a channel closes, as the panel's SSH channels rely on it](#ssh2-how-a-channel-closes-as-the-panels-ssh-channels-rely-on-it) | Low | 2026-11-15 10:57 UTC | 1.17.0 is the latest; channels half-open by default, `destroy()` never marks one destroyed, `'close'` waits for `'end'` or an unreadable stream |
+| [Duplicator's package format, as New site reads it](#duplicators-package-format-as-new-site-reads-it) | Medium | 2026-11-24 10:31 UTC | Lite 5.2.0 is the latest; read in its source and in packages from 5.2.0 and 1.5.11, .zip and .daf; triggers stay out of its dumps, without their SQL mode; 1.5.x's mysqldump writes in the client's default set; the end-to-end test passes on all four |
+| [MariaDB: MySQL 8's collations](#mariadb-mysql-8s-collations) | Medium | 2026-11-24 08:46 UTC | 11.4.13 has MySQL 8.0's 44 `0900` collations, with the weights of the `uca1400` `nopad` ones they are mapped to; 11.4.4 has only the latter |
+| [WordPress's incompatible SQL modes, as a package's triggers run in them](#wordpresss-incompatible-sql-modes-as-a-packages-triggers-run-in-them) | Low | 2026-11-24 10:31 UTC | 7.1.5 takes out six modes; trunk adds `NO_BACKSLASH_ESCAPES`, which the panel takes out already |
+| [MariaDB's keywords and functions, as a trigger's words are read](#mariadbs-keywords-and-functions-as-a-triggers-words-are-read) | Low | 2026-11-24 11:54 UTC | 11.4.13: 699 keywords, 268 functions, as `panel/src/lib/mariadbWords.ts` has them; spatial functions are not among them |
 
 ## Traefik: an idle visitor's rate limit refills
 
 - **Priority:** High
-- **Last checked:** 2026-11-15 19:04 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
+- **Last checked:** 2026-11-23 17:02 UTC. [traefik#13957](https://github.com/traefik/traefik/issues/13957)
   is open, with nothing since the Traefik team said on 2026-09-28 they would reproduce it. Its
   fix, [traefik#13958](https://github.com/traefik/traefik/pull/13958) (against `v3.7`, milestone
-  3.7), still waits for review, with nothing since a user's comment of 2026-10-29 asking for a
-  merge. v3.7.19 (2026-11-13) is now the latest, which `traefik:v3.7` in
-  `deploy/docker-compose.yml` follows. Neither it nor v3.7.18 (2026-11-10) has a rate-limiter
-  item in its notes, and nor have v2.11.62, v2.11.63, v3.8.0-rc.2 and v3.8.0-rc.3, out on the same
-  two days. v3.7.18 fixes five advisories, in the Compress, BasicAuth and ForwardAuth
-  middlewares, the ingress-nginx provider and the clean-up of request paths; v3.7.19 moves three
-  dependencies. None of the five reaches WPL7, which sets up none of those middlewares and not the
-  ingress-nginx provider. The path one, [GHSA-cp28-5662-543f](https://github.com/traefik/traefik/security/advisories/GHSA-cp28-5662-543f),
-  leaves `/..;x/` in the path a router matches, which bypasses a rule only in front of a backend
-  that strips path parameters, such as a servlet container; Apache and nginx, in front of PHP,
-  take `..;x` for a folder's name. Nothing under `pkg/middlewares/ratelimiter` has changed on `v3.7`, `v3.8` or
-  `master` since 2026-09-24. A server gets the five when it next pulls `traefik:v3.7`.
+  3.7), still waits for review. Two comments since the last check: on 2026-11-18 a user hit by it
+  in production, and on 2026-11-19 a measurement of the fix applied to v3.7.19. Traefik's TTL map
+  keeps expiry times in whole seconds, so even with the fix a bucket can be dropped up to a
+  second early and come back full. That gives back at most one second of refill per pause:
+  under one request for our per-minute limits, so the measurement under **When it changes**
+  still expects one or two through. Traefik v3.7.20 and v3.8.0 came out on 2026-11-23: neither has
+  the fix, and 3.8.0's one rate-limit item is the Redis script's change of 2026-09-24.
+  `traefik:v3.7` in `deploy/docker-compose.yml` follows 3.7.20, not 3.8. Nothing under
+  `pkg/middlewares/ratelimiter` has changed on `v3.7`, `v3.8` or `master` since 2026-09-24.
 - **The problem:** Traefik drops a visitor's rate-limit bucket after `1 + 1/rate` seconds without
   a request - 2 seconds for limits of one a second or more, 4 for 20 a minute - and starts the
   next request on a full burst. With logins at 20 a minute in bursts of 30, a guesser who paused
@@ -115,23 +116,20 @@ for a reason; remove one once there is nothing left to watch.
 ## AMWScan: the pinned image and its signatures
 
 - **Priority:** High
-- **Last checked:** 2026-11-15 19:04 UTC. Upstream moved on the day of this check: 0.21.16 to
-  0.21.20 were tagged within half an hour, after a 0.22.0 it took back, and of the five only
-  0.21.20 has a Docker Hub image. None has a GitHub release yet, so v0.21.15 (2026-10-03) is still
-  the latest there. We pin 0.21.12, whose definitions are 2026.09.08.1, and 0.21.20 bundles the
-  same: its `signatures.json`, `exploits.json` and `hashes.json` are those of 0.21.15 byte for
-  byte, `functions.json` has the same content, and the manifest differs in `createdAt` only. What
-  changed is the engine and the image. `--lite`, which WPL7 passes, now skips four more signatures
-  (`0f53abf5`, `85310fdd`, `8c60fbdb`, `e6300ec0`) and any signature match that contains `ls-la`
-  or a schema.org product snippet. It also defines `LITE_SIGNATURE_MATCH_EXCLUSIONS`, which
-  0.21.12 to 0.21.15 read without defining: in Lite mode, a signature found in the first or last
-  32 KiB of an oversized script raises a PHP error there (`Undefined constant`) instead of a
-  finding. What the pinned scanner then reports for that file was not traced. There is a new
-  `--memory-limit` (the default stays 1G), a patched Symfony Filesystem, and libxml2 and musl from
-  Alpine edge in the image. The pin stays for now: the signatures are the same, and a release that
-  took five tags in half an hour may not have settled. Moving it comes up again once 0.21.20, or
-  what follows it, has a release: it would report fewer Lite-mode false positives, end the
-  oversized-script error, and check every catalog zip again.
+- **Last checked:** 2026-11-23 12:35 UTC. v0.21.20 got its GitHub release on 2026-11-15 at
+  19:20 UTC, minutes after the previous check, with "Maintenance release." as its notes. No tag
+  has followed it, and its Docker Hub image (`0.21.20`, also `0.21` and `latest`) was last pushed
+  that day at 19:26 UTC. We still pin 0.21.12. What the previous check found in 0.21.20 stands:
+  it bundles the pin's definitions (2026.09.08.1); `--lite`, which WPL7 passes, skips four more
+  signatures (`0f53abf5`, `85310fdd`, `8c60fbdb`, `e6300ec0`) and any signature match that
+  contains `ls-la` or a schema.org product snippet; and it defines
+  `LITE_SIGNATURE_MATCH_EXCLUSIONS`, which 0.21.12 to 0.21.15 read without defining, so a
+  signature in the first or last 32 KiB of an oversized script no longer raises a PHP error
+  instead of a finding. The image also has a new `--memory-limit` (the default stays 1G), a
+  patched Symfony Filesystem, and libxml2 and musl from Alpine edge. The condition the previous
+  check set has been met, so moving the pin is due, in a pull request of its own, as **When it
+  changes** says: fewer Lite-mode false positives, no oversized-script error, and every catalog
+  zip checked again. Not done at this check.
 - **The problem:** the scanner image is pinned by digest (`SCANNER_IMAGE` in
   `panel/src/services/scanEngines.ts`) and runs with `--disable-definitions-update`. Its
   signatures are the ones bundled in that image, and they age until the pin moves. Upstream
@@ -180,18 +178,22 @@ for a reason; remove one once there is nothing left to watch.
 ## SFTPGo: our build and its overwrite patch
 
 - **Priority:** High
-- **Last checked:** 2026-11-15 19:04 UTC. We build v2.7.6 (commit 62ae9ba3) with
+- **Last checked:** 2026-11-23 12:35 UTC. We build v2.7.6 (commit 62ae9ba3) with
   `deploy/sftpgo-image/staged-overwrite.patch`; v2.7.6 (2026-09-19) is still the latest release,
   and no advisory has been published since the four of that day, which 2.7.6 fixes (one high:
   stored XSS through directory names in the WebClient). The `2.7.x` branch has not moved since
-  2026-09-26. `main` got 12 commits, pushed 2026-11-09 to 2026-11-15, among them a fix for a
-  panic when a rename's target is missing on S3, a periodic check that closes sessions no longer
-  valid, the external auth hook answering first in keyboard-interactive sign-in, and an
-  ftpserverlib update. None changes how an upload replaces a file: they touch none of the upload
-  handlers the patch changes, and the rename that completes an atomic upload
-  (`BaseTransfer.Close`, `internal/common/transfer.go`) is unchanged since 2026-10-17. The
-  patch's code still applies to `main`; one test hunk, in `internal/sftpd/sftpd_test.go`, does
-  not. `main` now needs Go 1.27, so the builder image moves with the next release.
+  2026-09-26. `main` got nine commits from 2026-11-19 to 2026-11-21. One, 0f4cece8, removes the
+  creation of symbolic links: a link is followed with the permissions of the path it is reached
+  from, and a rename can move it, so a user allowed to create links could reach paths their
+  permissions do not grant. Links already on the storage are still followed within each root,
+  `symlink_mode` is ignored with a warning, and sub-path mounts open inside their folder. It has
+  no advisory and is in no release yet. It does not reach WPL7: `FULL_ACCESS` in
+  `panel/src/services/ftpConfig.ts` never grants `create_symlinks`, every login has the same
+  permissions on `/`, and there are no sub-path mounts. The rest touch object storage, recursive
+  copies and dependencies. None changes how an upload replaces a file, and the patch's code still
+  applies to `main` (360ca011), with offsets; the same test hunk in
+  `internal/sftpd/sftpd_test.go` does not. `main` needs Go 1.27, so the builder image moves with
+  the next release.
 - **The problem:** SFTPGo is on the internet (FTP and SFTP). Upstream's `upload_mode: 1` renames
   an existing file to a temporary name before an overwrite, so the file is missing for the whole
   transfer - WordPress without its `wp-config.php` shows the installer - and is deleted if the
@@ -610,7 +612,9 @@ for a reason; remove one once there is nothing left to watch.
 ## Traefik: a router on web beside the HTTPS redirect
 
 - **Priority:** High
-- **Last checked:** 2026-11-14 20:51 UTC. On Traefik 3.7.19, with `deploy/docker-compose.yml`'s own
+- **Last checked:** 2026-11-23 17:02 UTC. The release notes of Traefik 3.7.20 and 3.8.0, both out on
+  2026-11-23, say nothing of entry point redirections, router priorities or the HTTP-01 challenge;
+  not measured again. Last measured on 2026-11-14 20:51 UTC: on Traefik 3.7.19, with `deploy/docker-compose.yml`'s own
   flags plus `--entrypoints.web.http.redirections.entrypoint.priority=1`, a container app's router on
   `web` answers plain http, and every other request on port 80 still redirects: a WordPress and a PHP
   site under the panel's labels and protection files, and a host nobody has. The ACME challenge router
@@ -634,7 +638,10 @@ for a reason; remove one once there is nothing left to watch.
 ## Docker: an image's labels on its container
 
 - **Priority:** High
-- **Last checked:** 2026-11-14 20:51 UTC. On Docker 28.1.1 with Traefik 3.7.19, an image's `traefik.*`
+- **Last checked:** 2026-11-23 17:02 UTC. The release notes of Docker Engine 29.10.0 (2026-11-16) and of
+  Traefik 3.7.20 and 3.8.0 (2026-11-23) say nothing of label inheritance, `exposedByDefault` or the
+  Docker provider's default rule; not measured again. Last measured on 2026-11-14 20:51 UTC: on
+  Docker 28.1.1 with Traefik 3.7.19, an image's `traefik.*`
   and `wpl7.*` labels land on a container made without labels: Traefik routed another site's domain to
   it at once, and `listManaged(['wpl7.role=wordpress'])` counted it as that site's. `traefik.enable=false`
   on the container wins over the image's. A container with `traefik.enable=true` and only a service label
@@ -1108,11 +1115,12 @@ for a reason; remove one once there is nothing left to watch.
 ## The WordPress image's entrypoint, as an import and `wpl7-start` rely on it
 
 - **Priority:** Medium
-- **Last checked:** 2026-11-01 09:08 UTC. `docker-entrypoint.sh` on docker-library/wordpress's default branch acts
+- **Last checked:** 2026-11-24 06:45 UTC. `docker-entrypoint.sh` on docker-library/wordpress's default branch acts
   only when its first argument starts with `apache2` or is `php-fpm`. It then copies WordPress into
   `/var/www/html` only when neither `index.php` nor `wp-includes/version.php` is there, and writes
-  `wp-config.php` from `wp-config-docker.php` only when there is none (`! -s`), then chowns it to
-  `www-data`. `wp-config-docker.php` reads the table prefix from `WORDPRESS_TABLE_PREFIX` and ends with
+  `wp-config.php` only when there is none (`! -s`), then chowns it to `www-data`. It writes it from
+  the first `wp-config-docker.php` it finds: the one in the site's folder, then its own in
+  `/usr/src/wordpress`. `wp-config-docker.php` reads the table prefix from `WORDPRESS_TABLE_PREFIX` and ends with
   the `/* That's all, stop editing!` line.
 - **The problem:** the site image is the fpm variant, whose services `wpl7-start` starts itself. So it
   runs the entrypoint once as `docker-entrypoint.sh php-fpm -t`: the first argument gets the seeding and
@@ -1122,13 +1130,17 @@ for a reason; remove one once there is nothing left to watch.
   `wp-config.php` of its own, with the site's prefix, which the import then adds the carried settings
   to with `wp config set` (placed above the "stop editing" line). The image copies its own `.htaccess`
   only into an empty folder, which is why the finish job writes WordPress's standard one when the old
-  site had none. PHP sites rely on the other side of it: `wpl7-start` runs the entrypoint only for a
+  site had none. An old site's own `wp-config-docker.php`, there when it ran on this image, would be
+  the template for the new `wp-config.php`: an import (`IMPORT_SKIPS` in `panel/src/services/imports.ts`,
+  for pulls saved before it too) and a Duplicator package (`siteFileFilter` in
+  `panel/src/services/duplicator.ts`) leave it out, and `leaveBehind` takes it out of the staging folder.
+  PHP sites rely on the other side of it: `wpl7-start` runs the entrypoint only for a
   container with `WORDPRESS_DB_HOST`, which every WordPress site's container has and a PHP site's
   never does, and plain `php-fpm -t` otherwise, so nothing is put into a PHP site's folder.
   `test/engine/phpSite.test.ts` proves that an empty folder stays empty without the variable, and
   that a WordPress container on the same image is still seeded.
 - **Check:** `gh api repos/docker-library/wordpress/contents/docker-entrypoint.sh --jq .content | base64 -d`
-  around the first `if`, and the `index.php` and `wp-config.php` tests, and
+  around the first `if`, the `index.php` and `wp-config.php` tests and the `wp-config-docker.php` list, and
   `gh api repos/docker-library/wordpress/contents/wp-config-docker.php --jq .content | base64 -d | grep -n 'table_prefix\|stop editing'`.
 - **When it changes:**
   - **It stops acting on `php-fpm`:** `wpl7-start` has to run it with whatever it takes instead. A new
@@ -1468,22 +1480,22 @@ for a reason; remove one once there is nothing left to watch.
 ## Adminer: the pinned build and its advisories
 
 - **Priority:** High
-- **Last checked:** 2026-11-15 19:04 UTC. No release and no advisory since the last check.
-  Adminer 6.3.0 (2026-11-03) is the latest release; the image still pins 6.2.0. 6.3.0 fixes a
-  CSRF regression from 6.0.1 that has no advisory: a POST
-  with any `auth[]` field and a wrong token had the token replaced by a valid one, and ran its
-  action in the existing session (vrana/adminer#1375). It does not reach our build: `router.php`
-  refuses a POST with `auth` that lacks the panel's login key, and the panel's own sign-in posts
-  no token. The notes rename or remove no hook `wpl7.php` uses, and `connection()`,
-  `adminer_object()` and `X-Forwarded-Prefix` work as before; they add the plugin methods
-  `executeQuery()` and `donation()`. But redirects after a POST now answer 303, not 302, the
-  sign-in's and Logout's among them, and the panel takes anything but 302 as a refused sign-in
-  (`prepare()` in `panel/src/adminer/index.ts`). Moving the pin needs that check to accept 303
-  too, the tests that expect 302 changed, and the engine test run on 6.3.0, which this check did
-  not do. There are still 22 advisories, the newest
-  GHSA-r9r5-j5q8-8c59 (2026-09-25), in the SQLite driver, which the MySQL-only build leaves out.
-  The image's base, `php:8.4-cli-alpine`, is still PHP 8.4.27 (built 2026-11-05). The engine test
-  was not run at this check.
+- **Last checked:** 2026-11-23 12:35 UTC. Adminer 6.3.1 came out on 2026-11-20; the image still
+  pins 6.2.0. Two advisories came with it, and neither reaches our build:
+  GHSA-qjv8-pw8g-jw65 (low), search keys from the URL printed into form attributes, is in 6.3.0
+  only; GHSA-5xfm-7vgj-3f39 (medium), a `file:` URI in the SQLite driver, is in code the MySQL-only
+  build leaves out. 6.3.1 also fixes, with no advisory, two bugs in code our build has: an SQL
+  injection through the name of a geometry column, in conditions, editing and export, and an HTML
+  injection through the name of a FULLTEXT index in the search form. Both need a column or index
+  named by someone with the site's database user, the user Adminer signs in as. It also performs
+  an action posted with an expired session only if it came from the same origin, uses a 128-bit
+  CSRF token, and stops keeping a created or altered user's password in the SQL history. The
+  notes rename no hook `wpl7.php` uses. What 6.3.0 changed still holds: redirects after a POST
+  answer 303, so moving the pin needs `prepare()` in `panel/src/adminer/index.ts` to accept 303,
+  the tests that expect 302 changed, and the engine test run on 6.3.1. There are now 24
+  advisories. The base, `php:8.4-cli-alpine`, has been PHP 8.4.28 since 2026-11-20, a security
+  release the image, built on 8.4.27, does not have; moving the pin rebuilds on it too. Moving it
+  is due, as **When it changes** says. Not done at this check; the engine test was not run.
 - **The problem:** "Open in Adminer" runs Adminer's MySQL-only English build on every server
   that uses it, pinned in `deploy/adminer-image/Dockerfile` by `ADMINER_VERSION` and
   `ADMINER_SHA256`. It sits behind the panel's front door, signs in as a site's own database
@@ -1626,3 +1638,135 @@ for a reason; remove one once there is nothing left to watch.
   channel stops being half-open by default, ending the panel's half would close the whole channel:
   `execWithInput` would lose a command's output after its input, and the forwarded socket's channel
   would need `allowHalfOpen` passed where ssh2 then takes it.
+
+## Duplicator's package format, as New site reads it
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-24 10:31 UTC. Duplicator Lite 5.2.0 is the latest on wordpress.org.
+  What the panel reads was taken from its source and from four packages built with it and with
+  1.5.11 on WordPress 7.1.5: a 5.2.0 `.daf` (DupArchive 5.0.1, PHP dump in one file per table), a
+  5.2.0 `.zip` (mysqldump, one dump file), and a 1.5.11 `.zip` and `.daf` (DupArchive 1.0.0, the
+  old layout). `WPL7_DUPLICATOR_E2E_DIR=… npx vitest run test/e2e/duplicator` passes on all four:
+  every file byte for byte, every table row for row against Duplicator's own dump.
+- **What we rely on:** none of it is documented by Duplicator.
+  - Where things are. 5.x: `dup-installer/dup_descriptors_<hash>/archive.txt`, the dump in
+    `db_dumps/`, the old `.htaccess` and `.user.ini` in `orig_files/source_site_*`. 1.x:
+    `dup-installer/dup-archive__<hash>.txt`, `dup-installer/dup-database__<hash>.sql`,
+    `dup-installer/original_files_<hash>/source_site_*`. The root `wp-config.php`, `.htaccess` and
+    `.user.ini` are left out of the archive (`PackageArchive.php`'s global file filter).
+  - The dump's order: `dbInfo.dumpFiles` in archive.txt (`schema.sql` first, then a file per table,
+    each `.gz` in the archive, `DumpFileMap.php`), else the files of `db_dumps/` by name, else 1.x's
+    one file. No `SET NAMES`: the bytes are in WordPress's connection charset (`DB_CHARSET`) when
+    the PHP dump wrote them (`PhpDumpEngine.php` reads through `$wpdb`), and when mysqldump did
+    from 5.0.0 on (`--skip-set-charset --default-character-set=<$wpdb->charset>`, `DatabasePkg.php`).
+    1.5.x's mysqldump has `--skip-set-charset` and no character set of its own (the plugin's SVN
+    tags: every 1.5.x without `--default-character-set`, every 5.x with it): its dumps are in the
+    client's default, UTF-8 unless the old host's configuration sets another. The job tells which
+    from the bytes, which hold text only (`--hex-blob`).
+    `dbInfo.buildMode` says which wrote it (`PHP`, `PHPCHUNKING`, `MYSQLDUMP`).
+  - mysqldump's own header in 5.x, as the package keeps it: `/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS,
+    UNIQUE_CHECKS=0 */;`. With unique checks off InnoDB may take a duplicate into a unique index
+    without a word; New site turns them on there (`PackageDumpFilter`).
+  - `wpInfo.configs.defines` holds `UPLOADS` when wp-config.php sets it (`addDefineIfExists`,
+    `PackInstaller.php`); New site carries it as it is.
+  - What the dump holds: rows in `INSERT IGNORE` statements of a row a line, at most the query size
+    limit each (`TableDumpWriter.php`, at most 1 MiB); views, procedures and functions in the
+    schema file as `SHOW CREATE` gives them, strings with line breaks in them and all
+    (`writeRoutines`). Rows load with `INSERT IGNORE` in both modes (mysqldump's `--insert-ignore`);
+    New site loads them with a plain `INSERT`, so a row that collides fails the load.
+    Triggers are left out (`--skip-triggers`): `dbInfo.triggerList` has each one's
+    `"DELIMITER ;;\n<SHOW CREATE TRIGGER>;;\nDELIMITER ;"` (`DatabaseInfo::addTriggers`, the same in
+    1.5.x), but not the SQL mode it was made in, which `SHOW CREATE TRIGGER` gives beside it.
+    Duplicator's own installer asks for them to be added by hand. New site adds them last, after
+    the address rewrite, in WordPress's SQL mode.
+  - `dbInfo.tablesList`: the base tables in the package, after its table filters; views only as
+    `viewCount`. A table left out by a filter is named nowhere.
+  - archive.txt's fields: `wp_tableprefix`, `version_*`, `mu_mode`, `exportOnlyDB`, `components`,
+    `wpInfo.configs.realValues` (`homeUrl`, `siteUrl`, `originalPaths`: `home`, `abs`, `wpcontent`,
+    `uploads`, `plugins`, `muplugins`, `themes`, from `SnapWP::getWpPaths` in both versions), `wpInfo.configs.defines`
+    (`value`, `inWpConfig`), `wpInfo.plugins` (`active`, `mustUse`, `dropIns`), `wpInfo.themes`,
+    `dbInfo.triggerList`, `viewCount`, `procCount`, `funcCount`.
+  - DupArchive: `<A><V>` then `<C>` before 5.0.0, `<X>` flags and `<P>` password hash from 5.0.0; a
+    file's own `<X>` flags from 5.0.0; every glob with its CRC-32 (`hash('crc32b')`, so eight hex
+    digits), of the stored bytes before 5.0.0 and of the content since; each file's own CRC-32 of
+    its content, taken before it is read in, or 32 zeros past 100 MiB. A file that changed between
+    the two does not match: Duplicator's installer notes it and goes on (`validateExpandedFile`); the index file `__dup__archive__index.json` never compressed, its
+    `extraPos` where the installer's files start.
+- **Check:** the version of
+  `https://downloads.wordpress.org/plugin/duplicator.latest-stable.zip`. For a newer one, compare
+  with the last: `installer/dup-installer/src/Package/InstallerDescriptors.php`,
+  `src/Package/Database/Dump/DumpFileMap.php`, `src/Package/Archive/PackageArchive.php`
+  (`getDefaultGlobalFileFilter` and the config files after it), `src/Package/Create/PackInstaller.php`
+  (`createArchiveConfigFile`, `getWpInfo`), `src/Package/Database/` (`DatabaseInfo.php`'s triggers,
+  `Dump/PhpDumpEngine.php`, `Dump/TableDumpWriter.php`, the mysqldump flags in `DatabasePkg.php`) and
+  `src/Libs/DupArchive/` (`DUPARCHIVE_VERSION`, the headers, `DupArchiveFileProcessor.php`'s globs). Then build a `.zip` and a `.daf` package with it on any WordPress (**Duplicator →
+  Settings → Backups → Archive engine**) and run the end-to-end test on them.
+- **When it changes:** a moved or renamed file goes into the patterns in
+  `panel/src/services/duplicator.ts`; a new DupArchive header into `panel/src/lib/dupArchive.ts`; a
+  field into `descriptorSchema`. Triggers in the dump: they would load with the rows, before the
+  address rewrite fires them, so take them out there and keep adding them last. A `SET NAMES` of
+  its own in the dump: it wins over `packageDumpPreamble`'s. A new mysqldump character set flag, or
+  one gone: `packageCharset`. Add the layout to `panel/test/duplicatorFixtures.ts` and run the
+  unit and end-to-end tests. Until then the panel refuses such a package and says why.
+
+## MariaDB: MySQL 8's collations
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-24 08:46 UTC. MariaDB 11.4.13 knows MySQL 8.0's 44 `utf8mb4_*0900_*`
+  collations: the root four, and twenty languages in `ai_ci` and `as_cs`. Their `WEIGHT_STRING` is the
+  same as that of the `utf8mb4_uca1400_[<language>_]nopad_*` collation they are mapped to, and like
+  MySQL's they pad no spaces. 11.4.4 has none of them, but every `uca1400` `nopad` collation, `ai`/`as`
+  and `ci`/`cs`, in the same twenty languages. MySQL 8.0.30's later languages (`ru`, `nb`, `ja`, …) are
+  in neither.
+- **The problem:** a dump from MySQL 8 names these collations. A server before 11.4.5, which an install
+  that never pulled its MariaDB again still runs, refuses the tables, and one mapped to a collation that
+  compares less strictly (case-insensitive for `as_cs`, padded for any of them) makes two values one:
+  a unique key keeps only the first, and Duplicator's dumps load with `INSERT IGNORE`.
+- **What we do about it:** `replaceCollations` in `panel/src/services/importSql.ts`, for packages, the
+  import's pull and backups of sites hosted elsewhere: the same strength and no padding, the language's
+  own rules where MariaDB has them, the accent-sensitive root order where it does not.
+  `test/unit/importSql.test.ts` pins the names. No MariaDB collation is UCA 9.0, MySQL 8's: UCA 14.0
+  counts some characters Unicode added since alike with what they decompose to (`㋿` and `令和`), so
+  rows always load with a plain `INSERT` (packages lose their `INSERT IGNORE`): such a pair fails the
+  load, and the job says to change one of the rows.
+- **Check:** on the compose file's MariaDB and on `mariadb:11.4.4`:
+  `SELECT COLLATION_NAME FROM information_schema.COLLATIONS WHERE COLLATION_NAME LIKE 'utf8mb4%0900%'`,
+  the `uca1400` `nopad` names, and `WEIGHT_STRING` of a few strings under a `0900` collation and its
+  mapped one.
+- **When it changes:** once every supported MariaDB has the `0900` names, leave them as they are and drop
+  the mapping. A language MariaDB gains goes into `UCA1400_LANGUAGES`.
+
+## WordPress's incompatible SQL modes, as a package's triggers run in them
+
+- **Priority:** Low
+- **Last checked:** 2026-11-24 10:31 UTC. `wpdb::$incompatible_modes` in `src/wp-includes/class-wpdb.php` is
+  `NO_ZERO_DATE`, `ONLY_FULL_GROUP_BY`, `STRICT_TRANS_TABLES`, `STRICT_ALL_TABLES`, `TRADITIONAL` and
+  `ANSI` in WordPress 6.9.9, 7.0.6 and 7.1.5; trunk (last changed 2026-10-28) adds
+  `NO_BACKSLASH_ESCAPES`.
+- **The problem:** a trigger keeps the SQL mode it was made in, and Duplicator does not record it.
+  New site adds a package's triggers in the mode WordPress gives its own queries: the server's, without
+  the modes wpdb takes out. That is the mode a plugin's trigger was made in, and the one in which a
+  wrong guess makes no write fail.
+- **What we do about it:** `WORDPRESS_INCOMPATIBLE_MODES` and `TRIGGER_PREAMBLE` in
+  `panel/src/jobs/handlers/sitePackage.ts` copy trunk's list.
+- **Check:** `gh api repos/WordPress/wordpress-develop/contents/src/wp-includes/class-wpdb.php --jq
+  .content | base64 -d | sed -n '/incompatible_modes = array(/,/);/p'`, for trunk and the latest release.
+- **When it changes:** copy the list. A mode taken back out of it stays out of the panel's copy until a
+  release has done so.
+
+## MariaDB's keywords and functions, as a trigger's words are read
+
+- **Priority:** Low
+- **Last checked:** 2026-11-24 11:54 UTC. MariaDB 11.4.13 lists 699 words in `information_schema.KEYWORDS` and 268
+  in `information_schema.SQL_FUNCTIONS`; the spatial functions (`ST_Distance` and the like) are in
+  neither.
+- **The problem:** New site adds a package's trigger only when every word of it is accounted for
+  (`panel/src/services/packageTriggers.ts`): a keyword or function of MariaDB's, or a name of the
+  site's database. A keyword or function MariaDB adds is an unknown name until the list has it, and a
+  trigger that uses it is left out and named.
+- **What we do about it:** `panel/src/lib/mariadbWords.ts` is the two tables of the compose file's
+  MariaDB, written out.
+- **Check:** on the compose file's MariaDB, `SELECT WORD FROM information_schema.KEYWORDS ORDER BY
+  WORD` and `SELECT FUNCTION FROM information_schema.SQL_FUNCTIONS ORDER BY FUNCTION`, against the file.
+- **When it changes:** write the file again from the two tables. Left out, a word only makes a
+  trigger that uses it stay out: nothing breaks.

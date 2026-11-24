@@ -25,6 +25,10 @@ The **New site** wizard creates a WordPress site in four steps: **Name & domain*
 it: **Name & domain**, **PHP** and **Review**. A [container app](/docs/sites/container/) runs your
 own image, with the steps **Image**, **Settings** and **Routes** in between.
 
+<Since v="0.4.3" /> **Start from** on the **WordPress** step picks a new install or a
+[Duplicator package](/docs/sites/duplicator/). A site from a package brings its own users and
+plugins, so its steps are **Name & domain**, **WordPress**, **From the old host** and **Review**.
+
 <Screenshot name="site-new" alt="The New site wizard's first step with a site title entered" />
 
 ## Create a site
@@ -94,6 +98,7 @@ then shows the error and the log. **Back to the form** opens the wizard as you f
 ## Related
 
 - [Your first site](/docs/get-started/first-site/)
+- [Create a site from a Duplicator package](/docs/sites/duplicator/)
 - [Domains and going live](/docs/sites/domains/)
 - [The plugin catalog](/docs/plugins/catalog/)
 - [Recipes and pro-plugin licenses](/docs/plugins/recipes/)

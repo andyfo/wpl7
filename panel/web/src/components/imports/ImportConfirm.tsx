@@ -1,13 +1,14 @@
 // @docs sites/import
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { ImportDto, JobDto } from '../../../../shared/types';
 import { api } from '../../api/client';
 import { useMeta } from '../../api/hooks';
 import { useFollowJob } from '../jobConsole/context';
-import { formatBytes, localeName } from '../../lib/format';
-import { Button, Card, ConfirmDialog, ErrorNote, Field, Toggle, inputClass } from '../ui';
+import { localeName } from '../../lib/format';
+import { Button, Card, ConfirmDialog, ErrorNote, Field, inputClass } from '../ui';
+import { LeaveBehind, OldSiteFacts, WarningList, choicesBody, suggestedChoices } from './OldSite';
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/;
 
@@ -25,11 +26,7 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
   const [slug, setSlug] = useState(s.slug);
   const [serverId, setServerId] = useState<number | null>(null);
   const [phpVersion, setPhpVersion] = useState<string | null>(s.phpVersion);
-  const [constants, setConstants] = useState(() => new Set(imp.constants.filter((c) => c.ticked).map((c) => c.name)));
-  const [plugins, setPlugins] = useState(() => new Set(s.deactivatePlugins));
-  const [dropins, setDropins] = useState(() => new Set(s.removeDropins));
-  const [muPlugins, setMuPlugins] = useState(() => new Set(s.removeMuPlugins));
-  const [rewritePaths, setRewritePaths] = useState(true);
+  const [choices, setChoices] = useState(() => suggestedChoices(s, imp.constants));
   const [deleting, setDeleting] = useState(false);
   const follow = useFollowJob();
 
@@ -53,11 +50,7 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
           slug,
           ...(multiServer ? { serverId: effServerId } : {}),
           ...(phpVersion ? { phpVersion } : {}),
-          carryConstants: [...constants],
-          deactivatePlugins: [...plugins],
-          removeDropins: [...dropins],
-          removeMuPlugins: [...muPlugins],
-          rewritePaths,
+          ...choicesBody(choices),
         },
       });
       follow(res.job, { refresh: [['import', imp.id], ['imports']] });
@@ -70,47 +63,18 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
     },
   });
   const blocking = imp.warnings.filter((w) => w.blocking);
-  const others = imp.warnings.filter((w) => !w.blocking);
-  const activePlugins = report.plugins.filter((p) => p.active);
   const reason = imp.blockedReason ?? (!SLUG_RE.test(slug) ? 'The site name is not valid.' : !title.trim() ? 'The site needs a title.' : null);
   const oldPhp = /^(\d+\.\d+)/.exec(report.phpVersion)?.[1] ?? report.phpVersion;
 
   return (
     <div className="space-y-6">
       <Card title="The old site">
-        <dl className="space-y-2 text-sm">
-          <Fact label="Source" value={report.home} />
-          <Fact label="WordPress" value={report.wpVersion} />
-          <Fact label="PHP" value={report.phpVersion} />
-          <Fact label="Table prefix" value={report.tablePrefix} />
-          <Fact label="Language" value={localeName(meta.data?.locales, report.locale)} />
-          <Fact
-            label="Files"
-            value={`${report.files.count.toLocaleString('en-US')} · ${formatBytes(report.files.bytes)}${report.files.partial ? ' (estimate)' : ''}`}
-          />
-          <Fact label="Database" value={`${report.db.tables} tables · ${formatBytes(report.db.bytes)} · ${report.db.server}`} />
-          <Fact label="Plugins" value={`${report.plugins.length}, ${activePlugins.length} active`} />
-          <Fact
-            label="Search engines"
-            value={report.searchEnginesAllowed ? 'Allowed on the old site; discouraged here until you go live' : 'Discouraged'}
-          />
-        </dl>
+        <OldSiteFacts report={report} language={localeName(meta.data?.locales, report.locale)} searchEnginesAllowed={report.searchEnginesAllowed} />
       </Card>
 
       {imp.warnings.length > 0 && (
         <Card title="Before you import">
-          <ul className="space-y-2 text-sm">
-            {blocking.map((w) => (
-              <li key={w.code} className="rounded-lg bg-red-50 px-3 py-2 text-red-800">
-                {w.message}
-              </li>
-            ))}
-            {others.map((w) => (
-              <li key={w.code} className="rounded-lg bg-amber-50 px-3 py-2 text-amber-900">
-                {w.message}
-              </li>
-            ))}
-          </ul>
+          <WarningList warnings={imp.warnings} />
         </Card>
       )}
 
@@ -152,54 +116,7 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
       </Card>
 
       <Card title="From the old host">
-        <div className="space-y-6">
-          <CheckList
-            title="Settings to carry over"
-            hint="From the old wp-config.php. Database settings, keys and paths are never carried."
-            empty="The old wp-config.php has none that can be carried."
-            items={imp.constants.map((c) => ({ id: c.name, label: <code>{c.name}</code>, sub: c.note ?? c.preview }))}
-            checked={constants}
-            onChange={setConstants}
-          />
-          <CheckList
-            title="Plugins to deactivate"
-            hint="Active plugins that need the old host. Deactivated, not deleted."
-            empty="No active plugins."
-            items={activePlugins.map((p) => ({ id: p.slug, label: p.name || p.slug, sub: p.slug }))}
-            checked={plugins}
-            onChange={setPlugins}
-          />
-          {report.dropins.length > 0 && (
-            <CheckList
-              title="Drop-ins to remove"
-              hint="Files in wp-content that plug a cache or database layer of the old host in."
-              items={report.dropins.map((d) => ({ id: d, label: <code>{d}</code> }))}
-              checked={dropins}
-              onChange={setDropins}
-            />
-          )}
-          {report.muPlugins.length > 0 && (
-            <CheckList
-              title="Must-use plugins to remove"
-              hint="Hosts install their own here."
-              items={report.muPlugins.map((m) => ({ id: m.file, label: <code>{m.file}</code>, sub: m.name || undefined }))}
-              checked={muPlugins}
-              onChange={setMuPlugins}
-            />
-          )}
-          <Toggle
-            checked={rewritePaths}
-            onChange={setRewritePaths}
-            label={
-              <span>
-                Rewrite file paths
-                <span className="block text-xs text-neutral-500">
-                  Replaces <code>{report.abspath.replace(/\/$/, '')}</code> with <code>/var/www/html</code> in the database.
-                </span>
-              </span>
-            }
-          />
-        </div>
+        <LeaveBehind report={report} constants={imp.constants} value={choices} onChange={setChoices} />
       </Card>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -222,65 +139,6 @@ export function ImportConfirm({ imp }: { imp: ImportDto }) {
           onConfirm={() => remove.mutate()}
           onClose={() => setDeleting(false)}
         />
-      )}
-    </div>
-  );
-}
-
-function Fact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex gap-3">
-      <dt className="w-32 shrink-0 text-neutral-500">{label}</dt>
-      <dd className="break-all font-medium">{value}</dd>
-    </div>
-  );
-}
-
-/** A titled list of checkboxes over a set of ids. */
-function CheckList({
-  title,
-  hint,
-  empty,
-  items,
-  checked,
-  onChange,
-}: {
-  title: string;
-  hint: string;
-  empty?: string;
-  items: { id: string; label: ReactNode; sub?: string }[];
-  checked: Set<string>;
-  onChange: (next: Set<string>) => void;
-}) {
-  const toggle = (id: string, on: boolean) => {
-    const next = new Set(checked);
-    if (on) next.add(id);
-    else next.delete(id);
-    onChange(next);
-  };
-  return (
-    <div>
-      <div className="text-sm font-medium">{title}</div>
-      <div className="mb-2 text-xs text-neutral-500">{hint}</div>
-      {items.length === 0 ? (
-        <div className="text-sm text-neutral-500">{empty}</div>
-      ) : (
-        <div className="space-y-1.5">
-          {items.map((item) => (
-            <label key={item.id} className="flex items-start gap-2 text-sm">
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={checked.has(item.id)}
-                onChange={(e) => toggle(item.id, e.target.checked)}
-              />
-              <span>
-                {item.label}
-                {item.sub && <span className="block break-all text-xs text-neutral-500">{item.sub}</span>}
-              </span>
-            </label>
-          ))}
-        </div>
       )}
     </div>
   );

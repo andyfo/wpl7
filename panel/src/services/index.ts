@@ -33,6 +33,7 @@ import type { PanelFiles } from './panelFiles.js';
 import type { PluginZipChecks } from './pluginZipChecks.js';
 import type { QuarantineService } from './quarantine.js';
 import type { ImportService } from './imports.js';
+import type { PackageUploads } from './duplicator.js';
 import type { ConnectionsService } from './connections.js';
 import type { ExternalBackupService } from './externalBackup.js';
 import type { ReminderService } from './reminders.js';
@@ -122,6 +123,8 @@ export interface CoreServices {
   quarantine: QuarantineService;
   /** Imports of existing WordPress sites through the migration plugin. */
   imports: ImportService;
+  /** Duplicator packages uploaded to make a new site from. */
+  packages: PackageUploads;
   /** Sites hosted elsewhere, through the WPL7 Connect plugin: their connections and keys. */
   connections: ConnectionsService;
   /** Their backups: a copy of their files kept up to date on a server, and the database pulled whole. */

@@ -28,9 +28,23 @@ describe('the SQL an import accepts', () => {
     );
     const { lines, collations } = checkSqlPage(page(DROP, mysql8), T, { first: true });
     expect(collations).toBe(true);
-    expect(lines[1]).toContain("DEFAULT 'utf8mb4_0900_ai_ci' COLLATE utf8mb4_bin");
-    expect(lines[1]).toContain('COLLATE=utf8mb4_unicode_520_ci;');
-    expect(rewriteCollations('COLLATE utf8mb4_de_pb_0900_ai_ci')).toEqual({ line: 'COLLATE utf8mb4_unicode_520_ci', changed: true });
+    expect(lines[1]).toContain("DEFAULT 'utf8mb4_0900_ai_ci' COLLATE utf8mb4_nopad_bin");
+    expect(lines[1]).toContain('COLLATE=utf8mb4_uca1400_nopad_ai_ci;');
+  });
+
+  it("gives each MySQL 8 collation MariaDB's that compares the same, so no two values become one", () => {
+    const to = (name: string) => rewriteCollations(`COLLATE ${name}`).line.slice('COLLATE '.length);
+    // Case and accents, as MySQL had them; and no padding, so 'a' and 'a ' stay two values.
+    expect(to('utf8mb4_0900_ai_ci')).toBe('utf8mb4_uca1400_nopad_ai_ci');
+    expect(to('utf8mb4_0900_as_cs')).toBe('utf8mb4_uca1400_nopad_as_cs');
+    expect(to('utf8mb4_0900_as_ci')).toBe('utf8mb4_uca1400_nopad_as_ci');
+    expect(to('utf8mb4_0900_bin')).toBe('utf8mb4_nopad_bin');
+    // A language MariaDB has rules for keeps them; one it has none for gets the accent-sensitive root order.
+    expect(to('utf8mb4_de_pb_0900_ai_ci')).toBe('utf8mb4_uca1400_german2_nopad_ai_ci');
+    expect(to('utf8mb4_es_trad_0900_as_cs')).toBe('utf8mb4_uca1400_spanish2_nopad_as_cs');
+    expect(to('utf8mb4_nb_0900_ai_ci')).toBe('utf8mb4_uca1400_nopad_as_ci');
+    expect(to('utf8mb4_ja_0900_as_cs_ks')).toBe('utf8mb4_uca1400_nopad_as_cs');
+    expect(rewriteCollations('COLLATE utf8mb4_unicode_520_ci')).toEqual({ line: 'COLLATE utf8mb4_unicode_520_ci', changed: false });
   });
 
   it.each([

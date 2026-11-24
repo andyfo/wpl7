@@ -112,6 +112,11 @@ export const hostExec: ExecPort = {
         if (stdout.length < STDERR_CAP) stdout += chunk.toString();
       });
       input.on('error', () => child.kill('SIGKILL'));
+      // Destroyed before it ended, with or without an error: its stdin would never end.
+      input.on('close', () => {
+        if (!input.readableEnded) child.kill('SIGKILL');
+      });
+      if (input.destroyed && !input.readableEnded) child.kill('SIGKILL');
       // A child that exits early (bad flags, full disk, its own timeout) makes the next
       // write to stdin raise EPIPE. Unhandled, that 'error' event takes down the whole
       // panel process — API, worker and every other server's jobs with it. The command's

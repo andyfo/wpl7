@@ -60,6 +60,7 @@ import { MalwareScanService } from './services/malwareScan.js';
 import { PluginZipChecks } from './services/pluginZipChecks.js';
 import { QuarantineService } from './services/quarantine.js';
 import { ImportService } from './services/imports.js';
+import { PackageUploads } from './services/duplicator.js';
 import { ConnectionsService } from './services/connections.js';
 import { ExternalBackupService } from './services/externalBackup.js';
 import { DatabasesService } from './services/databases.js';
@@ -72,6 +73,7 @@ import type { CoreServices, Logger } from './services/index.js';
 import { PANEL_VERSION } from './lib/version.js';
 import { JobWorker } from './jobs/worker.js';
 import { Schedulers } from './jobs/schedulers.js';
+import { holdQueuedPackages } from './jobs/handlers/sites.js';
 import { buildServer } from './server.js';
 import type { AppDeps } from './routes/deps.js';
 
@@ -235,6 +237,7 @@ async function main(): Promise<void> {
     panelFiles,
     quarantine,
     imports: importsService,
+    packages: new PackageUploads(config, () => settings.get('phpVersions') ?? []),
     connections,
     updates,
     system,
@@ -301,6 +304,7 @@ async function main(): Promise<void> {
   worker.reconcileOnBoot();
   // After the worker's sweep, which fails the jobs a restart cut short: their imports follow.
   importsService.reconcileOnBoot();
+  holdQueuedPackages(core);
   worker.start();
   schedulers.start();
 

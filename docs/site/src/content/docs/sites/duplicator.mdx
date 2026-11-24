@@ -1,0 +1,112 @@
+---
+title: Create a site from a Duplicator package
+description: Make a new site from the archive the Duplicator plugin made of a WordPress site, without its installer.
+sidebar:
+  order: 3.5
+  label: Duplicator packages
+since: 0.4.3
+sources:
+  - panel/web/src/components/duplicator/*.tsx
+  - panel/web/src/components/imports/OldSite.tsx
+  - panel/web/src/api/packages.ts
+  - panel/src/routes/packages.ts
+  - panel/src/routes/uploadChunks.ts
+  - panel/src/services/duplicator.ts
+  - panel/src/services/packageDump.ts
+  - panel/src/services/packageTriggers.ts
+  - panel/src/jobs/handlers/sitePackage.ts
+  - panel/src/lib/zipReader.ts
+  - panel/src/lib/dupArchive.ts
+---
+
+import Screenshot from '~/components/Screenshot.astro';
+
+A Duplicator package is the archive the Duplicator plugin makes of a WordPress site. The
+**New site** wizard can make a site from one. The panel reads the archive itself, so the
+`installer.php` that comes with it is not needed.
+
+<Screenshot name="site-new-package" alt="The WordPress step of New site with a Duplicator package read: the old site's address, versions and size" />
+
+## Before you start
+
+- The package's archive: the file that ends in `_archive.zip` or `_archive.daf`.
+- A package built without archive encryption. An encrypted archive cannot be read.
+- Free disk for the archive on the panel's server, and for about two and a half times the site's
+  size on the server the site goes to.
+
+## Create the site
+
+1. Open **Sites** and choose **New site**. Enter a **Site title** and choose **Continue**.
+2. Under **Start from**, choose **Duplicator package**, then **Choose package**. The file goes up
+   and the panel reads it.
+3. Read what the package holds and the warnings under it. Pick the **PHP version** and choose
+   **Continue**.
+4. In **From the old host**, choose what to leave behind: plugins to deactivate, drop-ins and
+   must-use plugins to remove, and the settings to carry over from the old `wp-config.php`. Choose
+   **Continue**.
+5. Check the **Review** step and choose **Create site**.
+
+## What happens
+
+The `site.create` job brings the site in the way an [import](/docs/sites/import/) does:
+
+- The files come from the package, but for Duplicator's own installer. The old `.htaccess` and
+  `.user.ini` come back too. A file that differs from what Duplicator noted for it is unpacked as
+  it is, and the job log names it.
+- The panel writes its own `wp-config.php`, with the settings you ticked. A setting that names a
+  folder of the old site, such as `WP_LANG_DIR`, gets the same folder here. `UPLOADS` comes along
+  as it is, so uploads kept in a folder of their own stay there.
+- The site gets its own database, and the package's dump is loaded into it as the site's own
+  database user. The tables keep their prefix.
+- The old address is replaced with the new one in the database, and the old folder with
+  `/var/www/html`. The plugins you chose are deactivated. Search engines follow the wizard's
+  **Discourage search engines from indexing this site**, not the old site's setting.
+- The old database's triggers are added last, so the address change does not set them off. They
+  run in the SQL mode WordPress gives its own queries. Duplicator does not record the one they
+  were made with.
+- A first backup is taken and a malware scan is queued.
+
+The upload is deleted once the site is made. A failed create keeps it for a day, so **Back to the
+form** tries again without a new upload.
+
+## After the site is made
+
+- It keeps its users, passwords and language. **Log in to WordPress** on its page works as on
+  any site.
+- **Go live** moves it to its domain and allows search engines again. See
+  [Domains and going live](/docs/sites/domains/).
+
+## Limits
+
+- Encrypted packages, multisite networks, database-only packages and WordPress in a subfolder
+  are refused. So are sites whose plugins, must-use plugins or themes are not in `wp-content`.
+- A package is at most 20 GiB. An upload no site was made from is deleted a day after its last
+  chunk.
+- Symbolic links in a `.zip` are not copied.
+- Views, routines and triggers come along, owned by the site's database user. A trigger is added
+  only when the site has every table, column and routine it names. One that names another
+  database, a table the package left out or anything else the site does not have is left out. So
+  is one that uses `||`, which means different things in different SQL modes. New site and the
+  job log name each one.
+- Duplicator does not record the SQL mode a trigger was made in. A trigger made in an unusual
+  mode, such as `ANSI_QUOTES`, can act differently here.
+- Every row loads, or the create fails. Two rows that MySQL 8 tells apart can count as the same
+  in MariaDB. Change one of them on the old site and build the package again.
+- The database is loaded in the character set Duplicator wrote it in. UTF-8, single-byte sets such
+  as latin1 or cp1250, and ujis, eucjpms, euckr and gb2312 work. A site whose `DB_CHARSET` is sjis,
+  big5 or gbk is refused.
+- Duplicator before 5.0.0 does not say which character set its mysqldump wrote. Such a dump is
+  read as UTF-8, or in the old site's `DB_CHARSET` or latin1 when its bytes are not UTF-8. If
+  letters with accents look wrong, build the package again with Duplicator's **SQL Mode** set to
+  **PHP Code**.
+- Statements that set the database server itself, such as `SET @@GLOBAL`, are left out.
+- The old `wp-config.php` is never used, nor a `wp-config-docker.php` beside it. Only the settings
+  you tick are carried over.
+
+## Related
+
+- [Create a site](/docs/sites/create/)
+- [Import a site](/docs/sites/import/)
+- [Domains and going live](/docs/sites/domains/)
+- [How backups work](/docs/backups/overview/)
+- [Malware scans](/docs/security/malware-scans/)

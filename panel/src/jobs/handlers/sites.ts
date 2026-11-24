@@ -3,9 +3,9 @@ import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
-import { appHardeningInput } from '../../../shared/schemas.js';
+import { appHardeningInput, sitePackageInput } from '../../../shared/schemas.js';
 import { UPLOAD_ID_RE } from '../../../shared/siteFilePath.js';
-import { siteConnections, backups, moveCleanups, sites, type SiteRow } from '../../db/schema.js';
+import { siteConnections, backups, jobs, moveCleanups, sites, type SiteRow } from '../../db/schema.js';
 import { BACKUP_DELETE_LANE } from '../../services/backup.js';
 import type { CoreServices } from '../../services/index.js';
 import type { ServerHandle } from '../../servers/registry.js';
@@ -90,6 +90,8 @@ export const siteCreatePayload = z.object({
   discourageSearchEngines: z.boolean().default(true),
   /** A container app's uploaded image, when it was made from one (services/apps.ts): checked as a deploy's is. */
   uploadId: z.string().regex(UPLOAD_ID_RE).optional(),
+  /** A WordPress site made from a Duplicator package instead of a new install (handlers/sitePackage.ts). */
+  package: sitePackageInput.optional(),
 });
 
 /**
@@ -110,6 +112,8 @@ export async function siteCreate(ctx: JobContext<z.infer<typeof siteCreatePayloa
   const site = loadSite(s.db, ctx.payload.siteId);
   // Its own image, folders and checks: none of the site image's steps (handlers/apps.ts).
   if (isContainerApp(site)) return (await import('./apps.js')).createApp(ctx, s);
+  // Its files and database from the package, as an import's set-up brings them in (handlers/sitePackage.ts).
+  if (ctx.payload.package) return (await import('./sitePackage.js')).createSiteFromPackage(ctx, s, site);
   const server = s.servers.handleFor(site.serverId);
   const domains = siteDomains(site);
   const primary = domains[0]!;
@@ -337,13 +341,40 @@ async function installWordPress(
 }
 
 /** The WordPress site's container again, now with its router. Its protection is pinned by then. */
-async function publishWordPress(ctx: JobContext<unknown>, s: CoreServices, server: ServerHandle, site: SiteRow, domains: string[]): Promise<void> {
+export async function publishWordPress(ctx: JobContext<unknown>, s: CoreServices, server: ServerHandle, site: SiteRow, domains: string[]): Promise<void> {
   ctx.info('Publishing the site (enabling its router)…');
   // Protection first (docs/security.md): the rules arrive before the router they guard.
   await s.security.kick(server.id);
   await server.docker.removeContainer(site.containerName);
   await server.docker.createSiteContainer(await siteContainerSpec(s, server, site, domains, siteRuntimeFrom(s.settings, site)));
   await startSiteContainer(server, s, site, ctx);
+}
+
+/**
+ * At boot, before the API takes a request: the uploads of package creates still queued, held
+ * again. A create's hold lives in memory, so after a restart a delete, a chunk or another create
+ * could otherwise take an upload from a create still waiting for its turn. Returns how many.
+ */
+export function holdQueuedPackages(s: Pick<CoreServices, 'db' | 'packages'>): number {
+  const queued = s.db
+    .select({ payload: jobs.payload })
+    .from(jobs)
+    .where(and(eq(jobs.type, 'site.create'), eq(jobs.status, 'queued')))
+    .all();
+  let held = 0;
+  for (const { payload } of queued) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(payload);
+    } catch {
+      continue;
+    }
+    const uploadId = siteCreatePayload.safeParse(parsed).data?.package?.uploadId;
+    if (!uploadId) continue;
+    s.packages.hold(uploadId);
+    held++;
+  }
+  return held;
 }
 
 /**
@@ -356,6 +387,8 @@ async function publishWordPress(ctx: JobContext<unknown>, s: CoreServices, serve
 export function siteCreateQueuedCancel(payload: z.infer<typeof siteCreatePayload>, s: CoreServices): void {
   // Let go of and removed, as a canceled deploy's is (handlers/apps.ts appDeployQueuedCancel).
   // Synchronous: it runs inside the worker's cancel.
+  // A package stays for another try: only the create's hold on it goes.
+  if (payload.package) s.packages.release(payload.package.uploadId);
   const { uploadId } = payload;
   if (uploadId) {
     s.apps.releaseUpload(uploadId);
@@ -542,6 +575,8 @@ export async function siteDelete(ctx: JobContext<z.infer<typeof siteDeletePayloa
 
     ctx.info('Removing site files…');
     await server.files.rm(safeJoin(s.config.paths.sites, site.slug));
+    // A create from a Duplicator package that a restart cut short leaves its unpacked copy here (handlers/sitePackage.ts).
+    await server.files.rm(path.join(s.config.srvRoot, 'wpl7-import', `package-${site.id}`));
 
     ctx.info('Removing the site network…');
     await removeSiteNetwork(server.docker, site.slug);

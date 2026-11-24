@@ -151,6 +151,7 @@ export function summarizeJob(type: JobType | string, payload: unknown, names: Na
       case 'demo':
         return num(p.steps) !== null ? plural(num(p.steps)!, 'step') : null;
       case 'site.create': {
+        if (p.package && typeof p.package === 'object') return 'From a Duplicator package';
         const plugins = (Array.isArray(p.pluginSlugs) ? p.pluginSlugs.length : 0) + (Array.isArray(p.pluginZipPaths) ? p.pluginZipPaths.length : 0);
         return plugins > 0 ? `With ${plural(plugins, 'plugin')}` : null;
       }

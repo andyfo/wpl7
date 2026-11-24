@@ -15,6 +15,7 @@ import {
   type DbAdminPort,
   type DbInventoryRow,
 } from '../services/dbAdmin.js';
+import { redactSqlError } from '../lib/sqlErrors.js';
 
 /** MySQL string literal escaping (backslash escapes are active in MariaDB's default sql_mode). */
 const sqlQuote = (v: string) => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`;
@@ -47,7 +48,7 @@ export class RemoteDbAdminService implements DbAdminPort {
       { timeoutMs: 5 * 60_000 },
     );
     if (res.exitCode !== 0) {
-      throw new Error(`mariadb admin command failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
+      throw new Error(`mariadb admin command failed (exit ${res.exitCode}): ${redactSqlError(res.stderr).slice(0, 500)}`);
     }
     return res.stdout;
   }
@@ -118,7 +119,7 @@ export class RemoteDbAdminService implements DbAdminPort {
       `'exec mariadb ${IMPORT_CLIENT_ARGS} -uroot -p"$MARIADB_ROOT_PASSWORD" ${dbName}'`;
     const res = await this.exec.run('bash', ['-c', script], { timeoutMs: 60 * 60_000 });
     if (res.exitCode !== 0) {
-      throw new Error(`Database import failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
+      throw new Error(`Database import failed (exit ${res.exitCode}): ${redactSqlError(res.stderr).slice(0, 500)}`);
     }
   }
 
@@ -146,7 +147,7 @@ export class RemoteDbAdminService implements DbAdminPort {
         `mariadb --defaults-extra-file=${cnf} ${IMPORT_CLIENT_ARGS} --max-allowed-packet=1G ${dbName}`;
       const res = await this.exec.run('bash', ['-c', script], { timeoutMs: opts.timeoutMs ?? 60 * 60_000 });
       if (res.exitCode !== 0) {
-        throw new Error(`Database import failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
+        throw new Error(`Database import failed (exit ${res.exitCode}): ${redactSqlError(res.stderr).slice(0, 500)}`);
       }
     } finally {
       await this.exec.run('docker', ['exec', this.container, 'rm', '-f', cnf], { timeoutMs: 60_000 }).catch(() => undefined);
@@ -161,7 +162,7 @@ export class RemoteDbAdminService implements DbAdminPort {
       Readable.from(['SELECT @@GLOBAL.max_allowed_packet;\n']),
       { timeoutMs: 60_000 },
     );
-    if (res.exitCode !== 0) throw new Error(`mariadb admin command failed (exit ${res.exitCode}): ${res.stderr.slice(0, 500)}`);
+    if (res.exitCode !== 0) throw new Error(`mariadb admin command failed (exit ${res.exitCode}): ${redactSqlError(res.stderr).slice(0, 500)}`);
     if (Number(res.stdout.trim()) >= wanted) return null;
     await this.sql(`SET GLOBAL max_allowed_packet = ${wanted};`);
     return wanted;

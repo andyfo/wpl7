@@ -32,6 +32,7 @@ const SITE_QUERY_REVIEW: Record<string, Record<string, Verdict>> = {
   },
   'jobs/handlers/backups.ts': { backupRestore: hosted('isExternal(site)') },
   'jobs/handlers/import.ts': { siteImportQueuedCancel: hosted("'provisioning'") },
+  'jobs/handlers/sitePackage.ts': { createSiteFromPackage: both("the site its own create made, by its id: hosted, as every create's") },
   'jobs/handlers/move.ts': { finalizeCleanup: hosted("owner.kind !== 'external'") },
   'jobs/handlers/servers.ts': { serverApplySiteLimits: hosted('hostedSites()') },
   'jobs/handlers/shared.ts': {
@@ -194,6 +195,7 @@ const SITE_APP_REVIEW: Record<string, Record<string, AppVerdict>> = {
   },
   'jobs/handlers/backups.ts': { backupRestore: apps("restores either app; WordPress's steps inside ask isPhpSite") },
   'jobs/handlers/import.ts': { siteImportQueuedCancel: IMPORT_ROW },
+  'jobs/handlers/sitePackage.ts': { createSiteFromPackage: apps('the site its own create made, by its id: a WordPress site') },
   'jobs/handlers/move.ts': { finalizeCleanup: apps('who owns a source copy, by slug') },
   'jobs/handlers/servers.ts': { serverApplySiteLimits: apps('container limits and runtime files for every hosted site') },
   'jobs/handlers/shared.ts': {
@@ -341,6 +343,9 @@ const SITE_IMAGE_REVIEW: Record<string, Record<string, ImageVerdict>> = {
   },
   'jobs/handlers/import.ts': {
     siteImportQueuedCancel: images('an import\'s own site, which an import makes as a WordPress site (services/imports.ts:385 sets no app)'),
+  },
+  'jobs/handlers/sitePackage.ts': {
+    createSiteFromPackage: images('the site its own create made, by its id: a WordPress site on the site image'),
   },
   'jobs/handlers/move.ts': {
     finalizeCleanup: images('who owns a source copy, by slug: an app\'s container, database and folder go by the same names'),

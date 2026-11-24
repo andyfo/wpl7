@@ -1,4 +1,4 @@
-// @docs get-started/first-site, get-started/quick-start, sites/container, sites/create, sites/php
+// @docs get-started/first-site, get-started/quick-start, sites/container, sites/create, sites/duplicator, sites/php
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
@@ -8,17 +8,21 @@ import { webRootSchema, type SiteApp } from '../../../shared/schemas';
 import { Button, Card, ErrorNote, Field, OutLink, Segmented, Toggle, inputClass } from '../components/ui';
 import { WporgPluginSearch } from '../components/WporgPluginSearch';
 import { LocaleSelect } from '../components/LocaleSelect';
-import { localeName } from '../lib/format';
+import { formatBytes, localeName } from '../lib/format';
 import { draftOf, keepDraft, type NewAppDraft, type NewSiteDraft } from '../lib/siteCreation';
 import { AppImageStep, AppRoutesStep, AppSettingsStep, appReviewRows } from '../components/app/NewAppSteps';
 import { appBody, appStepOk, createdStoppedNote, emptyAppDraft } from '../lib/appForm';
+import { usePackageInspection } from '../api/packages';
+import { PackageUpload, type PackageUploadValue } from '../components/duplicator/PackageUpload';
+import { LeaveBehind, OldSiteFacts, WarningList, choicesBody, suggestedChoices, type LeaveBehindChoices } from '../components/imports/OldSite';
 
-type StepId = 'name' | 'wordpress' | 'plugins' | 'php' | 'image' | 'settings' | 'routes' | 'review';
+type StepId = 'name' | 'wordpress' | 'plugins' | 'leave' | 'php' | 'image' | 'settings' | 'routes' | 'review';
 
 const STEP_LABELS: Record<StepId, string> = {
   name: 'Name & domain',
   wordpress: 'WordPress',
   plugins: 'Plugins',
+  leave: 'From the old host',
   php: 'PHP',
   image: 'Image',
   settings: 'Settings',
@@ -32,6 +36,14 @@ const STEPS: Record<SiteApp, StepId[]> = {
   php: ['name', 'php', 'review'],
   container: ['name', 'image', 'settings', 'routes', 'review'],
 };
+
+/** A WordPress site from a Duplicator package skips Plugins: it brings its own, and the old host's are what to leave behind. */
+const PACKAGE_STEPS: StepId[] = ['name', 'wordpress', 'leave', 'review'];
+
+const SOURCE_OPTIONS = [
+  { id: 'install', label: 'New install' },
+  { id: 'package', label: 'Duplicator package' },
+] as const;
 
 const APP_OPTIONS = [
   { id: 'wordpress', label: 'WordPress' },
@@ -93,8 +105,16 @@ export function NewSite() {
   const [database, setDatabase] = useState(draft?.database ?? false);
   const [webRoot, setWebRoot] = useState(draft?.webRoot ?? '');
   const [container, setContainer] = useState<NewAppDraft>(draft?.container ?? emptyAppDraft());
+  const [source, setSource] = useState<'install' | 'package'>(draft?.source ?? 'install');
+  const [pkgUpload, setPkgUpload] = useState<PackageUploadValue | null>(draft?.pkgUpload ?? null);
+  /** What of the old host to leave behind, for the upload it was chosen for; the suggestions until then. */
+  const [leave, setLeave] = useState<{ for: string; choices: LeaveBehindChoices } | null>(draft?.leave ?? null);
+  const fromPackage = app === 'wordpress' && source === 'package';
+  const inspection = usePackageInspection(fromPackage ? (pkgUpload?.id ?? null) : null);
+  const pkg = inspection.data && inspection.data.uploadId === pkgUpload?.id ? inspection.data : null;
+  const leaveChoices = pkg && leave?.for === pkg.uploadId ? leave.choices : suggestedChoices(pkg?.suggestions ?? null, pkg?.constants ?? []);
 
-  const steps = STEPS[app];
+  const steps = fromPackage ? PACKAGE_STEPS : STEPS[app];
   const step = Math.max(0, steps.indexOf(stepId));
   const webRootValue = cleanWebRoot(webRoot);
   const webRootOk = webRootSchema.safeParse(webRootValue).success;
@@ -106,7 +126,8 @@ export function NewSite() {
   const selectedServer = servers.find((s) => s.id === effServerId);
   const devHostname = meta.data ? `${slug || '…'}.${selectedServer?.devDomain || meta.data.devDomain}` : '…';
   const effLocale = locale ?? meta.data?.defaultLocale ?? 'en_US';
-  const effPhp = phpVersion ?? meta.data?.defaultPhpVersion ?? '8.3';
+  // A package's site starts on the offered version nearest the old site's.
+  const effPhp = phpVersion ?? (fromPackage ? pkg?.suggestions?.phpVersion : null) ?? meta.data?.defaultPhpVersion ?? '8.3';
   const effAdminEmail = adminEmail ?? meta.data?.defaultAdminEmail ?? '';
   const domains = useMemo(
     () => domainsText.split(/[\s,]+/).map((d) => d.trim().toLowerCase()).filter(Boolean),
@@ -126,8 +147,11 @@ export function NewSite() {
 
   const canNext: Record<StepId, boolean> = {
     name: title.trim().length > 0 && SLUG_RE.test(slug) && (app === 'container' || !customDomain || domains.length > 0),
-    wordpress: adminUser.length > 0 && /.+@.+\..+/.test(effAdminEmail) && (generatePw || adminPassword.length >= 10),
+    wordpress: fromPackage
+      ? pkg !== null && pkg.blockedReason === null
+      : adminUser.length > 0 && /.+@.+\..+/.test(effAdminEmail) && (generatePw || adminPassword.length >= 10),
     plugins: true,
+    leave: true,
     php: webRootOk,
     image: appStepOk('image', container, devHostname),
     settings: appStepOk('settings', container, devHostname),
@@ -151,6 +175,12 @@ export function NewSite() {
       ? appPart && { title: common.title, slug: common.slug, serverId: common.serverId, ...appPart }
       : app === 'php'
       ? { ...common, app, database, ...(webRootValue ? { webRoot: webRootValue } : {}) }
+      : fromPackage
+      ? pkg && pkgUpload && {
+          ...common,
+          discourageSearchEngines: discourageSearch,
+          package: { uploadId: pkgUpload.id, ...choicesBody(leaveChoices) },
+        }
       : {
           ...common,
           locale: effLocale,
@@ -185,6 +215,9 @@ export function NewSite() {
       database,
       webRoot,
       container,
+      source,
+      pkgUpload,
+      leave,
     };
     run.mutate(
       { path: '/api/sites', body },
@@ -299,28 +332,57 @@ export function NewSite() {
 
         {stepId === 'wordpress' && (
           <div className="space-y-4">
-            <div className="grid max-w-2xl grid-cols-2 gap-4">
-              <Field label="Admin username">
-                <input className={inputClass} value={adminUser} onChange={(e) => setAdminUser(e.target.value)} />
-              </Field>
-              <Field label="Admin email">
-                <input className={inputClass} type="email" value={effAdminEmail} onChange={(e) => setAdminEmail(e.target.value)} />
-              </Field>
+            {/* Not a Field: a <label> hands a click anywhere on it to its first button, New install. */}
+            <div>
+              <div className="mb-1 text-sm font-medium text-neutral-700">Start from</div>
+              <Segmented options={SOURCE_OPTIONS} value={source} onChange={setSource} label="Start from" />
             </div>
-            <Toggle checked={generatePw} onChange={setGeneratePw} label="Generate a strong admin password (shown once after creation)" />
-            {!generatePw && (
-              <Field label="Admin password" hint="Minimum 10 characters.">
-                <input className={inputClass} type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} />
-              </Field>
+            {source === 'package' ? (
+              <>
+                <PackageUpload value={pkgUpload} onChange={setPkgUpload} />
+                {pkgUpload && inspection.isPending && <p className="text-sm text-neutral-500">Reading the package…</p>}
+                <ErrorNote error={inspection.error} />
+                {pkg?.report && (
+                  <div className="rounded-lg bg-neutral-50 px-4 py-3">
+                    <OldSiteFacts
+                      report={pkg.report}
+                      rows={[['Made by', `Duplicator ${pkg.duplicator ?? ''}${pkg.created ? ` on ${pkg.created.slice(0, 10)}` : ''}`.trim()]]}
+                    />
+                  </div>
+                )}
+                {pkg && pkg.warnings.length > 0 && <WarningList warnings={pkg.warnings} />}
+                {pkg?.report && (
+                  <Field label="PHP version" hint={`The old site runs PHP ${pkg.report.phpVersion.replace(/^(\d+\.\d+).*$/, '$1')}.`}>
+                    <PhpVersionSelect value={effPhp} versions={meta.data?.phpVersions ?? []} onChange={setPhpVersion} />
+                  </Field>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="grid max-w-2xl grid-cols-2 gap-4">
+                  <Field label="Admin username">
+                    <input className={inputClass} value={adminUser} onChange={(e) => setAdminUser(e.target.value)} />
+                  </Field>
+                  <Field label="Admin email">
+                    <input className={inputClass} type="email" value={effAdminEmail} onChange={(e) => setAdminEmail(e.target.value)} />
+                  </Field>
+                </div>
+                <Toggle checked={generatePw} onChange={setGeneratePw} label="Generate a strong admin password (shown once after creation)" />
+                {!generatePw && (
+                  <Field label="Admin password" hint="Minimum 10 characters.">
+                    <input className={inputClass} type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} />
+                  </Field>
+                )}
+                <div className="grid max-w-2xl grid-cols-2 gap-4">
+                  <Field label="Language" hint="The matching WordPress language pack is installed and activated.">
+                    <LocaleSelect value={effLocale} onChange={setLocale} />
+                  </Field>
+                  <Field label="PHP version">
+                    <PhpVersionSelect value={effPhp} versions={meta.data?.phpVersions ?? []} onChange={setPhpVersion} />
+                  </Field>
+                </div>
+              </>
             )}
-            <div className="grid max-w-2xl grid-cols-2 gap-4">
-              <Field label="Language" hint="The matching WordPress language pack is installed and activated.">
-                <LocaleSelect value={effLocale} onChange={setLocale} />
-              </Field>
-              <Field label="PHP version">
-                <PhpVersionSelect value={effPhp} versions={meta.data?.phpVersions ?? []} onChange={setPhpVersion} />
-              </Field>
-            </div>
             <div>
               <Toggle
                 checked={discourageSearch}
@@ -332,6 +394,15 @@ export function NewSite() {
               </p>
             </div>
           </div>
+        )}
+
+        {stepId === 'leave' && pkg?.report && (
+          <LeaveBehind
+            report={pkg.report}
+            constants={pkg.constants}
+            value={leaveChoices}
+            onChange={(choices) => setLeave({ for: pkg.uploadId, choices })}
+          />
         )}
 
         {stepId === 'plugins' && (
@@ -424,7 +495,23 @@ export function NewSite() {
           </div>
         )}
 
-        {stepId === 'review' && app === 'wordpress' && (
+        {stepId === 'review' && fromPackage && pkg?.report && (
+          <div className="space-y-3 text-sm">
+            <ReviewRow label="Title" value={title} />
+            {multiServer && <ReviewRow label="Server" value={selectedServer?.name ?? `#${effServerId}`} />}
+            <ReviewRow label="Address" value={customDomain ? domains.join(', ') : devHostname} />
+            <ReviewRow label="Package" value={`${pkgUpload?.name ?? ''} · ${formatBytes(pkg.bytes)}`} />
+            <ReviewRow label="Old address" value={pkg.report.home} />
+            <ReviewRow label="PHP" value={effPhp} />
+            <ReviewRow label="Search engines" value={discourageSearch ? 'discouraged (noindex)' : 'allowed to index'} />
+            <ReviewRow label="Left behind" value={leftBehind(leaveChoices)} />
+            <ReviewRow label="Settings" value={leaveChoices.constants.size > 0 ? [...leaveChoices.constants].join(', ') : 'none carried over'} />
+            {!leaveChoices.rewritePaths && <ReviewRow label="File paths" value="kept as the old site had them" />}
+            <ErrorNote error={run.error} />
+          </div>
+        )}
+
+        {stepId === 'review' && app === 'wordpress' && !fromPackage && (
           <div className="space-y-3 text-sm">
             <ReviewRow label="Title" value={title} />
             {multiServer && <ReviewRow label="Server" value={selectedServer?.name ?? `#${effServerId}`} />}
@@ -450,11 +537,15 @@ export function NewSite() {
             Back
           </Button>
           {step < steps.length - 1 ? (
-            <Button onClick={() => setStepId(steps[step + 1]!)} disabled={!canNext[stepId]}>
+            <Button
+              onClick={() => setStepId(steps[step + 1]!)}
+              disabled={!canNext[stepId]}
+              title={stepId === 'wordpress' && fromPackage && !canNext.wordpress ? (pkg?.blockedReason ?? 'Choose the package first.') : undefined}
+            >
               Continue
             </Button>
           ) : (
-            <Button onClick={create} busy={run.active} disabled={!body} title={body ? undefined : 'Choose the image archive first.'}>
+            <Button onClick={create} busy={run.active} disabled={!body} title={body ? undefined : fromPackage ? 'Choose the package first.' : 'Choose the image archive first.'}>
               Create site
             </Button>
           )}
@@ -516,3 +607,12 @@ function ReviewRecipes({ recipes }: { recipes: RecipeDto[] }) {
 /** "A", "A and B", "A, B and C" - as the job log names them. */
 const listLabels = (labels: string[]): string =>
   labels.length > 1 ? `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}` : (labels[0] ?? '');
+
+/** What of the old host stays behind, in a line. */
+function leftBehind(c: LeaveBehindChoices): string {
+  const parts: string[] = [];
+  if (c.plugins.size > 0) parts.push(`${[...c.plugins].join(', ')} deactivated`);
+  const removed = [...c.dropins, ...c.muPlugins];
+  if (removed.length > 0) parts.push(`${removed.join(', ')} removed`);
+  return parts.join('; ') || 'nothing';
+}
