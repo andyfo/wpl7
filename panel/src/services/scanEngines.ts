@@ -26,10 +26,10 @@ import {
  *                      with WPL7's tuning of it (scanTuning.ts)
  */
 
-/** AMWScan 0.21.12, linux/amd64 and linux/arm64. Changing it is a release, not a setting. */
+/** AMWScan 0.21.20, linux/amd64 and linux/arm64. Changing it is a release, not a setting. */
 export const SCANNER_IMAGE =
-  'marcocesarato/php-antimalware-scanner@sha256:920fb974c5e743556b5eff8d58dac988d97f611806b6b38f3e4513f17e75d944';
-export const SCANNER_VERSION = '0.21.12';
+  'marcocesarato/php-antimalware-scanner@sha256:430618977f11050678535ea591417e157d2c9f70b2fe42f9370ac09afdcd5b22';
+export const SCANNER_VERSION = '0.21.20';
 /**
  * What a result of the scanner is good for: its version and WPL7's tuning of it. A catalog zip
  * checked under another profile is checked again.

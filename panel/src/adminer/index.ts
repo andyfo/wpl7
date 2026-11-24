@@ -368,7 +368,8 @@ export class AdminerService {
       });
       session.jar.take(res.headers['set-cookie']);
       const body = await readAll(res);
-      if (res.statusCode !== 302) throw new Error(`Adminer refused the sign-in (HTTP ${res.statusCode}): ${body.replace(/<[^>]+>/g, ' ').trim().slice(0, 200)}`);
+      // A sign-in Adminer takes redirects: 303 since Adminer 6.3.0, 302 before. A refused one shows the form.
+      if (res.statusCode !== 303 && res.statusCode !== 302) throw new Error(`Adminer refused the sign-in (HTTP ${res.statusCode}): ${body.replace(/<[^>]+>/g, ' ').trim().slice(0, 200)}`);
       session.state = 'ready';
       session.message = null;
     } catch (err) {

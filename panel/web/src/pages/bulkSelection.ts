@@ -49,6 +49,24 @@ export function reconcileSelection(
   return kept.size === selected.size ? selected : kept;
 }
 
+/** Every row on screen, selected: what the header checkbox selects. */
+export function selectAll(visible: Map<string, VisibleRow>): Map<string, Target> {
+  return new Map(
+    [...visible].map(([key, v]) => [key, { siteSlug: v.row.siteSlug, kind: v.kind, slug: v.slug }]),
+  );
+}
+
+/** How many of these rows are selected, for a checkbox that stands for all of them. */
+export function selectionState(selected: Map<string, Target>, keys: Iterable<string>): 'none' | 'some' | 'all' {
+  let total = 0;
+  let hits = 0;
+  for (const key of keys) {
+    total += 1;
+    if (selected.has(key)) hits += 1;
+  }
+  return hits === 0 ? 'none' : hits === total ? 'all' : 'some';
+}
+
 /** The selected targets that are still on screen, in selection order. */
 export function visibleTargets(selected: Map<string, Target>, visible: Map<string, VisibleRow>): Target[] {
   return [...selected.entries()].filter(([key]) => visible.has(key)).map(([, target]) => target);

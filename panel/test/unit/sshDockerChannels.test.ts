@@ -4,11 +4,12 @@ import net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { type Duplex, Writable } from 'node:stream';
 import Docker from 'dockerode';
-import { Server, utils, type ServerChannel } from 'ssh2';
-import { afterEach, describe, expect, it } from 'vitest';
+import { Server, type ServerChannel } from 'ssh2';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { ServerUnreachableError, SshConnection } from '../../src/servers/sshConnection.js';
 import { SshDockerAgent } from '../../src/servers/sshDockerAgent.js';
 import { DockerService } from '../../src/services/docker.js';
+import { newSshKeyPair } from '../../src/services/ftpKeys.js';
 import { waitFor } from '../helpers.js';
 
 /**
@@ -155,6 +156,15 @@ interface FakeSshd {
   open: () => number;
 }
 
+// Made as the panel makes its own. ssh2's generator cuts 1 ed25519 key in 256 short, which
+// failed this file about one run in twenty.
+let hostKey = '';
+let clientKey = '';
+beforeAll(async () => {
+  hostKey = (await newSshKeyPair('ed25519', 'fake-sshd')).privateKey;
+  clientKey = (await newSshKeyPair('ed25519', 'wpl7-panel@test')).privateKey;
+});
+
 /**
  * An sshd that forwards docker.sock to `backendPort` and runs every other command as `printForEver`.
  * `drop` instead cuts the connection the moment a forward is asked for: a network that goes away.
@@ -175,7 +185,7 @@ async function fakeSshd(opts: {
     forwardLikeOpenSsh(channel, net.connect(opts.backendPort!, '127.0.0.1'), () => open--);
   };
   // An OpenSSH ident: ssh2 only asks other servers for socket forwarding with strictVendor off.
-  const ssh = new Server({ hostKeys: [utils.generateKeyPairSync('ed25519').private], ident: 'OpenSSH_9.9' }, (client) => {
+  const ssh = new Server({ hostKeys: [hostKey], ident: 'OpenSSH_9.9' }, (client) => {
     client.on('error', () => undefined);
     client.on('authentication', (ctx) => ctx.accept());
     client.on('ready', () => {
@@ -210,7 +220,6 @@ function connect(
   warn: (msg: string) => void = () => undefined,
   opts: { hangUpCloseMs?: number } = {},
 ): SshConnection {
-  const key = utils.generateKeyPairSync('ed25519').private;
   const conn = new SshConnection(
     {
       serverId: 2,
@@ -218,7 +227,7 @@ function connect(
       host: '127.0.0.1',
       port: sshPort,
       username: 'wpl7-panel',
-      privateKey: () => key,
+      privateKey: () => clientKey,
       pinnedHostKey: () => null,
     },
     warn,
