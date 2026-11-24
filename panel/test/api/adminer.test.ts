@@ -89,6 +89,8 @@ function fakeAdminer(world: TestWorld) {
     onQueued: null as ((res: ServerResponse) => void) | null,
     /** Adminer's sessions (adminer_sid) that are signed in. */
     signedIn: new Set<string>(),
+    /** How Adminer redirects after a POST: 303 since 6.3.0, the pinned one, and 302 before. */
+    redirect: 303,
   };
   const sidOf = (headers: IncomingHttpHeaders) => /(?:^|; )adminer_sid=([^;]+)/.exec(String(headers.cookie ?? ''))?.[1] ?? '';
   world.docker.adminerHttp = (req, res) => {
@@ -126,13 +128,13 @@ function fakeAdminer(world: TestWorld) {
         if (req.method === 'POST' && params.has('auth[username]')) {
           const user = params.get('auth[username]')!;
           fake.signedIn.add(`s-${user}`);
-          res.writeHead(302, { location: `?server=mariadb&username=${user}&db=${user}`, 'set-cookie': `adminer_sid=s-${user}; path=/; HttpOnly` });
+          res.writeHead(fake.redirect, { location: `?server=mariadb&username=${user}&db=${user}`, 'set-cookie': `adminer_sid=s-${user}; path=/; HttpOnly` });
           return void res.end();
         }
         // Adminer's own Logout button: its PHP session forgets the sign-in.
         if (req.method === 'POST' && params.has('logout')) {
           fake.signedIn.delete(sidOf(req.headers));
-          res.writeHead(302, { location: '?server=mariadb' });
+          res.writeHead(fake.redirect, { location: '?server=mariadb' });
           return void res.end();
         }
         if (req.method === 'POST' && fake.change && tag) return fake.change(r, res, { tag, done: () => fake.gate.set(tag, 'done') });
@@ -370,6 +372,16 @@ describe('Open in Adminer', () => {
     expect((await get(beta.location, own)).body).toBe('<h2>wp_beta</h2>');
   });
 
+  it('signs in to an Adminer from before 6.3.0 too, which redirects with 302', async () => {
+    // An image of one's own, set with WPL7_ADMINER_IMAGE, may hold an older Adminer.
+    const { app, world, headers } = await signedIn();
+    addSite(world, 'alpha');
+    fakeAdminer(world).redirect = 302;
+    const get = await frontDoor(world);
+    const first = await opened(app, headers, get);
+    expect((await get(first.location, { cookie: first.cookie, 'sec-fetch-site': 'same-origin' })).body).toBe('<h2>wp_alpha</h2>');
+  });
+
   it('signs a site in again on reopening once Adminer has signed it out, and leaves one still signed in as it is', async () => {
     const { app, world, headers } = await signedIn();
     addSite(world, 'alpha');
@@ -383,7 +395,7 @@ describe('Open in Adminer', () => {
     expect(signIns()).toBe(1);
     // Adminer's own Logout button.
     const out = await get(first.location, { ...own, 'content-type': 'application/x-www-form-urlencoded' }, 'POST', 'logout=Logout&token=1');
-    expect(out.status).toBe(302);
+    expect(out.status).toBe(303);
     expect((await get(first.location, own)).body).toContain('wpl7-signed-out');
     // Reopened: signed in again, for the new tab and the one already open.
     const again = await opened(app, headers, get, 'alpha', first.cookie);

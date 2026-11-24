@@ -183,7 +183,7 @@ CREATE TABLE wp_other.secret_table (s text);
       req.on('error', reject);
       req.end(new URLSearchParams({ logout: 'Logout', token }).toString());
     });
-    expect(out).toBe(302);
+    expect(out).toBe(303);
     expect((await get(location, { cookie })).body).toContain('wpl7-signed-out');
     // Opened again from the panel, in the same browser: signed in again.
     const again = new URL(service.open(ticket));
