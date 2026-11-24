@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { promisify } from 'node:util';
 import argon2 from 'argon2';
 // The default import: ssh2 is CommonJS, and Node's ESM loader only finds `Client` and a few
-// others as named exports - `utils` is not one (see servers/keys.ts, which does the same).
+// others as named exports - `utils` is not one.
 import ssh2 from 'ssh2';
 import { sshFingerprint } from '../servers/sshConnection.js';
 
@@ -38,7 +38,7 @@ const generateRsa = promisify(crypto.generateKeyPair);
  * SSH implementation will load. RSA is 3072-bit and generated off the event loop.
  *
  * Both formats are ones SFTPGo (`golang.org/x/crypto/ssh`) and ssh2 read: OpenSSH's own for
- * ed25519, PKCS#1 PEM for RSA.
+ * ed25519, PKCS#1 PEM for RSA. The panel's own SSH key is made here too (servers/keys.ts).
  */
 export async function newSshKeyPair(type: SshKeyType, comment: string): Promise<SshKeyPair> {
   let privateKey: string;

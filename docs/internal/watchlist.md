@@ -77,6 +77,7 @@ for a reason; remove one once there is nothing left to watch.
 | [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-11-19 11:43 UTC | The feed still calls `bbpress` and `bbpress-private-replies` closed and misses `captcha`; the directory answers as `wporgListing` reads them |
 | [Google's crawler address lists](#googles-crawler-address-lists) | Medium | 2026-11-03 09:35 UTC | Both answer: 589 prefixes, none wider than a /27 or a /64 |
 | [ssh2: how a channel closes, as the panel's SSH channels rely on it](#ssh2-how-a-channel-closes-as-the-panels-ssh-channels-rely-on-it) | Low | 2026-11-15 10:57 UTC | 1.17.0 is the latest; channels half-open by default, `destroy()` never marks one destroyed, `'close'` waits for `'end'` or an unreadable stream |
+| [ssh2: ed25519 keys from its own generator](#ssh2-ed25519-keys-from-its-own-generator) | Low | 2026-11-24 14:29 UTC | Open upstream since 2024, fix #1515 waiting for review; 1.17.0 cuts 1 key in 256 short; the panel does not use it |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -1652,3 +1653,27 @@ for a reason; remove one once there is nothing left to watch.
   channel stops being half-open by default, ending the panel's half would close the whole channel:
   `execWithInput` would lose a command's output after its input, and the forwarded socket's channel
   would need `allowHalfOpen` passed where ssh2 then takes it.
+
+## ssh2: ed25519 keys from its own generator
+
+- **Priority:** Low
+- **Last checked:** 2026-11-24 14:29 UTC. Open upstream since 2024-05-22 as
+  [mscdex/ssh2#1390](https://github.com/mscdex/ssh2/issues/1390), reported again as #1513 and #1514
+  on 2026-08-26. Its fix, [mscdex/ssh2#1515](https://github.com/mscdex/ssh2/pull/1515), waits for
+  review. 1.17.0, the version in `panel/package-lock.json`, is the latest on npm and has the bug: of
+  6,000 keys from `utils.generateKeyPairSync('ed25519')`, 23 had a 31-byte public key and failed
+  `utils.parseKey`, as 1 in 256 would. Of 20,000 from `newSshKeyPair()`, none failed, 74 had a public
+  key starting with a zero byte, and OpenSSH's `ssh-keygen` read the 8 of those it was given.
+- **The problem:** ssh2's generator strips every leading zero byte off an ed25519 public key
+  (`lib/keygen.js`). It means to drop the BIT STRING's unused-bits byte, but a public key that itself
+  starts with a zero byte, 1 in 256, comes out 31 bytes long. Neither ssh2 nor OpenSSH reads that
+  private key or its public line.
+- **What we do about it:** nothing in the panel or its tests uses ssh2's generator. `newSshKeyPair()`
+  in `panel/src/services/ftpKeys.ts` makes ed25519 keys with Node's crypto and writes OpenSSH's format
+  itself, for FTP logins and for the panel's own key when it has to make one
+  (`panel/src/servers/keys.ts`). An install has its key already: `provision/setup.sh` makes it with
+  `ssh-keygen`. A new key anywhere, in tests too, comes from `newSshKeyPair()`.
+- **Check:** `gh pr view 1515 -R mscdex/ssh2`, `gh issue view 1390 -R mscdex/ssh2` and
+  `npm view ssh2 version`. For a newer release, read the ed25519 case in its `lib/keygen.js`.
+- **When it changes:** nothing has to change, as `newSshKeyPair()` stays correct. Once a release we
+  use has the fix, remove this entry: ssh2's generator may then be used again.
