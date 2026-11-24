@@ -393,7 +393,7 @@ per site. A catalog zip whose check matches known malware is emailed about once.
 ### AMWScan
 
 The signature scan is [AMWScan](https://github.com/marcocesarato/PHP-Antimalware-Scanner)
-(PHP Antimalware Scanner) 0.21.12 by Marco Cesarato, GPL-3.0, pulled by each server as the
+(PHP Antimalware Scanner) 0.21.20 by Marco Cesarato, GPL-3.0, pulled by each server as the
 official image pinned by digest and run unmodified as a separate process. Open-source
 signatures lag behind what is new; the checks against published checksums do not age, and carry
 the weight.

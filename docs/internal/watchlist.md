@@ -21,8 +21,8 @@ for a reason; remove one once there is nothing left to watch.
 | [Reminders: PHP and OS support dates](#reminders-php-and-os-support-dates) | Medium | 2026-11-13 13:02 UTC | All dates match; PHP 8.6 not out (GA due 2026-11-19); the interim Ubuntu 26.10 is not in the map |
 | [Reminders: Cloudflare token lifetime](#reminders-cloudflare-token-lifetime) | Medium | 2026-11-13 13:15 UTC | Contracts unchanged; neither verify endpoint is documented to take `cfoat_` OAuth tokens, so one would get no date |
 | [Traefik: an idle visitor's rate limit refills](#traefik-an-idle-visitors-rate-limit-refills) | High | 2026-11-24 09:18 UTC | Open upstream, fix #13958 awaiting review; not in v3.7.20 or v3.8.0; worked around. New, #14328: requests arriving at once each get a full bucket, past the bursts of 2 |
-| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-11-24 09:19 UTC | 0.21.20 released on 2026-11-15, the latest; same definitions as the pinned 0.21.12; moving the pin is due |
-| [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-11-01 09:08 UTC | Both overrides still match in 0.21.15, the latest; `@preg_replace` is still 22c684e7; engine test not run at this check |
+| [AMWScan: the pinned image and its signatures](#amwscan-the-pinned-image-and-its-signatures) | High | 2026-11-24 10:53 UTC | 0.21.20, the latest, pinned; same definitions; ends 0.21.12's crash on oversized scripts; engine test passes |
+| [AMWScan: WPL7's tuning of it](#amwscan-wpl7s-tuning-of-it) | Medium | 2026-11-24 10:53 UTC | On 0.21.20 both overrides apply and `@preg_replace` is still dropped; engine test passes |
 | [SFTPGo: our build and its overwrite patch](#sftpgo-our-build-and-its-overwrite-patch) | High | 2026-11-24 09:19 UTC | 2.7.6 is the latest, no new advisory; patch still needed |
 | [PHP security releases and the site image's floor](#php-security-releases-and-the-site-images-floor) | High | 2026-11-19 19:51 UTC | 8.2.36, 8.3.37, 8.4.28 and 8.5.13 out today, all security releases: floor raised to them, released in 0.4.1; Docker's bases and the edge images carry them; the refresh workflow has had no scheduled run on `main` yet |
 | [phpredis: the pinned 6.3.0](#phpredis-the-pinned-630) | Medium | 2026-11-01 09:08 UTC | 6.3.0 is the latest on PECL and GitHub |
@@ -129,22 +129,22 @@ for a reason; remove one once there is nothing left to watch.
 ## AMWScan: the pinned image and its signatures
 
 - **Priority:** High
-- **Last checked:** 2026-11-24 09:19 UTC. 0.21.20 got its GitHub release ("Maintenance release")
-  at 19:20 UTC on 2026-11-15, 16 minutes after the last check, and is the latest. Nothing has been
-  tagged or committed since. Its release's phar bundles definitions 2026.09.08.1, the pinned
-  0.21.12's: `signatures.json`, `exploits.json` and `hashes.json` byte for byte, `functions.json`
-  with the same content, and the definition sources are identical at both tags. Docker Hub's
-  `0.21.20` (also `0.21` and `latest`) is
-  `sha256:430618977f11050678535ea591417e157d2c9f70b2fe42f9370ac09afdcd5b22`, amd64 and arm64,
-  rebuilt from the release commit at 19:21 UTC that day. What changed since 0.21.12 is the engine
-  and the image, as the last check found. `--lite`, which WPL7 passes, skips four more signatures
-  (`0f53abf5`, `85310fdd`, `8c60fbdb`, `e6300ec0`) and any signature match that contains `ls-la`
-  or a schema.org product snippet. It defines `LITE_SIGNATURE_MATCH_EXCLUSIONS`, which 0.21.12 reads
-  without defining: in Lite mode, a signature in the first or last 32 KiB of an oversized script
-  raises `Undefined constant` there instead of a finding. There is a new `--memory-limit` (default 1G), a patched Symfony
-  Filesystem, and libxml2 and musl from Alpine edge. The condition the last check set for moving
-  the pin is met: a release, and nothing since in nine days. The move (**When it changes**) is
-  due; this check did not make it.
+- **Last checked:** 2026-11-24 10:53 UTC, moving the pin to 0.21.20, released 2026-11-15 and the
+  latest. Its image, `sha256:430618977f11050678535ea591417e157d2c9f70b2fe42f9370ac09afdcd5b22`
+  (amd64 and arm64), bundles the same definitions as 0.21.12, 2026.09.08.1. 0.21.12 crashed on an
+  oversized script with a signature match in the part Lite mode samples:
+  `LITE_SIGNATURE_MATCH_EXCLUSIONS` was undefined, PHP threw, and the whole signature scan ended
+  with exit 255 and no message. Three of the thirty scripts over 1 MB in the latest Elementor and
+  WooCommerce did it on their own. A real scan skips a plugin folder whose files all match
+  wordpress.org's checksums, so the crash could come only from a folder it scans, such as a premium
+  plugin's. 0.21.20 defines the constant and scans all thirty. `--lite`, which WPL7 passes, now
+  skips four more signatures (`0f53abf5`, `85310fdd`, `8c60fbdb`, `e6300ec0`) and any match that
+  contains `ls-la` or a schema.org product snippet. The new `--memory-limit` is not passed. Like
+  0.21.12, 0.21.20 sets PHP's memory limit to 1G as it starts, over the `-d memory_limit` WPL7 gives
+  it. The engine test passes, 4 of 4. A scan of WordPress 7.1.5 with seven wordpress.org plugins and
+  three webshells in uploads, leaving out core, Elementor and WooCommerce as a real scan would,
+  gives the same 25 findings on both versions: every webshell, and 12 raw findings in UpdraftPlus,
+  Yoast SEO and WPForms Lite that a real scan, which skips those folders, never sees.
 - **The problem:** the scanner image is pinned by digest (`SCANNER_IMAGE` in
   `panel/src/services/scanEngines.ts`) and runs with `--disable-definitions-update`. Its
   signatures are the ones bundled in that image, and they age until the pin moves. Upstream
@@ -163,11 +163,9 @@ for a reason; remove one once there is nothing left to watch.
 ## AMWScan: WPL7's tuning of it
 
 - **Priority:** Medium
-- **Last checked:** 2026-11-01 09:08 UTC. v0.21.15 is still the latest release. In its `exploits.json`,
-  `str_replace_eval` and `execution2` are exactly the patterns the overrides replace, and
-  `@preg_replace` is still in its signatures, as 22c684e7. Its definitions are the same 2026.09.08.1
-  as the pinned 0.21.12. The engine test, which needs Docker, was not run at this check: on 2026-10-02
-  every signature finding on 0.21.12 was read back to its own id.
+- **Last checked:** 2026-11-24 10:53 UTC, on 0.21.20. Both overrides apply, `@preg_replace`
+  (22c684e7) is still dropped, and every signature finding is read back to its own id: the engine
+  test passes, 4 of 4. Its definitions are the same 2026.09.08.1 as 0.21.12's.
 - **The problem:** `panel/src/services/scanTuning.ts` works around AMWScan in four ways
   (docs/security.md, "What the scanner is not asked to say"): two exploit patterns that reach
   too far (`str_replace_eval`, `execution2`) are replaced through its local-rules folder; the
