@@ -4,6 +4,8 @@ import {
   allowedActions,
   filtersForKind,
   reconcileSelection,
+  selectAll,
+  selectionState,
   targetKey,
   targetsForSites,
   visibleRows,
@@ -77,6 +79,21 @@ describe('bulk selection', () => {
     // Somebody else updated beta, so it no longer matches the "has update" filter.
     const refreshed = visibleRows([group('cf7', [siteRow('alpha')])]);
     expect([...reconcileSelection(selected, refreshed).keys()]).toEqual(['alpha|plugin|cf7']);
+  });
+
+  it('selects every row on screen from the header, and shows how much is selected', () => {
+    const visible = visibleRows([group('cf7', [siteRow('alpha'), siteRow('beta')]), group('seo', [siteRow('alpha')])]);
+    const all = selectAll(visible);
+    expect([...all.values()]).toEqual([target('alpha', 'cf7'), target('beta', 'cf7'), target('alpha', 'seo')]);
+    // Exactly what is on screen: nothing for the reconciliation to drop.
+    expect(reconcileSelection(all, visible)).toBe(all);
+
+    expect(selectionState(all, visible.keys())).toBe('all');
+    expect(selectionState(select(target('beta', 'cf7')), visible.keys())).toBe('some');
+    expect(selectionState(new Map(), visible.keys())).toBe('none');
+    // A row a refresh added makes a full selection partial again.
+    const refreshed = visibleRows([group('cf7', [siteRow('alpha'), siteRow('beta'), siteRow('gamma')]), group('seo', [siteRow('alpha')])]);
+    expect(selectionState(all, refreshed.keys())).toBe('some');
   });
 
   it('returns the same map when nothing was dropped, so it is safe in a setState updater', () => {

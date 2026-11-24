@@ -24,6 +24,8 @@ import {
   allowedActions,
   filtersForKind,
   reconcileSelection,
+  selectAll,
+  selectionState,
   targetKey,
   targetsForSites,
   visibleRows,
@@ -176,11 +178,13 @@ export function BulkManagement() {
     });
   };
 
-  const groupState = (group: WpInventoryRow): 'none' | 'some' | 'all' => {
-    const keys = group.siteRows.map((r) => targetKey({ siteSlug: r.siteSlug, kind: group.kind, slug: group.slug }));
-    const hits = keys.filter((k) => selected.has(k)).length;
-    return hits === 0 ? 'none' : hits === keys.length ? 'all' : 'some';
-  };
+  const groupState = (group: WpInventoryRow) =>
+    selectionState(
+      selected,
+      group.siteRows.map((r) => targetKey({ siteSlug: r.siteSlug, kind: group.kind, slug: group.slug })),
+    );
+  /** The header checkbox stands for every per-site row on screen, as the filters show them. */
+  const allState = selectionState(selected, visible.keys());
 
   const runBatch = async (action: WpBulkAction) => {
     setError(null);
@@ -421,7 +425,18 @@ export function BulkManagement() {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs uppercase tracking-wide text-neutral-400">
-                <th className="w-8 pb-2" />
+                <th className="w-8 pb-2">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all"
+                    title="Select all"
+                    checked={allState === 'all'}
+                    ref={(el) => {
+                      if (el) el.indeterminate = allState === 'some';
+                    }}
+                    onChange={(e) => setSelected(e.target.checked ? selectAll(visible) : new Map())}
+                  />
+                </th>
                 <th className="pb-2">{kind === 'core' ? 'Version' : 'Component'}</th>
                 <th className="pb-2 pr-3 text-right">Sites</th>
                 <th className="pb-2 pr-3 text-right">Updates</th>
