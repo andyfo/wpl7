@@ -29,6 +29,7 @@ for a reason; remove one once there is nothing left to watch.
 | [Redis in the site image](#redis-in-the-site-image) | Medium | 2026-11-01 09:08 UTC | Debian's 5:8.0.2-3+deb13u3; three open issues on trixie, none reachable here; `LICENSE.txt` still offers AGPLv3 |
 | [The Redis Object Cache plugin: its constants and `wp redis`](#the-redis-object-cache-plugin-its-constants-and-wp-redis) | Medium | 2026-11-01 09:08 UTC | 3.0.0 is the latest; all seven constants and `status`, `enable`, `disable` are in its code |
 | [The cache plugins' clear hooks](#the-cache-plugins-clear-hooks) | Medium | 2026-11-01 09:08 UTC | Every hook is in the latest releases: WP Rocket 3.24, W3 Total Cache 2.11.0, WP Super Cache 3.1.4, LiteSpeed Cache 7.9.2, Autoptimize 3.1.17, Elementor 4.3.5, WooCommerce 11.2.1 |
+| [WP Rocket: its .htaccess rules, which WP-CLI deactivation leaves](#wp-rocket-its-htaccess-rules-which-wp-cli-deactivation-leaves) | Medium | 2026-11-25 10:47 UTC | 3.24.2: the rules come out only under a web server, and not while another domain's config file is left; markers `# BEGIN WP Rocket` and `# END WP Rocket` |
 | [The built-in cache rules' cookies and parameters](#the-built-in-cache-rules-cookies-and-parameters) | Medium | 2026-11-01 09:08 UTC | Every name is in the latest code or WP Rocket 3.24's lists; `wp_is_mobile()` tests the same words |
 | [Debian's nginx and Apache, as the page cache and PHP sites rely on them](#debians-nginx-and-apache-as-the-page-cache-and-php-sites-rely-on-them) | Low | 2026-11-01 09:08 UTC | nginx 1.26.3-3+deb13u10 and Apache 2.4.69-1~deb13u1 on trixie-security, as tested; engine test not run at this check |
 | [PHP-FPM: `[PATH=]` and `[HOST=]` in a `.user.ini`](#php-fpm-path-and-host-in-a-userini) | Low | 2026-11-01 09:08 UTC | No upstream issue found; `php_ini_parser_cb` unchanged in its handling; not re-run at this check |
@@ -378,6 +379,31 @@ for a reason; remove one once there is nothing left to watch.
 - **When it changes:** add the new action to `$changes` in `WP_CACHE_CODE` and keep the old one while
   releases that fire it are in use. Update the versions in its comments and here.
 
+
+## WP Rocket: its .htaccess rules, which WP-CLI deactivation leaves
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-25 10:47 UTC. 3.24.2 is the latest release of `wp-media/wp-rocket`.
+  `Deactivation::deactivate_plugin` (`inc/Engine/Deactivation/Deactivation.php`) calls
+  `flush_rocket_htaccess( true )` only when no config file of another domain is left in
+  `wp-rocket-config`, and `flush_rocket_htaccess` (`inc/functions/htaccess.php`) returns at once
+  unless WordPress's `$is_apache`, which `wp-includes/vars.php` sets from `SERVER_SOFTWARE` and
+  WP-CLI leaves empty. It takes out the line with `# BEGIN WP Rocket`, the line with
+  `# END WP Rocket` and what is between. On a site made from a package that left WP Rocket
+  deactivated, the block was still there and the page cache stored no page.
+- **The problem:** the panel deactivates plugins with WP-CLI, so WP Rocket's rules stay in
+  `.htaccess`. `ExpiresByType text/html "access plus 0 seconds"` among them sends every page with
+  `max-age=0`, and the panel's page cache stores none.
+- **What we do about it:** after the panel deactivates or deletes WP Rocket (an import or a package
+  leaving it deactivated, the WordPress tab, Bulk management), `clearPluginLeftovers` in
+  `panel/src/services/pluginLeftovers.ts` takes the block out as WP Rocket does.
+- **Check:** `gh api repos/wp-media/wp-rocket/releases/latest --jq .tag_name`. For a newer release,
+  read `flush_rocket_htaccess` in `inc/functions/htaccess.php` and `deactivate_plugin` in
+  `inc/Engine/Deactivation/Deactivation.php`: the markers, how the block is taken out, and whether
+  it still needs `$is_apache`.
+- **When it changes:** new markers, or another way of taking the block out: follow them in
+  `pluginLeftovers.ts` and its test. If WP Rocket takes its rules out under WP-CLI too, the panel's
+  step can go, and so can this entry.
 ## The built-in cache rules' cookies and parameters
 
 - **Priority:** Medium
