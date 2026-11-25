@@ -106,8 +106,8 @@ sends the file in one of two ways.
 | From its own disk, with curl | Up to 2 GiB | A shell that can reach the panel |
 
 For a file on its disk, the app gets a curl command with a one-time upload link. The link takes only
-the file the app named by its size and SHA-256. It works once and ends after an hour. Revoking the
-app, or lowering it below **Manage**, ends it at once.
+the file the app named by its size and SHA-256. It works once, and ends after an hour without use.
+Revoking the app, lowering it below **Manage** or turning off **Let AI apps connect** ends it at once.
 
 Claude Code's shell reaches the panel. Claude's code sandbox in claude.ai reaches it only if the
 network settings for code execution allow the panel's domain. Without that, the app can still send
@@ -166,6 +166,7 @@ The panel is its own OAuth authorization server, and `/mcp` is its only resource
   API keys, the activity log, binary downloads, the terminal, and uploads other than a site's files.
 - Upload links live in the panel's memory. A restart of the panel ends them, and the app asks for a
   new one.
+- An app or key can have 20 unfinished upload links at once.
 - What an app creates inside a site stays after you revoke it: WordPress users, application
   passwords, FTP logins, changed files.
 - The panel offers tools only. It has no MCP resources or prompts.

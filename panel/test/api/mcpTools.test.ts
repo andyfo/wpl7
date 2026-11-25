@@ -403,6 +403,12 @@ describe('the file tools', () => {
     await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'x.php', contentBase64: Buffer.from('<?php').toString('base64'), overwrite: true });
     // Replace whatever is there, but only with PHP that parses.
     expect(args(world.docker.calls.find((c) => c.method === 'execWithInput')!)).toMatchObject({ 1: 'any', 5: 'php' });
+
+    // The route saves `x.php/` as x.php: checked as PHP all the same.
+    world.docker.calls = [];
+    world.docker.execQueue.push({ stdout: 'rw/f/f/5/644/1727000000.25/33/33/x.php/\0', stderr: '', exitCode: 0 });
+    await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'x.php/', contentBase64: Buffer.from('<?php').toString('base64'), overwrite: true });
+    expect(args(world.docker.calls.find((c) => c.method === 'execWithInput')!)).toMatchObject({ 0: '/var/www/html/x.php', 5: 'php' });
   });
 
   it('refuse base64 that is not, bytes that are not the file meant, and more than one call carries - sending nothing', async () => {
@@ -451,7 +457,20 @@ describe('the file tools', () => {
     world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.notFound });
     const big = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'theme.zip', sizeBytes: 20 * 1024 * 1024, sha256: sha('x') });
     expect(big.value.command).toContain('while [ $((i * n)) -lt 20971520 ]; do');
-    expect(big.value.command).toContain('"http://panel.example.test/api/file-uploads?offset=$((i * n))" || break');
+    expect(big.value.command).toContain('"http://panel.example.test/api/file-uploads?offset=$((i * n))" || { ok=0; break; }');
+    // A refused piece makes the whole command fail, not just stop.
+    expect(big.value.command.split('\n').at(-1)).toBe('[ "$ok" = 1 ]');
+  });
+
+  it('stop the links an app made once MCP is switched off', async () => {
+    const { app, world, client } = await panel();
+    addSite(world, 'alpha');
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.notFound });
+    const res = await client('manage').call('wpl7_upload_site_file', { site: 'alpha', path: 'a.bin', sizeBytes: 1, sha256: sha('a') });
+    const token = /X-WPL7-Upload-Token: (\S+)'/.exec(res.value.command as string)![1]!;
+    world.deps.settings.set('mcpEnabled', false);
+    const put = await app.inject({ method: 'PUT', url: '/api/file-uploads', headers: { 'x-wpl7-upload-token': token }, payload: Buffer.from('a') });
+    expect(put.statusCode).toBe(403);
   });
 
   it('make upload links through the upload tool alone', async () => {

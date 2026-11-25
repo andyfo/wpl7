@@ -188,7 +188,9 @@ answers with a URL and a token; whoever holds them sends the file to `PUT /api/f
 the token in `X-WPL7-Upload-Token`, in pieces of at most 8 MiB as above (`?offset=`, 0 when left
 out). The piece that completes the file puts it in place only if the whole file has the SHA-256 the
 link names, and, for a `.php` file, only if it parses; otherwise the part is removed and nothing is
-replaced. A link works once, for an hour, and stops when its key or connection is revoked.
+replaced. A link works once, ends after an hour without a piece arriving (what arrived is then
+removed), and stops when whatever made it is revoked. One piece at a time: a second one while the
+first is arriving answers `409`.
 
 ```bash
 curl -sS --fail-with-body -T plugin.zip -H "X-WPL7-Upload-Token: $TOKEN" "https://panel.example.com/api/file-uploads"

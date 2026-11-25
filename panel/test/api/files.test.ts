@@ -625,6 +625,89 @@ describe('Web FTP: upload links', () => {
     expect(empty.statusCode).toBe(400);
   });
 
+  it('ends a link made in a session when its admin signs out everywhere', async () => {
+    const s = await siteReady();
+    s.world.docker.execQueue.push(missing);
+    const token = (await link(s, { path: 'a.bin', size: 1, sha256: sha('a') })).json().token as string;
+    expect((await s.app.inject({ method: 'POST', url: '/api/auth/logout-all', headers: s.headers })).statusCode).toBe(204);
+    expect((await send(s, token, Buffer.from('a'))).statusCode).toBe(403);
+  });
+
+  it('holds each key to 20 unfinished links, which a finished one no longer counts toward', async () => {
+    const s = await siteReady();
+    const { world } = s;
+    const auth = { authorization: `Bearer ${world.deps.apiKeys.create('app', 'manage').token}` };
+    const tokens: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      world.docker.execQueue.push(missing);
+      const made = await link(s, { path: `f${i}.bin`, size: 1, sha256: sha('x') }, auth);
+      expect(made.statusCode, String(i)).toBe(201);
+      tokens.push(made.json().token as string);
+    }
+    world.docker.execQueue.push(missing);
+    const over = await link(s, { path: 'more.bin', size: 1, sha256: sha('x') }, auth);
+    expect(over.statusCode).toBe(409);
+    expect(over.json().error.message).toMatch(/20 upload links are open already/);
+    // Another key, and the panel's admins, have links of their own.
+    world.docker.execQueue.push(missing);
+    expect((await link(s, { path: 'mine.bin', size: 1, sha256: sha('x') })).statusCode).toBe(201);
+
+    world.docker.execQueue.push({ stdout: record('f0.bin', { size: 1 }), stderr: '', exitCode: 0 });
+    expect((await send(s, tokens[0], Buffer.from('x'))).json().written).not.toBeNull();
+    world.docker.execQueue.push(missing);
+    expect((await link(s, { path: 'more.bin', size: 1, sha256: sha('x') }, auth)).statusCode).toBe(201);
+  });
+
+  it('takes one piece at a time, lasts an hour from its last piece, and clears what arrived when it runs out', async () => {
+    const s = await siteReady();
+    const { world } = s;
+    world.docker.execQueue.push(missing);
+    const token = (await link(s, { path: 'big.bin', size: 20, sha256: sha(Buffer.alloc(20)) })).json().token as string;
+    const open = world.deps.uploadLinks.find(token)!;
+    open.busy = true;
+    const second = await send(s, token, Buffer.alloc(10));
+    expect(second.statusCode).toBe(409);
+    expect(second.json().error.message).toMatch(/still arriving/);
+    open.busy = false;
+
+    const start = Date.now();
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      clock.mockReturnValue(start + 50 * 60_000);
+      expect((await send(s, token, Buffer.alloc(10))).json()).toMatchObject({ received: 10, written: null });
+      // Fifty minutes later: 100 since it was made, 50 since its last piece.
+      clock.mockReturnValue(start + 100 * 60_000);
+      world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.offset });
+      expect((await send(s, token, Buffer.alloc(10), 10)).statusCode).toBe(409);
+
+      world.docker.calls = [];
+      clock.mockReturnValue(start + 161 * 60_000);
+      expect((await send(s, token, Buffer.alloc(10), 10)).statusCode).toBe(401);
+      await waitFor(() => callsOf(world, 'exec').length > 0);
+      const abort = callsOf(world, 'exec').at(-1)!;
+      expect(scriptArgs(abort)).toEqual([expect.stringMatching(/^\/var\/www\/html\/\.wpl7-upload-[A-Za-z0-9_-]{24}\.part$/)]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('answers only the piece that finished it for ten minutes, then nothing', async () => {
+    const s = await siteReady();
+    s.world.docker.execQueue.push(missing);
+    const token = (await link(s, { path: 'a.txt', size: 1, sha256: sha('a') })).json().token as string;
+    s.world.docker.execQueue.push({ stdout: record('a.txt', { size: 1 }), stderr: '', exitCode: 0 });
+    const done = await send(s, token, Buffer.from('a'));
+    expect(done.statusCode).toBe(200);
+    // Same offset and length, other bytes: no replay.
+    expect((await send(s, token, Buffer.from('b'))).statusCode).toBe(409);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60_000 + 1);
+    try {
+      expect((await send(s, token, Buffer.from('a'))).statusCode).toBe(401);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it('stops working once the key that made it is revoked, the site it was for is gone, or an hour has passed', async () => {
     const s = await siteReady();
     const { app, world, headers } = s;

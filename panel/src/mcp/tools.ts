@@ -7,7 +7,7 @@ import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import type { AccessLevel } from '../../shared/access.js';
 import { mcpGroupReachable, type McpToolGroup } from '../../shared/apiDocs.js';
 import { SLUG_RE } from '../../shared/schemas.js';
-import { FILE_LIMITS } from '../../shared/siteFilePath.js';
+import { FILE_LIMITS, parseSiteFilePath } from '../../shared/siteFilePath.js';
 import { jobs } from '../db/schema.js';
 import type { AppDeps } from '../routes/deps.js';
 import { injectAs, type McpCall, type McpPrincipal } from './call.js';
@@ -431,7 +431,7 @@ export function registerTools(server: McpServer, c: ToolContext): void {
           const a = await callApi(c, 'wpl7_write_site_file', 'file', {
             method: 'PUT',
             path: `/api/sites/${site}/files/content`,
-            query: { path, ...(/\.php$/i.test(path) ? { lint: 'php' } : {}) },
+            query: { path, ...(isPhp(path) ? { lint: 'php' } : {}) },
             raw: bytes,
             headers: createOnly ? { 'if-none-match': '*' } : { 'if-match': `"${etag}"` },
           });
@@ -503,7 +503,7 @@ export function registerTools(server: McpServer, c: ToolContext): void {
           const a = await callApi(c, 'wpl7_upload_site_file', 'file', {
             method: 'PUT',
             path: `/api/sites/${site}/files/content`,
-            query: { path, ...(/\.php$/i.test(path) ? { lint: 'php' } : {}) },
+            query: { path, ...(isPhp(path) ? { lint: 'php' } : {}) },
             raw: bytes,
             headers: overwrite ? {} : { 'if-none-match': '*' },
           });
@@ -515,6 +515,15 @@ export function registerTools(server: McpServer, c: ToolContext): void {
         }, c),
     );
   }
+}
+
+/**
+ * Whether a save is PHP, to be syntax-checked first - judged on the path as the route will read
+ * it, so `functions.php/`, which the route saves as functions.php, is checked too.
+ */
+function isPhp(path: string): boolean {
+  const parsed = parseSiteFilePath(path);
+  return parsed.ok && /\.php$/i.test(parsed.path);
 }
 
 // ------------------------------------------------------------------ uploads
@@ -564,12 +573,14 @@ function uploadCommand(site: string, path: string, size: number, link: UploadLin
     size <= link.chunkBytes
       ? `curl -sS --fail-with-body -T "FILE" ${header} '${link.url}'`
       : [
-          `f="FILE"; n=${link.chunkBytes}; i=0`,
+          `f="FILE"; n=${link.chunkBytes}; i=0; ok=1`,
           `while [ $((i * n)) -lt ${size} ]; do`,
           `  dd if="$f" bs=$n skip=$i count=1 2>/dev/null | curl -sS --fail-with-body -w '\\n' -X PUT --data-binary @- ` +
-            `-H 'Content-Type: application/octet-stream' ${header} "${link.url}?offset=$((i * n))" || break`,
+            `-H 'Content-Type: application/octet-stream' ${header} "${link.url}?offset=$((i * n))" || { ok=0; break; }`,
           '  i=$((i + 1))',
           'done',
+          // A piece refused ends the loop, and the command with it, as a failure.
+          '[ "$ok" = 1 ]',
         ].join('\n');
   let host = '';
   try {

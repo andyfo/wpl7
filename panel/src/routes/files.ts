@@ -37,6 +37,7 @@ import type { SiteFilesService } from '../services/siteFiles.js';
 import { clearAfterChange } from '../services/siteCaches.js';
 import { UPLOAD_TOKEN_HEADER, type UploadLinkAnswer, type UploadLinkMaker } from '../services/uploadLinks.js';
 import type { AppDeps } from './deps.js';
+import { mcpAvailable } from './mcp.js';
 
 /**
  * Web FTP: browse, read, write, upload and download a site's files.
@@ -236,18 +237,38 @@ async function registerRoutes(app: FastifyInstance, deps: AppDeps): Promise<void
   const makerOf = (req: FastifyRequest): UploadLinkMaker => {
     const actor = actorOf(req);
     const principal = req.mcp?.principal;
-    if (principal?.connection) return { kind: 'connection', id: principal.connection.id, actor };
-    if (principal?.apiKey) return { kind: 'apiKey', id: principal.apiKey.id, actor };
-    if (req.user) return { kind: 'user', id: req.user.id, actor };
-    if (req.apiKeyUsed?.id) return { kind: 'apiKey', id: req.apiKeyUsed.id, actor };
+    if (principal?.connection) return { kind: 'connection', id: principal.connection.id, viaMcp: true, actor };
+    if (principal?.apiKey) return { kind: 'apiKey', id: principal.apiKey.id, viaMcp: true, actor };
+    if (req.user) return { kind: 'user', id: req.user.id, generation: req.session.generation ?? 0, viaMcp: false, actor };
+    if (req.apiKeyUsed?.id) return { kind: 'apiKey', id: req.apiKeyUsed.id, viaMcp: false, actor };
     throw unauthorized();
   };
 
-  /** Whether a link's maker may still upload: still there, and still at Manage or above. */
+  /**
+   * Whether a link's maker may still upload: still there, still at Manage or above, an admin
+   * still signed in where they made it, and MCP still on for what came through it.
+   */
   const makerMay = (maker: UploadLinkMaker): boolean => {
-    if (maker.kind === 'user') return deps.users.byId(maker.id) !== null;
+    if (maker.viaMcp && !mcpAvailable(deps)) return false;
+    if (maker.kind === 'user') {
+      const row = deps.users.byId(maker.id);
+      return row !== null && row.sessionGeneration === maker.generation;
+    }
     const level = maker.kind === 'apiKey' ? deps.apiKeys.levelOf(maker.id) : deps.oauth.connectionLevel(maker.id);
     return level !== null && allows(level, 'manage');
+  };
+
+  // A link that ran out half-sent leaves its part beside the target: take it away, if the site
+  // is there to take it from. Otherwise the day-old sweep of the next upload there does.
+  deps.uploadLinks.onAbandoned = (link) => {
+    void (async () => {
+      const site = deps.sites.bySlug(link.slug, { app: 'siteImage' });
+      if (site.id !== link.siteId) return;
+      const { container, files } = await containerOf(site);
+      await files.abortUpload(container, link.path, link.id);
+    })().catch((err: unknown) => {
+      deps.log.warn(`files: could not remove what arrived of an unfinished upload to "${link.path}" on "${link.slug}": ${err instanceof Error ? err.message : err}`);
+    });
   };
 
   const statOrNull = (files: SiteFilesService, container: string, path: string): Promise<SiteFileEntryDto | null> =>
@@ -444,14 +465,24 @@ async function registerRoutes(app: FastifyInstance, deps: AppDeps): Promise<void
         const site = siteOf(link.slug);
         if (site.id !== link.siteId) throw notFound(`The site this link was made for is gone`);
         const offset = req.query.offset ?? 0;
-        const { body, release } = await readBody(req, FILE_LIMITS.chunkBytes);
+        const spent = link.done;
+        // Spent: only the piece that finished it may come again, its answer lost on the way.
+        if (spent && (offset !== spent.offset || Number(req.headers['content-length'] ?? 0) !== spent.length)) {
+          throw conflict('This upload link has been used: its file is in place');
+        }
+        if (link.busy) throw conflict('A piece of this upload is still arriving; send the next one once it is answered');
+        link.busy = true;
+        let release: () => void = () => {};
         try {
+          const read = await readBody(req, FILE_LIMITS.chunkBytes);
+          release = read.release;
+          const body = read.body;
           const chunkSha = crypto.createHash('sha256').update(body).digest('hex');
-          if (link.done) {
-            // The piece that finished it, sent again because its answer was lost: the same answer.
-            if (link.done.offset === offset && link.done.chunkSha === chunkSha) return link.done.result;
+          if (spent) {
+            if (spent.chunkSha === chunkSha) return spent.result;
             throw conflict('This upload link has been used: its file is in place');
           }
+          link.started = true;
           return await changing(
             site,
             async ({ container, files }) => {
@@ -470,8 +501,9 @@ async function registerRoutes(app: FastifyInstance, deps: AppDeps): Promise<void
               );
               // In place, and checked to be the file declared: its SHA-256 is the etag.
               const answer: UploadLinkAnswer = { ...res, written: res.written ? { ...res.written, etag: link.sha256 } : null, size: link.size };
+              deps.uploadLinks.used(link);
               if (answer.written && !link.done) {
-                link.done = { offset, chunkSha, result: answer };
+                deps.uploadLinks.finished(link, { offset, length: body.length, chunkSha, result: answer });
                 if (!replayed) audit(req, site, 'upload', { path: link.path, bytes: link.size, via: 'upload link' }, link.maker.actor);
               }
               return answer;
@@ -479,6 +511,7 @@ async function registerRoutes(app: FastifyInstance, deps: AppDeps): Promise<void
             (answer) => Boolean(answer.written),
           );
         } finally {
+          link.busy = false;
           release();
         }
       },

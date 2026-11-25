@@ -226,9 +226,10 @@ MCP has no way to hand a tool a file: whatever a tool takes, the model writes ou
 The command carries a one-time upload link (`POST /api/sites/<slug>/files/upload-links` makes it).
 The link names one file by its path, size and SHA-256, and the upload is held to all three before the
 file takes its place: a link that leaks into a log or a transcript can put nothing else there. It is
-spent once the file is in place, ends after an hour, and stops at once when the key or connection
-that made it is revoked or lowered below Manage. Links live in the panel's memory, so a restart ends
-them and the app asks for a new one. The upload itself (`PUT /api/file-uploads`) is logged under
+spent once the file is in place, ends after an hour without a piece arriving, and stops at once when
+the key or connection that made it is revoked or lowered below Manage, or MCP is switched off. A key
+or connection can have 20 unfinished links at once. Links live in the panel's memory, so a restart ends
+them and the app asks for a new one. A link that runs out half-sent has what arrived removed. The upload itself (`PUT /api/file-uploads`) is logged under
 whoever made the link.
 
 The app's shell has to reach the panel. Claude Code's does. Claude's code sandbox in claude.ai does
