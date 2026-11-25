@@ -1,13 +1,16 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { backups, imports, jobs, sites } from '../../src/db/schema.js';
+import { backups, imports, jobLogs, jobs, sites } from '../../src/db/schema.js';
 import { hostExec } from '../../src/lib/exec.js';
 import { sitePaths } from '../../src/services/siteSpec.js';
 import { FORGET_MIGRATE_PLUGIN, makeRoomForStatements } from '../../src/jobs/handlers/import.js';
 import type { JobContext } from '../../src/jobs/context.js';
+import { notFound } from '../../src/lib/errors.js';
 import { makeWorld } from '../helpers.js';
+import { sampleReport } from '../importFixtures.js';
 import { BIG, CHOICES, PHOTO, connected, importRow, logOf, oldSiteFiles, oldSiteTables, settle, wpCalls } from '../importWorld.js';
 
 describe('importing a site', () => {
@@ -89,6 +92,36 @@ describe('importing a site', () => {
     expect(fs.existsSync(path.join(p.wordpress, 'wp-config-docker.php'))).toBe(false);
     expect(fs.readFileSync(path.join(p.wordpress, 'wp-config.php'), 'utf8')).toBe('<?php // written by the image');
     expect(w.core.imports.cursorOf(row)!.skip).toEqual(expect.arrayContaining(['wp-config.php', 'wp-config-docker.php']));
+  });
+
+  it("takes WP Rocket's rules out of .htaccess when it is left deactivated, as WP Rocket does in wp-admin", async () => {
+    const rocket = '# BEGIN WP Rocket\n<IfModule mod_expires.c>\nExpiresByType text/html "access plus 0 seconds"\n</IfModule>\n# END WP Rocket\n';
+    const own = '# BEGIN WordPress\nRewriteEngine On\n# END WordPress\n';
+    const plugins = [...(sampleReport().plugins as object[]), { file: 'wp-rocket/wp-rocket.php', slug: 'wp-rocket', name: 'WP Rocket', version: '3.24.2', active: true }];
+    const { w, id } = await connected({
+      fake: { files: { ...oldSiteFiles(), '.htaccess': `${rocket}${own}`, 'wp-content/plugins/wp-rocket/wp-rocket.php': '<?php /* Plugin Name: WP Rocket */' } },
+      report: { plugins },
+    });
+    // The site's files as its container reads and saves them: here, the site's folder.
+    const p = sitePaths(w.config, 'willow');
+    const files = w.core.servers.handleFor(1).siteFiles;
+    files.read = async (_container, rel) => {
+      const file = path.join(p.wordpress, rel);
+      if (!fs.existsSync(file)) throw notFound(`"${rel}" does not exist`);
+      const bytes = fs.readFileSync(file);
+      return { bytes, etag: crypto.createHash('sha256').update(bytes).digest('hex') };
+    };
+    files.write = async (_container, rel, body) => {
+      fs.writeFileSync(path.join(p.wordpress, rel), body);
+      return { path: rel, entry: {} as never, etag: crypto.createHash('sha256').update(body).digest('hex') };
+    };
+    w.core.imports.start(id, { ...CHOICES, deactivatePlugins: ['redis-cache', 'wp-rocket'] });
+    const row = await settle(w, id);
+    expect(row.status, row.lastError ?? '').toBe('done');
+    expect(fs.readFileSync(path.join(p.wordpress, '.htaccess'), 'utf8')).toBe(own);
+    expect(w.db.select().from(jobLogs).all().map((l) => l.message)).toContain(
+      "Took WP Rocket's rules out of .htaccess, as WP Rocket does when it is deactivated in wp-admin.",
+    );
   });
 
   it('reads a small file again in ranges when it grew past a bundle before it was read', async () => {

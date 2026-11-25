@@ -16,6 +16,7 @@ sources:
   - panel/src/services/importListing.ts
   - panel/src/lib/outboundGuard.ts
   - panel/migrate-plugin/wpl7-migrate/**/*.php
+  - panel/src/services/pluginLeftovers.ts
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
@@ -58,7 +59,8 @@ short requests, into a staging folder on the server. It writes down how far it g
 The database is imported as the site's own database user. The site gets a new `wp-config.php`
 with the settings you carried over. A setting that names a folder of the old site gets the same
 folder here. The old address is replaced with the dev address in the database. The plugins, drop-ins and must-use plugins you chose are left behind, and so is the
-migration plugin. Search engines are discouraged, a first backup is taken and a malware scan is
+migration plugin. A deactivated WP Rocket's rules come out of `.htaccess` too, as WP Rocket does when it
+is deactivated in wp-admin. Search engines are discouraged, a first backup is taken and a malware scan is
 queued.
 
 ## After the import

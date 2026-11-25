@@ -18,6 +18,7 @@ import type { ScanLog } from './wpInventory.js';
 import { createAdminLoginLink, type AdminLoginLink } from './adminLogin.js';
 import { restTargetOf, sendWpRest, type WpRestResponse } from './wpRest.js';
 import { PluginSourceError } from './pluginClient.js';
+import { clearPluginLeftovers } from './pluginLeftovers.js';
 import { UnknownCommandError, type ConnectClient, type Rescue } from './connectClient.js';
 import type { WpRestMethod } from '../../shared/schemas.js';
 
@@ -221,6 +222,10 @@ export class ContainerBackend implements SiteBackend {
         return change.error && `Plugin "${slug}" was activated, but WP-CLI reported an error: ${change.error}`;
       }
       await this.server.wp.pluginAction(this.site.containerName, slug, action, actor);
+      if (action === 'deactivate' || action === 'delete') {
+        const left = await clearPluginLeftovers(this.server.siteFiles, this.site.containerName, [slug]);
+        if (left && !left.ok) return left.message;
+      }
       return null;
     }
     if (action === 'deactivate') throw new Error('themes cannot be deactivated; activate another one instead');

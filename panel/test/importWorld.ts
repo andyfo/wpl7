@@ -54,7 +54,9 @@ export const CHOICES: ImportRunBody = {
 };
 
 /** A world with an import connected to a fake old site, ready to start. */
-export async function connected(opts: { fake?: Partial<ConstructorParameters<typeof FakeSourceSite>[0]>; world?: TestWorld } = {}) {
+export async function connected(
+  opts: { fake?: Partial<ConstructorParameters<typeof FakeSourceSite>[0]>; world?: TestWorld; report?: Record<string, unknown> } = {},
+) {
   const w = opts.world ?? (await makeWorld({ exec: hostExec }));
   // The image's entrypoint: wp-config.php, from the container's settings, at its first start.
   w.docker.onStart = (name) => {
@@ -71,6 +73,7 @@ export async function connected(opts: { fake?: Partial<ConstructorParameters<typ
   const report = sampleReport({
     files: { count: 9, bytes: 4_000_000, dirs: 5, links: 1, unreadable: 0, excluded: [] },
     db: { ...(base.db as object), bytes: 100_000 },
+    ...opts.report,
   });
   await w.core.imports.connect(w.core.imports.get(row.id), report);
   // What the database restore was handed, read before the staging folder goes.

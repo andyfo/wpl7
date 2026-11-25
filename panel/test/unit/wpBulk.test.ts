@@ -248,6 +248,36 @@ describe('wp.bulkTask', () => {
     expect(lines.indexOf('wp plugin deactivate seo --user=1')).toBeLessThan(lines.indexOf('wp plugin delete seo --user=1'));
   });
 
+  it("takes WP Rocket's rules out of .htaccess when it deactivates or deletes WP Rocket, and no one else's", async () => {
+    const rocket = '# BEGIN WP Rocket\nExpiresByType text/html "access plus 0 seconds"\n# END WP Rocket\n';
+    for (const [slug, action, left] of [
+      ['wp-rocket', 'deactivate', ''],
+      ['wp-rocket', 'delete', ''],
+      ['akismet', 'deactivate', rocket],
+    ] as const) {
+      const w = await makeWorld();
+      const site = addRunningSite(w, 'blog');
+      await seedSnapshot(w, site);
+      w.docker.execQueue.push(ok('Success: Deactivated.'), ok('Success: Deleted.'));
+      scriptScan(w);
+      let htaccess = Buffer.from(rocket);
+      const files = w.core.servers.handleFor(1).siteFiles;
+      files.read = async () => ({ bytes: htaccess, etag: 'e' });
+      files.write = async (_container, rel, body, opts) => {
+        expect([rel, opts?.ifMatch]).toEqual(['.htaccess', 'e']);
+        htaccess = body;
+        return { path: rel, entry: {} as never, etag: 'f' };
+      };
+      const job = w.worker.enqueue(
+        'wp.bulkTask',
+        { siteId: site.id, ops: [{ kind: 'plugin', slug, action }], backupFirst: false, healthCheck: false },
+        { id: site.id, slug: site.slug, serverId: 1 },
+      );
+      expect((await runJob(w, job.id)).status, `${action} ${slug}`).toBe('succeeded');
+      expect(htaccess.toString(), `${action} ${slug}`).toBe(left);
+    }
+  });
+
   it('takes a pre-update backup first and records its id', async () => {
     const w = await makeWorld({ exec: hostExec });
     const site = addRunningSite(w, 'blog', { files: true });
