@@ -17,6 +17,7 @@ sources:
   - panel/src/jobs/handlers/sitePackage.ts
   - panel/src/lib/zipReader.ts
   - panel/src/lib/dupArchive.ts
+  - panel/src/services/pluginLeftovers.ts
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
@@ -59,7 +60,8 @@ The `site.create` job brings the site in the way an [import](/docs/sites/import/
 - The site gets its own database, and the package's dump is loaded into it as the site's own
   database user. The tables keep their prefix.
 - The old address is replaced with the new one in the database, and the old folder with
-  `/var/www/html`. The plugins you chose are deactivated. Search engines follow the wizard's
+  `/var/www/html`. The plugins you chose are deactivated, and a deactivated WP Rocket's rules come
+  out of `.htaccess`. Search engines follow the wizard's
   **Discourage search engines from indexing this site**, not the old site's setting.
 - The old database's triggers are added last, so the address change does not set them off. They
   run in the SQL mode WordPress gives its own queries. Duplicator does not record the one they

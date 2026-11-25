@@ -24,6 +24,7 @@ import {
   type SnapshotAnswer,
 } from '../../services/importPull.js';
 import type { PluginClient } from '../../services/pluginClient.js';
+import { clearPluginLeftovers } from '../../services/pluginLeftovers.js';
 import { siteContainerSpec, sitePaths, siteRuntimeFrom } from '../../services/siteSpec.js';
 import { restoreSiteOnServer, type ProtectionHold } from './restoreSite.js';
 import {
@@ -831,6 +832,8 @@ export async function fixWordPress(
       const res = await server.wp.run(container, ['plugin', 'deactivate', ...choices.deactivatePlugins, '--skip-plugins', '--skip-themes'], 300_000);
       if (res.exitCode !== 0) ctx.warn(`Could not deactivate them (${errMsg(err)}); do it on the site's WordPress tab.`);
     }
+    const left = await clearPluginLeftovers(server.siteFiles, container, choices.deactivatePlugins);
+    if (left) ctx.log(left.ok ? 'info' : 'warn', left.message);
   }
   if (opts.discourageSearchEngines) {
     try {

@@ -13,6 +13,7 @@ sources:
   - panel/src/services/wp.ts
   - panel/src/services/adminLogin.ts
   - panel/src/services/wpInventory.ts
+  - panel/src/services/pluginLeftovers.ts
 ---
 
 import Screenshot from '~/components/Screenshot.astro';
@@ -52,7 +53,8 @@ The **Plugins** and **Themes** cards list what is installed, with status, versio
 Install a plugin with the wordpress.org search box above the list. Each row offers
 **Update**, **Activate** or **Deactivate**, and **Delete** where they apply. Deleting asks you
 to type `delete`. Must-use plugins and drop-ins are listed but cannot be changed, and the
-active theme and its parent cannot be deleted.
+active theme and its parent cannot be deleted. Deactivating or deleting WP Rocket also takes its
+rules out of `.htaccess`, as WP Rocket does when it is deactivated in wp-admin.
 
 A plugin with a [recipe](/docs/reference/glossary/#recipe) adds a **Recipes** card, which shows
 its license and offers **Check** and **Activate all**.
