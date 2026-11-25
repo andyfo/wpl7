@@ -17,6 +17,7 @@ sources:
   - panel/src/jobs/handlers/sitePackage.ts
   - panel/src/lib/zipReader.ts
   - panel/src/lib/dupArchive.ts
+  - panel/src/lib/phpDefines.ts
   - panel/src/services/pluginLeftovers.ts
 ---
 
@@ -66,6 +67,9 @@ The `site.create` job brings the site in the way an [import](/docs/sites/import/
 - The old database's triggers are added last, so the address change does not set them off. They
   run in the SQL mode WordPress gives its own queries. Duplicator does not record the one they
   were made with.
+- What Duplicator's own installer clears is cleared too: transients, everyone's logins, and the
+  Duplicator plugin's list of the old site's backups with its activity log. The plugin's key comes
+  over from the old `wp-config.php`, so its settings stay readable.
 - A first backup is taken and a malware scan is queued.
 
 The upload is deleted once the site is made. A failed create keeps it for a day, so **Back to the
@@ -75,6 +79,9 @@ form** tries again without a new upload.
 
 - It keeps its users, passwords and language. **Log in to WordPress** on its page works as on
   any site.
+- The first administrator to log in lands on Duplicator's **Tools** page, which finishes the move
+  as after Duplicator's own installer. It says the site was migrated and that it found no
+  installer files to remove: the panel never unpacks them.
 - **Go live** moves it to its domain and allows search engines again. See
   [Domains and going live](/docs/sites/domains/).
 
@@ -103,7 +110,9 @@ form** tries again without a new upload.
   **PHP Code**.
 - Statements that set the database server itself, such as `SET @@GLOBAL`, are left out.
 - The old `wp-config.php` is never used, nor a `wp-config-docker.php` beside it. Only the settings
-  you tick are carried over.
+  you tick are carried over, and the Duplicator plugin's key.
+- For a package from Duplicator Pro, the plugin's own records stay as they came, and its last step
+  does not run at the first login.
 
 ## Related
 

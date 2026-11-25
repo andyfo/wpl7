@@ -198,7 +198,8 @@ export class AlertService {
     let notifiedAt = row?.notifiedAt ?? null;
     if (next.fails >= DOWN_AFTER) {
       ({ next, notifiedAt } = await this.deliver(next, notifiedAt, this.enabled('alertsSiteDown'), () => {
-        const what = reading.status !== null ? `HTTP ${reading.status}` : `no answer${reading.error ? `: ${clip(reading.error)}` : ''}`;
+        // The probe's own reason when it has one: "No answer within 15 s", a refused connection.
+        const what = reading.status !== null ? `HTTP ${reading.status}` : reading.error ? clip(reading.error) : 'no answer';
         return [
           `${site.title} is down`,
           [

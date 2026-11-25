@@ -653,6 +653,7 @@ export class SitesService {
       status: site.status as SiteSummary['status'],
       up: monitor?.up ?? null,
       httpStatus: monitor?.httpStatus ?? null,
+      httpTimedOut: monitor?.httpTimedOut ?? false,
       lastCheckedAt: monitor?.lastCheckedAt ?? null,
       diskBytes: site.diskBytes,
       recentTraffic: traffic,

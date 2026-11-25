@@ -9,7 +9,8 @@
  * `db.sql.gz` beside them. From that staging folder the site comes up as an import's does
  * (restoreSiteOnServer, `tree`): the database made and loaded as the site's own user, the panel's
  * wp-config.php written by the image, the old address replaced with the new one, what of the old
- * host the admin chose left behind. The installer the package came with is never extracted.
+ * host the admin chose left behind. The installer the package came with is never extracted: what
+ * it does to the Duplicator plugin's own records, the job does (duplicatorAfterInstall).
  */
 import { once } from 'node:events';
 import fsp from 'node:fs/promises';
@@ -28,9 +29,12 @@ import {
   OpenPackage,
   charsetFromMysqldump,
   checkPackageChoices,
+  duplicatorAfterInstall,
+  duplicatorKeyIn,
   notUtf8Charset,
   packageCharset,
   packageTriggers,
+  type DuplicatorAfterInstall,
   type PackageContents,
   type PackageDumpFile,
   type PackageEntryRef,
@@ -38,6 +42,7 @@ import {
 import { PackageDumpFilter, packageDumpPreamble } from '../../services/packageDump.js';
 import type { SiteNames } from '../../services/packageTriggers.js';
 import { sitePaths } from '../../services/siteSpec.js';
+import { phpLiteral } from '../../services/wpCachePhp.js';
 import { restoreSiteOnServer, type ProtectionHold } from './restoreSite.js';
 import { WORDPRESS_HTACCESS, bytesText, extractInto, fixWordPress, leaveBehind, makeRoomForStatements } from './import.js';
 import { dnsPreflight, probeSite, siteDomains, siteUrl, updateSiteRow, waitForWordPressFiles, writeSiteJson } from './shared.js';
@@ -88,6 +93,7 @@ export async function createSiteFromPackage(ctx: JobContext<z.infer<typeof siteC
     const report = inspection.report;
     if (report.table_prefix !== site.tablePrefix) throw new Error(`The package's table prefix is ${report.table_prefix}, the site's ${site.tablePrefix}`);
     const c = inspection.contents;
+    const duplicator = duplicatorAfterInstall(c);
     ctx.info(
       `The package: ${c.format === 'zip' ? 'a .zip' : 'a .daf'} of ${bytesText(c.bytes)} made by Duplicator ${inspection.dto.duplicator ?? '(version not given)'}, ` +
         `from ${report.home}: WordPress ${report.wp}, PHP ${report.php}, table prefix ${report.table_prefix}.`,
@@ -115,6 +121,7 @@ export async function createSiteFromPackage(ctx: JobContext<z.infer<typeof siteC
     await server.files.mkdirp(staging, { mode: 0o700 });
     await server.files.mkdirp(wordpressDir, { mode: 0o755 });
     let db: UnpackedDatabase;
+    let key: { name: string; value: string; workedOut: boolean } | null = null;
     const pkg = await OpenPackage.open(file, c);
     try {
       // The database first: smaller than the files, and where a package fails most.
@@ -122,6 +129,7 @@ export async function createSiteFromPackage(ctx: JobContext<z.infer<typeof siteC
       ctx.checkCanceled();
       await unpackFiles(ctx, server, pkg, c, wordpressDir);
       ctx.checkCanceled();
+      if (duplicator && duplicator.keyNames.length > 0) key = await duplicatorKey(ctx, pkg, c, duplicator.keyNames);
     } finally {
       await pkg.close();
     }
@@ -174,6 +182,9 @@ export async function createSiteFromPackage(ctx: JobContext<z.infer<typeof siteC
         }
       }
     }
+    if (key) await carryDuplicatorKey(ctx, server, container, key);
+    // Before the address change, as Duplicator's installer clears them: none of it is rewritten for nothing.
+    await clearOldSiteRecords(ctx, server, container, duplicator, c);
     const admin = await fixWordPress(ctx, s, server, site, report, choices, url, { discourageSearchEngines: ctx.payload.discourageSearchEngines });
     if (!ctx.payload.discourageSearchEngines) {
       // The old site's own setting came with its database: what the form said wins.
@@ -185,6 +196,8 @@ export async function createSiteFromPackage(ctx: JobContext<z.infer<typeof siteC
     }
     // Last of the database's changes: the address rewrite and the rest above would have fired them.
     await addTriggers(ctx, server, site, c, report, db.names, path.join(staging, 'triggers'));
+    // Last, as the installer's own last step: what the plugin finishes the move by.
+    if (duplicator) await finishAtFirstLogin(ctx, server, container, duplicator);
     const locale = await siteLanguage(server, container);
     if (!locale) ctx.warn(`Could not read the site's language from WordPress, so the panel takes it to be ${site.locale}.`);
     ctx.checkCanceled();
@@ -317,6 +330,135 @@ async function originalFile(ctx: JobContext<unknown>, pkg: OpenPackage, ref: Pac
     ctx.warn(`Could not read the package's ${what} (${errMsg(err)}).`);
     return null;
   }
+}
+
+// ---------------------------------------------------------------------- the Duplicator plugin's records
+
+/** The most of the old wp-config.php read: the plugin's key is all the panel takes from it. */
+const MAX_WP_CONFIG_BYTES = 1024 * 1024;
+
+/**
+ * The key the Duplicator plugin encrypts its settings with, from the old wp-config.php: the first of
+ * `names` it defines with a plain string. Never logged.
+ */
+async function duplicatorKey(
+  ctx: JobContext<unknown>,
+  pkg: OpenPackage,
+  c: PackageContents,
+  names: string[],
+): Promise<{ name: string; value: string; workedOut: boolean } | null> {
+  const lost = 'Duplicator will make a new key and say its encrypted settings were reset';
+  if (!c.original.wpConfig) {
+    ctx.info(`The package has no copy of the old wp-config.php: ${lost}.`);
+    return null;
+  }
+  let source: string;
+  try {
+    source = (await pkg.readAll(c.original.wpConfig, MAX_WP_CONFIG_BYTES)).toString('utf8');
+  } catch (err) {
+    ctx.warn(`Could not read the package's copy of the old wp-config.php (${errMsg(err)}): ${lost}.`);
+    return null;
+  }
+  const key = duplicatorKeyIn(source, names);
+  if (!key) ctx.info(`The old wp-config.php sets no Duplicator key the panel can read: ${lost}.`);
+  return key;
+}
+
+/**
+ * Writes the plugin's key into wp-config.php with WP-CLI's own editor of it. The key comes in the
+ * environment, never on a command line, as a recipe's license key does.
+ */
+export const DUPLICATOR_KEY_PHP = String.raw`$name = getenv('WPL7_DUPLICATOR_KEY_NAME');
+$value = getenv('WPL7_DUPLICATOR_KEY');
+if (!in_array($name, array('DUPLICATOR_AUTH_KEY', 'DUP_SECURE_KEY'), true) || !is_string($value) || $value === '') { fwrite(STDERR, 'No key was given.'); exit(1); }
+$file = \WP_CLI\Utils\locate_wp_config();
+if (!$file || !class_exists('WPConfigTransformer')) { fwrite(STDERR, 'WP-CLI cannot change wp-config.php here.'); exit(1); }
+$config = new WPConfigTransformer($file);
+$config->update('constant', $name, var_export($value, true), array('raw' => true, 'normalize' => true));`;
+
+/** The old site's Duplicator key, into the new wp-config.php: the plugin's settings stay readable. */
+async function carryDuplicatorKey(
+  ctx: JobContext<unknown>,
+  server: ServerHandle,
+  container: string,
+  key: { name: string; value: string; workedOut: boolean },
+): Promise<void> {
+  const res = await server.wp
+    .run(container, ['eval', DUPLICATOR_KEY_PHP, '--skip-plugins', '--skip-themes'], 60_000, {
+      env: [`WPL7_DUPLICATOR_KEY_NAME=${key.name}`, `WPL7_DUPLICATOR_KEY=${key.value}`],
+    })
+    .catch((err: unknown) => ({ exitCode: 1, stdout: '', stderr: errMsg(err) }));
+  if (res.exitCode === 0) {
+    ctx.info(
+      key.workedOut
+        ? `Wrote the Duplicator plugin's key into wp-config.php as ${key.name}, worked out as the old site did from its own settings, so the plugin's settings stay readable.`
+        : `Carried the Duplicator plugin's key (${key.name}) into wp-config.php, so its settings stay readable.`,
+    );
+  }
+  // WP-CLI's own words only: they never hold the key.
+  else ctx.warn(`Could not carry the Duplicator plugin's key into wp-config.php (exit ${res.exitCode}): Duplicator will say its encrypted settings were reset.`);
+}
+
+/**
+ * What Duplicator's installer clears on a moved site: every transient and every login, then the
+ * plugin's own tables and options `plan` names.
+ */
+const CLEAR_OLD_RECORDS_PHP = String.raw`global $wpdb;
+$run = function ($sql) use ($wpdb) { if ($wpdb->query($sql) === false) { fwrite(STDERR, $wpdb->last_error); exit(1); } };
+$run($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name LIKE %s OR option_name LIKE %s", $wpdb->esc_like('_transient_') . '%', $wpdb->esc_like('_site_transient_') . '%'));
+$run($wpdb->prepare("DELETE FROM {$wpdb->usermeta} WHERE meta_key = %s", 'session_tokens'));
+foreach ($plan['tables'] as $table) {
+  // WordPress allows letters, digits and _ in a prefix: a name that needs no quoting.
+  $table = $wpdb->prefix . $table;
+  if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table))) === $table) $run('DELETE FROM ' . $table);
+}
+foreach ($plan['options'] as $option) delete_option($option);`;
+
+/** The PHP that clears what `plan` names, with the transients and logins every package's site loses. */
+export function clearOldRecordsPhp(plan: DuplicatorAfterInstall | null): string {
+  return `$plan = ${phpLiteral({ tables: plan?.tables ?? [], options: plan?.options ?? [] })};\n${CLEAR_OLD_RECORDS_PHP}`;
+}
+
+async function clearOldSiteRecords(
+  ctx: JobContext<unknown>,
+  server: ServerHandle,
+  container: string,
+  plan: DuplicatorAfterInstall | null,
+  c: PackageContents,
+): Promise<void> {
+  const res = await server.wp
+    .run(container, ['eval', clearOldRecordsPhp(plan), '--skip-plugins', '--skip-themes'], 300_000)
+    .catch((err: unknown) => ({ exitCode: 1, stdout: '', stderr: errMsg(err) }));
+  if (res.exitCode !== 0) {
+    ctx.warn(`Could not clear the old site's transients, logins and Duplicator backup list (${(res.stderr || res.stdout).trim().slice(0, 200)}).`);
+    return;
+  }
+  ctx.info(`Cleared the old site's transients and logins${plan ? ", and the Duplicator plugin's list of its backups" : ''}, as Duplicator's installer does.`);
+  if (!plan && c.descriptor && c.descriptor.dup_type.toLowerCase() === 'pro') {
+    ctx.info("Duplicator Pro made this package: the plugin's own records are left as they came.");
+  }
+}
+
+/** The options Duplicator's installer writes last: the plugin finishes the move at the first administrator login. */
+const FIRST_LOGIN_PHP = String.raw`$data = $finish['data'];
+$data[$finish['timeField']] = $finish['timeField'] === 'time' ? time() : gmdate('Y-m-d H:i:s');
+$json = wp_json_encode($data, JSON_PRETTY_PRINT);
+if (!is_string($json)) { fwrite(STDERR, 'The move could not be written down.'); exit(1); }
+update_option($finish['dataOption'], $json, false);
+update_option($finish['option'], '1', false);
+if (get_option($finish['option']) !== '1' || get_option($finish['dataOption']) !== $json) { fwrite(STDERR, 'The options were not saved.'); exit(1); }`;
+
+/** The PHP that writes the options `plan` names, as Duplicator's installer does last. */
+export function firstLoginPhp(plan: DuplicatorAfterInstall): string {
+  return `$finish = ${phpLiteral(plan.firstLogin)};\n${FIRST_LOGIN_PHP}`;
+}
+
+async function finishAtFirstLogin(ctx: JobContext<unknown>, server: ServerHandle, container: string, plan: DuplicatorAfterInstall): Promise<void> {
+  const res = await server.wp
+    .run(container, ['eval', firstLoginPhp(plan), '--skip-plugins', '--skip-themes'], 60_000)
+    .catch((err: unknown) => ({ exitCode: 1, stdout: '', stderr: errMsg(err) }));
+  if (res.exitCode === 0) ctx.info('Duplicator finishes the move at the first administrator login, as after its own installer.');
+  else ctx.warn(`Could not leave Duplicator its last step (${(res.stderr || res.stdout).trim().slice(0, 200)}): its plugin will not say the move is done.`);
 }
 
 /** What the database's unpacking found: what restoring it and adding triggers go by. */

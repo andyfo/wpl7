@@ -1888,6 +1888,12 @@ export const mailSuspensionBody = z
   })
   .strict();
 
+/**
+ * How long the uptime check waits for a site's home page. A site that answers later is slow, not
+ * offline: one that runs WordPress for every visit can take seconds under load.
+ */
+export const UPTIME_TIMEOUT_SECONDS = 15;
+
 export const settingsUpdateBody = z.object({
   backupCron: z.string().min(9).max(100).optional(),
   backupRetention: z.number().int().min(1).max(365).optional(),

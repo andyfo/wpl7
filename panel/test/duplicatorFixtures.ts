@@ -218,6 +218,10 @@ export function archiveTxt(o: {
   defines?: Record<string, unknown>;
   /** Folders other than WordPress's own: plugins, muplugins, themes. */
   paths?: Record<string, string>;
+  /** lite unless said: pro for Duplicator Pro's. */
+  dupType?: string;
+  /** The plugin options its installer deletes, as archive.txt has them. */
+  optsDelete?: unknown;
 }) {
   const prefix = o.prefix ?? 'wpd_';
   const home = o.home ?? OLD_HOME;
@@ -225,13 +229,19 @@ export function archiveTxt(o: {
   const define = (value: unknown, inWpConfig: boolean) => ({ 'CL_-=_-=': 'stdClass', value, inWpConfig });
   return JSON.stringify({
     'CL_-=_-=': 'Duplicator\\Installer\\Package\\ArchiveDescriptor',
-    dup_type: 'lite',
+    dup_type: o.dupType ?? 'lite',
     created: '2026-11-20 10:00:00',
     version_dup: o.version ?? (o.layout === 'new' ? '5.2.0' : '1.5.11'),
     version_wp: '7.1.5',
     version_db: '8.0.46',
     version_php: o.php ?? '8.2.29',
     version_os: 'Linux',
+    license_type: 0,
+    // 1.x writes the list as a JSON string, 5.x as a list.
+    opts_delete:
+      o.optsDelete ??
+      (o.layout === 'new' ? ['dupli_opt_ui_view_state', 'dupli_opt_settings'] : '["duplicator_ui_view_state","duplicator_package_active","duplicator_settings"]'),
+    packInfo: { 'CL_-=_-=': 'x', packageId: 7, packageName: 'shop', packageHash: 'abc1234-20101000', secondaryHash: 'abc1234-20101000-1' },
     blogname: 'Shop',
     exportOnlyDB: o.dbOnly ?? false,
     secure_on: 0,
@@ -245,6 +255,7 @@ export function archiveTxt(o: {
       version: '8.0.46',
       collationList: ['utf8mb4_0900_ai_ci', 'utf8mb4_unicode_520_ci'],
       tablesSizeOnDisk: 4096,
+      tablesFinalCount: 2,
       tablesList: { [`${prefix}options`]: { 'CL_-=_-=': 'x', insertedRows: 2, size: 2048 }, [`${prefix}posts`]: { 'CL_-=_-=': 'x', insertedRows: 2, size: 2048 } },
       ...(o.dumpFiles ? { dumpFiles: o.dumpFiles } : {}),
       viewCount: 1,
@@ -400,6 +411,17 @@ export function legacySql(prefix = 'wp_'): Buffer {
   );
 }
 
+/** The key the old site's Duplicator encrypted its settings with: every character PHP escapes in it. */
+export const OLD_DUPLICATOR_KEY = "k3y-'quoted'-\\slash-$dollar=equals!@#";
+const phpQuoted = (s: string) => `'${s.replace(/[\\']/g, '\\$&')}'`;
+
+/** The old wp-config.php as 5.x keeps it: the plugin's key, and an older one only in a comment. */
+export const OLD_WP_CONFIG = `<?php
+// define('DUPLICATOR_AUTH_KEY', 'a-key-in-a-comment');
+define( 'DB_PASSWORD', '' );
+define( 'DUPLICATOR_AUTH_KEY', ${phpQuoted(OLD_DUPLICATOR_KEY)} );
+`;
+
 export const OLD_HTACCESS = '# BEGIN WordPress\nRewriteEngine On\nRewriteRule . /index.php [L]\n# END WordPress\nphp_value upload_max_filesize 64M\n';
 
 /** A site as a package holds it: WordPress, wp-content, Duplicator's own installer files beside it. */
@@ -435,7 +457,7 @@ export function packageEntries(o: {
           { name: 'dup-installer/dup_descriptors_abc1234-20101000/archive.txt', data: archive },
           { name: 'dup-installer/dup_descriptors_abc1234-20101000/orig_files/source_site_htaccess', data: OLD_HTACCESS },
           { name: 'dup-installer/dup_descriptors_abc1234-20101000/orig_files/source_site_userini', data: 'memory_limit = 512M\n' },
-          { name: 'dup-installer/dup_descriptors_abc1234-20101000/orig_files/source_site_wpconfig', data: "<?php define('DB_PASSWORD', '');" },
+          { name: 'dup-installer/dup_descriptors_abc1234-20101000/orig_files/source_site_wpconfig', data: OLD_WP_CONFIG },
           ...(o.dumps === false
             ? []
             : [
