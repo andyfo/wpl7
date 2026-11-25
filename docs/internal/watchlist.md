@@ -72,6 +72,7 @@ for a reason; remove one once there is nothing left to watch.
 | [WordPress's default From address](#wordpresss-default-from-address) | Medium | 2026-11-13 13:00 UTC | `wordpress@` and the home URL's host without `www.`, on 7.1.4, trunk and 7.2 Beta 5 |
 | [msmtp: one envelope sender, as `wpl7-sendmail` relies on it](#msmtp-one-envelope-sender-as-wpl7-sendmail-relies-on-it) | Low | 2026-11-11 23:04 UTC | msmtp 1.8.28 in the image, 1.8.34 upstream; nothing since changes the four behaviours; the engine mail tests pass |
 | [sodium_compat for PHP 7.0 in CI](#sodium_compat-for-php-70-in-ci) | Low | 2026-10-09 15:55 UTC | 1.24.2 is the newest 1.x and takes PHP 7; 2.x needs 8.1 |
+| [GNU tar: its words for a file that changes while it is read](#gnu-tar-its-words-for-a-file-that-changes-while-it-is-read) | Low | 2026-11-25 10:47 UTC | 1.35 on Ubuntu 24.04 and 26.04: exit 1 and three messages for a file changed, removed or shorter while read; exit 2 for one it cannot read |
 | [The MariaDB image's bash and client, as the database browser and imports rely on them](#the-mariadb-images-bash-and-client-as-the-database-browser-and-imports-rely-on-them) | Medium | 2026-11-19 08:16 UTC | `mariadb:11.4` (11.4.13 on Ubuntu 24.04, rebuilt 2026-11-11) has bash 5.2 with `/dev/tcp`, and its client refuses a dump's commands; the engine test passes |
 | [Adminer: the pinned build and its advisories](#adminer-the-pinned-build-and-its-advisories) | High | 2026-11-24 10:07 UTC | 6.3.1, the latest, pinned as `6.3.1-wpl7.1` on PHP 8.4.28; the panel takes its 303 sign-in; engine test passes |
 | [wordpress.org's directory, as the panel's closed flag reads it](#wordpressorgs-directory-as-the-panels-closed-flag-reads-it) | Medium | 2026-11-19 11:43 UTC | The feed still calls `bbpress` and `bbpress-private-replies` closed and misses `captcha`; the directory answers as `wporgListing` reads them |
@@ -1408,6 +1409,25 @@ for a reason; remove one once there is nothing left to watch.
 
 
 
+
+## GNU tar: its words for a file that changes while it is read
+
+- **Priority:** Low
+- **Last checked:** 2026-11-25 10:47 UTC. Ubuntu 24.04 and 26.04 both have GNU tar 1.35. In a
+  container, tar exits 1 with "file changed as we read it" for a folder that gains files and a
+  file that grows while it is read, "File removed before we read it" and "File shrank by N bytes;
+  padding with zeros", and the archive tests whole. A file it cannot open gives exit 2, "Cannot
+  open: Permission denied" and "Exiting with failure status due to previous errors".
+- **The problem:** a backup archives a running site's files, which the site may change while tar
+  reads them. tar's exit 1 says only that; the archive is whole.
+- **What we do about it:** `changedWhileArchived` in `panel/src/services/backup.ts` lets a backup
+  go on when tar exits 1 and every line it says is one of those three, and the backup's log names
+  the files. Anything else fails the backup.
+- **Check:** `tar --version` on a new Ubuntu release. For a new tar, read its NEWS for these
+  messages and the exit codes, or repeat the container test: a folder that gains files and a
+  file truncated while `tar -czf` reads them.
+- **When it changes:** reworded messages go into `CHANGED_WHILE_READ_RE` and its test. Until then a
+  backup of a busy site fails again on them, as it did before the change.
 ## RDAP: registry endpoints and bootstrap
 
 - **Priority:** Medium

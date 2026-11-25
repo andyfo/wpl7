@@ -79,6 +79,40 @@ function idsToDelete(payload: string): number[] {
 }
 
 /** Where a backup keeps the site's other databases: databases/<name>.sql.gz. */
+/**
+ * What GNU tar says, with exit 1, of a file that changed while it read it: the archive is whole and
+ * holds the file as tar read it, a file that got shorter filled out with zeros. A running site writes
+ * to its caches and logs while it is backed up.
+ */
+const CHANGED_WHILE_READ_RE = /^tar: (.+): (file changed as we read it|File removed before we read it|File shrank by \d+ bytes; padding with zeros)$/;
+
+/**
+ * The files tar names when all its exit 1 says is that they changed while it read them: the
+ * backup goes on. Null for any other failure, which fails the backup.
+ */
+export function changedWhileArchived(exitCode: number, stderr: string): { path: string; shrank: boolean }[] | null {
+  if (exitCode !== 1) return null;
+  const files: { path: string; shrank: boolean }[] = [];
+  for (const line of stderr.split('\n').map((l) => l.trim()).filter(Boolean)) {
+    const m = CHANGED_WHILE_READ_RE.exec(line);
+    if (!m) return null;
+    files.push({ path: m[1]!, shrank: m[2]!.startsWith('File shrank') });
+  }
+  return files.length > 0 ? files : null;
+}
+
+/** The job log's line for files that changed while they were archived. */
+export function changedWhileArchivedNote(files: { path: string; shrank: boolean }[]): string {
+  const list = (paths: string[]) => `${paths.slice(0, 5).join(', ')}${paths.length > 5 ? ', …' : ''}`;
+  const shrank = files.filter((f) => f.shrank).map((f) => f.path);
+  const n = files.length;
+  return (
+    `The site changed ${n === 1 ? 'a file' : `${n} files`} while ${n === 1 ? 'it was' : 'they were'} archived, so the backup has ` +
+    `${n === 1 ? 'it' : 'them'} as read then: ${list(files.map((f) => f.path))}.` +
+    (shrank.length > 0 ? ` ${shrank.length === 1 ? 'One' : `${shrank.length}`} got shorter while read and ${shrank.length === 1 ? 'is' : 'are'} filled out with zeros: ${list(shrank)}.` : '')
+  );
+}
+
 export const EXTRA_DB_DIR = 'databases';
 export const extraDbFile = (name: string) => `${EXTRA_DB_DIR}/${name}.sql.gz`;
 
@@ -288,7 +322,11 @@ export class BackupService {
         ['-C', p.root, '-czf', path.join(dir, 'files.tar.gz'), ...entries],
         { timeoutMs: 60 * 60_000 },
       );
-      if (tar.exitCode !== 0) throw new Error(`tar failed (exit ${tar.exitCode}): ${tar.stderr.slice(0, 500)}`);
+      if (tar.exitCode !== 0) {
+        const changed = changedWhileArchived(tar.exitCode, tar.stderr);
+        if (!changed) throw new Error(`tar failed (exit ${tar.exitCode}): ${tar.stderr.slice(0, 500)}`);
+        log('warn', changedWhileArchivedNote(changed));
+      }
 
       // A PHP site's folder may hold a WordPress of its own, which is not the site's.
       const wpVersion = site.app === 'wordpress' ? await readWpVersion(h, p.wordpress) : null;
