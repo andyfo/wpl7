@@ -78,7 +78,7 @@ for a reason; remove one once there is nothing left to watch.
 | [Google's crawler address lists](#googles-crawler-address-lists) | Medium | 2026-11-03 09:35 UTC | Both answer: 589 prefixes, none wider than a /27 or a /64 |
 | [ssh2: how a channel closes, as the panel's SSH channels rely on it](#ssh2-how-a-channel-closes-as-the-panels-ssh-channels-rely-on-it) | Low | 2026-11-15 10:57 UTC | 1.17.0 is the latest; channels half-open by default, `destroy()` never marks one destroyed, `'close'` waits for `'end'` or an unreadable stream |
 | [ssh2: ed25519 keys from its own generator](#ssh2-ed25519-keys-from-its-own-generator) | Low | 2026-11-24 14:29 UTC | Open upstream since 2024, fix #1515 waiting for review; 1.17.0 cuts 1 key in 256 short; the panel does not use it |
-| [Duplicator's package format, as New site reads it](#duplicators-package-format-as-new-site-reads-it) | Medium | 2026-11-24 10:31 UTC | Lite 5.2.0 is the latest; read in its source and in packages from 5.2.0 and 1.5.11, .zip and .daf; triggers stay out of its dumps, without their SQL mode; 1.5.x's mysqldump writes in the client's default set; the end-to-end test passes on all four |
+| [Duplicator's package format, as New site reads it](#duplicators-package-format-as-new-site-reads-it) | Medium | 2026-11-25 10:03 UTC | Lite 5.2.0 is the latest; the plugin's own records as its installer leaves them, the same from 5.0.0 to 5.2.0 and in 1.5.17; on real WordPress, the first login after a 5.2.0 and a 1.5.11 package ends on Duplicator's own message |
 | [MariaDB: MySQL 8's collations](#mariadb-mysql-8s-collations) | Medium | 2026-11-24 08:46 UTC | 11.4.13 has MySQL 8.0's 44 `0900` collations, with the weights of the `uca1400` `nopad` ones they are mapped to; 11.4.4 has only the latter |
 | [WordPress's incompatible SQL modes, as a package's triggers run in them](#wordpresss-incompatible-sql-modes-as-a-packages-triggers-run-in-them) | Low | 2026-11-24 10:31 UTC | 7.1.5 takes out six modes; trunk adds `NO_BACKSLASH_ESCAPES`, which the panel takes out already |
 | [MariaDB's keywords and functions, as a trigger's words are read](#mariadbs-keywords-and-functions-as-a-triggers-words-are-read) | Low | 2026-11-24 11:54 UTC | 11.4.13: 699 keywords, 268 functions, as `panel/src/lib/mariadbWords.ts` has them; spatial functions are not among them |
@@ -1690,12 +1690,20 @@ for a reason; remove one once there is nothing left to watch.
 ## Duplicator's package format, as New site reads it
 
 - **Priority:** Medium
-- **Last checked:** 2026-11-24 10:31 UTC. Duplicator Lite 5.2.0 is the latest on wordpress.org.
-  What the panel reads was taken from its source and from four packages built with it and with
-  1.5.11 on WordPress 7.1.5: a 5.2.0 `.daf` (DupArchive 5.0.1, PHP dump in one file per table), a
-  5.2.0 `.zip` (mysqldump, one dump file), and a 1.5.11 `.zip` and `.daf` (DupArchive 1.0.0, the
-  old layout). `WPL7_DUPLICATOR_E2E_DIR=… npx vitest run test/e2e/duplicator` passes on all four:
-  every file byte for byte, every table row for row against Duplicator's own dump.
+- **Last checked:** 2026-11-25 10:03 UTC. Duplicator Lite 5.2.0 is still the latest (the plugin's
+  SVN tags). What the panel does in place of the installer's last steps, below, was read in 5.2.0's
+  source and compared with the 1.5.17, 5.0.0, 5.0.6, 5.1.0 and 5.1.1 tags: the 5.x names are the
+  same from 5.0.0 on, 1.5.17 has the 1.x ones. A site made from the 5.2.0 `.zip` and the 1.5.11 `.zip`
+  on WordPress's own image and MariaDB 11.4, with the job's steps, then signed in to with curl:
+  the first login lands on Duplicator's **Tools** page ("This site has been successfully
+  migrated!", "No Duplicator files were found"), the next on a dashboard without a notice. Without
+  the steps, 5.2.0's dashboard says "Encrypted Settings Reset" and "Manual Backup Failed". On
+  2026-11-24 10:31 UTC: what the panel reads was taken from 5.2.0's source and from four packages
+  built with it and with 1.5.11 on WordPress 7.1.5: a 5.2.0 `.daf` (DupArchive 5.0.1, PHP dump in one
+  file per table), a 5.2.0 `.zip` (mysqldump, one dump file), and a 1.5.11 `.zip` and `.daf`
+  (DupArchive 1.0.0, the old layout). `WPL7_DUPLICATOR_E2E_DIR=… npx vitest run test/e2e/duplicator`
+  passes on all four: every file byte for byte, every table row for row against Duplicator's own
+  dump.
 - **What we rely on:** none of it is documented by Duplicator.
   - Where things are. 5.x: `dup-installer/dup_descriptors_<hash>/archive.txt`, the dump in
     `db_dumps/`, the old `.htaccess` and `.user.ini` in `orig_files/source_site_*`. 1.x:
@@ -1734,6 +1742,27 @@ for a reason; remove one once there is nothing left to watch.
     `uploads`, `plugins`, `muplugins`, `themes`, from `SnapWP::getWpPaths` in both versions), `wpInfo.configs.defines`
     (`value`, `inWpConfig`), `wpInfo.plugins` (`active`, `mustUse`, `dropIns`), `wpInfo.themes`,
     `dbInfo.triggerList`, `viewCount`, `procCount`, `funcCount`.
+  - The plugin's own records, as its installer leaves them on a new site (`DbCleanup.php`, and
+    `duplicatorMigrationInfoSet` and `forceLogoutOfAllUsers` in `class.ctrl.s3.funcs.php`); the
+    panel does the same (`duplicatorAfterInstall`). The dump is taken in the middle of the package's
+    own build, so its row is there at status 20, exporting the database: left in place, the plugin
+    calls that build failed. Both versions: every transient and every user's `session_tokens` go,
+    and archive.txt's `opts_delete`. 5.x: the tables `duplicator_backups` and
+    `duplicator_activity_logs` are emptied, the options `dupli_opt_plugin_data_stats` and
+    `dupli_opt_unique_id` deleted, and `dupli_opt_first_login_after_install` (`1`) and
+    `dupli_opt_migration_data` (MigrateData's fields as JSON, `InstState::getMigrationData`) written
+    last. At the first administrator login `MigrationMng.php` reads them, finishes the move and
+    says so. The settings are encrypted with `DUPLICATOR_AUTH_KEY`, or the older `DUP_SECURE_KEY`,
+    from wp-config.php (`CryptBlowfish.php`); the installer keeps the old wp-config.php and so the
+    key. The panel reads it from `source_site_wpconfig`, which archive.txt's `defines` leave out.
+    Only a new install writes a key (`initSecureKey` in `UpgradeFunctions.php`): with none, the
+    plugin uses the md5 of `AUTH_KEY`, `DB_HOST`, `DB_NAME` and `DB_USER` (`getLegacyKey`), as a site
+    that has had it since 1.x does. Those four differ on a new site, so the panel works that key out
+    from the old wp-config.php and writes it as `DUPLICATOR_AUTH_KEY`.
+    1.x: `duplicator_packages`, `duplicator_plugin_data_stats`,
+    `duplicator_first_login_after_install` and `duplicator_migration_data` (an array with `time`,
+    `getMigrationData` in `class.installer.state.php`); no key. `opts_delete` is a JSON string there.
+    Duplicator Pro's names were not read: its packages (`dup_type` `pro`) are left as they came.
   - DupArchive: `<A><V>` then `<C>` before 5.0.0, `<X>` flags and `<P>` password hash from 5.0.0; a
     file's own `<X>` flags from 5.0.0; every glob with its CRC-32 (`hash('crc32b')`, so eight hex
     digits), of the stored bytes before 5.0.0 and of the content since; each file's own CRC-32 of
@@ -1747,7 +1776,12 @@ for a reason; remove one once there is nothing left to watch.
   (`getDefaultGlobalFileFilter` and the config files after it), `src/Package/Create/PackInstaller.php`
   (`createArchiveConfigFile`, `getWpInfo`), `src/Package/Database/` (`DatabaseInfo.php`'s triggers,
   `Dump/PhpDumpEngine.php`, `Dump/TableDumpWriter.php`, the mysqldump flags in `DatabasePkg.php`) and
-  `src/Libs/DupArchive/` (`DUPARCHIVE_VERSION`, the headers, `DupArchiveFileProcessor.php`'s globs). Then build a `.zip` and a `.daf` package with it on any WordPress (**Duplicator →
+  `src/Libs/DupArchive/` (`DUPARCHIVE_VERSION`, the headers, `DupArchiveFileProcessor.php`'s globs),
+  and for the plugin's records `installer/dup-installer/src/Core/Deploy/Database/DbCleanup.php`,
+  `installer/dup-installer/ctrls/classes/class.ctrl.s3.funcs.php`,
+  `installer/dup-installer/src/Core/InstState.php` (`getMigrationData`),
+  `installer/dup-installer/src/Models/MigrateData.php`, `src/Core/MigrationMng.php` and
+  `src/Utils/Crypt/CryptBlowfish.php`. Then build a `.zip` and a `.daf` package with it on any WordPress (**Duplicator →
   Settings → Backups → Archive engine**) and run the end-to-end test on them.
 - **When it changes:** a moved or renamed file goes into the patterns in
   `panel/src/services/duplicator.ts`; a new DupArchive header into `panel/src/lib/dupArchive.ts`; a
@@ -1755,7 +1789,10 @@ for a reason; remove one once there is nothing left to watch.
   address rewrite fires them, so take them out there and keep adding them last. A `SET NAMES` of
   its own in the dump: it wins over `packageDumpPreamble`'s. A new mysqldump character set flag, or
   one gone: `packageCharset`. Add the layout to `panel/test/duplicatorFixtures.ts` and run the
-  unit and end-to-end tests. Until then the panel refuses such a package and says why.
+  unit and end-to-end tests. Until then the panel refuses such a package and says why. A renamed
+  table, option or key constant of the plugin's, or a field its first login reads: `duplicatorAfterInstall`.
+  Then make a site from a package and log in to it: the first login should end on Duplicator's
+  own message, with no notice of settings reset or a failed backup.
 
 ## MariaDB: MySQL 8's collations
 

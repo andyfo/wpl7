@@ -15,6 +15,7 @@
  * - The package becomes the report an import's plugin sends (importInspect.ts), so the warnings, the
  *   suggestions and the choices are the import's own, and so is the set-up (handlers/sitePackage.ts).
  */
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
@@ -28,6 +29,7 @@ import { importPathProblem } from '../lib/archivePath.js';
 import { conflict, notFound, tooManyRequests } from '../lib/errors.js';
 import { DafFormatError, DafReader, DAF_INDEX_FILE, type DafEntry } from '../lib/dupArchive.js';
 import { ZipFormatError, ZipReader, type ZipEntry } from '../lib/zipReader.js';
+import { phpStringDefines } from '../lib/phpDefines.js';
 import { dumpCharset } from './packageDump.js';
 import { checkTrigger, inspectTrigger, type SiteNames } from './packageTriggers.js';
 import { CONSTANT_BLOCKLIST, blockingReason, checkChoices, inspectReport, migrateReportSchema, sourceOf, type MigrateReport } from './importInspect.js';
@@ -60,9 +62,32 @@ export interface PackageDumpFile {
 
 const count = z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).catch(0);
 const text = (max = 2000) => z.string().max(max);
+
+/** Names of the Duplicator plugin's own options: no other option of the site is ever deleted for a package. */
+const OWN_OPTION_RE = /^(duplicator|dupli_opt)_[A-Za-z0-9_]{1,150}$/;
+
+/** archive.txt's opts_delete, as Duplicator's own: 1.x writes the list as a JSON string. */
+function ownOptions(value: unknown): string[] {
+  let list = value;
+  if (typeof value === 'string') {
+    try {
+      list = JSON.parse(value) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  if (!Array.isArray(list)) return [];
+  return list.filter((o): o is string => typeof o === 'string' && OWN_OPTION_RE.test(o)).slice(0, 200);
+}
 /** The fields of a package's archive.txt the panel reads; the rest, the old salts among them, are dropped. */
 const descriptorSchema = z.object({
+  /** lite or pro; the oldest packages say nothing, and are Lite's. */
+  dup_type: text(32).catch(''),
   version_dup: text(32).catch(''),
+  license_type: z.coerce.number().int().catch(0),
+  /** The plugin's own options its installer deletes on the new site: a list, or 1.x's list as a JSON string. */
+  opts_delete: z.unknown().transform(ownOptions),
+  packInfo: z.object({ packageId: count, packageHash: text(100).catch('') }).catch({ packageId: 0, packageHash: '' }),
   version_wp: text(32),
   version_php: text(32),
   version_db: text(200).catch(''),
@@ -79,6 +104,7 @@ const descriptorSchema = z.object({
     collationList: z.array(text(100)).max(500).catch([]),
     tablesList: z.record(text(200), z.object({ insertedRows: count, size: count })).catch({}),
     tablesSizeOnDisk: count,
+    tablesFinalCount: count,
     dumpFiles: z.array(text(300)).max(200_000).catch([]),
     viewCount: count,
     procCount: count,
@@ -91,7 +117,7 @@ const descriptorSchema = z.object({
       .record(text(200), z.object({ create: z.string().max(MAX_TRIGGER_BYTES).catch('') }).catch({ create: '' }))
       .catch({})
       .transform((list) => Object.entries(list).map(([name, t]) => ({ name, create: t.create }))),
-  }).catch({ version: '', collationList: [], tablesList: {}, tablesSizeOnDisk: 0, dumpFiles: [], viewCount: 0, procCount: 0, funcCount: 0, buildMode: '', triggerList: [] }),
+  }).catch({ version: '', collationList: [], tablesList: {}, tablesSizeOnDisk: 0, tablesFinalCount: 0, dumpFiles: [], viewCount: 0, procCount: 0, funcCount: 0, buildMode: '', triggerList: [] }),
   fileInfo: z.object({ fileCount: count, dirCount: count, size: count }).catch({ fileCount: 0, dirCount: 0, size: 0 }),
   wpInfo: z.object({
     is_multisite: z.boolean().catch(false),
@@ -179,7 +205,8 @@ export interface PackageContents {
   descriptor: Descriptor | null;
   descriptorProblem: string | null;
   dumps: PackageDumpFile[];
-  original: { htaccess: PackageEntryRef | null; userIni: PackageEntryRef | null; phpIni: boolean };
+  /** The old site's own files Duplicator keeps apart; its wp-config.php is read only for the Duplicator plugin's key. */
+  original: { htaccess: PackageEntryRef | null; userIni: PackageEntryRef | null; phpIni: boolean; wpConfig: PackageEntryRef | null };
   encrypted: boolean;
   /** The site's files: what the listing holds outside the installer's folder. */
   files: { count: number; bytes: number; links: number; other: number };
@@ -351,7 +378,7 @@ const CONFIG_NEW_RE = /^dup-installer\/(dup_descriptors_[^/]+)\/archive\.txt$/;
 const CONFIG_OLD_RE = /^dup-installer\/dup-archive__[^/]+\.txt$/;
 const DUMP_NEW_RE = /^dup-installer\/(dup_descriptors_[^/]+)\/db_dumps\/([^/]+\.sql(\.gz)?)$/;
 const DUMP_OLD_RE = /^dup-installer\/dup-database__[^/]+\.sql(\.gz)?$/;
-const ORIGINAL_RE = /^dup-installer\/(?:dup_descriptors_[^/]+\/orig_files|original_files_[^/]+)\/source_site_(htaccess|userini|phpini)$/;
+const ORIGINAL_RE = /^dup-installer\/(?:dup_descriptors_[^/]+\/orig_files|original_files_[^/]+)\/source_site_(htaccess|userini|phpini|wpconfig)$/;
 
 function noteInstallerFile(found: InstallerFiles, name: string, ref: PackageEntryRef, bytes: number): void {
   if (CONFIG_NEW_RE.test(name) || CONFIG_OLD_RE.test(name)) found.config.push({ name, ref });
@@ -492,7 +519,12 @@ async function finish(
     descriptor,
     descriptorProblem,
     dumps,
-    original: { htaccess: found.original.get('htaccess') ?? null, userIni: found.original.get('userini') ?? null, phpIni: found.original.has('phpini') },
+    original: {
+      htaccess: found.original.get('htaccess') ?? null,
+      userIni: found.original.get('userini') ?? null,
+      phpIni: found.original.has('phpini'),
+      wpConfig: found.original.get('wpconfig') ?? null,
+    },
     encrypted,
     files: tally.files,
     hasCore: tally.hasVersion && tally.hasLoad,
@@ -547,6 +579,102 @@ export function notUtf8Charset(contents: PackageContents): string | null {
 function charsetSetting(contents: PackageContents): string {
   const value = contents.descriptor?.wpInfo.configs.defines['DB_CHARSET']?.value;
   return typeof value === 'string' ? value.trim() : '';
+}
+
+// ---------------------------------------------------------------------- the plugin's own records
+
+/**
+ * What Duplicator's installer does to the Duplicator plugin's own records on the new site, done by
+ * the panel instead (DbCleanup and duplicatorMigrationInfoSet in its dup-installer). The dump comes
+ * from the middle of the package's build: without this the plugin finds that build still exporting
+ * the database, the old site's other backups listed with no files, and settings it cannot decrypt.
+ */
+export interface DuplicatorAfterInstall {
+  /** The plugin's tables to empty, after the site's prefix: the old site's backups and their activity log. */
+  tables: string[];
+  /** The plugin's options to delete. */
+  options: string[];
+  /** What the plugin reads at the first administrator login to finish the move, as its installer writes it. */
+  firstLogin: { option: string; dataOption: string; data: Record<string, unknown>; timeField: 'installTime' | 'time' };
+  /** The wp-config.php constants the plugin encrypts its settings with, in the order it reads them. */
+  keyNames: string[];
+}
+
+/**
+ * The plugin's records by the version that made the package: 5.x renamed its options and tables.
+ * Null for Duplicator Pro, whose names the panel has not read, and a package that gives no version.
+ */
+export function duplicatorAfterInstall(contents: PackageContents): DuplicatorAfterInstall | null {
+  const d = contents.descriptor;
+  if (!d || d.version_dup === '' || (d.dup_type !== '' && d.dup_type.toLowerCase() !== 'lite')) return null;
+  const v5 = versionAtLeast(d.version_dup, [5, 0, 0]);
+  // As the installer fills it for a new single site from its own archive, with no installer
+  // files on the site to clean up: they never reach it.
+  const common = {
+    installerVersion: d.version_dup,
+    installType: -1,
+    logicModes: ['CLASSIC'],
+    template: 'base',
+    restoreBackupMode: false,
+    recoveryMode: false,
+    archivePath: '',
+    ...(v5 ? { packageId: d.packInfo.packageId } : {}),
+    packageHash: d.packInfo.packageHash,
+    installerPath: '',
+    installerBootLog: '',
+    installerLog: '',
+    dupInstallerPath: '',
+    origFileFolderPath: '',
+    safeMode: 0,
+    cleanInstallerFiles: true,
+    licenseType: d.license_type,
+    phpVersion: d.version_php,
+    archiveType: contents.format === 'zip' ? 'zip' : 'dup',
+    siteSize: d.fileInfo.size,
+    siteNumFiles: d.fileInfo.dirCount + d.fileInfo.fileCount,
+    siteDbSize: d.dbInfo.tablesSizeOnDisk,
+    siteDBNumTables: d.dbInfo.tablesFinalCount,
+    components: d.components,
+    ustatIdentifier: '',
+  };
+  return v5
+    ? {
+        tables: ['duplicator_backups', 'duplicator_activity_logs'],
+        options: [...new Set(['dupli_opt_plugin_data_stats', 'dupli_opt_unique_id', ...d.opts_delete])],
+        // 5.x's MigrateData says dup-pro whichever plugin wrote it.
+        firstLogin: { option: 'dupli_opt_first_login_after_install', dataOption: 'dupli_opt_migration_data', data: { plugin: 'dup-pro', ...common, extra: [] }, timeField: 'installTime' },
+        keyNames: ['DUPLICATOR_AUTH_KEY', 'DUP_SECURE_KEY'],
+      }
+    : {
+        tables: ['duplicator_packages'],
+        options: [...new Set(['duplicator_plugin_data_stats', ...d.opts_delete])],
+        firstLogin: { option: 'duplicator_first_login_after_install', dataOption: 'duplicator_migration_data', data: { plugin: 'dup-lite', ...common }, timeField: 'time' },
+        keyNames: [],
+      };
+}
+
+/** What 5.x works its key out from when wp-config.php defines none (CryptBlowfish::getLegacyKey). */
+const LEGACY_KEY_PARTS = ['AUTH_KEY', 'DB_HOST', 'DB_NAME', 'DB_USER'] as const;
+
+/**
+ * The Duplicator plugin's key in an old wp-config.php, as the plugin finds it (CryptBlowfish::
+ * getDefaultKey): the first of `names` it defines with a plain string. With none, and `names` 5.x's,
+ * the key the plugin worked out from the old site's salt and database settings - what a site that has
+ * had Duplicator since 1.x still uses, as only a new install writes a key - for DUPLICATOR_AUTH_KEY to
+ * keep: a new site has other settings. Null when it cannot be told, and for one the environment
+ * cannot carry (a NUL) or that was not UTF-8.
+ */
+export function duplicatorKeyIn(wpConfig: string, names: readonly string[]): { name: string; value: string; workedOut: boolean } | null {
+  const defines = phpStringDefines(wpConfig, [...names, ...LEGACY_KEY_PARTS]);
+  const usable = (v: string | undefined): v is string => v !== undefined && !/[\0\uFFFD]/.test(v);
+  for (const name of names) {
+    const value = defines.get(name);
+    if (value && usable(value)) return { name, value, workedOut: false };
+  }
+  if (!names.includes('DUPLICATOR_AUTH_KEY')) return null;
+  const parts = LEGACY_KEY_PARTS.map((name) => defines.get(name));
+  if (!parts.every(usable)) return null;
+  return { name: 'DUPLICATOR_AUTH_KEY', value: createHash('md5').update(parts.join(''), 'utf8').digest('hex'), workedOut: true };
 }
 
 // ---------------------------------------------------------------------- the report

@@ -1,6 +1,15 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { OpenPackage, PackageError, inspectPackage, notUtf8Charset, packageCharset, type PackageInspection } from '../../src/services/duplicator.js';
-import { OLD_ABS, OLD_HOME, archiveTxt, dafBytes, packageEntries, tempFile, zipBytes, removeTempFiles } from '../duplicatorFixtures.js';
+import {
+  OpenPackage,
+  PackageError,
+  duplicatorAfterInstall,
+  duplicatorKeyIn,
+  inspectPackage,
+  notUtf8Charset,
+  packageCharset,
+  type PackageInspection,
+} from '../../src/services/duplicator.js';
+import { OLD_ABS, OLD_DUPLICATOR_KEY, OLD_HOME, OLD_WP_CONFIG, archiveTxt, dafBytes, packageEntries, tempFile, zipBytes, removeTempFiles } from '../duplicatorFixtures.js';
 
 const OFFERED = ['8.2', '8.3', '8.4'];
 
@@ -188,5 +197,87 @@ describe('a Duplicator package, read as an import reads an old site', () => {
     } finally {
       await pkg.close();
     }
+  });
+});
+
+describe("what Duplicator's installer does to its plugin's records, by the version that made the package", () => {
+  const contentsOf = async (file: string) => (await inspect(file)).contents;
+
+  it('names 5.x tables, options and key, and the first-login data its installer writes', async () => {
+    const plan = duplicatorAfterInstall(await contentsOf(asZip(packageEntries({ layout: 'new' }))))!;
+    expect(plan.tables).toEqual(['duplicator_backups', 'duplicator_activity_logs']);
+    expect(plan.options).toEqual(['dupli_opt_plugin_data_stats', 'dupli_opt_unique_id', 'dupli_opt_ui_view_state', 'dupli_opt_settings']);
+    expect(plan.keyNames).toEqual(['DUPLICATOR_AUTH_KEY', 'DUP_SECURE_KEY']);
+    expect(plan.firstLogin).toMatchObject({ option: 'dupli_opt_first_login_after_install', dataOption: 'dupli_opt_migration_data', timeField: 'installTime' });
+    expect(plan.firstLogin.data).toMatchObject({
+      plugin: 'dup-pro',
+      installerVersion: '5.2.0',
+      installType: -1,
+      restoreBackupMode: false,
+      packageId: 7,
+      packageHash: 'abc1234-20101000',
+      // No installer files on the site: what the plugin removes at the first login is nothing.
+      installerPath: '',
+      archivePath: '',
+      cleanInstallerFiles: true,
+      archiveType: 'zip',
+      siteNumFiles: 13,
+      siteDBNumTables: 2,
+      extra: [],
+    });
+  });
+
+  it("names 1.x's, its options listed in a JSON string, with no key and no package id", async () => {
+    const plan = duplicatorAfterInstall(await contentsOf(asDaf(packageEntries({ layout: 'legacy' }), '1.0.0')))!;
+    expect(plan.tables).toEqual(['duplicator_packages']);
+    expect(plan.options).toEqual(['duplicator_plugin_data_stats', 'duplicator_ui_view_state', 'duplicator_package_active', 'duplicator_settings']);
+    expect(plan.keyNames).toEqual([]);
+    expect(plan.firstLogin).toMatchObject({ option: 'duplicator_first_login_after_install', dataOption: 'duplicator_migration_data', timeField: 'time' });
+    expect(plan.firstLogin.data).toMatchObject({ plugin: 'dup-lite', installerVersion: '1.5.11', archiveType: 'dup' });
+    expect(plan.firstLogin.data).not.toHaveProperty('packageId');
+  });
+
+  it("deletes only the plugin's own options, whatever archive.txt lists", async () => {
+    const listed = (optsDelete: unknown) =>
+      contentsOf(asZip(packageEntries({ layout: 'new', archive: archiveTxt({ layout: 'new', dumpFiles: ['schema.sql', 'wpd_options-h1.sql', 'wpd_posts-h2.sql'], optsDelete }) }))).then(
+        (c) => duplicatorAfterInstall(c)!.options,
+      );
+    expect(await listed(['dupli_opt_settings', 'siteurl', 'active_plugins', 'duplicator_x; DROP'])).toEqual(['dupli_opt_plugin_data_stats', 'dupli_opt_unique_id', 'dupli_opt_settings']);
+    expect(await listed('["duplicator_settings", "home"]')).toEqual(['dupli_opt_plugin_data_stats', 'dupli_opt_unique_id', 'duplicator_settings']);
+    expect(await listed('not JSON')).toEqual(['dupli_opt_plugin_data_stats', 'dupli_opt_unique_id']);
+  });
+
+  it("leaves Duplicator Pro's records, and a package that names no version, alone", async () => {
+    const archive = (o: Partial<Parameters<typeof archiveTxt>[0]>) =>
+      archiveTxt({ layout: 'new', dumpFiles: ['schema.sql', 'wpd_options-h1.sql', 'wpd_posts-h2.sql'], ...o });
+    expect(duplicatorAfterInstall(await contentsOf(asZip(packageEntries({ layout: 'new', archive: archive({ dupType: 'pro' }) }))))).toBeNull();
+    expect(duplicatorAfterInstall(await contentsOf(asZip(packageEntries({ layout: 'new', archive: archive({ version: '' }) }))))).toBeNull();
+  });
+
+  const KEYS = ['DUPLICATOR_AUTH_KEY', 'DUP_SECURE_KEY'];
+  /** An old wp-config.php as a host writes it: the salt and the database settings as plain strings. */
+  const settings = (extra = '') =>
+    `<?php define('DB_NAME', 'wp_db'); define('DB_USER', 'site_user'); define('DB_HOST', 'localhost:3306');\n` +
+    `define('AUTH_KEY', 'K$y\\'"\\\\ ü @#');\n${extra}`;
+
+  it("finds the plugin's key in the old wp-config.php, the one it reads first", () => {
+    expect(duplicatorKeyIn(OLD_WP_CONFIG, KEYS)).toEqual({ name: 'DUPLICATOR_AUTH_KEY', value: OLD_DUPLICATOR_KEY, workedOut: false });
+    const both = `<?php define('DUP_SECURE_KEY', 'old'); define('DUPLICATOR_AUTH_KEY', 'new');`;
+    expect(duplicatorKeyIn(both, KEYS)).toEqual({ name: 'DUPLICATOR_AUTH_KEY', value: 'new', workedOut: false });
+    expect(duplicatorKeyIn(`<?php define('DUP_SECURE_KEY', 'old');`, KEYS)).toEqual({ name: 'DUP_SECURE_KEY', value: 'old', workedOut: false });
+    expect(duplicatorKeyIn(settings("define('DUPLICATOR_AUTH_KEY', 'own');"), KEYS)).toEqual({ name: 'DUPLICATOR_AUTH_KEY', value: 'own', workedOut: false });
+  });
+
+  it('works the key out as the plugin does when the old wp-config.php defines none: a site that has had Duplicator since 1.x', () => {
+    // As CryptBlowfish::getLegacyKey gives it for these settings, run in PHP against the plugin's own code.
+    expect(duplicatorKeyIn(settings(), KEYS)).toEqual({ name: 'DUPLICATOR_AUTH_KEY', value: '265aa983f21b01ffc3becbcdc4f58651', workedOut: true });
+    // Not when one of the four is missing or worked out at run time, nor for 1.x, which has no key.
+    expect(duplicatorKeyIn(settings().replace("define('DB_HOST', 'localhost:3306');", ''), KEYS)).toBeNull();
+    expect(duplicatorKeyIn(settings().replace("'localhost:3306'", "getenv('DB_HOST')"), KEYS)).toBeNull();
+    expect(duplicatorKeyIn(settings(), [])).toBeNull();
+    // None that the environment cannot carry, or that was not UTF-8.
+    expect(duplicatorKeyIn(`<?php define('DUPLICATOR_AUTH_KEY', 'a\0b');`, ['DUPLICATOR_AUTH_KEY'])).toBeNull();
+    expect(duplicatorKeyIn(Buffer.from([...Buffer.from("<?php define('DUPLICATOR_AUTH_KEY', '"), 0xff, ...Buffer.from("');")]).toString('utf8'), ['DUPLICATOR_AUTH_KEY'])).toBeNull();
+    expect(duplicatorKeyIn(`<?php define('DUPLICATOR_AUTH_KEY', getenv('KEY'));`, ['DUPLICATOR_AUTH_KEY'])).toBeNull();
   });
 });
