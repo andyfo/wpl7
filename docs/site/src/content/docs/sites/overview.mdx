@@ -58,8 +58,8 @@ In a single list, the server menu leaves out the sites hosted elsewhere.
 
 Two readings decide the **Status** badge. The panel records what the last job left the site
 as, such as running or stopped. An uptime check also requests the site through Traefik, every
-minute by default. A page, a redirect, a 401 or a 403 counts as an answer. Nothing, a 404 or
-a server error counts as down. A PHP site may have no page at its address, so any 4xx it sent
+minute by default. A page, a redirect, a 401 or a 403 counts as an answer. No answer within 15
+seconds, a 404 or a server error counts as down. A PHP site may have no page at its address, so any 4xx it sent
 itself counts as an answer. Traefik's own 404 still counts as down. A container app is asked its
 own health path, on its own network, and is up for any answer below 400. While a job starts,
 stops, rebuilds or updates the site, the check skips it. The site is checked again as the job

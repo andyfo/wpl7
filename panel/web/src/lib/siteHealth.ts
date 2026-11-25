@@ -1,5 +1,5 @@
 // @docs help/troubleshooting, sites/overview
-import type { SiteApp, SiteStatus } from '../../../shared/schemas';
+import { UPTIME_TIMEOUT_SECONDS, type SiteApp, type SiteStatus } from '../../../shared/schemas';
 import { timeAgo } from './format';
 
 /**
@@ -29,6 +29,8 @@ export interface SiteHealthInput {
   up?: boolean | null;
   /** Code the probe got back; null = nothing answered at all (refused, timed out). */
   httpStatus?: number | null;
+  /** Nothing answered within the probe's time: slow or stuck, rather than refused. */
+  httpTimedOut?: boolean;
   lastCheckedAt?: number | null;
   /** Live Docker state; omitted on screens that only have the sites list. */
   containerState?: 'running' | 'created' | 'exited' | 'missing' | 'unknown' | null;
@@ -154,14 +156,14 @@ export function siteHealth(input: SiteHealthInput): SiteHealth {
     ? {
         label: 'Offline',
         tone: 'bad',
-        detail: `${lead}, but ${probeReason(httpStatus, input.app)}.${checked}`,
+        detail: `${lead}, but ${probeReason(httpStatus, input.app, input.httpTimedOut)}.${checked}`,
         fix: RECREATE,
         action: RECREATE_ACTION,
       }
     : {
         label: 'Offline',
         tone: 'bad',
-        detail: `${lead}, but ${probeReason(httpStatus, input.app)}.${checked}`,
+        detail: `${lead}, but ${probeReason(httpStatus, input.app, input.httpTimedOut)}.${checked}`,
         fix: 'Restarting it is the first move; its container logs say what it is failing on.',
         action: { label: 'Restart', path: 'restart' },
       };
@@ -187,10 +189,10 @@ function servingNote(up: boolean | null, containerState: SiteHealthInput['contai
  * site with a half-recreated container looks like from outside - indistinguishable, in
  * the old red dot, from a site that was never started.
  */
-function probeReason(httpStatus: number | null, app: SiteHealthInput['app']): string {
+function probeReason(httpStatus: number | null, app: SiteHealthInput['app'], timedOut = false): string {
   // A container app is asked its own health path, on its own network.
   if (app === 'container') return httpStatus === null ? 'its health path got no answer' : `its health path answered ${httpStatus}`;
-  if (httpStatus === null) return 'nothing answered on its HTTP port';
+  if (httpStatus === null) return timedOut ? `it did not answer within ${UPTIME_TIMEOUT_SECONDS} s` : 'nothing answered on its HTTP port';
   if (httpStatus === 404) {
     return app === 'php'
       ? 'it answered 404 - no route matches this hostname'
@@ -214,7 +216,7 @@ function externalHealth(input: SiteHealthInput, external: { reachable: boolean |
     return {
       label: 'Offline',
       tone: 'bad',
-      detail: `${httpStatus === null ? 'Nothing answered' : `It answered ${httpStatus}`} at its address.${checked}`,
+      detail: `${httpStatus === null ? (input.httpTimedOut ? `Its address did not answer within ${UPTIME_TIMEOUT_SECONDS} s` : 'Nothing answered at its address') : `It answered ${httpStatus} at its address`}.${checked}`,
     };
   }
   if (external.reachable === false) {

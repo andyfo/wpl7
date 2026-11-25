@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { existsSync as fsExistsSync, readFileSync } from 'node:fs';
 import { z } from 'zod';
+import { UPTIME_TIMEOUT_SECONDS } from '../shared/schemas.js';
 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
@@ -223,6 +224,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     // Smoke checks retry while Apache boots; tests use a single attempt so the suite
     // never depends on whether anything is listening on 127.0.0.1:80.
     probeTimeoutMs: e.NODE_ENV === 'test' ? 0 : 30_000,
+    // How long the uptime check waits for a site's home page; tests set less.
+    uptimeTimeoutMs: UPTIME_TIMEOUT_SECONDS * 1000,
     // How long the panel waits for Docker to say which PHP a site runs (services/phpReleases.ts).
     // A daemon can take a request and never answer it, and the reading is not worth a job's lane.
     phpReadTimeoutMs: 10_000,
