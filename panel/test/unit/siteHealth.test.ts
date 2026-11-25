@@ -17,6 +17,16 @@ describe('site health', () => {
     expect(siteHealth({ status: 'running', up: false, httpStatus: 502 }).detail).toContain('502');
   });
 
+  it('says a site that took too long did not answer in time, not that nothing answered', () => {
+    const late = siteHealth({ status: 'running', up: false, httpStatus: null, httpTimedOut: true, containerState: 'running' });
+    expect(late).toMatchObject({ label: 'Offline', tone: 'bad' });
+    expect(late.detail).toBe('The container is running, but it did not answer within 15 s.');
+    expect(siteHealth({ status: 'connected', up: false, httpStatus: null, httpTimedOut: true, external: { reachable: true } }).detail).toBe(
+      'Its address did not answer within 15 s.',
+    );
+    expect(siteHealth({ status: 'connected', up: false, httpStatus: null, external: { reachable: true } }).detail).toBe('Nothing answered at its address.');
+  });
+
   it('is Online only when the probe actually passed', () => {
     expect(siteHealth({ status: 'running', up: true }).tone).toBe('ok');
     expect(siteHealth({ status: 'running', up: null }).label).toBe('Checking');

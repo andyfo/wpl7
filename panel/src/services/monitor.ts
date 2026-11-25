@@ -86,6 +86,7 @@ export class MonitorService {
         serverId,
         up: null,
         httpStatus: null,
+        httpTimedOut: false,
         httpMs: null,
         lastCheckedAt: null,
         cpuPct: null,
@@ -142,6 +143,7 @@ export class MonitorService {
     if (stale()) return;
     entry.up = reading.ok;
     entry.httpStatus = reading.status;
+    entry.httpTimedOut = reading.timedOut === true;
     entry.httpMs = reading.ok ? reading.ms : null;
     entry.lastCheckedAt = Date.now();
     this.db.insert(siteStats).values({ siteId: site.id, ts: Date.now(), up: reading.ok ? 1 : 0, httpMs: entry.httpMs }).run();
@@ -247,6 +249,7 @@ export class MonitorService {
     if (site.status === 'stopped') {
       entry.up = false;
       entry.httpStatus = null;
+      entry.httpTimedOut = false;
       entry.httpMs = null;
       entry.lastCheckedAt = Date.now();
       return;
@@ -259,7 +262,8 @@ export class MonitorService {
     const opts = isPhpSite(site) ? { siteOwn4xx: true } : {};
     // A container app is asked its own health path, on its own network: it may answer nothing at /,
     // and its routes may all be off (services/appProbe.ts).
-    const probe = isContainerApp(site) ? () => this.askAppOnce(site, handle) : () => httpProbeOnce(url, primary, 5000, opts);
+    // A slow site is not an offline one: the home page gets as long as UPTIME_TIMEOUT_SECONDS says.
+    const probe = isContainerApp(site) ? () => this.askAppOnce(site, handle) : () => httpProbeOnce(url, primary, this.config.uptimeTimeoutMs, opts);
     let attempt = await probe();
     while (!attempt.ok && Date.now() < deadline && !stale()) {
       await new Promise((r) => setTimeout(r, 1000));
@@ -273,6 +277,7 @@ export class MonitorService {
     // answered" and "Traefik answered 404 because no router matched this hostname",
     // which is what the panel has to say out loud when a site is running but dark.
     entry.httpStatus = status;
+    entry.httpTimedOut = 'timedOut' in attempt && attempt.timedOut === true;
     entry.httpMs = up ? ms : null;
     entry.lastCheckedAt = Date.now();
     this.db
@@ -476,6 +481,7 @@ export class MonitorService {
         serverId: site.serverId,
         up: entry?.up ?? null,
         httpStatus: entry?.httpStatus ?? null,
+        httpTimedOut: entry?.httpTimedOut ?? false,
         httpMs: entry?.httpMs ?? null,
         lastCheckedAt: entry?.lastCheckedAt ?? null,
         cpuPct: entry?.cpuPct ?? null,

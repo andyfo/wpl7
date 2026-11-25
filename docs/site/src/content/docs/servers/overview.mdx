@@ -53,8 +53,8 @@ record. An unreachable server that passes them is **ok** again.
 | PHP's newest releases | <Since v="0.4.1" /> Every 15 minutes, from php.net | The **PHP** card on the dashboard. See [PHP updates](/docs/sites/php-updates/). |
 
 The uptime check asks each running site for its home page through its server's Traefik, under
-the site's own hostname. An answer below 400, a 401 or a 403 counts as up. A 404, a 5xx or no
-answer within five seconds counts as down. On a [PHP site](/docs/sites/php/), any 4xx the site sent
+the site's own hostname. An answer below 400, a 401 or a 403 counts as up, however slow, within
+15 seconds. A 404, a 5xx or no answer within 15 seconds counts as down. On a [PHP site](/docs/sites/php/), any 4xx the site sent
 itself counts as up. A [container app](/docs/sites/container/) is asked its health path on its own
 network instead, and any answer below 400 counts as up. It skips a site while a job starts, stops, rebuilds
 or updates it. As that job ends, the panel checks the site, and gives a container that has just
