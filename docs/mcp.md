@@ -223,19 +223,27 @@ MCP has no way to hand a tool a file: whatever a tool takes, the model writes ou
   a bigger one, up to 2 GiB. The bytes go from the app's disk to the panel and never through the
   model.
 
+Which one an app takes is in the tool's description: curl for any file already on its disk, text
+included, whenever its shell reaches the panel, so the model never reads the file. A folder goes up
+as a zip, which the app then extracts on the site (`POST /api/sites/<slug>/files/extract`). The call
+carries a file only when the shell cannot reach the panel, and then only a binary one. Text the app
+writes or edits itself goes through `wpl7_write_site_file`: it costs the same tokens, and keeps the
+etag check.
+
 The command carries a one-time upload link (`POST /api/sites/<slug>/files/upload-links` makes it).
-The link names one file by its path, size and SHA-256, and the upload is held to all three before the
-file takes its place: a link that leaks into a log or a transcript can put nothing else there. It is
-spent once the file is in place, ends after an hour without a piece arriving, and stops at once when
-the key or connection that made it is revoked or lowered below Manage, or MCP is switched off. A key
-or connection can have 20 unfinished links at once. Links live in the panel's memory, so a restart ends
-them and the app asks for a new one. A link that runs out half-sent has what arrived removed. The upload itself (`PUT /api/file-uploads`) is logged under
-whoever made the link.
+The link names one file by its path, size and SHA-256, and the upload is held to all three before
+the file takes its place: a link that leaks into a log or a transcript can put nothing else there.
+It is spent once the file is in place, ends after an hour without a piece arriving, and stops at
+once when the key or connection that made it is revoked or lowered below Manage, or MCP is switched
+off. A key or connection can have 20 unfinished links at once. Links live in the panel's memory, so
+a restart ends them and the app asks for a new one. A link that runs out half-sent has what arrived
+removed. The upload itself (`PUT /api/file-uploads`) is logged under whoever made the link.
 
 The app's shell has to reach the panel. Claude Code's does. Claude's code sandbox in claude.ai does
-only when the network settings for code execution allow the panel's domain; without that, curl fails
-and the app can still send a small file in the call. An upload never replaces a file unless the app
-sends `overwrite: true`, and a `.php` file that does not parse is refused.
+only when the network settings for code execution allow the panel's domain; without that, curl
+fails, and the app saves text with `wpl7_write_site_file` and sends a small binary file in the call.
+An upload never replaces a file unless the app sends `overwrite: true`, and a `.php` file that does
+not parse is refused.
 
 ## Plugins' own WP-CLI commands
 

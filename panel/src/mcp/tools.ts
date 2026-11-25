@@ -408,8 +408,8 @@ export function registerTools(server: McpServer, c: ToolContext): void {
           "Save a whole text file of a WPL7 site, relative to its WordPress folder. Needs either the etag " +
           'wpl7_read_site_file gave - refused if the file changed since - or createOnly: true for a new file, refused if ' +
           'one exists. There is no blind overwrite. A .php file is syntax-checked first and refused if it does not ' +
-          'parse, so a typo cannot take the site down. `content` is the entire file. A binary file (an image, a zip) ' +
-          'goes through wpl7_upload_site_file.',
+          'parse, so a typo cannot take the site down. `content` is the entire file. It is for text you write or edit ' +
+          'here. A binary file, or any file you already have on your own disk, goes through wpl7_upload_site_file.',
         inputSchema: z
           .object({
             site: siteField,
@@ -446,12 +446,14 @@ export function registerTools(server: McpServer, c: ToolContext): void {
       {
         title: 'Upload a file to a site',
         description:
-          'Put a file of any kind - a zip, an image, a font - on a WPL7 site, relative to its WordPress folder. Two ' +
-          'ways. A file on your own disk, when your commands can reach the internet: give sizeBytes and sha256, and the ' +
-          'answer is a curl command that uploads it - any size, no bytes through the conversation, for an hour, and for ' +
-          'that file only. Otherwise send the bytes base64-encoded in contentBase64, up to 1 MiB: every character ' +
-          'costs tokens. Refused if something is at the path already, unless overwrite: true. A .php file is ' +
-          'syntax-checked first. To edit a text file, use wpl7_write_site_file.',
+          'Put a file of any kind on a WPL7 site, relative to its WordPress folder. The way for any file already on your ' +
+          'own disk - a zip, an image, text you need not read here - when your shell can reach the panel: give ' +
+          'sizeBytes and sha256, and the answer is a curl command that uploads that file, any size, with no bytes ' +
+          'through the conversation. A folder: zip it, upload the zip, and extract it with POST ' +
+          '/api/sites/{site}/files/extract. Only when your shell cannot reach the panel, send a binary file ' +
+          'base64-encoded in contentBase64, up to 1 MiB: every character costs tokens. Text you write or edit goes ' +
+          'through wpl7_write_site_file. Refused if something is at the path already, unless overwrite: true. A .php ' +
+          'file is syntax-checked first.',
         inputSchema: z
           .object({
             site: siteField,
@@ -599,7 +601,8 @@ function uploadCommand(site: string, path: string, size: number, link: UploadLin
       'Run it in your shell with FILE replaced by the path of the file. The answer that has `written` set means the ' +
       'file is in place. If curl cannot reach ' +
       (host || 'the panel') +
-      ", your sandbox's network settings may not allow it: ask the user to allow that address, or send a small file as contentBase64.",
+      ", your sandbox's network settings may not allow it: ask the user to allow that address. Until then, text goes " +
+      'through wpl7_write_site_file, and a small binary file as contentBase64.',
   };
 }
 
