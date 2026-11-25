@@ -7,11 +7,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { backups, jobs, sites } from '../../src/db/schema.js';
 import { hostExec } from '../../src/lib/exec.js';
 import { FORGET_MIGRATE_PLUGIN, WORDPRESS_HTACCESS } from '../../src/jobs/handlers/import.js';
+import { DUPLICATOR_KEY_PHP } from '../../src/jobs/handlers/sitePackage.js';
 import { holdQueuedPackages } from '../../src/jobs/handlers/sites.js';
 import { sitePaths } from '../../src/services/siteSpec.js';
 import { makeApp, makeWorld, waitFor, type TestWorld } from '../helpers.js';
 import { logOf, wpCalls } from '../importWorld.js';
-import { BINARY, OLD_ABS, OLD_HOME, OLD_HTACCESS, archiveTxt, dafBytes, legacySql, packageEntries, zipBytes } from '../duplicatorFixtures.js';
+import { BINARY, OLD_ABS, OLD_DUPLICATOR_KEY, OLD_HOME, OLD_HTACCESS, archiveTxt, dafBytes, legacySql, packageEntries, zipBytes } from '../duplicatorFixtures.js';
 
 const UPLOAD = 'pkg-upload-0123456789';
 
@@ -49,6 +50,16 @@ function uploaded(w: TestWorld, bytes: Buffer, id = UPLOAD): string {
   fs.writeFileSync(w.core.packages.path(id), bytes);
   return id;
 }
+
+/** The site's wp-cli calls, with what each was handed in its environment. */
+function siteExecs(w: TestWorld, container: string) {
+  return w.docker.calls
+    .filter((c) => c.method === 'exec' && c.args[0] === container)
+    .map((c) => ({ argv: c.args[1] as string[], env: ((c.args[2] as { env?: string[] } | undefined)?.env ?? []) as string[] }));
+}
+
+/** Where the site's first `wp <command>` whose PHP or arguments start so is, -1 for none. */
+const callAt = (execs: ReturnType<typeof siteExecs>, command: string, start = '') => execs.findIndex((e) => e.argv[1] === command && (e.argv[2] ?? '').startsWith(start));
 
 async function runCreate(w: TestWorld, jobId: number) {
   w.worker.start();
@@ -149,6 +160,30 @@ describe('a new site from a Duplicator package', () => {
     expect(wp).toContain(`wp eval ${FORGET_MIGRATE_PLUGIN} --skip-plugins --skip-themes`);
     expect(wp).not.toContain('wp option update blog_public 1 --skip-plugins --skip-themes');
 
+    // What Duplicator's installer does to its plugin's records. The old key goes into wp-config.php
+    // through the environment only, never a command line or the log.
+    const execs = siteExecs(w, site.containerName);
+    const keyAt = execs.findIndex((e) => e.argv[1] === 'eval' && e.argv[2] === DUPLICATOR_KEY_PHP);
+    expect(keyAt).toBeGreaterThan(-1);
+    expect(execs[keyAt]!.env).toEqual(expect.arrayContaining(['WPL7_DUPLICATOR_KEY_NAME=DUPLICATOR_AUTH_KEY', `WPL7_DUPLICATOR_KEY=${OLD_DUPLICATOR_KEY}`]));
+    expect(execs.some((e) => e.argv.some((a) => a.includes(OLD_DUPLICATOR_KEY)))).toBe(false);
+    const log = logOf(w, job.id).join('\n');
+    expect(log).not.toContain(OLD_DUPLICATOR_KEY);
+    // The old site's backups, their log, its transients and logins cleared before the address changes.
+    const clearAt = callAt(execs, 'eval', '$plan = ');
+    expect(execs[clearAt]!.argv[2]).toContain("'tables' => ['duplicator_backups', 'duplicator_activity_logs']");
+    expect(execs[clearAt]!.argv[2]).toContain("'options' => ['dupli_opt_plugin_data_stats', 'dupli_opt_unique_id', 'dupli_opt_ui_view_state', 'dupli_opt_settings']");
+    expect(keyAt).toBeLessThan(clearAt);
+    expect(clearAt).toBeLessThan(callAt(execs, 'search-replace'));
+    // The options the plugin finishes the move by, last of the database's changes.
+    const finishAt = callAt(execs, 'eval', '$finish = ');
+    expect(execs[finishAt]!.argv[2]).toContain("'option' => 'dupli_opt_first_login_after_install', 'dataOption' => 'dupli_opt_migration_data'");
+    expect(execs[finishAt]!.argv[2]).toContain("'packageId' => 7");
+    expect(finishAt).toBeGreaterThan(execs.findLastIndex((e) => e.argv[1] === 'option' && e.argv[3] === 'blog_public'));
+    expect(log).toContain("Carried the Duplicator plugin's key (DUPLICATOR_AUTH_KEY) into wp-config.php, so its settings stay readable.");
+    expect(log).toContain("Cleared the old site's transients and logins, and the Duplicator plugin's list of its backups, as Duplicator's installer does.");
+    expect(log).toContain('Duplicator finishes the move at the first administrator login, as after its own installer.');
+
     // Published, backed up, scanned; the staging folder and the upload gone.
     const lastSpec = w.docker.calls.filter((c) => c.method === 'createSiteContainer').at(-1)!.args[0] as { labels: Record<string, string>; env: Record<string, string> };
     expect(lastSpec.labels['wpl7.routing']).toBe('public');
@@ -216,6 +251,14 @@ describe('a new site from a Duplicator package', () => {
     // Search engines as the form said, whatever the old site had.
     expect(wp).toContain('wp option update blog_public 1 --skip-plugins --skip-themes');
     expect(wp).not.toContain('wp option update blog_public 0 --skip-plugins --skip-themes');
+    // 1.x's own names: one table, the options its archive.txt lists in a JSON string, and no key.
+    const execs = siteExecs(w, site.containerName);
+    expect(execs[callAt(execs, 'eval', '$plan = ')]!.argv[2]).toContain(
+      "['tables' => ['duplicator_packages'], 'options' => ['duplicator_plugin_data_stats', 'duplicator_ui_view_state', 'duplicator_package_active', 'duplicator_settings']]",
+    );
+    expect(execs[callAt(execs, 'eval', '$finish = ')]!.argv[2]).toContain("'option' => 'duplicator_first_login_after_install'");
+    expect(execs.some((e) => e.argv[2] === DUPLICATOR_KEY_PHP)).toBe(false);
+    expect(log).not.toMatch(/Duplicator key|Duplicator plugin's key/);
   });
 
   it("reads a dump Duplicator 1.x's mysqldump wrote in the old host's own set, as its bytes say", async () => {

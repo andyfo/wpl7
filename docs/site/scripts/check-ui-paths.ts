@@ -62,6 +62,10 @@ export const IGNORE = new Set(
     'Watch',
     'Custom',
     'Releases',
+    // Duplicator
+    'Tools',
+    'SQL Mode',
+    'PHP Code',
     // FTP clients
     'Site Manager',
     'Quickconnect',
