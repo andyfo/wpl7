@@ -83,6 +83,7 @@ the check got back, and its button is the repair.
 | A 404, while the container runs | **Recreate container**. Traefik has no route for the site, usually after a PHP switch or a domain change that failed halfway. Files and database stay as they are |
 | The site has no container | **Recreate container** |
 | The container never ran, or exited | **Start**. Every start writes the files the container mounts again |
+| No answer within 15 s | The site is overloaded or stuck. Its CPU and memory are on its **Overview** tab. A page the page cache cannot store runs WordPress every time: **Check a URL** says why. **Restart** if it stays so |
 | Any other answer | **Restart**, then read `docker logs --tail 50 wp-<slug>` |
 
 **Recreate container** only warns when the rebuilt site still does not answer, so read its job

@@ -3,6 +3,7 @@ import http from 'node:http';
 import https from 'node:https';
 import type { LookupFunction } from 'node:net';
 import type { TLSSocket } from 'node:tls';
+import { UPTIME_TIMEOUT_SECONDS } from '../../shared/schemas.js';
 import { assertAllowedSource, type LookupFn } from './outboundGuard.js';
 
 export interface ProbeAttempt {
@@ -11,6 +12,15 @@ export interface ProbeAttempt {
   ms: number;
   /** It said its body is empty. Still an answer to the uptime check; not to a move's. */
   empty?: boolean;
+  /** Nothing came back within the time it was given: a site may be slow, not down. */
+  timedOut?: boolean;
+  /** Why nothing answered: refused, reset, or not within the time it was given. */
+  error?: string;
+}
+
+/** "No answer within 15 s": the reason a probe gives when its time ran out. */
+export function noAnswerWithin(timeoutMs: number): string {
+  return `No answer within ${timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)} s` : `${timeoutMs} ms`}`;
 }
 
 export interface ProbeOpts {
@@ -44,12 +54,15 @@ export function httpProbeOnce(url: string, hostHeader: string, timeoutMs = 8000,
   const secure = target.protocol === 'https:';
   const started = Date.now();
   return new Promise((resolve) => {
-    const done = (status: number | null, empty = false, fromSite = false) =>
+    let timedOut = false;
+    const done = (status: number | null, empty = false, fromSite = false, error?: string) =>
       resolve({
         ok: status !== null && (isUp(status) || (opts.siteOwn4xx === true && fromSite && status >= 400 && status < 500)),
         status,
         ms: Date.now() - started,
         ...(empty ? { empty } : {}),
+        ...(timedOut ? { timedOut } : {}),
+        ...(error ? { error } : {}),
       });
     const req = (secure ? https : http).request(
       {
@@ -71,8 +84,11 @@ export function httpProbeOnce(url: string, hostHeader: string, timeoutMs = 8000,
         done(res.statusCode ?? null, res.statusCode === 200 && res.headers['content-length'] === '0', res.headers[SITE_ANSWER_HEADER] !== undefined);
       },
     );
-    req.on('timeout', () => req.destroy(new Error('probe timed out')));
-    req.on('error', () => done(null));
+    req.on('timeout', () => {
+      timedOut = true;
+      req.destroy(new Error(noAnswerWithin(timeoutMs)));
+    });
+    req.on('error', (err) => done(null, false, false, timedOut ? noAnswerWithin(timeoutMs) : err.message));
     req.end();
   });
 }
@@ -124,6 +140,8 @@ export interface ExternalProbeResult {
   certExpiresAt: number | null;
   /** Why nothing answered: refused, timed out, a certificate that is not valid. */
   error?: string;
+  /** Nothing came back within the time it was given. */
+  timedOut?: boolean;
 }
 
 export type ExternalProbe = (url: string) => Promise<ExternalProbeResult>;
@@ -138,7 +156,7 @@ export type ExternalProbe = (url: string) => Promise<ExternalProbeResult>;
  */
 export function probeExternal(url: string, opts: { lookup?: LookupFn; timeoutMs?: number } = {}): Promise<ExternalProbeResult> {
   const started = Date.now();
-  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const timeoutMs = opts.timeoutMs ?? UPTIME_TIMEOUT_SECONDS * 1000;
   return assertAllowedSource(url, { allowHttp: true, lookup: opts.lookup }).then(
     (target) =>
       new Promise<ExternalProbeResult>((resolve) => {
@@ -179,8 +197,12 @@ export function probeExternal(url: string, opts: { lookup?: LookupFn; timeoutMs?
             done({ ok: status !== null && isUp(status), status, certExpiresAt });
           },
         );
-        req.on('timeout', () => req.destroy(new Error(`No answer within ${Math.round(timeoutMs / 1000)} s`)));
-        req.on('error', (err) => done({ ok: false, status: null, certExpiresAt: null, error: err.message }));
+        let timedOut = false;
+        req.on('timeout', () => {
+          timedOut = true;
+          req.destroy(new Error(noAnswerWithin(timeoutMs)));
+        });
+        req.on('error', (err) => done({ ok: false, status: null, certExpiresAt: null, error: err.message, ...(timedOut ? { timedOut } : {}) }));
         req.end();
       }),
     (err: unknown) => ({ ok: false, status: null, ms: Date.now() - started, certExpiresAt: null, error: err instanceof Error ? err.message : String(err) }),

@@ -75,6 +75,8 @@ export interface SiteSummary {
   up: boolean | null;
   /** What the probe got back; `null` = nothing answered at all (refused, timed out). */
   httpStatus: number | null;
+  /** Nothing answered because the probe's time ran out (UPTIME_TIMEOUT_SECONDS): slow or stuck, not refused. */
+  httpTimedOut: boolean;
   /** When the probe last ran; `null` before the first tick after a panel restart. */
   lastCheckedAt: number | null;
   diskBytes: number | null;
@@ -1552,6 +1554,8 @@ export interface SiteMonitorDto {
   up: boolean | null;
   /** Status code behind `up`; `null` = nothing answered at all (refused, timed out). */
   httpStatus: number | null;
+  /** Nothing answered because the probe's time ran out (UPTIME_TIMEOUT_SECONDS). */
+  httpTimedOut: boolean;
   httpMs: number | null;
   lastCheckedAt: number | null;
   cpuPct: number | null;

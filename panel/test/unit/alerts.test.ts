@@ -77,6 +77,14 @@ describe('alerts', () => {
     expect(sent).toHaveLength(2);
   });
 
+  it("gives the probe's own reason when nothing came back", async () => {
+    const w = await makeWorld();
+    const sent = capture(w);
+    const site = hostedSite(w);
+    for (let i = 0; i < DOWN_AFTER; i++) await w.core.alerts.probed(site, { ok: false, status: null, error: 'No answer within 15 s' });
+    expect(sent[0]!.body).toContain("blog.example.org did not answer the panel's last 3 checks (No answer within 15 s).");
+  });
+
   it('sends nothing for a blip, nor when the alert is switched off', async () => {
     const w = await makeWorld();
     const sent = capture(w);

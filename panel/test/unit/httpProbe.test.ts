@@ -1,7 +1,7 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { httpProbe, httpProbeAttempts, httpProbeOnce, isUp } from '../../src/lib/httpProbe.js';
+import { httpProbe, httpProbeAttempts, httpProbeOnce, isUp, noAnswerWithin } from '../../src/lib/httpProbe.js';
 
 let server: http.Server | null = null;
 
@@ -47,6 +47,25 @@ describe('httpProbe', () => {
   it('reports a 404 site as down instead of up', async () => {
     const url = await serve((_req, res) => res.writeHead(404).end('404 page not found'));
     expect(await httpProbe(url, 'nope.example.com', 0)).toBe(false);
+  });
+
+  it('waits for a slow site as long as it was given, and says when that ran out rather than nothing answering', async () => {
+    const url = await serve((_req, res) => void setTimeout(() => res.writeHead(200).end('ok'), 300));
+    // Slow is up, while it answers within the time.
+    expect(await httpProbeOnce(url, 'shop.example.com', 2000)).toMatchObject({ ok: true, status: 200 });
+    const late = await httpProbeOnce(url, 'shop.example.com', 100);
+    expect(late).toMatchObject({ ok: false, status: null, timedOut: true, error: 'No answer within 100 ms' });
+    expect(noAnswerWithin(15_000)).toBe('No answer within 15 s');
+  });
+
+  it('says why when nothing is listening, which is no timeout', async () => {
+    const url = await serve((_req, res) => res.end());
+    await new Promise<void>((r) => server!.close(() => r()));
+    server = null;
+    const refused = await httpProbeOnce(url, 'shop.example.com', 2000);
+    expect(refused).toMatchObject({ ok: false, status: null });
+    expect(refused.timedOut).toBeUndefined();
+    expect(refused.error).toMatch(/ECONNREFUSED/);
   });
 
   it('resolves false (never throws) when nothing is listening', async () => {

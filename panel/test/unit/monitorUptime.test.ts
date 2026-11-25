@@ -2,7 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
-import { jobs, siteStats, sites, type JobRow } from '../../src/db/schema.js';
+import { alertStates, jobs, siteStats, sites, type JobRow } from '../../src/db/schema.js';
 import { getRegistry } from '../../src/jobs/registry.js';
 import { makeWorld, waitFor, type TestWorld } from '../helpers.js';
 
@@ -81,6 +81,23 @@ describe('uptime probe', () => {
     const entry = w.core.monitor.latestFor(siteId)!;
     expect(entry.up).toBe(true);
     expect(entry.httpStatus).toBe(200);
+  });
+
+  it('counts a slow site that answers in time as up, and says when one did not answer in time', async () => {
+    const w = await makeWorld();
+    const siteId = addSite(w, 'busy', 'running');
+    await edgeServing(w, (_host, res) => void setTimeout(() => res.writeHead(200).end(''), 400));
+    w.config.uptimeTimeoutMs = 3000;
+    await w.core.monitor.tickUptime();
+    expect(w.core.monitor.latestFor(siteId)).toMatchObject({ up: true, httpStatus: 200, httpTimedOut: false });
+
+    w.config.uptimeTimeoutMs = 100;
+    await w.core.monitor.tickUptime();
+    expect(w.core.monitor.latestFor(siteId)).toMatchObject({ up: false, httpStatus: null, httpTimedOut: true });
+    expect(w.deps.sites.list().find((s) => s.slug === 'busy')).toMatchObject({ up: false, httpTimedOut: true });
+    expect(w.core.monitor.overview().sites.find((s) => s.slug === 'busy')).toMatchObject({ httpTimedOut: true });
+    // The alert hears why: it says so if the site stays that way.
+    expect(JSON.parse(w.db.select().from(alertStates).get()!.detail!)).toMatchObject({ fails: 1, status: null, error: 'No answer within 100 ms' });
   });
 
   it('still reports an error-state site that really is down', async () => {
