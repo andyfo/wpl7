@@ -5,9 +5,6 @@
  */
 // @docs sites/container
 import fsp from 'node:fs/promises';
-import { Readable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
-import fs from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
@@ -22,12 +19,13 @@ import {
   siteSlugParam,
 } from '../../shared/schemas.js';
 import { UPLOAD_ID_RE } from '../../shared/siteFilePath.js';
-import { AppError, badRequest, conflict, tooManyRequests } from '../lib/errors.js';
+import { AppError, badRequest, conflict } from '../lib/errors.js';
 import { jobToDto, seesCommands, viewerOf } from '../lib/dto.js';
 import { requireAccess } from '../plugins/auth.js';
 import { DEPLOY_TOKEN_HEADER, MAX_IMAGE_UPLOAD_BYTES } from '../services/apps.js';
 import { appLogLines, appPaths } from '../services/appSpec.js';
 import type { AppDeps } from './deps.js';
+import { chunkLength, readChunk, receiveChunk, withChunkBudget } from './uploadChunks.js';
 import { holdSigningDomainsOf } from './sites.js';
 
 const slugParams = z.object({ slug: siteSlugParam });
@@ -40,8 +38,6 @@ const uploadQuery = z
   })
   .strict();
 
-/** One chunk of an upload, as the database upload takes them. */
-const CHUNK_BYTES = 8 * 1024 * 1024;
 /** A mount's archive: at most this big. */
 const MAX_MOUNT_UPLOAD_BYTES = 4 * 1024 ** 3;
 const mountUploadQuery = z
@@ -136,7 +132,6 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
 
   // ---------------------------------------------------------------- uploaded images
 
-  let inflightBytes = 0;
   r.put(
     '/api/app-uploads/:id',
     { schema: { params: uploadParams, querystring: uploadQuery }, config: { rateLimit: { max: 1200, timeWindow: 60_000 } } },
@@ -144,30 +139,8 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
       const { id } = req.params;
       const { offset, size } = req.query;
       deps.apps.assertUploadFree(id);
-      const file = deps.apps.uploadPath(id);
-      const length = chunkLength(req);
-      if (offset + length > size) throw badRequest('The chunk goes past the size given');
-      if (inflightBytes + length > 64 * 1024 * 1024) throw tooManyRequests('The panel is receiving too much at once; retry in a moment');
-      inflightBytes += length;
-      try {
-        if (offset === 0) {
-          await fsp.mkdir(deps.apps.uploadDir(), { recursive: true, mode: 0o700 });
-          const disk = await fsp.statfs(deps.apps.uploadDir()).catch(() => null);
-          // The archive, and its copy in the server's image store when it is the panel's own.
-          if (disk && disk.bavail * disk.bsize < size * 2) {
-            throw new AppError('conflict', 507, `Not enough free disk on the panel's server: ${Math.round((disk.bavail * disk.bsize) / 1e6)} MB free, about ${Math.round((size * 2) / 1e6)} MB needed`);
-          }
-          await writeChunk(req, file, length, 'w');
-        } else {
-          const have = (await fsp.stat(file).catch(() => null))?.size ?? 0;
-          if (have !== offset) throw conflict(`The upload has ${have} bytes; send the chunk from there`, { received: have });
-          await writeChunk(req, file, length, 'a');
-        }
-        const received = offset + length;
-        return { received, complete: received === size };
-      } finally {
-        inflightBytes -= length;
-      }
+      // The archive, and its copy in the server's image store when it is the panel's own.
+      return receiveChunk(req, { dir: deps.apps.uploadDir(), file: deps.apps.uploadPath(id), offset, size, need: size * 2 });
     },
   );
 
@@ -191,9 +164,7 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
       const file = appPaths(deps.config, site.slug).mountUpload(req.params.id);
       const length = chunkLength(req);
       if (offset + length > size) throw badRequest('The chunk goes past the size given');
-      if (inflightBytes + length > 64 * 1024 * 1024) throw tooManyRequests('The panel is receiving too much at once; retry in a moment');
-      inflightBytes += length;
-      try {
+      return withChunkBudget(length, async () => {
         const body = await readChunk(req, length);
         if (offset === 0) {
           const dir = path.dirname(file);
@@ -211,9 +182,7 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
         }
         const received = offset + length;
         return { received, complete: received === size };
-      } finally {
-        inflightBytes -= length;
-      }
+      });
     },
   );
 
@@ -252,48 +221,4 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
       });
     },
   );
-}
-
-/** The chunk's size, as its Content-Length says: it has to be known up front. */
-function chunkLength(req: FastifyRequest): number {
-  const encoding = req.headers['content-encoding'];
-  if (encoding && encoding !== 'identity') throw new AppError('validation_error', 415, 'Send the chunk as it is (no Content-Encoding)');
-  const length = Number(req.headers['content-length']);
-  if (!Number.isSafeInteger(length) || length < 1) throw new AppError('validation_error', 411, 'Send a Content-Length: the size has to be known up front');
-  if (length > CHUNK_BYTES) throw new AppError('validation_error', 413, `Too large: at most ${CHUNK_BYTES} bytes per chunk`);
-  if (!(req.body instanceof Readable)) throw new AppError('validation_error', 415, 'Send the chunk as application/octet-stream');
-  return length;
-}
-
-/** The chunk, whole, refusing a body that is not as long as it said. */
-async function readChunk(req: FastifyRequest, length: number): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  let got = 0;
-  for await (const chunk of req.body as Readable) {
-    got += (chunk as Buffer).length;
-    if (got > length) throw badRequest('The body is longer than its Content-Length');
-    chunks.push(chunk as Buffer);
-  }
-  if (got !== length) throw badRequest('The body is shorter than its Content-Length');
-  return Buffer.concat(chunks, length);
-}
-
-/** Stream the chunk to the file, refusing a body that is not as long as it said. A short or long one leaves the file as it was. */
-async function writeChunk(req: FastifyRequest, file: string, length: number, flags: 'w' | 'a'): Promise<void> {
-  const before = flags === 'a' ? ((await fsp.stat(file).catch(() => null))?.size ?? 0) : 0;
-  let got = 0;
-  const counted = async function* (source: AsyncIterable<Buffer>) {
-    for await (const chunk of source) {
-      got += chunk.length;
-      if (got > length) throw badRequest('The body is longer than its Content-Length');
-      yield chunk;
-    }
-  };
-  try {
-    await pipeline(req.body as Readable, counted, fs.createWriteStream(file, { flags, mode: 0o600 }));
-    if (got !== length) throw badRequest('The body is shorter than its Content-Length');
-  } catch (err) {
-    await fsp.truncate(file, before).catch(() => undefined);
-    throw err;
-  }
 }

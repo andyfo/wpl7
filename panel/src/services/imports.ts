@@ -11,7 +11,6 @@ import type {
   ImportConnectionCodeDto,
   ImportDto,
   ImportProgressDto,
-  ImportSourceDto,
   ImportSummaryDto,
   MigrateStatusDto,
   SiteDetail,
@@ -36,6 +35,7 @@ import {
   checkChoices,
   inspectReport,
   migrateReportSchema,
+  sourceOf,
   type MigrateReport,
 } from './importInspect.js';
 import { ImportListings } from './importListing.js';
@@ -127,6 +127,15 @@ export interface ImportCursor {
   /** The finish job has moved the files into the site's folder. */
   materialized: boolean;
 }
+
+/**
+ * Files of the old site an import never copies: the panel writes its own wp-config.php, and
+ * WordPress's image writes it from a wp-config-docker.php in the site's folder before its own.
+ */
+export const IMPORT_SKIPS = ['wp-config.php', 'wp-config-docker.php'];
+
+/** A skip list with IMPORT_SKIPS in it: a cursor saved before one was added is held to it too. */
+export const withImportSkips = (skip: readonly string[]): string[] => [...new Set([...IMPORT_SKIPS, ...skip])];
 
 export function initialCursor(skip: string[]): ImportCursor {
   return {
@@ -373,7 +382,7 @@ export class ImportService {
     const devHostname = `${choices.slug}.${server.devDomain || this.config.devDomain}`;
     assertDomainsFree({ db: this.db, config: this.config, servers: this.servers }, [devHostname], { allowDevHostname: devHostname });
     const skip = [
-      'wp-config.php',
+      ...IMPORT_SKIPS,
       ...choices.removeDropins.map((d) => `wp-content/${d}`),
       ...choices.removeMuPlugins.map((m) => `wp-content/mu-plugins/${m}`),
     ];
@@ -872,27 +881,4 @@ function refreshedImport(payload: string): number | null {
   } catch {
     return null;
   }
-}
-
-/** The old site as the UI shows it: what the report says, without the constants' values. */
-function sourceOf(r: MigrateReport): ImportSourceDto {
-  return {
-    home: r.home,
-    siteurl: r.siteurl,
-    title: r.title,
-    wpVersion: r.wp,
-    phpVersion: r.php,
-    tablePrefix: r.table_prefix,
-    locale: r.locale,
-    searchEnginesAllowed: r.blog_public === 1,
-    https: r.home.startsWith('https://'),
-    abspath: r.abspath,
-    files: { count: r.files.count, bytes: r.files.bytes, partial: r.files.partial },
-    db: { server: r.db.server, bytes: r.db.bytes, tables: r.db.tables.length },
-    plugins: r.plugins.map((p) => ({ slug: p.slug, name: p.name, version: p.version, active: p.active })),
-    theme: r.theme ? { slug: r.theme.slug, name: r.theme.name, version: r.theme.version } : null,
-    dropins: r.dropins,
-    muPlugins: r.mu_plugins.map((m) => ({ file: m.file, name: m.name })),
-    pluginVersion: r.plugin,
-  };
 }

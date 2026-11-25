@@ -56,8 +56,8 @@ short requests, into a staging folder on the server. It writes down how far it g
 
 **Finish import** builds the site from that folder on its [dev address](/docs/reference/glossary/#dev-domain).
 The database is imported as the site's own database user. The site gets a new `wp-config.php`
-with the settings you carried over, and the old address is replaced with the dev address in the
-database. The plugins, drop-ins and must-use plugins you chose are left behind, and so is the
+with the settings you carried over. A setting that names a folder of the old site gets the same
+folder here. The old address is replaced with the dev address in the database. The plugins, drop-ins and must-use plugins you chose are left behind, and so is the
 migration plugin. Search engines are discouraged, a first backup is taken and a malware scan is
 queued.
 
@@ -103,12 +103,13 @@ started replacing, the backup is put back.
   that are not copied.
 - A refresh needs the plugin connected. After **Disconnect**, import the site again instead.
 - `wp-config.php` is the panel's own. Database settings, keys, salts, paths and cache settings
-  are never carried over.
+  are never carried over. A `wp-config-docker.php` from the old site is not copied either.
 - The first copy of a big site can take hours.
 
 ## Related
 
 - [Create a site](/docs/sites/create/)
+- [Create a site from a Duplicator package](/docs/sites/duplicator/)
 - [Domains and going live](/docs/sites/domains/)
 - [How backups work](/docs/backups/overview/)
 - [Malware scans](/docs/security/malware-scans/)

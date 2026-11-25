@@ -77,8 +77,8 @@ export function registerSiteRoutes(app: FastifyInstance, deps: AppDeps): void {
       holdSigningDomains(req, own);
       if (borrowed.length > 0) requireAccess(req, 'full', `a route on another site's domain (${borrowed.join(', ')})`);
     }
-    await deps.sites.assertCanCreate(req.body);
-    const { job } = deps.sites.create(req.body);
+    const prepared = await deps.sites.assertCanCreate(req.body);
+    const { job } = deps.sites.create(req.body, prepared);
     return reply.status(202).header('location', `/api/jobs/${job.id}`).send({ job: jobToDto(job, viewerOf(req)) });
   });
 

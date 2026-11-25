@@ -57,6 +57,7 @@ const EXCEPTIONS: Record<string, string> = {
   'GET /api/servers/:id/terminal': 'full',
   // An import's settings quote the old wp-config.php; its plugin zip carries its token.
   'GET /api/imports/:id': 'manage',
+  'GET /api/package-uploads/:id': 'manage',
   'GET /api/imports/:id/plugin': 'manage',
   'GET /api/imports/:id/code': 'manage',
   // A connection's plugin zip and code carry the token its site enrolls with.
@@ -245,6 +246,8 @@ const NOT_THROUGH_MCP = [
   'DELETE /api/sites/:slug/app/deploy-token',
   'PUT /api/app-uploads/:id',
   'DELETE /api/app-uploads/:id',
+  'PUT /api/package-uploads/:id',
+  'DELETE /api/package-uploads/:id',
   'PUT /api/sites/:slug/app/mount-uploads/:id',
   'DELETE /api/sites/:slug/app/mount-uploads/:id',
   'POST /api/hooks/app-deploy',

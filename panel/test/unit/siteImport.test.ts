@@ -8,7 +8,7 @@ import { sitePaths } from '../../src/services/siteSpec.js';
 import { FORGET_MIGRATE_PLUGIN, makeRoomForStatements } from '../../src/jobs/handlers/import.js';
 import type { JobContext } from '../../src/jobs/context.js';
 import { makeWorld } from '../helpers.js';
-import { BIG, CHOICES, PHOTO, connected, importRow, logOf, oldSiteTables, settle, wpCalls } from '../importWorld.js';
+import { BIG, CHOICES, PHOTO, connected, importRow, logOf, oldSiteFiles, oldSiteTables, settle, wpCalls } from '../importWorld.js';
 
 describe('importing a site', () => {
   it('pulls the old site and brings it up on its dev address', async () => {
@@ -75,6 +75,20 @@ describe('importing a site', () => {
     // Small files came many to a request.
     expect(fake.count('bundle')).toBeGreaterThan(0);
     expect(fake.count('bundle')).toBeLessThan(5);
+  });
+
+  it("never brings the old site's wp-config-docker.php in, a pull saved before it was left out included", async () => {
+    const { w, id } = await connected({ fake: { files: { ...oldSiteFiles(), 'wp-config-docker.php': "<?php define('DB_HOST', 'old-db');" } } });
+    w.core.imports.start(id, CHOICES);
+    // As a pull queued before the file joined the list saved it.
+    const saved = w.core.imports.cursorOf(importRow(w, id))!;
+    w.db.update(imports).set({ cursor: JSON.stringify({ ...saved, skip: ['wp-config.php'] }) }).where(eq(imports.id, id)).run();
+    const row = await settle(w, id);
+    expect(row.status, row.lastError ?? '').toBe('done');
+    const p = sitePaths(w.config, 'willow');
+    expect(fs.existsSync(path.join(p.wordpress, 'wp-config-docker.php'))).toBe(false);
+    expect(fs.readFileSync(path.join(p.wordpress, 'wp-config.php'), 'utf8')).toBe('<?php // written by the image');
+    expect(w.core.imports.cursorOf(row)!.skip).toEqual(expect.arrayContaining(['wp-config.php', 'wp-config-docker.php']));
   });
 
   it('reads a small file again in ranges when it grew past a bundle before it was read', async () => {

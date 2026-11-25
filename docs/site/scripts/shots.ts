@@ -42,6 +42,36 @@ const scrollTo = (title: string) => async (page: Page) => {
   });
 };
 
+/** What New site reads of a Duplicator package, for the site-new-package shot. */
+const demoPackage = (uploadId: string) => ({
+  uploadId,
+  format: 'zip',
+  bytes: 1_288_490_189,
+  duplicator: '5.2.0',
+  created: '2026-11-20 10:15:00',
+  report: {
+    home: 'https://harborflorist.example',
+    siteurl: 'https://harborflorist.example',
+    title: 'Harbor Florist',
+    wpVersion: '7.1.5',
+    phpVersion: '8.2.29',
+    tablePrefix: 'hf_',
+    https: true,
+    abspath: '/home/harbor/public_html',
+    files: { count: 18342, bytes: 1_610_612_736, partial: false },
+    db: { server: '10.11.9-MariaDB', bytes: 100_663_296, tables: 48 },
+    plugins: Array.from({ length: 23 }, (_, i) => ({ slug: `plugin-${i}`, name: `Plugin ${i}`, version: '1.0', active: i < 17 })),
+    theme: { slug: 'harbor', name: 'Harbor', version: '2.3' },
+    dropins: [],
+    muPlugins: [],
+  },
+  dumpFiles: 49,
+  warnings: [{ code: 'htaccess-custom', blocking: false, message: '.htaccess has rules of its own. Check them once the site is up (Files tab).' }],
+  blockedReason: null,
+  suggestions: { title: 'Harbor Florist', slug: 'harborflorist', phpVersion: '8.2', deactivatePlugins: [], removeDropins: [], removeMuPlugins: [] },
+  constants: [],
+});
+
 /** Answer `GET <api>` with the demo world's own answer, as `edit` changes it. */
 const answer = (api: string, edit: (body: Record<string, unknown>) => unknown) => async (page: Page) => {
   await page.route(`**${api}`, async (route) => {
@@ -114,6 +144,30 @@ export const SHOTS: Shot[] = [
       async (page) => page.getByRole('button', { name: 'Continue', exact: true }).click(),
       async (page) => page.getByRole('switch', { name: 'Database' }).click(),
       async (page) => page.getByLabel('Web root').fill('public'),
+    ),
+  },
+  {
+    name: 'site-new-package',
+    what: 'The New site wizard starting from a Duplicator package: what the package holds, and a warning',
+    path: '/sites/new',
+    theme: 'light',
+    // The upload and what the panel reads of it, answered here: the demo world has no package to read.
+    before: async (page) => {
+      await page.route('**/api/package-uploads/**', async (route) => {
+        const req = route.request();
+        const url = new URL(req.url());
+        if (req.method() === 'PUT') return route.fulfill({ json: { received: Number(url.searchParams.get('size')), complete: true } });
+        if (req.method() !== 'GET') return route.fulfill({ status: 204, body: '' });
+        return route.fulfill({ json: demoPackage(url.pathname.split('/').pop()!) });
+      });
+    },
+    prepare: steps(
+      async (page) => page.getByLabel('Site title').fill('Harbor Florist'),
+      async (page) => page.getByRole('button', { name: 'Continue', exact: true }).click(),
+      async (page) => page.getByRole('group', { name: 'Start from', exact: true }).getByRole('button', { name: 'Duplicator package', exact: true }).click(),
+      async (page) =>
+        page.locator('input[type=file]').setInputFiles({ name: '20261120_harborflorist_8c1d2e3f_20261120101500_archive.zip', mimeType: 'application/zip', buffer: Buffer.alloc(2048) }),
+      async (page) => page.getByText('Made by', { exact: true }).waitFor(),
     ),
   },
   { name: 'site-overview', what: 'A live site’s Overview tab', path: '/sites/northwind-bakery', theme: 'both', hero: true },

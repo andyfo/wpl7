@@ -61,7 +61,7 @@ for a reason; remove one once there is nothing left to watch.
 | [The DKIM signer's image: x86-64 only](#the-dkim-signers-image-x86-64-only) | Low | 2026-10-07 11:05 UTC | Every tag is amd64 only |
 | [setup-php: PHP 7.0 in CI](#setup-php-php-70-in-ci) | Low | 2026-10-07 15:07 UTC | `v2` is the newest major, 2.37.2 the latest release; 7.0 and 8.5 supported |
 | [The migration plugin's floor: WordPress 5.0 and PHP 7.0](#the-migration-plugins-floor-wordpress-50-and-php-70) | Medium | 2026-11-08 17:27 UTC | PHP 7.0 on 0.54% of sites, WordPress before 5.0 on 2.5%; CI installs 7.0; PHP 8.6 due 2026-11-19 |
-| [The WordPress image's entrypoint, as an import and `wpl7-start` rely on it](#the-wordpress-images-entrypoint-as-an-import-and-wpl7-start-rely-on-it) | Medium | 2026-11-01 09:08 UTC | Acts on a `php-fpm` first argument; seeds only an empty folder; writes wp-config.php only when absent |
+| [The WordPress image's entrypoint, as an import and `wpl7-start` rely on it](#the-wordpress-images-entrypoint-as-an-import-and-wpl7-start-rely-on-it) | Medium | 2026-11-24 06:45 UTC | Acts on a `php-fpm` first argument; seeds only an empty folder; writes wp-config.php only when absent, from the site folder's `wp-config-docker.php` before its own |
 | [WPL7 Connect's floor: WordPress 5.2 and PHP 7.0](#wpl7-connects-floor-wordpress-52-and-php-70) | Medium | 2026-11-08 17:27 UTC | PHP 7.0 on 0.54% of sites, WordPress before 5.2 on 3.0%; CI installs 7.0; Docker test not run at this check |
 | [WordPress's upgrader, as WPL7 Connect drives it](#wordpresss-upgrader-as-wpl7-connect-drives-it) | Medium | 2026-11-08 17:30 UTC | 7.1.4 is the latest; it unpacks into a randomly named folder, which WPL7 Connect does not use; Docker test not run at this check |
 | [WordPress's shutdown, as WPL7 Connect answers an activation that ended PHP](#wordpresss-shutdown-as-wpl7-connect-answers-an-activation-that-ended-php) | Medium | 2026-11-20 09:48 UTC | WordPress 7.1.4 and 7.1.5: output is flushed at `shutdown` priority 1, and the fatal error handler stays out of an activation; the Docker test passes |
@@ -78,6 +78,10 @@ for a reason; remove one once there is nothing left to watch.
 | [Google's crawler address lists](#googles-crawler-address-lists) | Medium | 2026-11-03 09:35 UTC | Both answer: 589 prefixes, none wider than a /27 or a /64 |
 | [ssh2: how a channel closes, as the panel's SSH channels rely on it](#ssh2-how-a-channel-closes-as-the-panels-ssh-channels-rely-on-it) | Low | 2026-11-15 10:57 UTC | 1.17.0 is the latest; channels half-open by default, `destroy()` never marks one destroyed, `'close'` waits for `'end'` or an unreadable stream |
 | [ssh2: ed25519 keys from its own generator](#ssh2-ed25519-keys-from-its-own-generator) | Low | 2026-11-24 14:29 UTC | Open upstream since 2024, fix #1515 waiting for review; 1.17.0 cuts 1 key in 256 short; the panel does not use it |
+| [Duplicator's package format, as New site reads it](#duplicators-package-format-as-new-site-reads-it) | Medium | 2026-11-24 10:31 UTC | Lite 5.2.0 is the latest; read in its source and in packages from 5.2.0 and 1.5.11, .zip and .daf; triggers stay out of its dumps, without their SQL mode; 1.5.x's mysqldump writes in the client's default set; the end-to-end test passes on all four |
+| [MariaDB: MySQL 8's collations](#mariadb-mysql-8s-collations) | Medium | 2026-11-24 08:46 UTC | 11.4.13 has MySQL 8.0's 44 `0900` collations, with the weights of the `uca1400` `nopad` ones they are mapped to; 11.4.4 has only the latter |
+| [WordPress's incompatible SQL modes, as a package's triggers run in them](#wordpresss-incompatible-sql-modes-as-a-packages-triggers-run-in-them) | Low | 2026-11-24 10:31 UTC | 7.1.5 takes out six modes; trunk adds `NO_BACKSLASH_ESCAPES`, which the panel takes out already |
+| [MariaDB's keywords and functions, as a trigger's words are read](#mariadbs-keywords-and-functions-as-a-triggers-words-are-read) | Low | 2026-11-24 11:54 UTC | 11.4.13: 699 keywords, 268 functions, as `panel/src/lib/mariadbWords.ts` has them; spatial functions are not among them |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -1135,11 +1139,12 @@ for a reason; remove one once there is nothing left to watch.
 ## The WordPress image's entrypoint, as an import and `wpl7-start` rely on it
 
 - **Priority:** Medium
-- **Last checked:** 2026-11-01 09:08 UTC. `docker-entrypoint.sh` on docker-library/wordpress's default branch acts
+- **Last checked:** 2026-11-24 06:45 UTC. `docker-entrypoint.sh` on docker-library/wordpress's default branch acts
   only when its first argument starts with `apache2` or is `php-fpm`. It then copies WordPress into
   `/var/www/html` only when neither `index.php` nor `wp-includes/version.php` is there, and writes
-  `wp-config.php` from `wp-config-docker.php` only when there is none (`! -s`), then chowns it to
-  `www-data`. `wp-config-docker.php` reads the table prefix from `WORDPRESS_TABLE_PREFIX` and ends with
+  `wp-config.php` only when there is none (`! -s`), then chowns it to `www-data`. It writes it from
+  the first `wp-config-docker.php` it finds: the one in the site's folder, then its own in
+  `/usr/src/wordpress`. `wp-config-docker.php` reads the table prefix from `WORDPRESS_TABLE_PREFIX` and ends with
   the `/* That's all, stop editing!` line.
 - **The problem:** the site image is the fpm variant, whose services `wpl7-start` starts itself. So it
   runs the entrypoint once as `docker-entrypoint.sh php-fpm -t`: the first argument gets the seeding and
@@ -1149,13 +1154,17 @@ for a reason; remove one once there is nothing left to watch.
   `wp-config.php` of its own, with the site's prefix, which the import then adds the carried settings
   to with `wp config set` (placed above the "stop editing" line). The image copies its own `.htaccess`
   only into an empty folder, which is why the finish job writes WordPress's standard one when the old
-  site had none. PHP sites rely on the other side of it: `wpl7-start` runs the entrypoint only for a
+  site had none. An old site's own `wp-config-docker.php`, there when it ran on this image, would be
+  the template for the new `wp-config.php`: an import (`IMPORT_SKIPS` in `panel/src/services/imports.ts`,
+  for pulls saved before it too) and a Duplicator package (`siteFileFilter` in
+  `panel/src/services/duplicator.ts`) leave it out, and `leaveBehind` takes it out of the staging folder.
+  PHP sites rely on the other side of it: `wpl7-start` runs the entrypoint only for a
   container with `WORDPRESS_DB_HOST`, which every WordPress site's container has and a PHP site's
   never does, and plain `php-fpm -t` otherwise, so nothing is put into a PHP site's folder.
   `test/engine/phpSite.test.ts` proves that an empty folder stays empty without the variable, and
   that a WordPress container on the same image is still seeded.
 - **Check:** `gh api repos/docker-library/wordpress/contents/docker-entrypoint.sh --jq .content | base64 -d`
-  around the first `if`, and the `index.php` and `wp-config.php` tests, and
+  around the first `if`, the `index.php` and `wp-config.php` tests and the `wp-config-docker.php` list, and
   `gh api repos/docker-library/wordpress/contents/wp-config-docker.php --jq .content | base64 -d | grep -n 'table_prefix\|stop editing'`.
 - **When it changes:**
   - **It stops acting on `php-fpm`:** `wpl7-start` has to run it with whatever it takes instead. A new
@@ -1677,3 +1686,135 @@ for a reason; remove one once there is nothing left to watch.
   `npm view ssh2 version`. For a newer release, read the ed25519 case in its `lib/keygen.js`.
 - **When it changes:** nothing has to change, as `newSshKeyPair()` stays correct. Once a release we
   use has the fix, remove this entry: ssh2's generator may then be used again.
+
+## Duplicator's package format, as New site reads it
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-24 10:31 UTC. Duplicator Lite 5.2.0 is the latest on wordpress.org.
+  What the panel reads was taken from its source and from four packages built with it and with
+  1.5.11 on WordPress 7.1.5: a 5.2.0 `.daf` (DupArchive 5.0.1, PHP dump in one file per table), a
+  5.2.0 `.zip` (mysqldump, one dump file), and a 1.5.11 `.zip` and `.daf` (DupArchive 1.0.0, the
+  old layout). `WPL7_DUPLICATOR_E2E_DIR=… npx vitest run test/e2e/duplicator` passes on all four:
+  every file byte for byte, every table row for row against Duplicator's own dump.
+- **What we rely on:** none of it is documented by Duplicator.
+  - Where things are. 5.x: `dup-installer/dup_descriptors_<hash>/archive.txt`, the dump in
+    `db_dumps/`, the old `.htaccess` and `.user.ini` in `orig_files/source_site_*`. 1.x:
+    `dup-installer/dup-archive__<hash>.txt`, `dup-installer/dup-database__<hash>.sql`,
+    `dup-installer/original_files_<hash>/source_site_*`. The root `wp-config.php`, `.htaccess` and
+    `.user.ini` are left out of the archive (`PackageArchive.php`'s global file filter).
+  - The dump's order: `dbInfo.dumpFiles` in archive.txt (`schema.sql` first, then a file per table,
+    each `.gz` in the archive, `DumpFileMap.php`), else the files of `db_dumps/` by name, else 1.x's
+    one file. No `SET NAMES`: the bytes are in WordPress's connection charset (`DB_CHARSET`) when
+    the PHP dump wrote them (`PhpDumpEngine.php` reads through `$wpdb`), and when mysqldump did
+    from 5.0.0 on (`--skip-set-charset --default-character-set=<$wpdb->charset>`, `DatabasePkg.php`).
+    1.5.x's mysqldump has `--skip-set-charset` and no character set of its own (the plugin's SVN
+    tags: every 1.5.x without `--default-character-set`, every 5.x with it): its dumps are in the
+    client's default, UTF-8 unless the old host's configuration sets another. The job tells which
+    from the bytes, which hold text only (`--hex-blob`).
+    `dbInfo.buildMode` says which wrote it (`PHP`, `PHPCHUNKING`, `MYSQLDUMP`).
+  - mysqldump's own header in 5.x, as the package keeps it: `/*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS,
+    UNIQUE_CHECKS=0 */;`. With unique checks off InnoDB may take a duplicate into a unique index
+    without a word; New site turns them on there (`PackageDumpFilter`).
+  - `wpInfo.configs.defines` holds `UPLOADS` when wp-config.php sets it (`addDefineIfExists`,
+    `PackInstaller.php`); New site carries it as it is.
+  - What the dump holds: rows in `INSERT IGNORE` statements of a row a line, at most the query size
+    limit each (`TableDumpWriter.php`, at most 1 MiB); views, procedures and functions in the
+    schema file as `SHOW CREATE` gives them, strings with line breaks in them and all
+    (`writeRoutines`). Rows load with `INSERT IGNORE` in both modes (mysqldump's `--insert-ignore`);
+    New site loads them with a plain `INSERT`, so a row that collides fails the load.
+    Triggers are left out (`--skip-triggers`): `dbInfo.triggerList` has each one's
+    `"DELIMITER ;;\n<SHOW CREATE TRIGGER>;;\nDELIMITER ;"` (`DatabaseInfo::addTriggers`, the same in
+    1.5.x), but not the SQL mode it was made in, which `SHOW CREATE TRIGGER` gives beside it.
+    Duplicator's own installer asks for them to be added by hand. New site adds them last, after
+    the address rewrite, in WordPress's SQL mode.
+  - `dbInfo.tablesList`: the base tables in the package, after its table filters; views only as
+    `viewCount`. A table left out by a filter is named nowhere.
+  - archive.txt's fields: `wp_tableprefix`, `version_*`, `mu_mode`, `exportOnlyDB`, `components`,
+    `wpInfo.configs.realValues` (`homeUrl`, `siteUrl`, `originalPaths`: `home`, `abs`, `wpcontent`,
+    `uploads`, `plugins`, `muplugins`, `themes`, from `SnapWP::getWpPaths` in both versions), `wpInfo.configs.defines`
+    (`value`, `inWpConfig`), `wpInfo.plugins` (`active`, `mustUse`, `dropIns`), `wpInfo.themes`,
+    `dbInfo.triggerList`, `viewCount`, `procCount`, `funcCount`.
+  - DupArchive: `<A><V>` then `<C>` before 5.0.0, `<X>` flags and `<P>` password hash from 5.0.0; a
+    file's own `<X>` flags from 5.0.0; every glob with its CRC-32 (`hash('crc32b')`, so eight hex
+    digits), of the stored bytes before 5.0.0 and of the content since; each file's own CRC-32 of
+    its content, taken before it is read in, or 32 zeros past 100 MiB. A file that changed between
+    the two does not match: Duplicator's installer notes it and goes on (`validateExpandedFile`); the index file `__dup__archive__index.json` never compressed, its
+    `extraPos` where the installer's files start.
+- **Check:** the version of
+  `https://downloads.wordpress.org/plugin/duplicator.latest-stable.zip`. For a newer one, compare
+  with the last: `installer/dup-installer/src/Package/InstallerDescriptors.php`,
+  `src/Package/Database/Dump/DumpFileMap.php`, `src/Package/Archive/PackageArchive.php`
+  (`getDefaultGlobalFileFilter` and the config files after it), `src/Package/Create/PackInstaller.php`
+  (`createArchiveConfigFile`, `getWpInfo`), `src/Package/Database/` (`DatabaseInfo.php`'s triggers,
+  `Dump/PhpDumpEngine.php`, `Dump/TableDumpWriter.php`, the mysqldump flags in `DatabasePkg.php`) and
+  `src/Libs/DupArchive/` (`DUPARCHIVE_VERSION`, the headers, `DupArchiveFileProcessor.php`'s globs). Then build a `.zip` and a `.daf` package with it on any WordPress (**Duplicator →
+  Settings → Backups → Archive engine**) and run the end-to-end test on them.
+- **When it changes:** a moved or renamed file goes into the patterns in
+  `panel/src/services/duplicator.ts`; a new DupArchive header into `panel/src/lib/dupArchive.ts`; a
+  field into `descriptorSchema`. Triggers in the dump: they would load with the rows, before the
+  address rewrite fires them, so take them out there and keep adding them last. A `SET NAMES` of
+  its own in the dump: it wins over `packageDumpPreamble`'s. A new mysqldump character set flag, or
+  one gone: `packageCharset`. Add the layout to `panel/test/duplicatorFixtures.ts` and run the
+  unit and end-to-end tests. Until then the panel refuses such a package and says why.
+
+## MariaDB: MySQL 8's collations
+
+- **Priority:** Medium
+- **Last checked:** 2026-11-24 08:46 UTC. MariaDB 11.4.13 knows MySQL 8.0's 44 `utf8mb4_*0900_*`
+  collations: the root four, and twenty languages in `ai_ci` and `as_cs`. Their `WEIGHT_STRING` is the
+  same as that of the `utf8mb4_uca1400_[<language>_]nopad_*` collation they are mapped to, and like
+  MySQL's they pad no spaces. 11.4.4 has none of them, but every `uca1400` `nopad` collation, `ai`/`as`
+  and `ci`/`cs`, in the same twenty languages. MySQL 8.0.30's later languages (`ru`, `nb`, `ja`, …) are
+  in neither.
+- **The problem:** a dump from MySQL 8 names these collations. A server before 11.4.5, which an install
+  that never pulled its MariaDB again still runs, refuses the tables, and one mapped to a collation that
+  compares less strictly (case-insensitive for `as_cs`, padded for any of them) makes two values one:
+  a unique key keeps only the first, and Duplicator's dumps load with `INSERT IGNORE`.
+- **What we do about it:** `replaceCollations` in `panel/src/services/importSql.ts`, for packages, the
+  import's pull and backups of sites hosted elsewhere: the same strength and no padding, the language's
+  own rules where MariaDB has them, the accent-sensitive root order where it does not.
+  `test/unit/importSql.test.ts` pins the names. No MariaDB collation is UCA 9.0, MySQL 8's: UCA 14.0
+  counts some characters Unicode added since alike with what they decompose to (`㋿` and `令和`), so
+  rows always load with a plain `INSERT` (packages lose their `INSERT IGNORE`): such a pair fails the
+  load, and the job says to change one of the rows.
+- **Check:** on the compose file's MariaDB and on `mariadb:11.4.4`:
+  `SELECT COLLATION_NAME FROM information_schema.COLLATIONS WHERE COLLATION_NAME LIKE 'utf8mb4%0900%'`,
+  the `uca1400` `nopad` names, and `WEIGHT_STRING` of a few strings under a `0900` collation and its
+  mapped one.
+- **When it changes:** once every supported MariaDB has the `0900` names, leave them as they are and drop
+  the mapping. A language MariaDB gains goes into `UCA1400_LANGUAGES`.
+
+## WordPress's incompatible SQL modes, as a package's triggers run in them
+
+- **Priority:** Low
+- **Last checked:** 2026-11-24 10:31 UTC. `wpdb::$incompatible_modes` in `src/wp-includes/class-wpdb.php` is
+  `NO_ZERO_DATE`, `ONLY_FULL_GROUP_BY`, `STRICT_TRANS_TABLES`, `STRICT_ALL_TABLES`, `TRADITIONAL` and
+  `ANSI` in WordPress 6.9.9, 7.0.6 and 7.1.5; trunk (last changed 2026-10-28) adds
+  `NO_BACKSLASH_ESCAPES`.
+- **The problem:** a trigger keeps the SQL mode it was made in, and Duplicator does not record it.
+  New site adds a package's triggers in the mode WordPress gives its own queries: the server's, without
+  the modes wpdb takes out. That is the mode a plugin's trigger was made in, and the one in which a
+  wrong guess makes no write fail.
+- **What we do about it:** `WORDPRESS_INCOMPATIBLE_MODES` and `TRIGGER_PREAMBLE` in
+  `panel/src/jobs/handlers/sitePackage.ts` copy trunk's list.
+- **Check:** `gh api repos/WordPress/wordpress-develop/contents/src/wp-includes/class-wpdb.php --jq
+  .content | base64 -d | sed -n '/incompatible_modes = array(/,/);/p'`, for trunk and the latest release.
+- **When it changes:** copy the list. A mode taken back out of it stays out of the panel's copy until a
+  release has done so.
+
+## MariaDB's keywords and functions, as a trigger's words are read
+
+- **Priority:** Low
+- **Last checked:** 2026-11-24 11:54 UTC. MariaDB 11.4.13 lists 699 words in `information_schema.KEYWORDS` and 268
+  in `information_schema.SQL_FUNCTIONS`; the spatial functions (`ST_Distance` and the like) are in
+  neither.
+- **The problem:** New site adds a package's trigger only when every word of it is accounted for
+  (`panel/src/services/packageTriggers.ts`): a keyword or function of MariaDB's, or a name of the
+  site's database. A keyword or function MariaDB adds is an unknown name until the list has it, and a
+  trigger that uses it is left out and named.
+- **What we do about it:** `panel/src/lib/mariadbWords.ts` is the two tables of the compose file's
+  MariaDB, written out.
+- **Check:** on the compose file's MariaDB, `SELECT WORD FROM information_schema.KEYWORDS ORDER BY
+  WORD` and `SELECT FUNCTION FROM information_schema.SQL_FUNCTIONS ORDER BY FUNCTION`, against the file.
+- **When it changes:** write the file again from the two tables. Left out, a word only makes a
+  trigger that uses it stay out: nothing breaks.

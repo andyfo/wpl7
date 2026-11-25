@@ -326,8 +326,19 @@ export class SshConnection {
             if (errText.length < OUTPUT_CAP) errText += chunk.toString();
           });
           if (opts.input) {
-            opts.input.on('error', () => stream.close());
-            opts.input.pipe(stream);
+            const input = opts.input;
+            // A stream destroyed before it ended never ends the command's stdin, which then waits
+            // for its deadline: its channel is closed instead. Destroyed while this call waited for
+            // a channel, its 'error' and 'close' came and went unheard.
+            if (input.destroyed && !input.readableEnded) {
+              stream.close();
+            } else {
+              input.on('error', () => stream.close());
+              input.on('close', () => {
+                if (!input.readableEnded) stream.close();
+              });
+              input.pipe(stream);
+            }
           } else {
             stream.end();
           }

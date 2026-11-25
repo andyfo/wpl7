@@ -615,6 +615,8 @@ export const appImageBody = z
 const WORDPRESS_CREATE_FIELDS = ['locale', 'adminUser', 'adminEmail', 'adminPassword', 'plugins', 'discourageSearchEngines'] as const;
 /** What a new PHP site may be given, and a WordPress site may not. */
 const PHP_CREATE_FIELDS = ['database', 'webRoot'] as const;
+/** What a site made from a Duplicator package takes from the package, not from the form. */
+const PACKAGE_GIVES = ['adminUser', 'adminEmail', 'adminPassword', 'locale', 'plugins'] as const;
 
 export const siteCreateBody = z.object({
   title: z.string().min(1).max(200),
@@ -646,6 +648,11 @@ export const siteCreateBody = z.object({
   database: z.boolean().optional(),
   /** PHP only: the folder visitors reach (webRootSchema). Left out, the site's folder. */
   webRoot: webRootSchema.optional(),
+  /**
+   * WordPress only: the site is made from an uploaded Duplicator package (PUT /api/package-uploads)
+   * instead of a new install. Its users, language and plugins come from the package.
+   */
+  package: z.lazy(() => sitePackageInput).optional(),
   ...APP_CREATE_SHAPE,
 }).strict()
   .superRefine((v, ctx) => {
@@ -655,6 +662,16 @@ export const siteCreateBody = z.object({
         if (v[field] !== undefined) ctx.addIssue({ code: 'custom', message: `${field} is for ${sites} only`, path: [field] });
       }
     };
+    if (v.package !== undefined && v.app === 'wordpress') {
+      for (const field of PACKAGE_GIVES) {
+        if (v[field] !== undefined) ctx.addIssue({ code: 'custom', message: `${field} comes from the package: leave it out`, path: [field] });
+      }
+      refuse(APP_CREATE_FIELDS, 'container apps');
+      refuse(PHP_CREATE_FIELDS, 'PHP sites');
+      return;
+    }
+    // Any other app is told so, and then what its own create needs.
+    if (v.package !== undefined) ctx.addIssue({ code: 'custom', message: 'package is for WordPress sites only', path: ['package'] });
     if (v.app === 'container') {
       refuse(WORDPRESS_CREATE_FIELDS, 'WordPress sites');
       refuse(['webRoot', 'phpVersion'], 'sites on the site image');
@@ -793,6 +810,16 @@ export const importRunBody = z
   })
   .strict();
 export type ImportRunBody = z.infer<typeof importRunBody>;
+
+/**
+ * A new site from a Duplicator package (POST /api/sites `package`, services/duplicator.ts): the
+ * upload, and what of the old host to leave behind, as an import's Confirm step chooses it.
+ */
+export const sitePackageInput = importRunBody
+  .pick({ carryConstants: true, deactivatePlugins: true, removeDropins: true, removeMuPlugins: true, rewritePaths: true })
+  .extend({ uploadId: z.string().regex(UPLOAD_ID_RE, 'an upload id is 16-64 characters of A-Z, a-z, 0-9, _ and -') })
+  .strict();
+export type SitePackageInput = z.infer<typeof sitePackageInput>;
 
 // ---------------------------------------------------------------------------
 // Connections: sites hosted elsewhere, through WPL7 Connect (docs/internal/connect-protocol.md)

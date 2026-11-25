@@ -479,6 +479,33 @@ export interface ImportConnectionCodeDto {
   code: string;
 }
 
+/**
+ * An uploaded Duplicator package, as New site shows it (`GET /api/package-uploads/:id`): the old
+ * site it holds, read as an import's report is, with the same warnings and choices.
+ */
+/** The old site, as a package describes it: its language, search engine setting and plugin it does not say. */
+export type PackageSourceDto = Omit<ImportSourceDto, 'locale' | 'searchEnginesAllowed' | 'pluginVersion'>;
+
+export interface PackageInspectionDto {
+  uploadId: string;
+  format: 'zip' | 'daf';
+  /** The archive's size. */
+  bytes: number;
+  /** The Duplicator version that made it, as the package says. */
+  duplicator: string | null;
+  /** When it was made, as the package says (the old host's clock). */
+  created: string | null;
+  /** Null when the package cannot be read: blockedReason says why. */
+  report: PackageSourceDto | null;
+  /** How many files its database comes in. */
+  dumpFiles: number;
+  warnings: ImportWarning[];
+  /** Why a site cannot be made from it, or null. */
+  blockedReason: string | null;
+  suggestions: ImportSuggestionsDto | null;
+  constants: ImportConstantDto[];
+}
+
 // ---------------------------------------------------------------------------
 // Connections: sites hosted elsewhere, through WPL7 Connect
 

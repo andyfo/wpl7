@@ -144,7 +144,8 @@ const registry: Partial<Record<JobType, RegistryEntry>> = {
     }
     ctx.setResult({ steps: ctx.payload.steps });
   }, 60_000) as RegistryEntry,
-  'site.create': entry(siteCreatePayload, siteCreate, 30 * 60_000, siteCreateQueuedCancel) as RegistryEntry,
+  // A package's site comes with all its files and database: unpacked, loaded and backed up in the job.
+  'site.create': entry(siteCreatePayload, siteCreate, (p) => (p.package ? 4 * 3600_000 : 30 * 60_000), siteCreateQueuedCancel) as RegistryEntry,
   'site.delete': entry(siteDeletePayload, siteDelete, 60 * 60_000) as RegistryEntry,
   'site.start': entry(siteIdPayload, siteStart, 5 * 60_000) as RegistryEntry,
   'site.stop': entry(siteIdPayload, siteStop, 5 * 60_000) as RegistryEntry,

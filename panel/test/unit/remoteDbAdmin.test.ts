@@ -80,10 +80,12 @@ describe('RemoteDbAdminService', () => {
 
   it('removes the login file when the import fails', async () => {
     const exec = new FakeExec();
-    exec.results = [{ stdout: '', stderr: '', exitCode: 0 }, { stdout: '', stderr: 'ERROR 1064', exitCode: 1 }];
-    await expect(new RemoteDbAdminService(exec).importFromAs('/x/db.sql.gz', 'wp_demo', 'wp_demo', 'pw')).rejects.toThrow(
-      /Database import failed \(exit 1\): ERROR 1064/,
-    );
+    // As the client writes it: the statement it ran, then the error.
+    const stderr = "--------------\nINSERT INTO t VALUES ('private') oops\n--------------\n\nERROR 1064 (42000) at line 3: You have an error in your SQL syntax; check the manual that corresponds to your MariaDB server version for the right syntax to use near 'oops' at line 1\n";
+    exec.results = [{ stdout: '', stderr: '', exitCode: 0 }, { stdout: '', stderr, exitCode: 1 }];
+    const failed = new RemoteDbAdminService(exec).importFromAs('/x/db.sql.gz', 'wp_demo', 'wp_demo', 'pw');
+    await expect(failed).rejects.toThrow(/Database import failed \(exit 1\): ERROR 1064 \(42000\) at line 3: You have an error in your SQL syntax.* near '…' at line 1$/);
+    await expect(failed).rejects.not.toThrow(/private/);
     expect(exec.calls.at(-1)!.args.slice(0, 4)).toEqual(['exec', 'wpl7-mariadb', 'rm', '-f']);
   });
 
@@ -139,9 +141,9 @@ describe('RemoteDbAdminService', () => {
 
   it('fails loudly with stderr context', async () => {
     const exec = new FakeExec();
-    exec.results = [{ stdout: '', stderr: 'boom', exitCode: 1 }];
+    exec.results = [{ stdout: '', stderr: 'ERROR 2013 (HY000) at line 5: Lost connection to server during query\n', exitCode: 1 }];
     await expect(new RemoteDbAdminService(exec).importFrom('/x/db.sql.gz', 'wp_demo')).rejects.toThrow(
-      /Database import failed \(exit 1\): boom/,
+      /Database import failed \(exit 1\): ERROR 2013 \(HY000\) at line 5: Lost connection to server during query/,
     );
   });
 });

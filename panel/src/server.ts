@@ -29,6 +29,7 @@ import { registerFileRoutes } from './routes/files.js';
 import { registerFtpRoutes } from './routes/ftp.js';
 import { registerDatabaseRoutes } from './routes/databases.js';
 import { registerAppRoutes } from './routes/apps.js';
+import { registerPackageRoutes } from './routes/packages.js';
 import { registerWpFleetRoutes } from './routes/wpFleet.js';
 import { registerPluginRoutes } from './routes/plugins.js';
 import { registerRecipeRoutes } from './routes/recipes.js';
@@ -121,6 +122,7 @@ export async function buildServer(
   registerFtpRoutes(app, deps);
   await registerDatabaseRoutes(app, deps);
   await registerAppRoutes(app, deps);
+  await registerPackageRoutes(app, deps);
   registerWpFleetRoutes(app, deps);
   registerPluginRoutes(app, deps);
   registerRecipeRoutes(app, deps);

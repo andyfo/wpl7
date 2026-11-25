@@ -7,7 +7,7 @@ import {
   WORDPRESS_DROPINS,
   type ImportRunBody,
 } from '../../shared/schemas.js';
-import type { ImportConstantDto, ImportSuggestionsDto, ImportWarning } from '../../shared/types.js';
+import type { ImportConstantDto, ImportSourceDto, ImportSuggestionsDto, ImportWarning } from '../../shared/types.js';
 import { slugify } from '../lib/slug.js';
 
 /**
@@ -128,6 +128,8 @@ export type MigrateReport = z.infer<typeof migrateReportSchema>;
  * Never carried into the new wp-config.php, whatever the old one said: the panel's container
  * sets them (database, keys and salts, addresses, cron), they name the old host's paths, or
  * they make a multisite. The plugin leaves them out of its report; the panel drops them again.
+ * UPLOADS is not among them: it names a folder of the site's own, from where WordPress is, and
+ * without it the media library looks in wp-content/uploads for files that are not there.
  */
 export const CONSTANT_BLOCKLIST = new Set([
   'DB_NAME',
@@ -153,7 +155,6 @@ export const CONSTANT_BLOCKLIST = new Set([
   'WP_PLUGIN_URL',
   'WPMU_PLUGIN_DIR',
   'WPMU_PLUGIN_URL',
-  'UPLOADS',
   'COOKIE_DOMAIN',
   'WP_CACHE',
   'WPCACHEHOME',
@@ -265,6 +266,24 @@ function preview(name: string, value: string | number | boolean | null): string 
   if (!SECRET_NAME_RE.test(name)) return shown.length > 120 ? `${shown.slice(0, 117)}…` : shown;
   if (typeof value !== 'string' || value.length === 0) return shown;
   return value.length <= 8 ? '••••' : `${value.slice(0, 2)}••••${value.slice(-2)}`;
+}
+
+/** The site's folder in its container. */
+const SITE_ROOT = '/var/www/html';
+/** A string that reads like a folder on a server: an absolute path of two parts or more. */
+const HOST_PATH_RE = /^(?:\/[^/\s]+\/\S|[A-Za-z]:[\\/])/;
+
+/**
+ * A constant as it is carried here: a string naming a place in the old site's folder names the
+ * same place in this one's (WP_LANG_DIR in its wp-content, say). Anything else stays as it was.
+ */
+export function constantHere<C extends MigrateReport['constants'][number]>(c: C, report: Pick<MigrateReport, 'abspath'>): C {
+  // UPLOADS is a folder from where WordPress is, whatever it looks like: carried as it is.
+  if (typeof c.value !== 'string' || c.name === 'UPLOADS') return c;
+  const old = report.abspath.replace(/\\/g, '/').replace(/\/+$/, '');
+  const value = c.value.replace(/\\/g, '/');
+  if (old === '' || (value !== old && !value.startsWith(`${old}/`))) return c;
+  return { ...c, value: SITE_ROOT + value.slice(old.length) };
 }
 
 /** A constant's value as WP-CLI is to write it, or null when it cannot be carried as one. */
@@ -383,10 +402,13 @@ export function inspectReport(report: MigrateReport, opts: { offeredPhp: string[
   const constants: ImportConstantDto[] = [];
   for (const c of report.constants) {
     if (!CONSTANT_NAME_RE.test(c.name) || blocked(c.name) || constants.some((k) => k.name === c.name)) continue;
-    const literal = constantLiteral(c);
+    const here = constantHere(c, report);
+    const literal = constantLiteral(here);
     if (!literal) continue;
-    const note = UNTICKED_BY_DEFAULT[c.name] ?? null;
-    constants.push({ name: c.name, type: c.type, preview: preview(c.name, c.value), ticked: note === null, note });
+    // A path outside the old site's folder is a place on the old host, which this one has not.
+    const elsewhere = here === c && typeof c.value === 'string' && HOST_PATH_RE.test(c.value);
+    const note = UNTICKED_BY_DEFAULT[c.name] ?? (elsewhere ? 'A folder on the old host.' : null);
+    constants.push({ name: c.name, type: c.type, preview: preview(c.name, here.value), ticked: note === null, note });
   }
 
   const suggestions: ImportSuggestionsDto = {
@@ -432,4 +454,27 @@ function hostOf(url: string): string | null {
 
 function plural(n: number, one: string, many = `${one}s`): string {
   return `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+}
+
+/** The report as the Confirm step, and New site for a Duplicator package, show it. */
+export function sourceOf(r: MigrateReport): ImportSourceDto {
+  return {
+    home: r.home,
+    siteurl: r.siteurl,
+    title: r.title,
+    wpVersion: r.wp,
+    phpVersion: r.php,
+    tablePrefix: r.table_prefix,
+    locale: r.locale,
+    searchEnginesAllowed: r.blog_public === 1,
+    https: r.home.startsWith('https://'),
+    abspath: r.abspath,
+    files: { count: r.files.count, bytes: r.files.bytes, partial: r.files.partial },
+    db: { server: r.db.server, bytes: r.db.bytes, tables: r.db.tables.length },
+    plugins: r.plugins.map((p) => ({ slug: p.slug, name: p.name, version: p.version, active: p.active })),
+    theme: r.theme ? { slug: r.theme.slug, name: r.theme.name, version: r.theme.version } : null,
+    dropins: r.dropins,
+    muPlugins: r.mu_plugins.map((m) => ({ file: m.file, name: m.name })),
+    pluginVersion: r.plugin,
+  };
 }

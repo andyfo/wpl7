@@ -127,6 +127,10 @@ export class TarWriter extends Readable {
   /** Start a file of `size` bytes; its content follows through writeFileData, then endFile. */
   async beginFile(h: TarHeader, size: number): Promise<void> {
     if (!Number.isSafeInteger(size) || size < 0) throw new Error(`Not a file size: ${size}`);
+    // A file named like a folder: some tars make the folder and read the file's content as more
+    // entries of the archive, past every rule the writer's caller applied.
+    const name = typeof h.name === 'string' ? Buffer.from(h.name, 'utf8') : h.name;
+    if (name[name.length - 1] === 0x2f) throw new Error('A file in a tar archive cannot have a name that ends in /');
     await this.entryHeader(h, '0', size);
     this.open = { name: typeof h.name === 'string' ? h.name : h.name.toString('latin1'), left: size, size };
   }

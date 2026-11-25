@@ -53,18 +53,59 @@ const CREATE_RE = new RegExp(`^CREATE TABLE \`(${NAME})\` \\(`);
 const INSERT_RE = new RegExp(`^INSERT INTO \`(${NAME})\` \\(`);
 
 /**
- * MySQL 8's default collations, which MariaDB versions before 11.4.5 do not know. Each becomes
- * the nearest one WordPress itself picks on MariaDB.
+ * MySQL 8's collations, which MariaDB before 11.4.5 does not know. Each becomes MariaDB's own that
+ * compares as it does (replaceCollations), so no two values MySQL keeps apart become one: a unique
+ * key would drop the second, and dumps load with INSERT IGNORE.
  */
 export function rewriteCollations(line: string): { line: string; changed: boolean } {
-  let changed = false;
-  const out = mapUnquoted(line, (segment) =>
-    segment.replace(/\butf8mb4_[a-z_]*0900_[a-z_]+\b/g, (name) => {
-      changed = true;
-      return name.endsWith('_bin') ? 'utf8mb4_bin' : 'utf8mb4_unicode_520_ci';
-    }),
-  );
-  return { line: out, changed };
+  const out = mapUnquoted(line, replaceCollations);
+  return { line: out, changed: out !== line };
+}
+
+/** `utf8mb4[_<language>]_0900_<strength>` as MySQL 8 names its UCA 9.0 collations. */
+const MYSQL8_COLLATION_RE = /\butf8mb4_(?:([a-z]+(?:_[a-z]+)?)_)?0900_(ai_ci|as_ci|as_cs|as_cs_ks|bin)\b/g;
+
+/**
+ * MySQL 8's languages and MariaDB's names for the same rules: the twenty MariaDB 11.4.5 itself
+ * gives MySQL's names to, each with the weights of the uca1400 collation it is mapped to here.
+ */
+const UCA1400_LANGUAGES: Record<string, string> = {
+  cs: 'czech',
+  da: 'danish',
+  de_pb: 'german2',
+  eo: 'esperanto',
+  es: 'spanish',
+  es_trad: 'spanish2',
+  et: 'estonian',
+  hr: 'croatian',
+  hu: 'hungarian',
+  is: 'icelandic',
+  la: 'roman',
+  lt: 'lithuanian',
+  lv: 'latvian',
+  pl: 'polish',
+  ro: 'romanian',
+  sk: 'slovak',
+  sl: 'slovenian',
+  sv: 'swedish',
+  tr: 'turkish',
+  vi: 'vietnamese',
+};
+
+/**
+ * rewriteCollations for a run of SQL that is all code: no quoted strings or names, no comments in
+ * it. MySQL's 0900 collations pad no spaces, nor do MariaDB's nopad ones: `a` and `a ` stay two
+ * values. A language MariaDB has no rules for gets the root order, accent-sensitive, which keeps
+ * apart all a tailoring would (å from a, ẹ from e).
+ */
+export function replaceCollations(code: string): string {
+  return code.replace(MYSQL8_COLLATION_RE, (_name, language: string | undefined, strength: string) => {
+    if (strength === 'bin') return 'utf8mb4_nopad_bin';
+    const own = language === undefined ? '' : UCA1400_LANGUAGES[language];
+    if (own !== undefined && strength !== 'as_cs_ks') return own ? `utf8mb4_uca1400_${own}_nopad_${strength}` : `utf8mb4_uca1400_nopad_${strength}`;
+    // No rules of MariaDB's for the language, or kana-sensitive: the root order, accent-sensitive.
+    return `utf8mb4_uca1400_nopad_as_${strength.endsWith('ci') ? 'ci' : 'cs'}`;
+  });
 }
 
 /** Apply `fn` to the parts of a line outside '…', "…" and `…`, keeping the quoted parts as they are. */

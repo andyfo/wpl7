@@ -12,8 +12,8 @@ import type { ServerHandle } from '../../servers/registry.js';
 import type { JobContext } from '../context.js';
 import { JobCanceledError } from '../../lib/errors.js';
 import { TarWriter } from '../../lib/tarWriter.js';
-import { IMPORT_TTL_MS, initialCursor, type ImportCursor } from '../../services/imports.js';
-import { constantLiteral, type MigrateReport } from '../../services/importInspect.js';
+import { IMPORT_SKIPS, IMPORT_TTL_MS, initialCursor, withImportSkips, type ImportCursor } from '../../services/imports.js';
+import { constantHere, constantLiteral, type MigrateReport } from '../../services/importInspect.js';
 import { DUMP_PREAMBLE, DUMP_TRAILER, checkSqlPage } from '../../services/importSql.js';
 import {
   ImportSourceError,
@@ -148,7 +148,9 @@ export async function siteImport(ctx: JobContext<z.infer<typeof siteImportPayloa
   updateSiteRow(s.db, site.id, { status: 'provisioning' });
   ctx.info(`Importing from ${ctx.payload.sourceHost} into "${site.slug}"…`);
 
-  let cursor: ImportCursor = s.imports.cursorOf(row) ?? initialCursor(['wp-config.php']);
+  let cursor: ImportCursor = s.imports.cursorOf(row) ?? initialCursor(IMPORT_SKIPS);
+  // A pull saved before a file joined IMPORT_SKIPS leaves it out from here on (leaveBehind takes out what it already copied).
+  cursor.skip = withImportSkips(cursor.skip);
   let client: ImportPullClient | null = null;
   const commit = async () => {
     if (client) {
@@ -171,6 +173,7 @@ export async function siteImport(ctx: JobContext<z.infer<typeof siteImportPayloa
     if (onDisk) {
       try {
         cursor = { ...initialCursor(cursor.skip), ...(JSON.parse(onDisk) as ImportCursor) };
+        cursor.skip = withImportSkips(cursor.skip);
       } catch {
         ctx.warn('The staging folder\'s import.json could not be read; going by the panel\'s record.');
       }
@@ -840,8 +843,13 @@ export async function fixWordPress(
   return admin;
 }
 
-/** Take out what the admin chose to leave behind: drop-ins, and must-use plugins with their folders. */
+/**
+ * Take out what the admin chose to leave behind, drop-ins and must-use plugins with their folders,
+ * and what of the old host never reaches a site (IMPORT_SKIPS): a pull saved before a file joined
+ * that list may have copied it.
+ */
 export async function leaveBehind(ctx: JobContext<unknown>, server: ServerHandle, wordpressDir: string, choices: ImportRunBody): Promise<void> {
+  for (const file of IMPORT_SKIPS) await server.files.rm(path.join(wordpressDir, file));
   for (const dropin of choices.removeDropins) {
     await server.files.rm(path.join(wordpressDir, 'wp-content', dropin));
   }
@@ -933,7 +941,8 @@ export async function siteImportFinish(ctx: JobContext<z.infer<typeof siteImport
     const container = site.containerName;
     const carried = choices.carryConstants
       .map((name) => report.constants.find((c) => c.name === name))
-      .filter((c): c is MigrateReport['constants'][number] => c !== undefined);
+      .filter((c): c is MigrateReport['constants'][number] => c !== undefined)
+      .map((c) => constantHere(c, report));
     if (carried.length > 0) {
       ctx.info(`Carrying ${carried.length} setting${carried.length === 1 ? '' : 's'} into wp-config.php…`);
       for (const constant of carried) {

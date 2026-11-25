@@ -116,6 +116,12 @@ export async function runHousekeeping(
     return 0;
   });
   if (result.databaseUploadsRemoved > 0) log.info(`Database uploads: removed ${result.databaseUploadsRemoved} older than a day`);
+  // Duplicator packages nobody made a site from within a day of the last chunk.
+  result.packageUploadsRemoved = await s.packages.removeStale().catch((err: unknown) => {
+    log.warn(`Clearing old package uploads failed: ${errorText(err)}`);
+    return 0;
+  });
+  if (result.packageUploadsRemoved > 0) log.info(`Package uploads: removed ${result.packageUploadsRemoved} older than a day`);
   checkCanceled();
 
   // Docker on every server: images nothing runs or needs any more, and the build cache.

@@ -95,6 +95,7 @@ import { MalwareScanService } from '../src/services/malwareScan.js';
 import { PluginZipChecks } from '../src/services/pluginZipChecks.js';
 import { QuarantineService } from '../src/services/quarantine.js';
 import { ImportService } from '../src/services/imports.js';
+import { PackageUploads } from '../src/services/duplicator.js';
 import { ConnectionsService } from '../src/services/connections.js';
 import { ExternalBackupService } from '../src/services/externalBackup.js';
 import { DatabasesService } from '../src/services/databases.js';
@@ -1913,6 +1914,7 @@ export async function makeWorld(
     panelFiles,
     quarantine,
     imports: importsService,
+    packages: new PackageUploads(config, () => settings.get('phpVersions') ?? []),
     connections,
     appRoutes,
     log,
