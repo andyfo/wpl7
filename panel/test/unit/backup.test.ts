@@ -3,7 +3,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { backupCopies, backups, jobs, sites, type BackupRow, type SiteRow } from '../../src/db/schema.js';
-import { hostExec } from '../../src/lib/exec.js';
+import { hostExec, type ExecPort } from '../../src/lib/exec.js';
+import { changedWhileArchived } from '../../src/services/backup.js';
 import { makeWorld, type TestWorld } from '../helpers.js';
 import { sitePaths } from '../../src/services/siteSpec.js';
 import { runHousekeeping } from '../../src/services/housekeeping.js';
@@ -119,6 +120,55 @@ describe('BackupService', () => {
     // Down to the newest one, it still never touches the final backup.
     expect(await w.core.backup.prune(1)).toEqual({ deleted: 1, offsiteOnly: 0 });
     expect(w.db.select().from(backups).all().map((b) => b.id).sort()).toEqual([s3.id, f1.id].sort());
+  });
+
+  /** The host's tar, answering as GNU tar does when the site's files change under it (`stderr`, exit `code`). */
+  const tarSays = (code: number, stderr: string): ExecPort => ({
+    ...hostExec,
+    run: async (cmd, args, o) => {
+      const res = await hostExec.run(cmd, args, o);
+      return cmd === 'tar' && args.includes('-czf') ? { ...res, exitCode: code, stderr } : res;
+    },
+  });
+
+  it('keeps a backup whose files changed while tar read them, and names those files', async () => {
+    const w = await makeWorld({ exec: tarSays(1, 'tar: wordpress/wp-content: file changed as we read it\ntar: wordpress/wp-content/debug.log: File shrank by 812 bytes; padding with zeros\n') });
+    const site = await makeSite(w);
+    const lines: string[] = [];
+    const row = await w.core.backup.create(site, 'manual', { log: (level, message) => lines.push(`${level}: ${message}`) });
+    expect(row.status).toBe('complete');
+    expect(fs.existsSync(path.join(row.path, 'files.tar.gz'))).toBe(true);
+    expect(lines).toContain(
+      'warn: The site changed 2 files while they were archived, so the backup has them as read then: wordpress/wp-content, wordpress/wp-content/debug.log. ' +
+        'One got shorter while read and is filled out with zeros: wordpress/wp-content/debug.log.',
+    );
+  });
+
+  it('fails a backup tar could not read a file for, or that it says anything else about', async () => {
+    for (const [code, stderr] of [
+      [2, 'tar: wordpress/secret.php: Cannot open: Permission denied\ntar: Exiting with failure status due to previous errors\n'],
+      [1, 'tar: wordpress/wp-content: file changed as we read it\ntar: something tar has not said before\n'],
+      [1, ''],
+    ] as const) {
+      const w = await makeWorld({ exec: tarSays(code, stderr) });
+      const site = await makeSite(w);
+      await expect(w.core.backup.create(site, 'manual', {})).rejects.toThrow(`tar failed (exit ${code})`);
+      expect(w.db.select().from(backups).where(eq(backups.siteSlug, 'demo')).get()!.status).toBe('failed');
+    }
+  });
+
+  it("reads tar's own words for a file that changed, went or got shorter while it was read", () => {
+    expect(
+      changedWhileArchived(
+        1,
+        'tar: wordpress/a: file changed as we read it\ntar: wordpress/b: File removed before we read it\ntar: wordpress/c d: File shrank by 9 bytes; padding with zeros\n',
+      ),
+    ).toEqual([
+      { path: 'wordpress/a', shrank: false },
+      { path: 'wordpress/b', shrank: false },
+      { path: 'wordpress/c d', shrank: true },
+    ]);
+    expect(changedWhileArchived(2, 'tar: wordpress/a: file changed as we read it\n')).toBeNull();
   });
 
   it('marks the row failed and removes the dir when the dump fails', async () => {
