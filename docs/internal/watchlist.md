@@ -84,6 +84,7 @@ for a reason; remove one once there is nothing left to watch.
 | [MariaDB: MySQL 8's collations](#mariadb-mysql-8s-collations) | Medium | 2026-11-24 08:46 UTC | 11.4.13 has MySQL 8.0's 44 `0900` collations, with the weights of the `uca1400` `nopad` ones they are mapped to; 11.4.4 has only the latter |
 | [WordPress's incompatible SQL modes, as a package's triggers run in them](#wordpresss-incompatible-sql-modes-as-a-packages-triggers-run-in-them) | Low | 2026-11-24 10:31 UTC | 7.1.5 takes out six modes; trunk adds `NO_BACKSLASH_ESCAPES`, which the panel takes out already |
 | [MariaDB's keywords and functions, as a trigger's words are read](#mariadbs-keywords-and-functions-as-a-triggers-words-are-read) | Low | 2026-11-24 11:54 UTC | 11.4.13: 699 keywords, 268 functions, as `panel/src/lib/mariadbWords.ts` has them; spatial functions are not among them |
+| [MCP: no way to hand a tool a file](#mcp-no-way-to-hand-a-tool-a-file) | Low | 2026-11-25 18:17 UTC | `io.modelcontextprotocol/files` is a draft extension, last changed 2026-11-09, with no reference implementation and no app known to support it |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -1901,3 +1902,31 @@ for a reason; remove one once there is nothing left to watch.
   WORD` and `SELECT FUNCTION FROM information_schema.SQL_FUNCTIONS ORDER BY FUNCTION`, against the file.
 - **When it changes:** write the file again from the two tables. Left out, a word only makes a
   trigger that uses it stay out: nothing breaks.
+
+## MCP: no way to hand a tool a file
+
+- **Priority:** Low
+- **Last checked:** 2026-11-25 18:17 UTC. File transfer is not in the MCP specification. The working
+  group's draft extension, `io.modelcontextprotocol/files` in
+  [modelcontextprotocol/experimental-ext-file-uploads](https://github.com/modelcontextprotocol/experimental-ext-file-uploads),
+  was announced on the MCP blog on 2026-11-10 and last changed on 2026-11-09. It says "Status: Draft",
+  has no reference implementation, and names no app that supports it. The blog expects it to be
+  stable by the end of 2026.
+- **The problem:** an MCP tool's arguments are written by the model, so a file can only reach a tool
+  as text the model writes out. A zip or an image costs a token every few characters of its base64,
+  and past a few hundred kilobytes it does not fit in a call at all.
+- **What we do about it:** `wpl7_upload_site_file` (`panel/src/mcp/tools.ts`) takes a file up to
+  1 MiB as base64, or answers with a curl command and a one-time upload link
+  (`panel/src/services/uploadLinks.ts`, `PUT /api/file-uploads`) for a file on the app's own disk.
+  The link takes one file, named by its size and SHA-256, so the bytes never pass through the model.
+  It needs an app whose shell can reach the panel, such as Claude Code, or claude.ai's code sandbox
+  once its network settings allow the panel's domain.
+- **Check:** the extension's repository: `gh api 'repos/modelcontextprotocol/experimental-ext-file-uploads/commits?per_page=5'`
+  and its `specification/` folder for a version that is no longer a draft. The MCP blog and
+  specification changelog for the extension being made official. Whether Claude (claude.ai, the
+  desktop app, Claude Code) or ChatGPT say they support it.
+- **When it changes:** once it is stable and an app the panel's users connect supports it, give
+  `wpl7_upload_site_file` a file argument marked `x-mcp-file` for clients that declare the extension,
+  and answer its `upload_required` with an upload link as the target. The app then sends the file
+  itself, from a file picker or its sandbox. Keep base64 and the curl command for apps without it.
+

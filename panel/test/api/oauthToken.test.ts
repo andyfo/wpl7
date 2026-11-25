@@ -77,6 +77,7 @@ describe('the token endpoint', () => {
       'wpl7_api_docs',
       'wpl7_api_get',
       'wpl7_read_site_file',
+      'wpl7_upload_site_file',
       'wpl7_wait_for_job',
       'wpl7_write_site_file',
     ]);

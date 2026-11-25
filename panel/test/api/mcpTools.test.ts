@@ -371,6 +371,99 @@ describe('the file tools', () => {
     expect(blind.isError).toBe(true);
     expect(String(blind.value)).toMatch(/exactly one of etag/);
   });
+
+  it('upload a small binary file sent as base64, only where nothing is unless asked to overwrite', async () => {
+    const { world, client } = await panel();
+    addSite(world, 'alpha');
+    const mcp = client('manage');
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0xff]);
+    const args = (call: { args: unknown[] }) => (call.args[1] as string[]).slice(4);
+    world.docker.execQueue.push({ stdout: 'rw/f/f/11/644/1727000000.25/33/33/logo.png/\0', stderr: '', exitCode: 0 });
+    // Wrapped as `base64` prints it, which the tool reads as well.
+    const b64 = png.toString('base64').replace(/(.{8})/g, '$1\n');
+    const saved = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'wp-content/uploads/logo.png', contentBase64: b64, sha256: sha(png) });
+    expect(saved).toMatchObject({ isError: false, value: { status: 200, path: 'wp-content/uploads/logo.png', bytes: 11, sha256: sha(png) } });
+    expect(world.docker.inputs[0]!.equals(png)).toBe(true);
+    // Create-only, and no PHP check for a picture.
+    expect(args(world.docker.calls.find((c) => c.method === 'execWithInput')!)).toEqual([
+      '/var/www/html/wp-content/uploads/logo.png',
+      'create',
+      '-',
+      '11',
+      sha(png),
+      '-',
+    ]);
+
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.exists });
+    const inTheWay = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'logo.png', contentBase64: png.toString('base64') });
+    expect(inTheWay.value).toMatchObject({ status: 412, hint: 'Something is at that path already. Send overwrite: true to replace it.' });
+
+    world.docker.calls = [];
+    world.docker.execQueue.push({ stdout: 'rw/f/f/5/644/1727000000.25/33/33/x.php/\0', stderr: '', exitCode: 0 });
+    await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'x.php', contentBase64: Buffer.from('<?php').toString('base64'), overwrite: true });
+    // Replace whatever is there, but only with PHP that parses.
+    expect(args(world.docker.calls.find((c) => c.method === 'execWithInput')!)).toMatchObject({ 1: 'any', 5: 'php' });
+  });
+
+  it('refuse base64 that is not, bytes that are not the file meant, and more than one call carries - sending nothing', async () => {
+    const { world, client } = await panel();
+    addSite(world, 'alpha');
+    const mcp = client('manage');
+    const upload = (extra: Record<string, unknown>) => mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'a.bin', ...extra });
+    for (const contentBase64 of ['not base64!', 'QR==', 'Q']) {
+      const res = await upload({ contentBase64 });
+      expect(res.isError, contentBase64).toBe(true);
+      expect(res.value.error.message).toMatch(/not base64/);
+    }
+    const slip = await upload({ contentBase64: Buffer.from('abc').toString('base64'), sha256: sha('abd') });
+    expect(slip.value.error.message).toBe(`The bytes' SHA-256 is ${sha('abc')}, not ${sha('abd')}: nothing was saved`);
+    const short = await upload({ contentBase64: Buffer.from('abc').toString('base64'), sizeBytes: 4 });
+    expect(short.value.error.message).toMatch(/holds 3 bytes, not sizeBytes 4/);
+    const big = await upload({ contentBase64: Buffer.alloc(1024 * 1024 + 1).toString('base64') });
+    expect(big.value).toMatchObject({ error: { message: expect.stringMatching(/more than one call carries/) }, hint: expect.stringMatching(/sizeBytes and sha256/) });
+    // Without the bytes, a file on the app's disk: its size and hash, both.
+    const neither = await upload({ sizeBytes: 3 });
+    expect(neither.isError).toBe(true);
+    expect(world.docker.calls.filter((c) => c.method.startsWith('exec'))).toEqual([]);
+  });
+
+  it("hand out a curl command for a file on the app's own disk, which puts that file there", async () => {
+    const { app, world, client, activity } = await panel();
+    addSite(world, 'alpha');
+    const mcp = client('manage');
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.notFound });
+    const res = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'plugin.zip', sizeBytes: 5, sha256: sha('hello') });
+    expect(res.isError).toBe(false);
+    expect(res.value).toMatchObject({ status: 201, site: 'alpha', path: 'plugin.zip', sizeBytes: 5, expiresAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) });
+    const command = res.value.command as string;
+    expect(command).toMatch(/^curl -sS --fail-with-body -T "FILE" -H 'X-WPL7-Upload-Token: wpl7up_[A-Za-z0-9_-]{43}' 'http:\/\/panel\.example\.test\/api\/file-uploads'$/);
+    expect(res.value.next).toMatch(/If curl cannot reach panel\.example\.test/);
+    expect((await activity())[0]).toMatchObject({ via: 'mcp', tool: 'wpl7_upload_site_file', route: '/api/sites/:slug/files/upload-links', status: 201 });
+
+    // What the app's shell then does.
+    const token = /X-WPL7-Upload-Token: (\S+)'/.exec(command)![1]!;
+    world.docker.execQueue.push({ stdout: 'rw/f/f/5/644/1727000000.25/33/33/plugin.zip/\0', stderr: '', exitCode: 0 });
+    const put = await app.inject({ method: 'PUT', url: '/api/file-uploads', headers: { 'x-wpl7-upload-token': token }, payload: Buffer.from('hello') });
+    expect(put.statusCode).toBe(200);
+    expect(put.json()).toMatchObject({ received: 5, size: 5, written: { path: 'plugin.zip', etag: sha('hello') } });
+
+    // Over one request's worth, the same in pieces.
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.notFound });
+    const big = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'theme.zip', sizeBytes: 20 * 1024 * 1024, sha256: sha('x') });
+    expect(big.value.command).toContain('while [ $((i * n)) -lt 20971520 ]; do');
+    expect(big.value.command).toContain('"http://panel.example.test/api/file-uploads?offset=$((i * n))" || break');
+  });
+
+  it('make upload links through the upload tool alone', async () => {
+    const { world, client } = await panel();
+    addSite(world, 'alpha');
+    const res = await client('full').call('wpl7_api_dangerous', {
+      method: 'POST',
+      path: '/api/sites/alpha/files/upload-links',
+      body: { path: 'a.zip', size: 1, sha256: sha('a') },
+    });
+    expect(res.value).toMatchObject({ status: 403, error: { message: expect.stringContaining('wpl7_upload_site_file') } });
+  });
 });
 
 describe('wpl7_api_docs', () => {

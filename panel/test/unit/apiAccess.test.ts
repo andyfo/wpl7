@@ -150,6 +150,7 @@ const DESTRUCTIVE = [
   'POST /api/sites/:slug/files/delete',
   'POST /api/sites/:slug/files/extract',
   'POST /api/sites/:slug/files/move',
+  'POST /api/sites/:slug/files/upload-links',
   'POST /api/sites/:slug/ftp/users/:id/password',
   'POST /api/sites/:slug/go-live',
   'POST /api/sites/:slug/move/finalize',
@@ -222,6 +223,8 @@ const NOT_THROUGH_MCP = [
   'GET /api/sites/:slug/files/download',
   'PUT /api/sites/:slug/files/uploads/:id',
   'DELETE /api/sites/:slug/files/uploads/:id',
+  // An upload link's file, sent with the link's token rather than a key; the file tools make the link.
+  'PUT /api/file-uploads',
   'GET /api/backups/:id/download',
   'GET /api/sites/:slug/databases/:db/export',
   'POST /api/sites/:slug/databases/:db/adminer',
@@ -352,7 +355,11 @@ describe('access levels in the API catalog', () => {
 
   it('reaches file contents through the file tools alone', () => {
     const files = API_DOC_ENDPOINTS.filter((e) => mcpToolGroup(e) === 'file').map(key);
-    expect(files.sort()).toEqual(['GET /api/sites/:slug/files/content', 'PUT /api/sites/:slug/files/content']);
+    expect(files.sort()).toEqual([
+      'GET /api/sites/:slug/files/content',
+      'POST /api/sites/:slug/files/upload-links',
+      'PUT /api/sites/:slug/files/content',
+    ]);
     // Everything that is not plain JSON is either one of those or not reachable at all.
     const raw = API_DOC_ENDPOINTS.filter((e) => e.note && mcpToolGroup(e) !== null && mcpToolGroup(e) !== 'file');
     expect(raw.map(key)).toEqual([]);

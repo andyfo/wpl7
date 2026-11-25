@@ -29,7 +29,16 @@ export function actorName(req: FastifyRequest): string | null {
  * One structured line per change to a site, naming who. The API activity log records Bearer
  * calls but not what they changed - and strips the query string, where a file's path is - so
  * this is where "who edited wp-config.php" or "who gave out that FTP login" is answered.
+ * `actor` is for a request that carries no credential of its own - an upload link's, whose
+ * maker is who it names.
  */
-export function audit(req: FastifyRequest, area: string, site: string, op: string, fields: Record<string, unknown>): void {
-  req.log.info({ [area]: { site, op, ...fields }, ...actorOf(req) }, `${area}: ${op} on site "${site}"`);
+export function audit(
+  req: FastifyRequest,
+  area: string,
+  site: string,
+  op: string,
+  fields: Record<string, unknown>,
+  actor: Record<string, string> = actorOf(req),
+): void {
+  req.log.info({ [area]: { site, op, ...fields }, ...actor }, `${area}: ${op} on site "${site}"`);
 }

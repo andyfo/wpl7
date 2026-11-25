@@ -1,9 +1,12 @@
-// @docs sites/files
+// @docs sites/files, integrations/mcp
+import crypto from 'node:crypto';
 import { PassThrough, Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from '@fastify/type-provider-zod';
 import { z } from 'zod';
+import { allows } from '../../shared/access.js';
 import {
+  fileUploadQuery,
   siteFileChmodBody,
   siteFileCompressBody,
   siteFileCopyBody,
@@ -18,17 +21,21 @@ import {
   siteFilesQuery,
   siteSlugParam,
   siteUploadAbortQuery,
+  siteUploadLinkBody,
   siteUploadParams,
   siteUploadQuery,
 } from '../../shared/schemas.js';
+import type { SiteFileEntryDto } from '../../shared/types.js';
 import { FILE_LIMITS, siteFileBase, siteFileParent } from '../../shared/siteFilePath.js';
-import { AppError, badRequest, conflict, forbidden, tooManyRequests } from '../lib/errors.js';
+import { AppError, badRequest, conflict, forbidden, notFound, tooManyRequests, unauthorized } from '../lib/errors.js';
 import { attachmentDisposition } from '../lib/contentDisposition.js';
-import { audit as auditLog } from '../lib/audit.js';
+import { actorOf, audit as auditLog } from '../lib/audit.js';
 import { jobToDto, viewerOf } from '../lib/dto.js';
+import { mcpOrigin, panelUrl } from '../lib/panelUrl.js';
 import type { SiteRow } from '../db/schema.js';
 import type { SiteFilesService } from '../services/siteFiles.js';
 import { clearAfterChange } from '../services/siteCaches.js';
+import { UPLOAD_TOKEN_HEADER, type UploadLinkAnswer, type UploadLinkMaker } from '../services/uploadLinks.js';
 import type { AppDeps } from './deps.js';
 
 /**
@@ -63,11 +70,11 @@ export async function registerFileRoutes(app: FastifyInstance, deps: AppDeps): P
     // runs, so reading here would let anyone make the panel buffer 8 MiB; the handlers read
     // it once the caller is known (readBody).
     scope.addContentTypeParser('application/octet-stream', (_req, payload, done) => done(null, payload));
-    registerRoutes(scope, deps);
+    await registerRoutes(scope, deps);
   });
 }
 
-function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
+async function registerRoutes(app: FastifyInstance, deps: AppDeps): Promise<void> {
   const r = app.withTypeProvider<ZodTypeProvider>();
   let inflightBytes = 0;
 
@@ -202,8 +209,8 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
       .header('cache-control', 'no-store');
 
   /** One structured line per change (and per content read), naming who - see lib/audit.ts. */
-  const audit = (req: FastifyRequest, site: SiteRow, op: string, fields: Record<string, unknown>): void =>
-    auditLog(req, 'files', site.slug, op, fields);
+  const audit = (req: FastifyRequest, site: SiteRow, op: string, fields: Record<string, unknown>, actor?: Record<string, string>): void =>
+    auditLog(req, 'files', site.slug, op, fields, actor);
 
   /**
    * `If-Match` / `If-None-Match: *` as write preconditions (RFC 9110; strong ETags only).
@@ -224,6 +231,31 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
     if (!m) throw badRequest('If-Match takes the ETag a read returned, quoted');
     return { ifMatch: m[1] };
   };
+
+  /** Who asks for a link: every upload through it is held to their access from then on. */
+  const makerOf = (req: FastifyRequest): UploadLinkMaker => {
+    const actor = actorOf(req);
+    const principal = req.mcp?.principal;
+    if (principal?.connection) return { kind: 'connection', id: principal.connection.id, actor };
+    if (principal?.apiKey) return { kind: 'apiKey', id: principal.apiKey.id, actor };
+    if (req.user) return { kind: 'user', id: req.user.id, actor };
+    if (req.apiKeyUsed?.id) return { kind: 'apiKey', id: req.apiKeyUsed.id, actor };
+    throw unauthorized();
+  };
+
+  /** Whether a link's maker may still upload: still there, and still at Manage or above. */
+  const makerMay = (maker: UploadLinkMaker): boolean => {
+    if (maker.kind === 'user') return deps.users.byId(maker.id) !== null;
+    const level = maker.kind === 'apiKey' ? deps.apiKeys.levelOf(maker.id) : deps.oauth.connectionLevel(maker.id);
+    return level !== null && allows(level, 'manage');
+  };
+
+  const statOrNull = (files: SiteFilesService, container: string, path: string): Promise<SiteFileEntryDto | null> =>
+    files.stat(container, path).catch((err: unknown) => {
+      if (err instanceof AppError && err.statusCode === 404) return null;
+      throw err;
+    });
+  const kindOf = (e: SiteFileEntryDto) => (e.type === 'link' ? e.targetType : e.type);
 
   // ------------------------------------------------------------------ reading
 
@@ -353,6 +385,105 @@ function registerRoutes(app: FastifyInstance, deps: AppDeps): void {
       return reply.status(204).send();
     },
   );
+
+  // ------------------------------------------------------------------ upload links
+
+  r.post(
+    '/api/sites/:slug/files/upload-links',
+    { schema: { params: slugParams, body: siteUploadLinkBody } },
+    async (req, reply) => {
+      const { path, size, sha256, overwrite } = req.body;
+      const site = siteOf(req.params.slug);
+      const { container, files } = await containerOf(site);
+      // What would refuse the upload at its first byte, said before the file is sent at all.
+      const target = await statOrNull(files, container, path);
+      if (target && !overwrite) throw conflict(`"${path}" already exists; send overwrite: true to replace it`);
+      if (target && kindOf(target) === 'dir') throw conflict(`"${path}" is a folder; a folder is never replaced`);
+      const folder = siteFileParent(path);
+      if (!target && folder !== '') {
+        const parent = await statOrNull(files, container, folder);
+        if (!parent || kindOf(parent) !== 'dir') throw notFound(`The folder "${folder}" does not exist; create it first`);
+      }
+      const { token, link } = deps.uploadLinks.create({ siteId: site.id, slug: site.slug, path, size, sha256, overwrite, maker: makerOf(req) });
+      audit(req, site, 'upload-link', { path, bytes: size, sha256, overwrite });
+      return reply.status(201).send({
+        url: `${mcpOrigin(deps.config) ?? panelUrl(deps.config) ?? ''}/api/file-uploads`,
+        method: 'PUT',
+        header: 'X-WPL7-Upload-Token',
+        token,
+        expiresAt: link.expiresAt,
+        chunkBytes: FILE_LIMITS.chunkBytes,
+      });
+    },
+  );
+
+  // A link's file, or its pieces. No key: the link's token is the credential, and it opens one
+  // declared file and nothing else (services/uploadLinks.ts). Its own scope, for its parser.
+  await app.register(async (scope) => {
+    // Whatever the client calls the body - `curl -T` calls it nothing - it is the file's bytes.
+    scope.removeAllContentTypeParsers();
+    scope.addContentTypeParser('*', (_req, payload, done) => done(null, payload));
+    scope.withTypeProvider<ZodTypeProvider>().put(
+      '/api/file-uploads',
+      // Per address, as the Files tab's chunks: a 2 GiB file is 256 requests.
+      { schema: { querystring: fileUploadQuery }, config: { rateLimit: { max: 1200, timeWindow: 60_000 } } },
+      async (req): Promise<UploadLinkAnswer> => {
+        const token = req.headers[UPLOAD_TOKEN_HEADER];
+        const link = typeof token === 'string' ? deps.uploadLinks.find(token) : null;
+        if (!link) throw unauthorized('Unknown or expired upload link; ask for a new one');
+        if (!makerMay(link.maker)) {
+          throw forbidden('The key or connection that made this upload link was revoked, or is below Manage now');
+        }
+        if (Number(req.headers['content-length']) > FILE_LIMITS.chunkBytes) {
+          throw new AppError(
+            'validation_error',
+            413,
+            `At most ${FILE_LIMITS.chunkBytes} bytes per request: send the file in pieces, in order, each with ?offset= the bytes sent before it`,
+          );
+        }
+        const site = siteOf(link.slug);
+        if (site.id !== link.siteId) throw notFound(`The site this link was made for is gone`);
+        const offset = req.query.offset ?? 0;
+        const { body, release } = await readBody(req, FILE_LIMITS.chunkBytes);
+        try {
+          const chunkSha = crypto.createHash('sha256').update(body).digest('hex');
+          if (link.done) {
+            // The piece that finished it, sent again because its answer was lost: the same answer.
+            if (link.done.offset === offset && link.done.chunkSha === chunkSha) return link.done.result;
+            throw conflict('This upload link has been used: its file is in place');
+          }
+          return await changing(
+            site,
+            async ({ container, files }) => {
+              const { replayed, ...res } = await files.appendChunk(
+                container,
+                {
+                  path: link.path,
+                  id: link.id,
+                  offset,
+                  size: link.size,
+                  overwrite: link.overwrite,
+                  sha256: link.sha256,
+                  ...(/\.php$/i.test(link.path) ? { lint: 'php' as const } : {}),
+                },
+                body,
+              );
+              // In place, and checked to be the file declared: its SHA-256 is the etag.
+              const answer: UploadLinkAnswer = { ...res, written: res.written ? { ...res.written, etag: link.sha256 } : null, size: link.size };
+              if (answer.written && !link.done) {
+                link.done = { offset, chunkSha, result: answer };
+                if (!replayed) audit(req, site, 'upload', { path: link.path, bytes: link.size, via: 'upload link' }, link.maker.actor);
+              }
+              return answer;
+            },
+            (answer) => Boolean(answer.written),
+          );
+        } finally {
+          release();
+        }
+      },
+    );
+  });
 
   r.post('/api/sites/:slug/files/mkdir', { schema: { params: slugParams, body: siteFileMkdirBody } }, async (req) => {
     const site = siteOf(req.params.slug);

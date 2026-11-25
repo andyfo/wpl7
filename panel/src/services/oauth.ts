@@ -605,6 +605,13 @@ export class OAuthService {
       .sort((a, b) => b.createdAt - a.createdAt);
   }
 
+  /** A connection's level right now; null once it has ended. For what it set going and must stop with it. */
+  connectionLevel(grantId: number): AccessLevel | null {
+    const grant = this.db.select({ access: oauthGrants.access }).from(oauthGrants).where(eq(oauthGrants.id, grantId)).get();
+    if (!grant) return null;
+    return isAccessLevel(grant.access) ? grant.access : 'read';
+  }
+
   /** Takes effect on the connection's very next call: the level is read on every one. */
   setAccess(grantId: number, access: AccessLevel): boolean {
     return this.db.update(oauthGrants).set({ access }).where(eq(oauthGrants.id, grantId)).run().changes > 0;

@@ -1,4 +1,5 @@
 // @docs integrations/mcp
+import crypto from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -6,6 +7,7 @@ import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import type { AccessLevel } from '../../shared/access.js';
 import { mcpGroupReachable, type McpToolGroup } from '../../shared/apiDocs.js';
 import { SLUG_RE } from '../../shared/schemas.js';
+import { FILE_LIMITS } from '../../shared/siteFilePath.js';
 import { jobs } from '../db/schema.js';
 import type { AppDeps } from '../routes/deps.js';
 import { injectAs, type McpCall, type McpPrincipal } from './call.js';
@@ -143,13 +145,20 @@ function answer(a: ApiAnswer, select?: string[]): CallToolResult {
   });
 }
 
-/** The panel's own error envelope, as it came, with a line on what to do about it. */
-function failure(a: ApiAnswer): CallToolResult {
+/**
+ * The panel's own error envelope, as it came, with a line on what to do about it - `hints`
+ * where a tool knows better than the general line what an error means for it.
+ */
+function failure(a: ApiAnswer, hints: Record<string, string> = {}): CallToolResult {
   const envelope = (a.body as { error?: { code?: string; message?: string; details?: unknown } } | null)?.error;
   const error = envelope ?? { code: 'internal', message: `HTTP ${a.status}` };
-  const hint = hintFor(error.code ?? '', error.message ?? '', a);
+  const hint = hints[error.code ?? ''] ?? hintFor(error.code ?? '', error.message ?? '', a);
   return text({ status: a.status, endpoint: a.endpoint, error, ...(hint ? { hint } : {}) }, true);
 }
+
+/** A refusal the tool makes itself, before anything reaches the panel. */
+const refusal = (message: string, hint?: string): CallToolResult =>
+  text({ error: { code: 'validation_error', message }, ...(hint ? { hint } : {}) }, true);
 
 function hintFor(code: string, message: string, a: ApiAnswer): string | null {
   switch (code) {
@@ -399,7 +408,8 @@ export function registerTools(server: McpServer, c: ToolContext): void {
           "Save a whole text file of a WPL7 site, relative to its WordPress folder. Needs either the etag " +
           'wpl7_read_site_file gave - refused if the file changed since - or createOnly: true for a new file, refused if ' +
           'one exists. There is no blind overwrite. A .php file is syntax-checked first and refused if it does not ' +
-          'parse, so a typo cannot take the site down. `content` is the entire file.',
+          'parse, so a typo cannot take the site down. `content` is the entire file. A binary file (an image, a zip) ' +
+          'goes through wpl7_upload_site_file.',
         inputSchema: z
           .object({
             site: siteField,
@@ -430,7 +440,156 @@ export function registerTools(server: McpServer, c: ToolContext): void {
           return text({ status: a.status, site, path: saved.path, etag: saved.etag, bytes: bytes.length });
         }, c),
     );
+
+    server.registerTool(
+      'wpl7_upload_site_file',
+      {
+        title: 'Upload a file to a site',
+        description:
+          'Put a file of any kind - a zip, an image, a font - on a WPL7 site, relative to its WordPress folder. Two ' +
+          'ways. A file on your own disk, when your commands can reach the internet: give sizeBytes and sha256, and the ' +
+          'answer is a curl command that uploads it - any size, no bytes through the conversation, for an hour, and for ' +
+          'that file only. Otherwise send the bytes base64-encoded in contentBase64, up to 1 MiB: every character ' +
+          'costs tokens. Refused if something is at the path already, unless overwrite: true. A .php file is ' +
+          'syntax-checked first. To edit a text file, use wpl7_write_site_file.',
+        inputSchema: z
+          .object({
+            site: siteField,
+            path: filePath.describe("Where it goes, relative to the site's WordPress folder, e.g. wp-content/uploads/logo.png"),
+            contentBase64: z.string().max(INLINE_BASE64_CHARS).optional().describe("The file's bytes, base64-encoded: a small file"),
+            sizeBytes: z.number().int().min(0).max(FILE_LIMITS.uploadBytes).optional().describe('The size of the file on your disk, in bytes'),
+            sha256: z
+              .string()
+              .regex(/^[0-9a-f]{64}$/, 'a SHA-256 as sha256sum prints it: 64 lowercase hex digits')
+              .optional()
+              .describe("The file's SHA-256, as sha256sum prints it. With contentBase64, checks that the bytes are the ones meant"),
+            overwrite: z.boolean().optional().describe('Replace the file already at the path'),
+          })
+          .strict()
+          .refine((v) => v.contentBase64 !== undefined || (v.sizeBytes !== undefined && v.sha256 !== undefined), {
+            message: 'Send contentBase64, or sizeBytes and sha256 for a file on your own disk',
+          }),
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      },
+      async ({ site, path, contentBase64, sizeBytes, sha256, overwrite }) =>
+        guarded(async () => {
+          if (contentBase64 === undefined) {
+            const a = await callApi(c, 'wpl7_upload_site_file', 'file', {
+              method: 'POST',
+              path: `/api/sites/${site}/files/upload-links`,
+              body: { path, size: sizeBytes, sha256, overwrite: overwrite === true },
+            });
+            if (a.status >= 400) return failure(a, UPLOAD_HINTS);
+            return text(uploadCommand(site, path, sizeBytes!, a.body as UploadLinkBody));
+          }
+          const bytes = fromBase64(contentBase64);
+          if (!bytes) return refusal('contentBase64 is not base64: nothing was saved');
+          if (bytes.length > INLINE_UPLOAD_BYTES) {
+            return refusal(
+              `${bytes.length} bytes is more than one call carries (${INLINE_UPLOAD_BYTES})`,
+              'Give sizeBytes and sha256 instead, for a curl command that uploads the file from your own disk.',
+            );
+          }
+          if (sizeBytes !== undefined && sizeBytes !== bytes.length) {
+            return refusal(`contentBase64 holds ${bytes.length} bytes, not sizeBytes ${sizeBytes}: nothing was saved`);
+          }
+          const got = crypto.createHash('sha256').update(bytes).digest('hex');
+          if (sha256 !== undefined && sha256 !== got) {
+            return refusal(
+              `The bytes' SHA-256 is ${got}, not ${sha256}: nothing was saved`,
+              'contentBase64 is not the file meant - a slip copying it, most likely. Send it again.',
+            );
+          }
+          const a = await callApi(c, 'wpl7_upload_site_file', 'file', {
+            method: 'PUT',
+            path: `/api/sites/${site}/files/content`,
+            query: { path, ...(/\.php$/i.test(path) ? { lint: 'php' } : {}) },
+            raw: bytes,
+            headers: overwrite ? {} : { 'if-none-match': '*' },
+          });
+          if (a.status >= 400) {
+            return failure(a, { ...UPLOAD_HINTS, precondition_failed: 'Something is at that path already. Send overwrite: true to replace it.' });
+          }
+          const saved = a.body as { path: string; etag: string };
+          return text({ status: a.status, site, path: saved.path, bytes: bytes.length, sha256: saved.etag });
+        }, c),
+    );
   }
+}
+
+// ------------------------------------------------------------------ uploads
+
+/**
+ * The most one call carries inline. A model writes base64 out a few characters per token, so
+ * anything bigger is better sent from its own disk with an upload link.
+ */
+const INLINE_UPLOAD_BYTES = 1024 * 1024;
+/** Its base64, with room for the line breaks `base64` puts in every 76 characters. */
+const INLINE_BASE64_CHARS = 1_500_000;
+/** Where an upload goes wrong otherwise than the general hints say. */
+const UPLOAD_HINTS = {
+  not_found: 'The site, or the folder the file goes into, does not exist; the message says which. Make a folder with wpl7_api_change POST /api/sites/{site}/files/mkdir.',
+};
+
+/**
+ * Base64 bytes, or null for anything that is not: Buffer.from skips what it cannot read, so a
+ * mangled string would otherwise decode into a different file without a word. Line breaks and
+ * spaces are dropped, the URL-safe alphabet is taken too, and padding may be left out.
+ */
+function fromBase64(text: string): Buffer | null {
+  const s = text.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
+  if (!/^[A-Za-z0-9+/]*$/.test(s) || s.length % 4 === 1) return null;
+  const bytes = Buffer.from(s, 'base64');
+  // Unused bits in the last character make a string that no file encodes to: a copying slip.
+  return bytes.toString('base64').replace(/=+$/, '') === s ? bytes : null;
+}
+
+/** What POST /api/sites/:slug/files/upload-links answers. */
+interface UploadLinkBody {
+  url: string;
+  method: string;
+  header: string;
+  token: string;
+  expiresAt: number;
+  chunkBytes: number;
+}
+
+/**
+ * An upload link as a command to run: one curl for a file that fits in a request, a loop of
+ * them, piece by piece, for one that does not. FILE is the app's to fill in.
+ */
+function uploadCommand(site: string, path: string, size: number, link: UploadLinkBody): Record<string, unknown> {
+  const header = `-H '${link.header}: ${link.token}'`;
+  const command =
+    size <= link.chunkBytes
+      ? `curl -sS --fail-with-body -T "FILE" ${header} '${link.url}'`
+      : [
+          `f="FILE"; n=${link.chunkBytes}; i=0`,
+          `while [ $((i * n)) -lt ${size} ]; do`,
+          `  dd if="$f" bs=$n skip=$i count=1 2>/dev/null | curl -sS --fail-with-body -w '\\n' -X PUT --data-binary @- ` +
+            `-H 'Content-Type: application/octet-stream' ${header} "${link.url}?offset=$((i * n))" || break`,
+          '  i=$((i + 1))',
+          'done',
+        ].join('\n');
+  let host = '';
+  try {
+    host = new URL(link.url).host;
+  } catch {
+    // A panel with no address of its own hands out a bare path.
+  }
+  return {
+    status: 201,
+    site,
+    path,
+    sizeBytes: size,
+    expiresAt: new Date(link.expiresAt).toISOString(),
+    command,
+    next:
+      'Run it in your shell with FILE replaced by the path of the file. The answer that has `written` set means the ' +
+      'file is in place. If curl cannot reach ' +
+      (host || 'the panel') +
+      ", your sandbox's network settings may not allow it: ask the user to allow that address, or send a small file as contentBase64.",
+  };
 }
 
 // ------------------------------------------------------------------ answers
@@ -497,7 +656,9 @@ function fileAnswer(site: string, path: string, a: ApiAnswer, startLine: number,
   // a file, and replacing one nobody has read is the blind overwrite that tool refuses.
   const unread = { site, path, sizeBytes: bytes.length };
   const base = { ...unread, etag };
-  if (bytes.subarray(0, 8192).includes(0)) return { ...unread, binary: true, note: 'A binary file; its bytes are not shown' };
+  if (bytes.subarray(0, 8192).includes(0)) {
+    return { ...unread, binary: true, note: 'A binary file; its bytes are not shown. To replace it, upload the new one with wpl7_upload_site_file and overwrite: true' };
+  }
   let decoded: string;
   try {
     decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);

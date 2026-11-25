@@ -1453,6 +1453,33 @@ export const siteUploadAbortQuery = z.object({
   path: siteNewPathSchema,
 }).strict();
 
+/** A SHA-256 as `sha256sum` prints it. */
+export const sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/, 'a SHA-256: 64 lowercase hex digits, as sha256sum prints it');
+
+/**
+ * An upload link names its one file up front: where it goes, its size and its SHA-256
+ * (services/uploadLinks.ts). Nothing else can be sent with it.
+ */
+export const siteUploadLinkBody = z.object({
+  path: siteNewPathSchema,
+  size: z.number().int().min(0).max(FILE_LIMITS.uploadBytes),
+  sha256: sha256HexSchema,
+  overwrite: z.boolean().default(false),
+}).strict();
+
+export const fileUploadQuery = z.object({
+  /**
+   * Where this piece goes: the bytes sent before it. Left out, 0 - so `curl -T file <url>`
+   * sends a file whole. An empty value is refused rather than taken as 0, which would start
+   * the file over.
+   */
+  offset: z
+    .string()
+    .regex(/^(0|[1-9][0-9]{0,11})$/, 'the number of bytes sent before this piece')
+    .transform(Number)
+    .optional(),
+}).strict();
+
 export const siteFileMkdirBody = z.object({
   path: siteNewPathSchema,
 }).strict();

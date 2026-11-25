@@ -186,7 +186,7 @@ next call: the tool list shrinks or grows with it.
 One tool per kind of call — reading, changing, destroying — so an app can let the reading tool run
 on its own and still ask you before every change, and before every destructive one in particular.
 An app only sees the tools its level reaches something through: Read only the first three, Manage
-and Full all seven. What tells Manage from Full is the gate, call by call.
+and Full all eight. What tells Manage from Full is the gate, call by call.
 
 | Tool | From | What it does |
 |---|---|---|
@@ -197,6 +197,7 @@ and Full all seven. What tells Manage from Full is the gate, call by call.
 | `wpl7_api_dangerous` | Manage | Anything the API marks destructive — running a command (a schedule's and a recipe's included), deleting, restoring, stopping, saving over, going live or changing domains (which rewrites the site's address in its database), a bulk run, taking a safety net away — that the level reaches; marked destructive for the app |
 | `wpl7_read_site_file` | Manage | A site's text file by line range, whole lines only, with its etag - none for a binary file, which it does not show |
 | `wpl7_write_site_file` | Manage | Saves a whole file, only over the version that was read (etag) or where none exists — never blind. PHP is syntax-checked first |
+| `wpl7_upload_site_file` | Manage | Puts a file of any kind on a site: up to 1 MiB as base64 in the call, or, for a file on the app's own disk, a curl command with a one-time upload link (below). Never over a file unless asked (`overwrite`). PHP is syntax-checked first |
 
 Each answer is one block of compact JSON — `{status, endpoint, body}` — kept under 40,000
 characters: long lists are cut with a note saying how much was left out, never broken. Errors keep
@@ -206,8 +207,34 @@ the panel's envelope and add a hint: wait for the named job on `job_conflict`, t
 Never reachable through MCP, whatever the level: signing in and the rest of `/api/auth`, admin
 accounts, API keys and the activity log (a connection must not mint panel credentials that outlive
 it, or erase its own trail), the Cloudflare token in Settings → DNS (setting, checking and removing
-it - a credential, which a check sends to Cloudflare), binary downloads, uploads and the terminal,
-the feedback form (it leaves the box), and the MCP page's own endpoints.
+it - a credential, which a check sends to Cloudflare), binary downloads, the terminal, uploads other
+than a site's files, the feedback form (it leaves the box), and the MCP page's own endpoints.
+
+## Uploading files
+
+MCP has no way to hand a tool a file: whatever a tool takes, the model writes out. So
+`wpl7_upload_site_file` takes a file in one of two ways.
+
+- **In the call**, as `contentBase64`, up to 1 MiB. It works in every app, but the model reads and
+  writes every character, a token for every few of them. With `sha256` too, a slip in copying is
+  refused rather than saved.
+- **From the app's own disk**, given its `sizeBytes` and `sha256`. The answer is a curl command,
+  which the app runs in its shell: one request for a file of up to 8 MiB, a loop of 8 MiB pieces for
+  a bigger one, up to 2 GiB. The bytes go from the app's disk to the panel and never through the
+  model.
+
+The command carries a one-time upload link (`POST /api/sites/<slug>/files/upload-links` makes it).
+The link names one file by its path, size and SHA-256, and the upload is held to all three before the
+file takes its place: a link that leaks into a log or a transcript can put nothing else there. It is
+spent once the file is in place, ends after an hour, and stops at once when the key or connection
+that made it is revoked or lowered below Manage. Links live in the panel's memory, so a restart ends
+them and the app asks for a new one. The upload itself (`PUT /api/file-uploads`) is logged under
+whoever made the link.
+
+The app's shell has to reach the panel. Claude Code's does. Claude's code sandbox in claude.ai does
+only when the network settings for code execution allow the panel's domain; without that, curl fails
+and the app can still send a small file in the call. An upload never replaces a file unless the app
+sends `overwrite: true`, and a `.php` file that does not parse is refused.
 
 ## Plugins' own WP-CLI commands
 

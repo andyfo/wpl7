@@ -314,6 +314,8 @@ export function fileOpError(code: number, stderr: string, ctx: FileOpContext): A
       return badRequest(detail ?? 'The archive cannot be extracted');
     case FILE_EXIT.busy:
       return conflict(`Another change next to ${what} is still being written; try again in a moment`);
+    case FILE_EXIT.digest:
+      return badRequest(`Not saved: the file that arrived is not the one declared for ${what} (its SHA-256 differs)`);
     default:
       return badGateway(`Could not ${ctx.op} ${what} (exit ${code})`, detail);
   }
@@ -558,10 +560,12 @@ export class SiteFilesService {
    * handled one at a time, so a chunk resent while its first copy is still being written
    * waits for it - and then finds it landed: a 409 saying where to resume, or, for the chunk
    * that finished the upload, that upload's answer again (`replayed`, see finishedUploads).
+   * `sha256` (the whole file's) and `lint` are checked once the file is whole, before it
+   * takes its place.
    */
   async appendChunk(
     container: string,
-    upload: { path: string; id: string; offset: number; size: number; overwrite: boolean },
+    upload: { path: string; id: string; offset: number; size: number; overwrite: boolean; sha256?: string; lint?: 'php' },
     chunk: Buffer,
   ): Promise<SiteUploadChunkDto & { replayed?: true }> {
     const { path, id, offset, size, overwrite } = upload;
@@ -593,6 +597,8 @@ export class SiteFilesService {
           this.abs(path),
           overwrite ? '1' : '0',
           String(FILE_LIMITS.minFreeBytes),
+          upload.sha256 ?? '-',
+          upload.lint ?? '-',
         ],
         { input: chunk, timeoutMs: TIMEOUTS.write },
       );

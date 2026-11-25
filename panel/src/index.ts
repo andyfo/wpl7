@@ -31,6 +31,7 @@ import { TwoFactorService } from './services/twoFactor.js';
 import { UsersService } from './services/users.js';
 import { AccountRecoveryService } from './services/accountRecovery.js';
 import { OAuthService } from './services/oauth.js';
+import { UploadLinksService } from './services/uploadLinks.js';
 import { WporgDirectoryService } from './services/wporg.js';
 import { MailService } from './services/mail.js';
 import { FreshResolver } from './services/freshDns.js';
@@ -281,6 +282,7 @@ async function main(): Promise<void> {
     twoFactor: new TwoFactorService(users, config.panelDomain || 'wpl7'),
     recovery: new AccountRecoveryService(users, mail, config, log),
     oauth: new OAuthService(db, config, settings, log),
+    uploadLinks: new UploadLinksService(),
     pluginCatalog: new PluginCatalogService(db, config.paths.plugins, wporg),
     wpBulk: new WpBulkService(core, worker, core.wpInventory),
     wporg,

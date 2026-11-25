@@ -109,6 +109,7 @@ import { TwoFactorService } from '../src/services/twoFactor.js';
 import { UsersService } from '../src/services/users.js';
 import { AccountRecoveryService } from '../src/services/accountRecovery.js';
 import { OAuthService } from '../src/services/oauth.js';
+import { UploadLinksService } from '../src/services/uploadLinks.js';
 import type { WporgDirectory, WporgSearchResult } from '../src/services/wporg.js';
 import type { WporgPluginDto } from '../shared/types.js';
 import { badGateway } from '../src/lib/errors.js';
@@ -1954,6 +1955,7 @@ export async function makeWorld(
     twoFactor: new TwoFactorService(users, config.panelDomain),
     recovery: new AccountRecoveryService(users, mail, config, log),
     oauth: new OAuthService(db, config, settings, log),
+    uploadLinks: new UploadLinksService(),
     pluginCatalog: new PluginCatalogService(db, config.paths.plugins, wporg),
     wpBulk: new WpBulkService(core, worker, core.wpInventory),
     wporg,

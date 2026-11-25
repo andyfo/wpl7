@@ -346,6 +346,34 @@ describe.skipIf(!gnu)('Web FTP scripts, run for real', () => {
       expect(leftovers()).toEqual(['.wpl7-upload-new0000000000000.part']);
     });
 
+    it('puts a whole file in place only if it is the one declared, removing it otherwise', async () => {
+      const data = crypto.randomBytes(2000);
+      const declared = (sha256: string) => ({ path: 'a.bin', id: ID, size: 2000, overwrite: false, sha256 });
+      await files.appendChunk(C, { ...declared(sha(Buffer.alloc(2000))), offset: 0 }, data.subarray(0, 1000));
+      const wrong = await refusal(files.appendChunk(C, { ...declared(sha(Buffer.alloc(2000))), offset: 1000 }, data.subarray(1000)));
+      expect(wrong.statusCode).toBe(400);
+      expect(wrong.message).toMatch(/not the one declared/);
+      expect(fs.existsSync(at('a.bin'))).toBe(false);
+      expect(leftovers()).toEqual([]);
+
+      await files.appendChunk(C, { ...declared(sha(data)), offset: 0 }, data.subarray(0, 1000));
+      const right = await files.appendChunk(C, { ...declared(sha(data)), offset: 1000 }, data.subarray(1000));
+      expect(right.written?.entry.size).toBe(2000);
+      expect(fs.readFileSync(at('a.bin')).equals(data)).toBe(true);
+    });
+
+    it.skipIf(!php)('puts a .php file in place only if it parses, when asked to check', async () => {
+      put('index.php', '<?php echo 1;');
+      const broken = Buffer.from('<?php echo 2');
+      const err = await refusal(files.appendChunk(C, { path: 'index.php', id: ID, offset: 0, size: broken.length, overwrite: true, lint: 'php' }, broken));
+      expect(err.statusCode).toBe(422);
+      expect(fs.readFileSync(at('index.php'), 'utf8')).toBe('<?php echo 1;');
+      expect(leftovers()).toEqual([]);
+      const fixed = Buffer.from('<?php echo 2;');
+      await files.appendChunk(C, { path: 'index.php', id: ID, offset: 0, size: fixed.length, overwrite: true, lint: 'php' }, fixed);
+      expect(fs.readFileSync(at('index.php'), 'utf8')).toBe('<?php echo 2;');
+    });
+
     it('abort removes what arrived', async () => {
       await upload('big.bin', ID, 0, 100, Buffer.alloc(10));
       expect(leftovers()).toHaveLength(1);

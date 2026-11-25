@@ -181,3 +181,15 @@ done
 
 `DELETE /files/uploads/<id>?path=…` abandons an upload and removes what arrived of it. Add
 `&overwrite=true` to replace an existing file.
+
+**Upload links** hand one upload to something that has no key, such as an AI app's shell (see
+[mcp.md](mcp.md#uploading-files)). `POST /files/upload-links` with `{path, size, sha256, overwrite?}`
+answers with a URL and a token; whoever holds them sends the file to `PUT /api/file-uploads` with
+the token in `X-WPL7-Upload-Token`, in pieces of at most 8 MiB as above (`?offset=`, 0 when left
+out). The piece that completes the file puts it in place only if the whole file has the SHA-256 the
+link names, and, for a `.php` file, only if it parses; otherwise the part is removed and nothing is
+replaced. A link works once, for an hour, and stops when its key or connection is revoked.
+
+```bash
+curl -sS --fail-with-body -T plugin.zip -H "X-WPL7-Upload-Token: $TOKEN" "https://panel.example.com/api/file-uploads"
+```

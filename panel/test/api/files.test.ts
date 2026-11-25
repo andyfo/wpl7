@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { eq } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { apiEvents, jobs, sites } from '../../src/db/schema.js';
 import { FILE_EXIT } from '../../src/services/siteFilesScripts.js';
 import type { SiteDirListingDto } from '../../shared/types.js';
@@ -375,6 +375,9 @@ describe('Web FTP: writing', () => {
       '/var/www/html/wp-content/uploads/v.mp4',
       '0',
       String(1024 ** 3),
+      // No whole-file SHA-256 to match, and no PHP check: the Files tab uploads what it is given.
+      '-',
+      '-',
     ]);
 
     world.docker.execQueue.push({ stdout: '20', stderr: '', exitCode: FILE_EXIT.offset });
@@ -490,5 +493,172 @@ describe('Web FTP with an API key', () => {
     expect(res.statusCode).toBe(200);
     const rows = world.db.select().from(apiEvents).all();
     expect(rows.map((r) => [r.method, r.route, r.status])).toContainEqual(['GET', '/api/sites/:slug/files', 200]);
+  });
+});
+
+describe('Web FTP: upload links', () => {
+  /** A link as the API hands it out, for `size` bytes with this SHA-256, at a path whose folder exists. */
+  async function link(
+    s: Awaited<ReturnType<typeof siteReady>>,
+    body: Record<string, unknown>,
+    auth: Record<string, string> = s.headers,
+  ) {
+    return s.app.inject({ method: 'POST', url: '/api/sites/my-blog/files/upload-links', headers: auth, payload: body });
+  }
+  const send = (s: Awaited<ReturnType<typeof siteReady>>, token: string | undefined, chunk: Buffer, offset?: number) =>
+    s.app.inject({
+      method: 'PUT',
+      url: `/api/file-uploads${offset === undefined ? '' : `?offset=${offset}`}`,
+      // No session and no key, and no Content-Type: what `curl -T` sends.
+      headers: token === undefined ? {} : { 'x-wpl7-upload-token': token },
+      payload: chunk,
+    });
+  const missing = { stdout: '', stderr: '', exitCode: FILE_EXIT.notFound };
+
+  it('makes a link for one declared file, which puts that file in place and is then spent', async () => {
+    const s = await siteReady();
+    const { world } = s;
+    const data = crypto.randomBytes(30);
+    world.docker.execQueue.push(missing, { stdout: record('uploads', { type: 'd' }), stderr: '', exitCode: 0 });
+    const made = await link(s, { path: 'wp-content/uploads/plugin.zip', size: 30, sha256: sha(data) });
+    expect(made.statusCode).toBe(201);
+    const { url, method, header, token, expiresAt, chunkBytes } = made.json() as Record<string, string & number>;
+    expect(url).toBe('http://panel.example.test/api/file-uploads');
+    expect({ method, header, chunkBytes }).toEqual({ method: 'PUT', header: 'X-WPL7-Upload-Token', chunkBytes: 8 * 1024 * 1024 });
+    expect(expiresAt - Date.now()).toBeGreaterThan(59 * 60_000);
+    expect(token).toMatch(/^wpl7up_[A-Za-z0-9_-]{43}$/);
+
+    world.docker.calls = [];
+    const first = await send(s, token, data.subarray(0, 20));
+    expect(first.statusCode).toBe(200);
+    expect(first.json()).toEqual({ received: 20, written: null, size: 30 });
+    const args = scriptArgs(callsOf(world, 'execWithInput')[0]!);
+    expect(args[0]).toMatch(/^\/var\/www\/html\/wp-content\/uploads\/\.wpl7-upload-[A-Za-z0-9_-]{24}\.part$/);
+    // The whole file's SHA-256 travels with every piece, for the script to hold the last one to.
+    expect(args.slice(1)).toEqual(['0', '20', sha(data.subarray(0, 20)), '30', '/var/www/html/wp-content/uploads/plugin.zip', '0', String(1024 ** 3), sha(data), '-']);
+
+    world.docker.execQueue.push({ stdout: record('plugin.zip', { size: 30 }), stderr: '', exitCode: 0 });
+    const last = await send(s, token, data.subarray(20), 20);
+    expect(last.json()).toMatchObject({ received: 30, size: 30, written: { path: 'wp-content/uploads/plugin.zip', etag: sha(data), entry: { size: 30 } } });
+
+    // The last piece again, its answer lost: the same answer, and nothing runs.
+    const execs = callsOf(world, 'execWithInput').length;
+    const again = await send(s, token, data.subarray(20), 20);
+    expect(again.json()).toEqual(last.json());
+    expect(callsOf(world, 'execWithInput')).toHaveLength(execs);
+    // Anything else: spent.
+    const reuse = await send(s, token, data, 0);
+    expect(reuse.statusCode).toBe(409);
+    expect(reuse.json().error.message).toMatch(/has been used/);
+    expect(callsOf(world, 'execWithInput')).toHaveLength(execs);
+  });
+
+  it('opens nothing without its token, and nothing to a key or a session', async () => {
+    const s = await siteReady();
+    for (const token of [undefined, 'wpl7up_nope', 'x'.repeat(50)]) {
+      const res = await send(s, token, Buffer.from('x'));
+      expect(res.statusCode).toBe(401);
+    }
+    const asSession = await s.app.inject({ method: 'PUT', url: '/api/file-uploads', headers: s.headers, payload: Buffer.from('x') });
+    expect(asSession.statusCode).toBe(401);
+    expect(callsOf(s.world, 'execWithInput')).toEqual([]);
+  });
+
+  it('says at once what would refuse the upload: a file in the way, a folder there, no folder to put it in', async () => {
+    const s = await siteReady();
+    const body = { path: 'wp-content/uploads/logo.png', size: 3, sha256: sha('new') };
+    s.world.docker.execQueue.push({ stdout: record('logo.png'), stderr: '', exitCode: 0 });
+    const inTheWay = await link(s, body);
+    expect(inTheWay.statusCode).toBe(409);
+    expect(inTheWay.json().error.message).toMatch(/already exists; send overwrite: true/);
+
+    s.world.docker.execQueue.push({ stdout: record('logo.png'), stderr: '', exitCode: 0 });
+    expect((await link(s, { ...body, overwrite: true })).statusCode).toBe(201);
+
+    s.world.docker.execQueue.push({ stdout: record('logo.png', { type: 'd' }), stderr: '', exitCode: 0 });
+    expect((await link(s, { ...body, overwrite: true })).json().error.message).toMatch(/is a folder/);
+
+    s.world.docker.execQueue.push(missing, missing);
+    const noFolder = await link(s, body);
+    expect(noFolder.statusCode).toBe(404);
+    expect(noFolder.json().error.message).toBe('The folder "wp-content/uploads" does not exist; create it first');
+
+    // What no link may name: the panel's own temporary files, a bad hash, more than an upload takes.
+    for (const bad of [
+      { ...body, path: 'wp-content/.wpl7-upload-x.part' },
+      { ...body, sha256: 'ABC' },
+      { ...body, size: 3 * 1024 ** 3 },
+    ]) {
+      expect((await link(s, bad)).statusCode).toBe(400);
+    }
+  });
+
+  it('answers a file that is not the one declared with 400, and checks a PHP file before it takes its place', async () => {
+    const s = await siteReady();
+    const { world } = s;
+    world.docker.execQueue.push(missing);
+    const token = (await link(s, { path: 'index.php', size: 7, sha256: sha('<?php }') })).json().token as string;
+    world.docker.calls = [];
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.digest });
+    const wrong = await send(s, token, Buffer.from('<?php {'));
+    expect(wrong.statusCode).toBe(400);
+    expect(wrong.json().error.message).toMatch(/not the one declared .*SHA-256/);
+    expect(scriptArgs(callsOf(world, 'execWithInput')[0]!).slice(-2)).toEqual([sha('<?php }'), 'php']);
+
+    // Not spent by a refusal: the right file can still come.
+    world.docker.execQueue.push({ stdout: '', stderr: 'PHP Parse error: syntax error, unexpected token "}" on line 1', exitCode: FILE_EXIT.syntax });
+    const broken = await send(s, token, Buffer.from('<?php }'));
+    expect(broken.statusCode).toBe(422);
+    expect(broken.json().error.code).toBe('syntax_error');
+  });
+
+  it('wants a file over 8 MiB in pieces, and says how', async () => {
+    const s = await siteReady();
+    s.world.docker.execQueue.push(missing);
+    const size = 9 * 1024 * 1024;
+    const token = (await link(s, { path: 'big.zip', size, sha256: sha('x') })).json().token as string;
+    const res = await send(s, token, Buffer.alloc(size));
+    expect(res.statusCode).toBe(413);
+    expect(res.json().error.message).toMatch(/in pieces, in order, each with \?offset=/);
+    // An empty offset is no offset - not 0, which would start the file over.
+    const empty = await s.app.inject({ method: 'PUT', url: '/api/file-uploads?offset=', headers: { 'x-wpl7-upload-token': token }, payload: 'x' });
+    expect(empty.statusCode).toBe(400);
+  });
+
+  it('stops working once the key that made it is revoked, the site it was for is gone, or an hour has passed', async () => {
+    const s = await siteReady();
+    const { app, world, headers } = s;
+    const key = (await app.inject({ method: 'POST', url: '/api/api-keys', headers, payload: { name: 'deployer', access: 'manage' } })).json() as {
+      id: number;
+      token: string;
+    };
+    world.docker.execQueue.push(missing);
+    const made = await link(s, { path: 'a.bin', size: 1, sha256: sha('a') }, { authorization: `Bearer ${key.token}` });
+    expect(made.statusCode).toBe(201);
+    const token = made.json().token as string;
+    world.deps.apiKeys.revoke(key.id);
+    const revoked = await send(s, token, Buffer.from('a'));
+    expect(revoked.statusCode).toBe(403);
+    expect(revoked.json().error.message).toMatch(/revoked, or is below Manage/);
+
+    // Read only never makes one.
+    const reader = world.deps.apiKeys.create('reader', 'read').token;
+    expect((await link(s, { path: 'a.bin', size: 1, sha256: sha('a') }, { authorization: `Bearer ${reader}` })).statusCode).toBe(403);
+
+    world.docker.execQueue.push(missing);
+    const later = (await link(s, { path: 'b.bin', size: 1, sha256: sha('b') })).json().token as string;
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 60 * 60_000 + 1);
+    try {
+      expect((await send(s, later, Buffer.from('b'))).statusCode).toBe(401);
+    } finally {
+      clock.mockRestore();
+    }
+
+    world.docker.execQueue.push(missing);
+    const orphan = (await link(s, { path: 'c.bin', size: 1, sha256: sha('c') })).json().token as string;
+    // The site deleted, and another made under its name: not the site the link was for.
+    world.deps.uploadLinks.find(orphan)!.siteId += 1000;
+    expect((await send(s, orphan, Buffer.from('c'))).statusCode).toBe(404);
   });
 });
