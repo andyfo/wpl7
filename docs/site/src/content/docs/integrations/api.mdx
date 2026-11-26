@@ -131,6 +131,14 @@ in the `X-WPL7-Deploy-Token` header to `POST /api/hooks/app-deploy`, and the app
 reference names. A key with Full access makes the token, which is shown once. An app that runs an
 uploaded image has no deploy hook.
 
+## Hand out a one-time upload
+
+`POST /api/sites/<slug>/files/upload-links` makes a link that uploads one file without a key. It names
+the file by its path, size and SHA-256, and takes that file only, once. It ends after an hour without
+use. The holder
+sends the file with the link's token in the `X-WPL7-Upload-Token` header. The
+[API reference](/docs/integrations/api-reference/) has both endpoints.
+
 ## Limits
 
 - A key belongs to the panel, not to a person. Two-factor authentication does not apply to it, and

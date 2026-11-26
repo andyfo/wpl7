@@ -62,6 +62,12 @@ export class ApiKeysService {
     return updated.length > 0;
   }
 
+  /** A key's level right now; null once it is revoked. For what a key set going and must stop with it. */
+  levelOf(id: number): AccessLevel | null {
+    const row = this.db.select().from(apiKeys).where(eq(apiKeys.id, id)).get();
+    return row && row.revokedAt === null ? accessOf(row) : null;
+  }
+
   /**
    * O(1) lookup by hash; last_used writes throttled to once a minute per key.
    *

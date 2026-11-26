@@ -37,6 +37,8 @@ export const FILE_EXIT = {
   unsafeArchive: 23,
   /** Another of the panel's writes into the same folder held its lock for too long. */
   busy: 24,
+  /** A finished upload is not the file it was declared to be (its SHA-256 differs). Nothing was put in place. */
+  digest: 25,
 } as const;
 
 const E = FILE_EXIT;
@@ -202,18 +204,21 @@ entry "$t"
 `),
 
   /**
-   * args: part, offset, length, sha256, total, target, overwrite (1|0), min-free-bytes.
+   * args: part, offset, length, sha256, total, target, overwrite (1|0), min-free-bytes,
+   * and optionally the whole file's sha256 (or -) and lint (php|-).
    * stdin: this chunk.
    *
    * Uploads arrive in chunks (Traefik cuts off any request that takes over 60 s), appended
    * to `<dir>/.wpl7-upload-<id>.part`. Offset 0 checks the target and the free space and
    * starts the part afresh; any other offset must equal the part's size, or the script
    * answers with the size it has so the client can resume from there. A chunk that did not
-   * land whole is cut back off. The chunk that makes the part complete puts it in place.
+   * land whole is cut back off. The chunk that makes the part complete puts it in place -
+   * once the whole part is the file declared (its sha256) and parses as PHP, where either
+   * was asked for; otherwise the part is removed and nothing is replaced.
    * An empty chunk at offset == total only commits (a retry after "already exists").
    */
   append: script(`
-p=$1 off=$2 len=$3 sha=$4 total=$5 t=$6 ow=$7 minfree=$8
+p=$1 off=$2 len=$3 sha=$4 total=$5 t=$6 ow=$7 minfree=$8 want=\${9:--} lint=\${10:--}
 d=$(dirname -- "$p")
 if [ "$off" = 0 ]; then
   [ -d "$d" ] || exit ${E.notFound}
@@ -250,6 +255,20 @@ if [ "$len" != 0 ]; then
   fi
 fi
 [ "$(stat -c %s -- "$p")" = "$total" ] || exit 0
+if [ "$want" != - ]; then
+  set -- $(sha256sum < "$p")
+  if [ "$1" != "$want" ]; then
+    rm -f -- "$p"
+    exit ${E.digest}
+  fi
+fi
+if [ "$lint" = php ] && command -v php > /dev/null; then
+  if ! out=$(php -n -l < "$p" 2>&1); then
+    printf '%s\\n' "$out" >&2
+    rm -f -- "$p"
+    exit ${E.syntax}
+  fi
+fi
 if [ -L "$t" ]; then
   t=$(readlink -f -- "$t") || exit ${E.notFound}
 fi

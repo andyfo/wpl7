@@ -36,7 +36,7 @@ export const TOOL_FOR_GROUP: Record<McpToolGroup, string> = {
   get: 'wpl7_api_get',
   change: 'wpl7_api_change',
   dangerous: 'wpl7_api_dangerous',
-  file: 'wpl7_read_site_file / wpl7_write_site_file',
+  file: 'wpl7_read_site_file / wpl7_write_site_file / wpl7_upload_site_file',
 };
 
 const storage = new AsyncLocalStorage<McpCall>();

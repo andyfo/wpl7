@@ -71,6 +71,9 @@ const PUBLIC_ROUTES = new Set([
   // A container app's deploy hook, called by its CI: the app's token, in X-WPL7-Deploy-Token, is
   // checked by the route itself (routes/apps.ts).
   '/api/hooks/app-deploy',
+  // An upload link's file, sent by an AI app's shell: the link's token, in X-WPL7-Upload-Token,
+  // is checked by the route itself (routes/files.ts), and opens one declared file.
+  '/api/file-uploads',
 ]);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 

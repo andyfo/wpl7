@@ -13,6 +13,7 @@ import type { AccountRecoveryService } from '../services/accountRecovery.js';
 import type { WporgDirectory } from '../services/wporg.js';
 import type { WpBulkService } from '../services/wpBulk.js';
 import type { OAuthService } from '../services/oauth.js';
+import type { UploadLinksService } from '../services/uploadLinks.js';
 
 export interface AppDeps extends CoreServices {
   worker: JobWorker;
@@ -28,6 +29,8 @@ export interface AppDeps extends CoreServices {
   recovery: AccountRecoveryService;
   /** OAuth sign-in for AI apps connecting over MCP: the window, the connections, the tokens. */
   oauth: OAuthService;
+  /** One-time links that put one declared file on a site (services/uploadLinks.ts). In memory. */
+  uploadLinks: UploadLinksService;
   pluginCatalog: PluginCatalogService;
   /** Fleet-wide WordPress bulk runs (batches) and the fleet scan's bookkeeping. */
   wpBulk: WpBulkService;

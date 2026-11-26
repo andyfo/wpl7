@@ -128,6 +128,7 @@ describe('the MCP endpoint', () => {
         'wpl7_api_docs',
         'wpl7_api_get',
         'wpl7_read_site_file',
+        'wpl7_upload_site_file',
         'wpl7_wait_for_job',
         'wpl7_write_site_file',
       ];
@@ -196,5 +197,6 @@ describe('the MCP endpoint', () => {
     expect(hints.wpl7_api_change).toMatchObject({ readOnlyHint: false, destructiveHint: false });
     expect(hints.wpl7_api_dangerous).toMatchObject({ readOnlyHint: false, destructiveHint: true });
     expect(hints.wpl7_write_site_file).toMatchObject({ destructiveHint: true });
+    expect(hints.wpl7_upload_site_file).toMatchObject({ destructiveHint: true });
   });
 });

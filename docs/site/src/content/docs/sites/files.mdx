@@ -7,6 +7,7 @@ sources:
   - "panel/web/src/components/files/**"
   - panel/src/routes/files.ts
   - "panel/src/services/siteFiles*.ts"
+  - panel/src/services/uploadLinks.ts
   - panel/shared/siteFilePath.ts
 ---
 
@@ -48,6 +49,9 @@ upload a folder, zip it, upload the `.zip` and **Extract…** it.
 
 A file downloads as it is, and a folder as a `.tar.gz`.
 
+An AI app connected over MCP uploads with a tool of its own. See
+[Upload a file](/docs/integrations/mcp/#upload-a-file).
+
 ## Zip and unzip
 
 **Extract…** and **Compress to .zip…** run as jobs, which the
@@ -73,7 +77,8 @@ Files owned by root, left by a root shell for example, show a lock and are read-
 
 ## See who changed what
 
-Every change, download and file read is logged with the admin or API key and the path:
+Every change, download and file read is logged with the path and who made it: an admin, an API key
+or an AI app. A file sent with an upload link is logged under whoever made the link.
 
 ```bash
 sudo docker logs wpl7-panel 2>&1 | grep '"files"'

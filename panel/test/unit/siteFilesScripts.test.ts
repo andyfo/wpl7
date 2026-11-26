@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, type Writable } from 'node:stream';
@@ -10,6 +11,8 @@ import type { DockerPort, ExecOpts, RunResult } from '../../src/services/docker.
 import { SiteFilesService } from '../../src/services/siteFiles.js';
 import { FILE_EXIT, SCRIPTS } from '../../src/services/siteFilesScripts.js';
 import { AppError } from '../../src/lib/errors.js';
+import { sites } from '../../src/db/schema.js';
+import { makeApp, makeWorld, mcpClient, runInSh, shellArg } from '../helpers.js';
 
 /**
  * The Web FTP scripts, for real: every command runs through a local `sh` standing in for
@@ -17,10 +20,13 @@ import { AppError } from '../../src/lib/errors.js';
  * is the part a fake cannot - that the scripts do what siteFiles.ts believes they do.
  *
  * The scripts are written for the site image (Debian: dash and GNU tools), so they only run
- * where those are: CI's Ubuntu runner, or on a Mac through
- *   docker run --rm -v "$PWD":/w -v /w/panel/node_modules -w /w/panel node:22 \
- *     sh -c 'npm ci --ignore-scripts=false >/dev/null && npx vitest run test/unit/siteFilesScripts.test.ts'
- * Zip tests need `php` with the zip extension, which is all they use.
+ * where those are. CI runs this file in a container of the Debian the site image is built on
+ * (.github/workflows/test.yml, `scripts`), where nothing may skip; on a Mac it runs the same way:
+ *   docker run --rm -v "$PWD":/w -v /w/panel/node_modules -w /w/panel node:22-trixie sh -c \
+ *     'apt-get update -qq && apt-get install -y -qq php-cli php-zip >/dev/null \
+ *      && npm ci --ignore-scripts=false >/dev/null && npx vitest run test/unit/siteFilesScripts.test.ts'
+ * That runs as root, which skips the one test of a permission refused. Zip tests need `php` with
+ * the zip extension, which is all they use. The upload link's commands need curl.
  */
 
 const gnu =
@@ -30,8 +36,19 @@ const phpZip =
   spawnSync('php', ['-n', '-r', 'if (!class_exists("ZipArchive")) @dl("zip.so"); exit(class_exists("ZipArchive") ? 0 : 1);'])
     .status === 0;
 const php = spawnSync('php', ['-v']).status === 0;
+const curl = spawnSync('curl', ['--version']).status === 0;
 /** Permission checks mean nothing to root, which may do anything. */
 const root = process.getuid?.() === 0;
+
+/**
+ * Where these tests must run - CI's job for them - a tool missing is a failure. Skipped, they
+ * pass without having run anything, as they did on CI once its Ubuntu took the Rust coreutils.
+ */
+describe.runIf(process.env.WPL7_SCRIPT_TESTS === 'required')('where these tests must run', () => {
+  it('has every tool they use, and runs them as a user that permissions apply to', () => {
+    expect({ gnu, php, phpZip, curl, root }).toEqual({ gnu: true, php: true, phpZip: true, curl: true, root: false });
+  });
+});
 
 /** `docker exec` stand-in: the same argv, run here, with the env and working directory it asks for. */
 class LocalShell {
@@ -346,6 +363,34 @@ describe.skipIf(!gnu)('Web FTP scripts, run for real', () => {
       expect(leftovers()).toEqual(['.wpl7-upload-new0000000000000.part']);
     });
 
+    it('puts a whole file in place only if it is the one declared, removing it otherwise', async () => {
+      const data = crypto.randomBytes(2000);
+      const declared = (sha256: string) => ({ path: 'a.bin', id: ID, size: 2000, overwrite: false, sha256 });
+      await files.appendChunk(C, { ...declared(sha(Buffer.alloc(2000))), offset: 0 }, data.subarray(0, 1000));
+      const wrong = await refusal(files.appendChunk(C, { ...declared(sha(Buffer.alloc(2000))), offset: 1000 }, data.subarray(1000)));
+      expect(wrong.statusCode).toBe(400);
+      expect(wrong.message).toMatch(/not the one declared/);
+      expect(fs.existsSync(at('a.bin'))).toBe(false);
+      expect(leftovers()).toEqual([]);
+
+      await files.appendChunk(C, { ...declared(sha(data)), offset: 0 }, data.subarray(0, 1000));
+      const right = await files.appendChunk(C, { ...declared(sha(data)), offset: 1000 }, data.subarray(1000));
+      expect(right.written?.entry.size).toBe(2000);
+      expect(fs.readFileSync(at('a.bin')).equals(data)).toBe(true);
+    });
+
+    it.skipIf(!php)('puts a .php file in place only if it parses, when asked to check', async () => {
+      put('index.php', '<?php echo 1;');
+      const broken = Buffer.from('<?php echo 2');
+      const err = await refusal(files.appendChunk(C, { path: 'index.php', id: ID, offset: 0, size: broken.length, overwrite: true, lint: 'php' }, broken));
+      expect(err.statusCode).toBe(422);
+      expect(fs.readFileSync(at('index.php'), 'utf8')).toBe('<?php echo 1;');
+      expect(leftovers()).toEqual([]);
+      const fixed = Buffer.from('<?php echo 2;');
+      await files.appendChunk(C, { path: 'index.php', id: ID, offset: 0, size: fixed.length, overwrite: true, lint: 'php' }, fixed);
+      expect(fs.readFileSync(at('index.php'), 'utf8')).toBe('<?php echo 2;');
+    });
+
     it('abort removes what arrived', async () => {
       await upload('big.bin', ID, 0, 100, Buffer.alloc(10));
       expect(leftovers()).toHaveLength(1);
@@ -619,3 +664,76 @@ describe.skipIf(!phpZip)('Web FTP zip archives, run for real', () => {
     expect(err.statusCode).toBe(400);
   });
 });
+
+/**
+ * The commands wpl7_upload_site_file hands out, run as an app runs them: curl in a shell, the
+ * panel listening, and the scripts above on the test's folder. Exit 0 must mean the file is in
+ * place - a script that goes on to the next step goes by nothing else.
+ */
+describe.skipIf(!gnu || !curl)('upload link commands, run for real', () => {
+  it('put a file in place in one request or in pieces, and fail for one shorter, longer or other than the link is for, sending none of it', async () => {
+    const world = await makeWorld();
+    const { app } = await makeApp(world);
+    world.deps.settings.set('mcpEnabled', true);
+    const now = Date.now();
+    world.db
+      .insert(sites)
+      .values({ slug: 'alpha', title: 'a', domains: '["alpha.test"]', phpVersion: '8.3', status: 'running', dbName: 'a', dbUser: 'a', dbPassword: 'x', containerName: 'wp-alpha', createdAt: now, updatedAt: now })
+      .run();
+    world.docker.containers.set('wp-alpha', 'running');
+    // The site's files are this test's folder, worked on by the scripts for real.
+    (world.servers.handleFor(1) as { siteFiles: SiteFilesService }).siteFiles = files;
+    const local = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-app-'));
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    try {
+      // The links point where the panel listens.
+      Object.assign(world.config, { panelDomain: `127.0.0.1:${(app.server.address() as AddressInfo).port}` });
+      const mcp = mcpClient(app, { authorization: `Bearer ${world.deps.apiKeys.create('ci', 'manage').token}` });
+      /** The command for a link to `declared`, run with `onDisk` as the file it sends. */
+      const upload = async (name: string, declared: Buffer, onDisk: Buffer = declared) => {
+        // A name a shell would read: $1, a quote, a backtick.
+        const file = path.join(local, `my $1 it's \`x\` ${name}`);
+        fs.writeFileSync(file, onDisk);
+        const res = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: name, sizeBytes: declared.length, sha256: sha(declared) });
+        expect(res.isError, JSON.stringify(res.value)).toBe(false);
+        return runInSh((res.value.command as string).replace('FILE', shellArg(file)));
+      };
+      const piece = 8 * 1024 * 1024;
+
+      // A local name curl would read as a pattern of several files: photo[1].png.
+      for (const [name, data] of [['photo[1].png', crypto.randomBytes(3000)], ['pieces.zip', crypto.randomBytes(piece + 1000)], ['empty.txt', Buffer.alloc(0)]] as const) {
+        const ran = await upload(name, data);
+        expect(ran.code, ran.out).toBe(0);
+        expect(fs.readFileSync(at(name)).equals(data), name).toBe(true);
+      }
+      expect(leftovers()).toEqual([]);
+
+      // One request: a file that shrank, grew or changed since the link was made.
+      const small = crypto.randomBytes(3000);
+      const shorter = await upload('a.zip', small, small.subarray(0, 2000));
+      expect(shorter.code).not.toBe(0);
+      expect(shorter.out).toContain('Not saved: the file sent is 2000 bytes, and this link is for one of 3000');
+      expect((await upload('b.zip', small, Buffer.concat([small, Buffer.from('x')]))).code).not.toBe(0);
+      const other = await upload('c.zip', small, crypto.randomBytes(3000));
+      expect(other.code).not.toBe(0);
+      expect(other.out).toContain('its SHA-256 differs');
+
+      // Pieces: a file of another size is not sent at all - one that grew by a byte past an exact
+      // number of pieces too, which the loop would otherwise send short of its new end.
+      const big = crypto.randomBytes(piece + 1000);
+      const shorter2 = await upload('d.zip', big, big.subarray(0, piece + 500));
+      expect(shorter2.code).not.toBe(0);
+      expect(shorter2.out).toContain(`is not the ${piece + 1000} bytes this link is for`);
+      const exact = crypto.randomBytes(2 * piece);
+      const grew = await upload('e.zip', exact, Buffer.concat([exact, Buffer.from('x')]));
+      expect(grew.code).not.toBe(0);
+      expect(grew.out).toContain(`is not the ${2 * piece} bytes this link is for`);
+      expect((await upload('f.zip', big, crypto.randomBytes(piece + 1000))).out).toContain('its SHA-256 differs');
+      for (const name of ['a.zip', 'b.zip', 'c.zip', 'd.zip', 'e.zip', 'f.zip']) expect(fs.existsSync(at(name)), name).toBe(false);
+    } finally {
+      await app.close();
+      fs.rmSync(local, { recursive: true, force: true });
+    }
+  });
+});
+

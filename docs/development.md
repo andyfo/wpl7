@@ -124,7 +124,7 @@ install seeing the candidate as the newest stable.
 
 | File | What it is |
 |---|---|
-| `.github/workflows/test.yml` | Typecheck, unit + API tests, web build. Reusable; every other workflow calls it |
+| `.github/workflows/test.yml` | Typecheck, unit + API tests, web build, and the Web FTP scripts' tests on the site image's Debian. Reusable; every other workflow calls it |
 | `.github/workflows/build-images.yml` | The panel image and the four site images. Reusable; called with different tags by the two below |
 | `.github/workflows/deploy.yml` | Every push and PR: test. Merges to `main`: `edge` images, the rolling `edge` release, then deploy to the production server |
 | `.github/workflows/release.yml` | A `v*` tag: check, test, images, release |

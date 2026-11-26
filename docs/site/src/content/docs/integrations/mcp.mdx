@@ -12,6 +12,8 @@ sources:
   - panel/src/services/oauth.ts
   - panel/src/mcp/server.ts
   - panel/src/mcp/tools.ts
+  - panel/src/routes/files.ts
+  - panel/src/services/uploadLinks.ts
   - panel/src/lib/panelUrl.ts
   - panel/shared/oauth.ts
 ---
@@ -93,6 +95,30 @@ need to mention WP Godmode.
 The app passes WP Godmode's questions and plans on to you. Sending WP Godmode the work needs
 **Manage** or **Full**. WP Godmode takes it only on a plan that includes remote control.
 
+## Upload a file
+
+An app puts a zip, an image or any other file on a site with the `wpl7_upload_site_file` tool. It
+sends the file in one of two ways.
+
+| Way | Size | What the app needs |
+|---|---|---|
+| In the call, as base64 | Up to 1 MiB | Nothing more, but every character costs tokens |
+| From its own disk, with curl | Up to 2 GiB | A shell that can reach the panel |
+
+The tool tells the app to use curl for any file already on its disk, text included. Text the app
+writes or edits itself goes through `wpl7_write_site_file`. A folder goes up as a zip, which the app
+then extracts on the site.
+
+For a file on its disk, the app gets a curl command with a one-time upload link. The link takes only
+the file the app named by its size and SHA-256. It works once, and ends after an hour without use.
+Revoking the app, lowering it below **Manage** or turning off **Let AI apps connect** ends it at once.
+
+Claude Code's shell reaches the panel. Claude's code sandbox in claude.ai reaches it only if the
+network settings for code execution allow the panel's domain. Without that, the app saves text
+through `wpl7_write_site_file` and sends a small binary file in the call.
+
+An upload replaces a file only if the app asks it to. A `.php` file that does not parse is refused.
+
 ## See what an app did
 
 The app acts as itself, never as the admin who approved it.
@@ -141,7 +167,10 @@ The panel is its own OAuth authorization server, and `/mcp` is its only resource
 ## Limits
 
 - Some endpoints are never reachable through MCP, whatever the level: signing in, admin accounts,
-  API keys, the activity log, uploads, binary downloads and the terminal.
+  API keys, the activity log, binary downloads, the terminal, and uploads other than a site's files.
+- Upload links live in the panel's memory. A restart of the panel ends them, and the app asks for a
+  new one.
+- An app or key can have 20 unfinished upload links at once.
 - What an app creates inside a site stays after you revoke it: WordPress users, application
   passwords, FTP logins, changed files.
 - The panel offers tools only. It has no MCP resources or prompts.

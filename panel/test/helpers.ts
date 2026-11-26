@@ -1,5 +1,6 @@
 import { ReminderService } from '../src/services/reminders.js';
 import { SiteCronService } from '../src/services/siteCron.js';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -109,6 +110,7 @@ import { TwoFactorService } from '../src/services/twoFactor.js';
 import { UsersService } from '../src/services/users.js';
 import { AccountRecoveryService } from '../src/services/accountRecovery.js';
 import { OAuthService } from '../src/services/oauth.js';
+import { UploadLinksService } from '../src/services/uploadLinks.js';
 import type { WporgDirectory, WporgSearchResult } from '../src/services/wporg.js';
 import type { WporgPluginDto } from '../shared/types.js';
 import { badGateway } from '../src/lib/errors.js';
@@ -1954,6 +1956,7 @@ export async function makeWorld(
     twoFactor: new TwoFactorService(users, config.panelDomain),
     recovery: new AccountRecoveryService(users, mail, config, log),
     oauth: new OAuthService(db, config, settings, log),
+    uploadLinks: new UploadLinksService(),
     pluginCatalog: new PluginCatalogService(db, config.paths.plugins, wporg),
     wpBulk: new WpBulkService(core, worker, core.wpInventory),
     wporg,
@@ -2088,6 +2091,23 @@ export function curlAnswer(
     exitCode: opts.exitCode ?? 0,
   };
 }
+
+/**
+ * A command in `sh`, the way an app's shell runs it: its exit status, and all it printed. Never
+ * blocks the event loop, so the panel a command talks to can be this test's own.
+ */
+export function runInSh(command: string): Promise<{ code: number; out: string }> {
+  return new Promise((resolve) => {
+    const child = spawn('sh', ['-c', command]);
+    let out = '';
+    child.stdout.on('data', (c: Buffer) => (out += c.toString()));
+    child.stderr.on('data', (c: Buffer) => (out += c.toString()));
+    child.on('close', (code) => resolve({ code: code ?? 1, out }));
+  });
+}
+
+/** `s` as one argument in `sh`: in single quotes, each ' in it closed, escaped and opened again. */
+export const shellArg = (s: string): string => `'${s.replaceAll("'", `'\\''`)}'`;
 
 export async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;

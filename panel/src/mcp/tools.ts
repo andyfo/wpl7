@@ -1,4 +1,5 @@
 // @docs integrations/mcp
+import crypto from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -6,6 +7,7 @@ import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import type { AccessLevel } from '../../shared/access.js';
 import { mcpGroupReachable, type McpToolGroup } from '../../shared/apiDocs.js';
 import { SLUG_RE } from '../../shared/schemas.js';
+import { FILE_LIMITS, parseSiteFilePath } from '../../shared/siteFilePath.js';
 import { jobs } from '../db/schema.js';
 import type { AppDeps } from '../routes/deps.js';
 import { injectAs, type McpCall, type McpPrincipal } from './call.js';
@@ -143,13 +145,20 @@ function answer(a: ApiAnswer, select?: string[]): CallToolResult {
   });
 }
 
-/** The panel's own error envelope, as it came, with a line on what to do about it. */
-function failure(a: ApiAnswer): CallToolResult {
+/**
+ * The panel's own error envelope, as it came, with a line on what to do about it - `hints`
+ * where a tool knows better than the general line what an error means for it.
+ */
+function failure(a: ApiAnswer, hints: Record<string, string> = {}): CallToolResult {
   const envelope = (a.body as { error?: { code?: string; message?: string; details?: unknown } } | null)?.error;
   const error = envelope ?? { code: 'internal', message: `HTTP ${a.status}` };
-  const hint = hintFor(error.code ?? '', error.message ?? '', a);
+  const hint = hints[error.code ?? ''] ?? hintFor(error.code ?? '', error.message ?? '', a);
   return text({ status: a.status, endpoint: a.endpoint, error, ...(hint ? { hint } : {}) }, true);
 }
+
+/** A refusal the tool makes itself, before anything reaches the panel. */
+const refusal = (message: string, hint?: string): CallToolResult =>
+  text({ error: { code: 'validation_error', message }, ...(hint ? { hint } : {}) }, true);
 
 function hintFor(code: string, message: string, a: ApiAnswer): string | null {
   switch (code) {
@@ -399,7 +408,8 @@ export function registerTools(server: McpServer, c: ToolContext): void {
           "Save a whole text file of a WPL7 site, relative to its WordPress folder. Needs either the etag " +
           'wpl7_read_site_file gave - refused if the file changed since - or createOnly: true for a new file, refused if ' +
           'one exists. There is no blind overwrite. A .php file is syntax-checked first and refused if it does not ' +
-          'parse, so a typo cannot take the site down. `content` is the entire file.',
+          'parse, so a typo cannot take the site down. `content` is the entire file. It is for text you write or edit ' +
+          'here. A binary file, or any file you already have on your own disk, goes through wpl7_upload_site_file.',
         inputSchema: z
           .object({
             site: siteField,
@@ -421,7 +431,7 @@ export function registerTools(server: McpServer, c: ToolContext): void {
           const a = await callApi(c, 'wpl7_write_site_file', 'file', {
             method: 'PUT',
             path: `/api/sites/${site}/files/content`,
-            query: { path, ...(/\.php$/i.test(path) ? { lint: 'php' } : {}) },
+            query: { path, ...(isPhp(path) ? { lint: 'php' } : {}) },
             raw: bytes,
             headers: createOnly ? { 'if-none-match': '*' } : { 'if-match': `"${etag}"` },
           });
@@ -430,7 +440,214 @@ export function registerTools(server: McpServer, c: ToolContext): void {
           return text({ status: a.status, site, path: saved.path, etag: saved.etag, bytes: bytes.length });
         }, c),
     );
+
+    server.registerTool(
+      'wpl7_upload_site_file',
+      {
+        title: 'Upload a file to a site',
+        description:
+          'Put a file of any kind on a WPL7 site, relative to its WordPress folder. The way for any file already on your ' +
+          'own disk - a zip, an image, text you need not read here - when your shell can reach the panel: give ' +
+          'sizeBytes and sha256, and the answer is a curl command that uploads that file, any size, with no bytes ' +
+          'through the conversation. A folder: zip it, upload the zip, and extract it with POST ' +
+          '/api/sites/{site}/files/extract. Only when your shell cannot reach the panel, send a binary file ' +
+          'base64-encoded in contentBase64, up to 1 MiB: every character costs tokens. Text you write or edit goes ' +
+          'through wpl7_write_site_file. Refused if something is at the path already, unless overwrite: true. A .php ' +
+          'file is syntax-checked first.',
+        inputSchema: z
+          .object({
+            site: siteField,
+            path: filePath.describe("Where it goes, relative to the site's WordPress folder, e.g. wp-content/uploads/logo.png"),
+            contentBase64: z.string().max(INLINE_BASE64_CHARS).optional().describe("The file's bytes, base64-encoded: a small file"),
+            sizeBytes: z.number().int().min(0).max(FILE_LIMITS.uploadBytes).optional().describe('The size of the file on your disk, in bytes'),
+            sha256: z
+              .string()
+              .regex(/^[0-9a-f]{64}$/, 'a SHA-256 as sha256sum prints it: 64 lowercase hex digits')
+              .optional()
+              .describe("The file's SHA-256, as sha256sum prints it. With contentBase64, checks that the bytes are the ones meant"),
+            overwrite: z.boolean().optional().describe('Replace the file already at the path'),
+          })
+          .strict()
+          .refine((v) => v.contentBase64 !== undefined || (v.sizeBytes !== undefined && v.sha256 !== undefined), {
+            message: 'Send contentBase64, or sizeBytes and sha256 for a file on your own disk',
+          }),
+        annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      },
+      async ({ site, path, contentBase64, sizeBytes, sha256, overwrite }) =>
+        guarded(async () => {
+          if (contentBase64 === undefined) {
+            const a = await callApi(c, 'wpl7_upload_site_file', 'file', {
+              method: 'POST',
+              path: `/api/sites/${site}/files/upload-links`,
+              body: { path, size: sizeBytes, sha256, overwrite: overwrite === true },
+            });
+            if (a.status >= 400) return failure(a, UPLOAD_HINTS);
+            return text(uploadCommand(site, path, sizeBytes!, a.body as UploadLinkBody));
+          }
+          const bytes = fromBase64(contentBase64);
+          if (!bytes) return refusal('contentBase64 is not base64: nothing was saved');
+          // An empty file only on purpose: no bytes is also what a slip sends, and with overwrite
+          // it would empty the file there.
+          if (bytes.length === 0 && sizeBytes !== 0) {
+            return refusal('contentBase64 holds no bytes: nothing was saved', 'To save an empty file, send sizeBytes: 0 with it.');
+          }
+          if (bytes.length > INLINE_UPLOAD_BYTES) {
+            return refusal(
+              `${bytes.length} bytes is more than one call carries (${INLINE_UPLOAD_BYTES})`,
+              'Give sizeBytes and sha256 instead, for a curl command that uploads the file from your own disk.',
+            );
+          }
+          if (sizeBytes !== undefined && sizeBytes !== bytes.length) {
+            return refusal(`contentBase64 holds ${bytes.length} bytes, not sizeBytes ${sizeBytes}: nothing was saved`);
+          }
+          const got = crypto.createHash('sha256').update(bytes).digest('hex');
+          if (sha256 !== undefined && sha256 !== got) {
+            return refusal(
+              `The bytes' SHA-256 is ${got}, not ${sha256}: nothing was saved`,
+              'contentBase64 is not the file meant - a slip copying it, most likely. Send it again.',
+            );
+          }
+          const a = await callApi(c, 'wpl7_upload_site_file', 'file', {
+            method: 'PUT',
+            path: `/api/sites/${site}/files/content`,
+            query: { path, ...(isPhp(path) ? { lint: 'php' } : {}) },
+            raw: bytes,
+            headers: overwrite ? {} : { 'if-none-match': '*' },
+          });
+          if (a.status >= 400) {
+            return failure(a, { ...UPLOAD_HINTS, precondition_failed: 'Something is at that path already. Send overwrite: true to replace it.' });
+          }
+          const saved = a.body as { path: string; etag: string };
+          return text({ status: a.status, site, path: saved.path, bytes: bytes.length, sha256: saved.etag });
+        }, c),
+    );
   }
+}
+
+/**
+ * Whether a save is PHP, to be syntax-checked first - judged on the path as the route will read
+ * it, so `functions.php/`, which the route saves as functions.php, is checked too.
+ */
+function isPhp(path: string): boolean {
+  const parsed = parseSiteFilePath(path);
+  return parsed.ok && /\.php$/i.test(parsed.path);
+}
+
+// ------------------------------------------------------------------ uploads
+
+/**
+ * The most one call carries inline. A model writes base64 out a few characters per token, so
+ * anything bigger is better sent from its own disk with an upload link.
+ */
+const INLINE_UPLOAD_BYTES = 1024 * 1024;
+/** Its base64, with room for the line breaks `base64` puts in every 76 characters. */
+const INLINE_BASE64_CHARS = 1_500_000;
+/** Where an upload goes wrong otherwise than the general hints say. */
+const UPLOAD_HINTS = {
+  not_found: 'The site, or the folder the file goes into, does not exist; the message says which. Make a folder with wpl7_api_change POST /api/sites/{site}/files/mkdir.',
+};
+
+/**
+ * Base64 bytes, or null for anything that is not exactly the encoding of some file. Buffer.from
+ * skips what it cannot read, so a mangled string would otherwise decode into another file, or
+ * into no bytes at all - which, saved with overwrite, empties the file. Line breaks and spaces
+ * are dropped and the URL-safe alphabet is taken too. Padding may be left out; where it is
+ * there, it is the one or two `=` that end the last group of four, and nothing else is.
+ *
+ * Each step is one pass over the text, and no pattern here can backtrack: the text is the
+ * caller's, up to 1.5 million characters, and the panel serves everyone else meanwhile.
+ */
+function fromBase64(text: string): Buffer | null {
+  const s = text.replace(/\s+/g, '');
+  let end = s.length;
+  if (s[end - 1] === '=') end--;
+  if (s[end - 1] === '=') end--;
+  const data = s.slice(0, end);
+  // Any other character is not base64 - a third `=`, or one before the end, included.
+  if (/[^A-Za-z0-9+/_-]/.test(data)) return null;
+  // No number of bytes encodes to one character past a group of four.
+  if (data.length % 4 === 1) return null;
+  if (end < s.length && (data.length + s.length - end) % 4 !== 0) return null;
+  const url = data.replace(/\+/g, '-').replace(/\//g, '_');
+  const bytes = Buffer.from(url, 'base64url');
+  // Unused bits in the last character make a string that no file encodes to: a copying slip.
+  return bytes.toString('base64url') === url ? bytes : null;
+}
+
+/** What POST /api/sites/:slug/files/upload-links answers. */
+interface UploadLinkBody {
+  url: string;
+  method: string;
+  header: string;
+  token: string;
+  expiresAt: number;
+  chunkBytes: number;
+}
+
+/**
+ * An upload link as a command to run, which exits 0 only once the file is in place - on the
+ * panel's own answer saying so, `"written":{` and the file's entry, and on nothing else. An exit
+ * code alone says too little: curl takes a redirect, a proxy's sign-in page say, as success, and
+ * every piece of a file is answered 200 until the last. FILE is the app's to fill in.
+ *
+ * A file that fits in a request goes in one curl: without an offset, a request is the whole
+ * file, and the panel refuses one that is not the link's size. A bigger file goes in a loop of
+ * pieces, each with its offset, once the file on the disk is found to be the link's size - one
+ * that grew would otherwise go short of its new end, and land as the file it was. The loop stops
+ * at the first answer that is not the panel's. `-g`: curl reads [ ] and { } in a file name, or a
+ * URL, as a pattern of several, and sends nothing for `photo[1].png`.
+ *
+ * The path goes in as the one argument of a script whose text the shell never expands (a quoted
+ * heredoc), and the script reads it from $1. Put into the script itself, a name such as
+ * `price$5.csv` would reach curl and dd as `price.csv`, and a quote or a backtick in it would be
+ * read as shell.
+ */
+function uploadCommand(site: string, path: string, size: number, link: UploadLinkBody): Record<string, unknown> {
+  const header = `-H '${link.header}: ${link.token}'`;
+  const notTaken = `echo "Not in place: the panel did not take the file." >&2; false`;
+  const script =
+    size <= link.chunkBytes
+      ? [
+          `r=$(curl -sS -g --fail-with-body -T "$1" ${header} '${link.url}'); printf '%s\\n' "$r"`,
+          `case "$r" in *'"written":{'*) ;; *) ${notTaken} ;; esac`,
+        ]
+      : [
+          `f=$1; n=${link.chunkBytes}; i=0; r=`,
+          `if [ "$(wc -c < "$f" | tr -dc 0-9)" != ${size} ]; then`,
+          `  echo "Not sent: $f is not the ${size} bytes this link is for. Ask for a new link with its size and sha256." >&2; false`,
+          'else',
+          `  while [ $((i * n)) -lt ${size} ]; do`,
+          `    r=$(dd if="$f" bs=$n skip=$i count=1 2>/dev/null | curl -sS -g --fail-with-body -X PUT --data-binary @- ` +
+            `-H 'Content-Type: application/octet-stream' ${header} "${link.url}?offset=$((i * n))") || break`,
+          `    case "$r" in *'"received":'*) ;; *) break ;; esac`,
+          '    i=$((i + 1))',
+          '  done',
+          `  printf '%s\\n' "$r"`,
+          `  case "$r" in *'"written":{'*) ;; *'"written":null'*) echo "Not in place: $f got shorter while it was sent. ` +
+            `Ask for a new link with its size and sha256." >&2; false ;; *) ${notTaken} ;; esac`,
+          'fi',
+        ];
+  const command = [`sh -s -- FILE <<'WPL7'`, ...script, 'WPL7'].join('\n');
+  let host = '';
+  try {
+    host = new URL(link.url).host;
+  } catch {
+    // A panel with no address of its own hands out a bare path.
+  }
+  return {
+    status: 201,
+    site,
+    path,
+    sizeBytes: size,
+    expiresAt: new Date(link.expiresAt).toISOString(),
+    command,
+    next:
+      "Run it in your shell with FILE replaced by the path of the file in single quotes, a ' inside it written as " +
+      "'\\''. It prints the panel's answer, and exits 0 only once the file is in place. If curl cannot reach " +
+      (host || 'the panel') +
+      ", your sandbox's network settings may not allow it: ask the user to allow that address. Until then, text goes " +
+      'through wpl7_write_site_file, and a small binary file as contentBase64.',
+  };
 }
 
 // ------------------------------------------------------------------ answers
@@ -497,7 +714,9 @@ function fileAnswer(site: string, path: string, a: ApiAnswer, startLine: number,
   // a file, and replacing one nobody has read is the blind overwrite that tool refuses.
   const unread = { site, path, sizeBytes: bytes.length };
   const base = { ...unread, etag };
-  if (bytes.subarray(0, 8192).includes(0)) return { ...unread, binary: true, note: 'A binary file; its bytes are not shown' };
+  if (bytes.subarray(0, 8192).includes(0)) {
+    return { ...unread, binary: true, note: 'A binary file; its bytes are not shown. To replace it, upload the new one with wpl7_upload_site_file and overwrite: true' };
+  }
   let decoded: string;
   try {
     decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);

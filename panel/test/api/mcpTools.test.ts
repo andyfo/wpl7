@@ -2,7 +2,13 @@
  * The MCP tools against the real routes over the fake world: every call goes through the API
  * and its auth gate, and comes back attributed, logged and shaped.
  */
+import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { jobLogs, jobs, settings, sites } from '../../src/db/schema.js';
@@ -10,7 +16,7 @@ import { FILE_EXIT } from '../../src/services/siteFilesScripts.js';
 import { injectAs } from '../../src/mcp/call.js';
 import type { ApiActivityDto } from '../../shared/types.js';
 import type { AccessLevel } from '../../shared/access.js';
-import { makeApp, makeWorld, mcpClient, type TestWorld } from '../helpers.js';
+import { makeApp, makeWorld, mcpClient, runInSh, shellArg, type TestWorld } from '../helpers.js';
 
 async function panel() {
   const world = await makeWorld();
@@ -370,6 +376,293 @@ describe('the file tools', () => {
     const blind = await full.call('wpl7_write_site_file', { site: 'alpha', path: 'new.txt', content: 'hi' });
     expect(blind.isError).toBe(true);
     expect(String(blind.value)).toMatch(/exactly one of etag/);
+  });
+
+  it('upload a small binary file sent as base64, only where nothing is unless asked to overwrite', async () => {
+    const { world, client } = await panel();
+    addSite(world, 'alpha');
+    const mcp = client('manage');
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0xff]);
+    const args = (call: { args: unknown[] }) => (call.args[1] as string[]).slice(4);
+    world.docker.execQueue.push({ stdout: 'rw/f/f/11/644/1727000000.25/33/33/logo.png/\0', stderr: '', exitCode: 0 });
+    // Wrapped as `base64` prints it, which the tool reads as well.
+    const b64 = png.toString('base64').replace(/(.{8})/g, '$1\n');
+    const saved = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'wp-content/uploads/logo.png', contentBase64: b64, sha256: sha(png) });
+    expect(saved).toMatchObject({ isError: false, value: { status: 200, path: 'wp-content/uploads/logo.png', bytes: 11, sha256: sha(png) } });
+    expect(world.docker.inputs[0]!.equals(png)).toBe(true);
+    // Create-only, and no PHP check for a picture.
+    expect(args(world.docker.calls.find((c) => c.method === 'execWithInput')!)).toEqual([
+      '/var/www/html/wp-content/uploads/logo.png',
+      'create',
+      '-',
+      '11',
+      sha(png),
+      '-',
+    ]);
+
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.exists });
+    const inTheWay = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'logo.png', contentBase64: png.toString('base64') });
+    expect(inTheWay.value).toMatchObject({ status: 412, hint: 'Something is at that path already. Send overwrite: true to replace it.' });
+
+    world.docker.calls = [];
+    world.docker.execQueue.push({ stdout: 'rw/f/f/5/644/1727000000.25/33/33/x.php/\0', stderr: '', exitCode: 0 });
+    await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'x.php', contentBase64: Buffer.from('<?php').toString('base64'), overwrite: true });
+    // Replace whatever is there, but only with PHP that parses.
+    expect(args(world.docker.calls.find((c) => c.method === 'execWithInput')!)).toMatchObject({ 1: 'any', 5: 'php' });
+
+    // The route saves `x.php/` as x.php: checked as PHP all the same.
+    world.docker.calls = [];
+    world.docker.execQueue.push({ stdout: 'rw/f/f/5/644/1727000000.25/33/33/x.php/\0', stderr: '', exitCode: 0 });
+    await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'x.php/', contentBase64: Buffer.from('<?php').toString('base64'), overwrite: true });
+    expect(args(world.docker.calls.find((c) => c.method === 'execWithInput')!)).toMatchObject({ 0: '/var/www/html/x.php', 5: 'php' });
+  });
+
+  it('refuse base64 that is not, bytes that are not the file meant, and more than one call carries - sending nothing', async () => {
+    const { world, client } = await panel();
+    addSite(world, 'alpha');
+    const mcp = client('manage');
+    const upload = (extra: Record<string, unknown>) => mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'a.bin', ...extra });
+    for (const contentBase64 of ['not base64!', 'QR==', 'Q']) {
+      const res = await upload({ contentBase64 });
+      expect(res.isError, contentBase64).toBe(true);
+      expect(res.value.error.message).toMatch(/not base64/);
+    }
+    const slip = await upload({ contentBase64: Buffer.from('abc').toString('base64'), sha256: sha('abd') });
+    expect(slip.value.error.message).toBe(`The bytes' SHA-256 is ${sha('abc')}, not ${sha('abd')}: nothing was saved`);
+    const short = await upload({ contentBase64: Buffer.from('abc').toString('base64'), sizeBytes: 4 });
+    expect(short.value.error.message).toMatch(/holds 3 bytes, not sizeBytes 4/);
+    const big = await upload({ contentBase64: Buffer.alloc(1024 * 1024 + 1).toString('base64') });
+    expect(big.value).toMatchObject({ error: { message: expect.stringMatching(/more than one call carries/) }, hint: expect.stringMatching(/sizeBytes and sha256/) });
+    // Without the bytes, a file on the app's disk: its size and hash, both.
+    const neither = await upload({ sizeBytes: 3 });
+    expect(neither.isError).toBe(true);
+    expect(world.docker.calls.filter((c) => c.method.startsWith('exec'))).toEqual([]);
+  });
+
+  it('never empty a file with text that decodes to nothing: padding alone, misplaced padding, or no bytes asked for by mistake', async () => {
+    const { world, client } = await panel();
+    addSite(world, 'alpha');
+    const mcp = client('manage');
+    const upload = (extra: Record<string, unknown>) =>
+      mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'wp-content/uploads/logo.png', overwrite: true, ...extra });
+    for (const contentBase64 of ['=', '==', '===', '====', ' = \n=', 'QQ=', 'QUJD==', 'QQ==QQ==', 'data:,QQ==']) {
+      const res = await upload({ contentBase64 });
+      expect(res.value.error?.message, JSON.stringify(contentBase64)).toBe('contentBase64 is not base64: nothing was saved');
+    }
+    // An empty file only when asked for in so many words.
+    for (const contentBase64 of ['', ' \n ']) {
+      const res = await upload({ contentBase64 });
+      expect(res.value).toMatchObject({ error: { message: 'contentBase64 holds no bytes: nothing was saved' }, hint: 'To save an empty file, send sizeBytes: 0 with it.' });
+    }
+    expect(world.docker.calls.filter((c) => c.method.startsWith('exec'))).toEqual([]);
+    world.docker.execQueue.push({ stdout: 'rw/f/f/0/644/1727000000.25/33/33/logo.png/\0', stderr: '', exitCode: 0 });
+    const empty = await upload({ contentBase64: '', sizeBytes: 0 });
+    expect(empty.value).toMatchObject({ status: 200, bytes: 0, sha256: sha('') });
+    // Valid text in every form the tool takes: padded, unpadded, URL-safe, wrapped.
+    for (const [contentBase64, bytes] of [['QQ==', 'A'], ['QQ', 'A'], ['QUI=', 'AB'], ['QUJD', 'ABC'], ['-_-_', '\xfb\xff\xbf'], ['QU\nJD\r\n', 'ABC']] as const) {
+      world.docker.execQueue.push({ stdout: 'rw/f/f/1/644/1727000000.25/33/33/logo.png/\0', stderr: '', exitCode: 0 });
+      const res = await upload({ contentBase64 });
+      expect(res.value.sha256, contentBase64).toBe(sha(Buffer.from(bytes, 'latin1')));
+    }
+  });
+
+  it('refuse a long malformed text at once, without holding the panel up', async () => {
+    const { world, client } = await panel();
+    addSite(world, 'alpha');
+    // A run of padding followed by one more character: the old decoder took time growing with the
+    // square of its length here, about an hour at the tool's 1.5 million characters.
+    const started = Date.now();
+    const res = await client('manage').call('wpl7_upload_site_file', { site: 'alpha', path: 'a.bin', contentBase64: `${'='.repeat(1_499_999)}A` });
+    expect(res.value.error.message).toBe('contentBase64 is not base64: nothing was saved');
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("hand out a curl command for a file on the app's own disk, which puts that file there", async () => {
+    const { app, world, client, activity } = await panel();
+    addSite(world, 'alpha');
+    const mcp = client('manage');
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.notFound });
+    const res = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'plugin.zip', sizeBytes: 5, sha256: sha('hello') });
+    expect(res.isError).toBe(false);
+    expect(res.value).toMatchObject({ status: 201, site: 'alpha', path: 'plugin.zip', sizeBytes: 5, expiresAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) });
+    const command = res.value.command as string;
+    // The path is the script's one argument, read from $1: never part of the script's text.
+    expect(command.split('\n')).toEqual([
+      `sh -s -- FILE <<'WPL7'`,
+      expect.stringMatching(
+        /^r=\$\(curl -sS -g --fail-with-body -T "\$1" -H 'X-WPL7-Upload-Token: wpl7up_[A-Za-z0-9_-]{43}' 'http:\/\/panel\.example\.test\/api\/file-uploads'\); printf '%s\\n' "\$r"$/,
+      ),
+      `case "$r" in *'"written":{'*) ;; *) echo "Not in place: the panel did not take the file." >&2; false ;; esac`,
+      'WPL7',
+    ]);
+    expect(command.match(/FILE/g)).toHaveLength(1);
+    expect(res.value.next).toContain("FILE replaced by the path of the file in single quotes, a ' inside it written as '\\''");
+    expect(res.value.next).toMatch(/If curl cannot reach panel\.example\.test/);
+    expect((await activity())[0]).toMatchObject({ via: 'mcp', tool: 'wpl7_upload_site_file', route: '/api/sites/:slug/files/upload-links', status: 201 });
+
+    // What the app's shell then does.
+    const token = /X-WPL7-Upload-Token: (\S+)'/.exec(command)![1]!;
+    world.docker.execQueue.push({ stdout: 'rw/f/f/5/644/1727000000.25/33/33/plugin.zip/\0', stderr: '', exitCode: 0 });
+    const put = await app.inject({ method: 'PUT', url: '/api/file-uploads', headers: { 'x-wpl7-upload-token': token }, payload: Buffer.from('hello') });
+    expect(put.statusCode).toBe(200);
+    expect(put.json()).toMatchObject({ received: 5, size: 5, written: { path: 'plugin.zip', etag: sha('hello') } });
+
+    // Over one request's worth, the same in pieces.
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.notFound });
+    const big = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'theme.zip', sizeBytes: 20 * 1024 * 1024, sha256: sha('x') });
+    const loop = (big.value.command as string).split('\n');
+    expect(loop.slice(0, 3)).toEqual([`sh -s -- FILE <<'WPL7'`, 'f=$1; n=8388608; i=0; r=', 'if [ "$(wc -c < "$f" | tr -dc 0-9)" != 20971520 ]; then']);
+    expect(big.value.command).toContain('while [ $((i * n)) -lt 20971520 ]; do');
+    expect(big.value.command).toContain('"http://panel.example.test/api/file-uploads?offset=$((i * n))") || break');
+    expect(loop.slice(-2)).toEqual(['fi', 'WPL7']);
+  });
+
+  it('stop the links an app made once MCP is switched off', async () => {
+    const { app, world, client } = await panel();
+    addSite(world, 'alpha');
+    world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.notFound });
+    const res = await client('manage').call('wpl7_upload_site_file', { site: 'alpha', path: 'a.bin', sizeBytes: 1, sha256: sha('a') });
+    const token = /X-WPL7-Upload-Token: (\S+)'/.exec(res.value.command as string)![1]!;
+    world.deps.settings.set('mcpEnabled', false);
+    const put = await app.inject({ method: 'PUT', url: '/api/file-uploads', headers: { 'x-wpl7-upload-token': token }, payload: Buffer.from('a') });
+    expect(put.statusCode).toBe(403);
+  });
+
+  it('make upload links through the upload tool alone', async () => {
+    const { world, client } = await panel();
+    addSite(world, 'alpha');
+    const res = await client('full').call('wpl7_api_dangerous', {
+      method: 'POST',
+      path: '/api/sites/alpha/files/upload-links',
+      body: { path: 'a.zip', size: 1, sha256: sha('a') },
+    });
+    expect(res.value).toMatchObject({ status: 403, error: { message: expect.stringContaining('wpl7_upload_site_file') } });
+  });
+});
+
+const curl = spawnSync('curl', ['--version']).status === 0;
+
+/**
+ * The commands wpl7_upload_site_file hands out, run as an app runs them: curl in `sh`, against
+ * this panel listening, with the site's files faked (the scripts behind them run for real in
+ * test/unit/siteFilesScripts.test.ts, on GNU tools). What is held to here is the exit status:
+ * 0 must mean the file is in place, as a script that goes on to the next step goes by it.
+ */
+describe.skipIf(!curl)('the upload commands, run with curl', () => {
+  const PIECE = 8 * 1024 * 1024;
+  /** What the panel's append script prints once a file is in place: its entry. */
+  const inPlace = (name: string, size: number) => ({ stdout: `rw/f/f/${size}/644/1727000000.25/33/33/${name}/\0`, stderr: '', exitCode: 0 });
+
+  async function listening() {
+    const { app, world, client } = await panel();
+    addSite(world, 'alpha');
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    // The links point where the panel listens.
+    Object.assign(world.config, { panelDomain: `127.0.0.1:${(app.server.address() as AddressInfo).port}` });
+    const local = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-app-'));
+    const mcp = client('manage');
+    /** The command for a link to a file like `declared`, at the site's top folder. */
+    const commandFor = async (name: string, declared: Buffer) => {
+      world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.notFound });
+      const res = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: name, sizeBytes: declared.length, sha256: sha(declared) });
+      expect(res.isError, JSON.stringify(res.value)).toBe(false);
+      return res.value.command as string;
+    };
+    /** Run a command with `onDisk` as the file on the app's disk, under `name` there. */
+    const run = (command: string, name: string, onDisk: Buffer) => {
+      const file = path.join(local, name);
+      fs.writeFileSync(file, onDisk);
+      return runInSh(command.replace('FILE', shellArg(file)));
+    };
+    const sent = () => world.docker.inputs.map((b) => b.length);
+    const close = async () => {
+      await app.close();
+      fs.rmSync(local, { recursive: true, force: true });
+    };
+    return { world, commandFor, run, sent, close };
+  }
+
+  /** A server that answers every request with a redirect to a sign-in page, as a proxy might. */
+  async function redirecting() {
+    let requests = 0;
+    const server = http.createServer((req, res) => {
+      requests++;
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(302, { location: 'https://sign-in.example.com/' });
+        res.end('<html>Sign in</html>');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/file-uploads`;
+    return { url, requests: () => requests, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
+  }
+
+  it('exit 0 once the panel has the file in place, in one request and in pieces, whatever its name', async () => {
+    const p = await listening();
+    try {
+      const small = crypto.randomBytes(3000);
+      const single = await p.commandFor('photo.png', small);
+      p.world.docker.execQueue.push(inPlace('photo.png', 3000));
+      // A name with all a shell or curl would read: $5, a quote, a backtick, brackets, a space.
+      const one = await p.run(single, "price$5 it's `x` [1].png", small);
+      expect(one.code, one.out).toBe(0);
+      expect(one.out).toContain('"written":{');
+      expect(p.sent()).toEqual([3000]);
+
+      const big = crypto.randomBytes(PIECE + 1000);
+      const command = await p.commandFor('theme.zip', big);
+      p.world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: 0 }, inPlace('theme.zip', PIECE + 1000));
+      const pieces = await p.run(command, "theme $HOME it's `x`.zip", big);
+      expect(pieces.code, pieces.out).toBe(0);
+      expect(p.sent()).toEqual([3000, PIECE, 1000]);
+    } finally {
+      await p.close();
+    }
+  });
+
+  it('exit non-zero for anything else: a redirect, a refusal, a file of another size, a last piece that left it short', async () => {
+    const p = await listening();
+    const proxy = await redirecting();
+    try {
+      // A redirect, which curl calls success: nothing goes further, and a loop stops at its first piece.
+      const small = crypto.randomBytes(3000);
+      const redirected = await p.run((await p.commandFor('a.png', small)).replace(/http:\/\/127\.0\.0\.1:\d+\/api\/file-uploads/, proxy.url), 'a.png', small);
+      expect(redirected.code).not.toBe(0);
+      expect(redirected.out).toContain('Not in place: the panel did not take the file.');
+      const big = crypto.randomBytes(PIECE + 1000);
+      const loop = await p.run((await p.commandFor('b.zip', big)).replace(/http:\/\/127\.0\.0\.1:\d+\/api\/file-uploads/g, proxy.url), 'b.zip', big);
+      expect(loop.code).not.toBe(0);
+      expect(proxy.requests()).toBe(2);
+
+      // The panel's refusal: another file of the same size.
+      const refused = await p.commandFor('c.png', small);
+      p.world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.digest });
+      const other = await p.run(refused, 'c.png', crypto.randomBytes(3000));
+      expect(other.code).not.toBe(0);
+      expect(other.out).toContain('its SHA-256 differs');
+
+      // A file one byte longer than an exact number of pieces: the loop would stop at the old end.
+      const exact = Buffer.alloc(2 * PIECE, 1);
+      const grew = await p.run(await p.commandFor('d.zip', exact), 'd.zip', Buffer.concat([exact, Buffer.from('x')]));
+      expect(grew.code).not.toBe(0);
+      expect(grew.out).toContain('Not sent: ');
+      expect(grew.out).toContain(`is not the ${2 * PIECE} bytes this link is for`);
+
+      // Every piece answered 200 and the last one not finishing the file, as when it shrank meanwhile.
+      const before = p.sent().length;
+      const shortCommand = await p.commandFor('e.zip', big);
+      p.world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: 0 }, { stdout: '', stderr: '', exitCode: 0 });
+      const short = await p.run(shortCommand, 'e.zip', big);
+      expect(short.code).not.toBe(0);
+      expect(short.out).toContain('"written":null');
+      expect(short.out).toContain('got shorter while it was sent');
+      // Of all of it, only the refused file and the two pieces of the last one reached the site.
+      expect(p.sent().slice(before)).toEqual([PIECE, 1000]);
+    } finally {
+      await proxy.close();
+      await p.close();
+    }
   });
 });
 
