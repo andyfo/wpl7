@@ -248,7 +248,8 @@ describe.skipIf(!ENABLED).each(cases)('importing from $wp on $db', (c) => {
     port = Number((await docker(['port', names.wp, '80/tcp'])).stdout.trim().split('\n')[0]!.split(':').at(-1));
     await until('WordPress', async () => (await request(port, 'GET', '/wp-admin/install.php').catch(() => ({ status: 0 }))).status === 200);
 
-    const cli = path.join(os.tmpdir(), 'wpl7-import-e2e-wp-cli.phar');
+    // Kept for the next run: outside the run's own temp folder (test/globalSetup.ts).
+    const cli = path.join(process.env.WPL7_TEST_CACHE ?? os.tmpdir(), 'wpl7-import-e2e-wp-cli.phar');
     if (!fs.existsSync(cli)) fs.writeFileSync(cli, Buffer.from(await (await fetch(WP_CLI)).arrayBuffer()));
     await docker(['cp', cli, `${names.wp}:/usr/local/bin/wp`]);
     await docker(['exec', names.wp, 'chmod', '755', '/usr/local/bin/wp']);

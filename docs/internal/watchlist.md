@@ -86,6 +86,7 @@ for a reason; remove one once there is nothing left to watch.
 | [MariaDB's keywords and functions, as a trigger's words are read](#mariadbs-keywords-and-functions-as-a-triggers-words-are-read) | Low | 2026-11-24 11:54 UTC | 11.4.13: 699 keywords, 268 functions, as `panel/src/lib/mariadbWords.ts` has them; spatial functions are not among them |
 | [MCP: no way to hand a tool a file](#mcp-no-way-to-hand-a-tool-a-file) | Low | 2026-11-25 18:17 UTC | `io.modelcontextprotocol/files` is a draft extension, last changed 2026-11-09, with no reference implementation and no app known to support it |
 | [CI: the Web FTP scripts' tests, on the site image's Debian](#ci-the-web-ftp-scripts-tests-on-the-site-images-debian) | Low | 2026-11-26 09:05 UTC | WordPress's fpm image and `node:22-trixie` are both Debian 13.8 with GNU coreutils 9.7; `ubuntu-latest` is Ubuntu 26.04, whose `head` is uutils 0.10.0 |
+| [Vitest: a stopped run and the global setup's teardown](#vitest-a-stopped-run-and-the-global-setups-teardown) | Low | 2026-11-26 13:47 UTC | 5.0.3 and 5.1.2, the latest: Ctrl-C and SIGTERM end `vitest run` with `process.exit()`, which skips the teardown; the `exit` hook deletes the run's temp folder |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -1952,3 +1953,29 @@ for a reason; remove one once there is nothing left to watch.
   node image of that release (`node:22-<codename>`), in the same pull request as the site image if
   it can be.
 
+## Vitest: a stopped run and the global setup's teardown
+
+- **Priority:** Low
+- **Last checked:** 2026-11-26 13:47 UTC. Vitest 5.0.3, the version in `panel/package-lock.json`, and
+  5.1.2, the latest: on SIGINT and SIGTERM, `vitest run` ends in its logger's signal handler, which
+  calls `process.exit()` and never closes Vitest, so a global setup's teardown does not run. Stopped
+  with either signal, sent to its process group or to Vitest's own process, a run of four API test
+  files left no temp folder behind. The nearest upstream issue,
+  [vitest-dev/vitest#11749](https://github.com/vitest-dev/vitest/issues/11749), is the coverage lock
+  file an interrupted run leaves in the temp folder.
+- **The problem:** `panel/test/globalSetup.ts` deletes the run's own temp folder in its teardown. A
+  run stopped with Ctrl-C, or with SIGTERM as an agent's timeout does, skips the teardown and would
+  leave the folder, with up to two thousand others in it.
+- **What we do about it:** the global setup also deletes the folder on the main process's `exit`
+  event, which `process.exit()` still fires. Only a run killed outright (SIGKILL) leaves it, and a
+  later run deletes it once the process is gone and a day has passed.
+  `panel/test/unit/testRunFolder.test.ts` fails if the workers stop getting the folder as TMPDIR,
+  the other thing this relies on.
+- **Check:** `npm view vitest version`. In that version's `dist/chunks/`, read
+  `addCleanupListeners`: does the signal handler now close Vitest, which runs the teardown, instead
+  of exiting? To see it, start `node node_modules/vitest/vitest.mjs run test/api` in `panel/`, wait
+  until `$TMPDIR/wpl7-test-run-<its pid>-*` has folders in it, send that process SIGTERM, and look
+  for the folder after it exits.
+- **When it changes:** if the signal handler runs the teardown, the `exit` hook can go. If the
+  workers stop inheriting the global setup's TMPDIR, hand them the folder through Vitest's `env`
+  option instead, made when `panel/vitest.config.ts` loads.

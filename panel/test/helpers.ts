@@ -158,6 +158,7 @@ async function seededTestDb(config: Config): Promise<Db> {
 }
 
 export function makeTestConfig(overrides: Record<string, string> = {}): Config {
+  // Under Vitest, os.tmpdir() is the run's own folder, which goes when the run ends (test/globalSetup.ts).
   const srvRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-test-'));
   return loadConfig({
     NODE_ENV: 'test',

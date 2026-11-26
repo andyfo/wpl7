@@ -8,6 +8,8 @@ export default defineConfig({
     testTimeout: 20_000,
     // Makes argon2 and RSA keys cheap; see the file for why they would be most of the runtime.
     setupFiles: ['test/setup.ts'],
+    // Puts the run's temp folders in one folder of its own, which it deletes at the end.
+    globalSetup: ['test/globalSetup.ts'],
     // Better-sqlite3 memory DBs are per-instance; parallel files are fine. The default `forks`
     // pool is also the fast one here - under `threads` the native modules re-initialise per
     // thread and import time triples.
