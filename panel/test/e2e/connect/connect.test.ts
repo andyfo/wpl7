@@ -97,7 +97,8 @@ async function until(what: string, check: () => boolean | Promise<boolean>, time
 
 /** WP-CLI, from the wordpress:cli image: the same phar runs on every PHP the cases have. */
 async function wpCliPhar(): Promise<string> {
-  const file = path.join(os.tmpdir(), 'wpl7-connect-e2e-wp-cli.phar');
+  // Kept for the next run: outside the run's own temp folder (test/globalSetup.ts).
+  const file = path.join(process.env.WPL7_TEST_CACHE ?? os.tmpdir(), 'wpl7-connect-e2e-wp-cli.phar');
   if (fs.existsSync(file)) return file;
   const name = `${RUN}-cli`;
   await docker(['create', '--name', name, 'wordpress:cli']);
