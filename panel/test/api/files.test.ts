@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { PassThrough } from 'node:stream';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import { apiEvents, jobs, sites } from '../../src/db/schema.js';
@@ -529,7 +530,7 @@ describe('Web FTP: upload links', () => {
     expect(token).toMatch(/^wpl7up_[A-Za-z0-9_-]{43}$/);
 
     world.docker.calls = [];
-    const first = await send(s, token, data.subarray(0, 20));
+    const first = await send(s, token, data.subarray(0, 20), 0);
     expect(first.statusCode).toBe(200);
     expect(first.json()).toEqual({ received: 20, written: null, size: 30 });
     const args = scriptArgs(callsOf(world, 'execWithInput')[0]!);
@@ -625,6 +626,66 @@ describe('Web FTP: upload links', () => {
     expect(empty.statusCode).toBe(400);
   });
 
+  it('takes a request without an offset as the whole file, and refuses one of another size', async () => {
+    const s = await siteReady();
+    const { world } = s;
+    const data = crypto.randomBytes(30);
+    world.docker.execQueue.push(missing);
+    const token = (await link(s, { path: 'a.zip', size: 30, sha256: sha(data) })).json().token as string;
+    world.docker.calls = [];
+    // `curl -T` with a file that shrank, or grew, since the link was made.
+    for (const sent of [data.subarray(0, 20), Buffer.concat([data, Buffer.from('x')])]) {
+      const res = await send(s, token, sent);
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.message).toBe(
+        `Not saved: the file sent is ${sent.length} bytes, and this link is for one of 30. Ask for a new link with its size and sha256`,
+      );
+    }
+    expect(callsOf(world, 'execWithInput')).toEqual([]);
+    // With an offset, the same bytes are the first piece of it.
+    expect((await send(s, token, data.subarray(0, 20), 0)).json()).toEqual({ received: 20, written: null, size: 30 });
+  });
+
+  it('writes nothing into a site deleted and made again under its name while the request arrived', async () => {
+    const s = await siteReady();
+    const { app, world, headers } = s;
+    world.docker.execQueue.push(missing);
+    const token = (await link(s, { path: 'a.txt', size: 1, sha256: sha('a') })).json().token as string;
+    world.docker.calls = [];
+    /** The site goes, and another takes its name: a new id, and the same container name. */
+    const replaceSite = () => {
+      const old = world.db.select().from(sites).where(eq(sites.slug, 'my-blog')).get()!;
+      world.db.delete(sites).where(eq(sites.id, old.id)).run();
+      world.db.insert(sites).values({ ...old, id: undefined }).run();
+    };
+
+    const piece = new PassThrough();
+    const put = app.inject({ method: 'PUT', url: '/api/file-uploads', headers: { 'x-wpl7-upload-token': token, 'content-length': '1' }, payload: piece });
+    // The link's site was looked up, and the piece is being read.
+    await waitFor(() => world.deps.uploadLinks.find(token)?.busy === true);
+    replaceSite();
+    piece.end('a');
+    const res = await put;
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.message).toBe('Site "my-blog" was deleted while this request arrived; nothing was changed');
+
+    // The same for a save addressed by the site's name: the request was for the site it found.
+    const lookups = vi.spyOn(world.deps.sites, 'bySlug');
+    const body = new PassThrough();
+    const save = app.inject({
+      method: 'PUT',
+      url: '/api/sites/my-blog/files/content?path=new.txt',
+      headers: { ...headers, 'content-type': 'application/octet-stream', 'content-length': '2', 'if-none-match': '*' },
+      payload: body,
+    });
+    await waitFor(() => lookups.mock.calls.length > 0);
+    lookups.mockRestore();
+    replaceSite();
+    body.end('hi');
+    expect((await save).statusCode).toBe(404);
+    expect(callsOf(world, 'execWithInput')).toEqual([]);
+  });
+
   it('ends a link made in a session when its admin signs out everywhere', async () => {
     const s = await siteReady();
     s.world.docker.execQueue.push(missing);
@@ -674,7 +735,7 @@ describe('Web FTP: upload links', () => {
     const clock = vi.spyOn(Date, 'now');
     try {
       clock.mockReturnValue(start + 50 * 60_000);
-      expect((await send(s, token, Buffer.alloc(10))).json()).toMatchObject({ received: 10, written: null });
+      expect((await send(s, token, Buffer.alloc(10), 0)).json()).toMatchObject({ received: 10, written: null });
       // Fifty minutes later: 100 since it was made, 50 since its last piece.
       clock.mockReturnValue(start + 100 * 60_000);
       world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.offset });

@@ -486,6 +486,11 @@ export function registerTools(server: McpServer, c: ToolContext): void {
           }
           const bytes = fromBase64(contentBase64);
           if (!bytes) return refusal('contentBase64 is not base64: nothing was saved');
+          // An empty file only on purpose: no bytes is also what a slip sends, and with overwrite
+          // it would empty the file there.
+          if (bytes.length === 0 && sizeBytes !== 0) {
+            return refusal('contentBase64 holds no bytes: nothing was saved', 'To save an empty file, send sizeBytes: 0 with it.');
+          }
           if (bytes.length > INLINE_UPLOAD_BYTES) {
             return refusal(
               `${bytes.length} bytes is more than one call carries (${INLINE_UPLOAD_BYTES})`,
@@ -543,16 +548,30 @@ const UPLOAD_HINTS = {
 };
 
 /**
- * Base64 bytes, or null for anything that is not: Buffer.from skips what it cannot read, so a
- * mangled string would otherwise decode into a different file without a word. Line breaks and
- * spaces are dropped, the URL-safe alphabet is taken too, and padding may be left out.
+ * Base64 bytes, or null for anything that is not exactly the encoding of some file. Buffer.from
+ * skips what it cannot read, so a mangled string would otherwise decode into another file, or
+ * into no bytes at all - which, saved with overwrite, empties the file. Line breaks and spaces
+ * are dropped and the URL-safe alphabet is taken too. Padding may be left out; where it is
+ * there, it is the one or two `=` that end the last group of four, and nothing else is.
+ *
+ * Each step is one pass over the text, and no pattern here can backtrack: the text is the
+ * caller's, up to 1.5 million characters, and the panel serves everyone else meanwhile.
  */
 function fromBase64(text: string): Buffer | null {
-  const s = text.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/').replace(/=+$/, '');
-  if (!/^[A-Za-z0-9+/]*$/.test(s) || s.length % 4 === 1) return null;
-  const bytes = Buffer.from(s, 'base64');
+  const s = text.replace(/\s+/g, '');
+  let end = s.length;
+  if (s[end - 1] === '=') end--;
+  if (s[end - 1] === '=') end--;
+  const data = s.slice(0, end);
+  // Any other character is not base64 - a third `=`, or one before the end, included.
+  if (/[^A-Za-z0-9+/_-]/.test(data)) return null;
+  // No number of bytes encodes to one character past a group of four.
+  if (data.length % 4 === 1) return null;
+  if (end < s.length && (data.length + s.length - end) % 4 !== 0) return null;
+  const url = data.replace(/\+/g, '-').replace(/\//g, '_');
+  const bytes = Buffer.from(url, 'base64url');
   // Unused bits in the last character make a string that no file encodes to: a copying slip.
-  return bytes.toString('base64').replace(/=+$/, '') === s ? bytes : null;
+  return bytes.toString('base64url') === url ? bytes : null;
 }
 
 /** What POST /api/sites/:slug/files/upload-links answers. */
@@ -566,8 +585,14 @@ interface UploadLinkBody {
 }
 
 /**
- * An upload link as a command to run: one curl for a file that fits in a request, a loop of
- * them, piece by piece, for one that does not. FILE is the app's to fill in.
+ * An upload link as a command to run, which exits 0 only once the file is in place. FILE is the
+ * app's to fill in.
+ *
+ * A file that fits in a request goes in one curl: sent without an offset, a request is the
+ * whole file, and the panel refuses one that is not the link's size. A bigger file goes in a
+ * loop of pieces, each with its offset - and every piece is answered 200 until the last, so a
+ * file that shrank since the link was made would end the loop well with nothing in place. The
+ * loop keeps the last answer, and only `"written":{` in it, the file's entry, is success.
  */
 function uploadCommand(site: string, path: string, size: number, link: UploadLinkBody): Record<string, unknown> {
   const header = `-H '${link.header}: ${link.token}'`;
@@ -575,14 +600,15 @@ function uploadCommand(site: string, path: string, size: number, link: UploadLin
     size <= link.chunkBytes
       ? `curl -sS --fail-with-body -T "FILE" ${header} '${link.url}'`
       : [
-          `f="FILE"; n=${link.chunkBytes}; i=0; ok=1`,
+          `f="FILE"; n=${link.chunkBytes}; i=0; r=`,
           `while [ $((i * n)) -lt ${size} ]; do`,
-          `  dd if="$f" bs=$n skip=$i count=1 2>/dev/null | curl -sS --fail-with-body -w '\\n' -X PUT --data-binary @- ` +
-            `-H 'Content-Type: application/octet-stream' ${header} "${link.url}?offset=$((i * n))" || { ok=0; break; }`,
+          `  r=$(dd if="$f" bs=$n skip=$i count=1 2>/dev/null | curl -sS --fail-with-body -X PUT --data-binary @- ` +
+            `-H 'Content-Type: application/octet-stream' ${header} "${link.url}?offset=$((i * n))") || break`,
           '  i=$((i + 1))',
           'done',
-          // A piece refused ends the loop, and the command with it, as a failure.
-          '[ "$ok" = 1 ]',
+          `printf '%s\\n' "$r"`,
+          `case "$r" in *'"written":{'*) ;; *'"written":null'*) echo "Not in place: $f is shorter than the size this link is for. ` +
+            `Ask for a new link with its size and sha256." >&2; false ;; *) false ;; esac`,
         ].join('\n');
   let host = '';
   try {
@@ -598,8 +624,8 @@ function uploadCommand(site: string, path: string, size: number, link: UploadLin
     expiresAt: new Date(link.expiresAt).toISOString(),
     command,
     next:
-      'Run it in your shell with FILE replaced by the path of the file. The answer that has `written` set means the ' +
-      'file is in place. If curl cannot reach ' +
+      "Run it in your shell with FILE replaced by the path of the file. It prints the panel's answer, and exits 0 " +
+      'only once the file is in place. If curl cannot reach ' +
       (host || 'the panel') +
       ", your sandbox's network settings may not allow it: ask the user to allow that address. Until then, text goes " +
       'through wpl7_write_site_file, and a small binary file as contentBase64.',

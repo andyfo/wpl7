@@ -185,10 +185,13 @@ done
 **Upload links** hand one upload to something that has no key, such as an AI app's shell (see
 [mcp.md](mcp.md#uploading-files)). `POST /files/upload-links` with `{path, size, sha256, overwrite?}`
 answers with a URL and a token; whoever holds them sends the file to `PUT /api/file-uploads` with
-the token in `X-WPL7-Upload-Token`, in pieces of at most 8 MiB as above (`?offset=`, 0 when left
-out). The piece that completes the file puts it in place only if the whole file has the SHA-256 the
-link names, and, for a `.php` file, only if it parses; otherwise the part is removed and nothing is
-replaced. A link works once, ends after an hour without a piece arriving (what arrived is then
+the token in `X-WPL7-Upload-Token`. A file of up to 8 MiB goes in one request without `?offset=`:
+such a request is the whole file, and is refused (`400`, nothing written) unless it has the link's
+size. A bigger one goes in pieces of at most 8 MiB, each with `?offset=` the bytes sent before it.
+Every piece but the last is answered `{"written": null}`, so a client sending pieces checks that its
+last answer has `written` set. The piece that completes the file puts it in place only if the whole
+file has the SHA-256 the link names, and, for a `.php` file, only if it parses; otherwise the part
+is removed and nothing is replaced. A link works once, ends after an hour without a piece arriving (what arrived is then
 removed), and stops when whatever made it is revoked. One piece at a time: a second one while the
 first is arriving answers `409`.
 

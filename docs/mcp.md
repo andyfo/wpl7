@@ -221,7 +221,8 @@ MCP has no way to hand a tool a file: whatever a tool takes, the model writes ou
 - **From the app's own disk**, given its `sizeBytes` and `sha256`. The answer is a curl command,
   which the app runs in its shell: one request for a file of up to 8 MiB, a loop of 8 MiB pieces for
   a bigger one, up to 2 GiB. The bytes go from the app's disk to the panel and never through the
-  model.
+  model. The command exits 0 only once the file is in place, so a script can go by its status: a
+  file shorter, longer or other than the one the link names fails it.
 
 Which one an app takes is in the tool's description: curl for any file already on its disk, text
 included, whenever its shell reaches the panel, so the model never reads the file. A folder goes up

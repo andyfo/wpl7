@@ -108,6 +108,12 @@ async function registerRoutes(app: FastifyInstance, deps: AppDeps): Promise<void
    * job starts on it meanwhile - a restore queued a second later waits for the change instead
    * of replacing the folder under it. A body is read BEFORE this, never inside: the site's
    * jobs wait for the change, not for a slow client.
+   *
+   * The site is looked up again here, in the same step as the hold, with nothing awaited in
+   * between: a body read since `site` was may have taken a minute, and the site may have moved
+   * to another server meanwhile, or been deleted and another made under its name. The hold is
+   * on the site's id, and the container is found by a name the slug gives, so an old row would
+   * hold one site and write into another.
    */
   const changing = async <T>(
     site: SiteRow,
@@ -115,14 +121,16 @@ async function registerRoutes(app: FastifyInstance, deps: AppDeps): Promise<void
     /** Whether what came of it can change what visitors see: its caches are then emptied. */
     changesPages: (result: T) => boolean = () => true,
   ): Promise<T> => {
-    const release = deps.worker.holdSite(site, FILE_SAFE_JOBS);
+    const current = siteOf(site.slug);
+    if (current.id !== site.id) throw notFound(`Site "${site.slug}" was deleted while this request arrived; nothing was changed`);
+    const release = deps.worker.holdSite(current, FILE_SAFE_JOBS);
     let result: T;
     try {
-      result = await work(await containerOf(site));
+      result = await work(await containerOf(current));
     } finally {
       release();
     }
-    if (changesPages(result)) await clearAfterChange(deps, site);
+    if (changesPages(result)) await clearAfterChange(deps, current);
     return result;
   };
 
@@ -462,6 +470,7 @@ async function registerRoutes(app: FastifyInstance, deps: AppDeps): Promise<void
             `At most ${FILE_LIMITS.chunkBytes} bytes per request: send the file in pieces, in order, each with ?offset= the bytes sent before it`,
           );
         }
+        // Before the body, to refuse at once; `changing` looks again, after it.
         const site = siteOf(link.slug);
         if (site.id !== link.siteId) throw notFound(`The site this link was made for is gone`);
         const offset = req.query.offset ?? 0;
@@ -481,6 +490,13 @@ async function registerRoutes(app: FastifyInstance, deps: AppDeps): Promise<void
           if (spent) {
             if (spent.chunkSha === chunkSha) return spent.result;
             throw conflict('This upload link has been used: its file is in place');
+          }
+          // Without an offset, a request is the whole file. A shorter one would otherwise be taken
+          // as the first piece of it: answered 200, with nothing in place.
+          if (req.query.offset === undefined && body.length !== link.size) {
+            throw badRequest(
+              `Not saved: the file sent is ${body.length} bytes, and this link is for one of ${link.size}. Ask for a new link with its size and sha256`,
+            );
           }
           link.started = true;
           return await changing(

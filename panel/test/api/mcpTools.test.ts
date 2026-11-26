@@ -433,6 +433,44 @@ describe('the file tools', () => {
     expect(world.docker.calls.filter((c) => c.method.startsWith('exec'))).toEqual([]);
   });
 
+  it('never empty a file with text that decodes to nothing: padding alone, misplaced padding, or no bytes asked for by mistake', async () => {
+    const { world, client } = await panel();
+    addSite(world, 'alpha');
+    const mcp = client('manage');
+    const upload = (extra: Record<string, unknown>) =>
+      mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'wp-content/uploads/logo.png', overwrite: true, ...extra });
+    for (const contentBase64 of ['=', '==', '===', '====', ' = \n=', 'QQ=', 'QUJD==', 'QQ==QQ==', 'data:,QQ==']) {
+      const res = await upload({ contentBase64 });
+      expect(res.value.error?.message, JSON.stringify(contentBase64)).toBe('contentBase64 is not base64: nothing was saved');
+    }
+    // An empty file only when asked for in so many words.
+    for (const contentBase64 of ['', ' \n ']) {
+      const res = await upload({ contentBase64 });
+      expect(res.value).toMatchObject({ error: { message: 'contentBase64 holds no bytes: nothing was saved' }, hint: 'To save an empty file, send sizeBytes: 0 with it.' });
+    }
+    expect(world.docker.calls.filter((c) => c.method.startsWith('exec'))).toEqual([]);
+    world.docker.execQueue.push({ stdout: 'rw/f/f/0/644/1727000000.25/33/33/logo.png/\0', stderr: '', exitCode: 0 });
+    const empty = await upload({ contentBase64: '', sizeBytes: 0 });
+    expect(empty.value).toMatchObject({ status: 200, bytes: 0, sha256: sha('') });
+    // Valid text in every form the tool takes: padded, unpadded, URL-safe, wrapped.
+    for (const [contentBase64, bytes] of [['QQ==', 'A'], ['QQ', 'A'], ['QUI=', 'AB'], ['QUJD', 'ABC'], ['-_-_', '\xfb\xff\xbf'], ['QU\nJD\r\n', 'ABC']] as const) {
+      world.docker.execQueue.push({ stdout: 'rw/f/f/1/644/1727000000.25/33/33/logo.png/\0', stderr: '', exitCode: 0 });
+      const res = await upload({ contentBase64 });
+      expect(res.value.sha256, contentBase64).toBe(sha(Buffer.from(bytes, 'latin1')));
+    }
+  });
+
+  it('refuse a long malformed text at once, without holding the panel up', async () => {
+    const { world, client } = await panel();
+    addSite(world, 'alpha');
+    // A run of padding followed by one more character: the old decoder took time growing with the
+    // square of its length here, about an hour at the tool's 1.5 million characters.
+    const started = Date.now();
+    const res = await client('manage').call('wpl7_upload_site_file', { site: 'alpha', path: 'a.bin', contentBase64: `${'='.repeat(1_499_999)}A` });
+    expect(res.value.error.message).toBe('contentBase64 is not base64: nothing was saved');
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
   it("hand out a curl command for a file on the app's own disk, which puts that file there", async () => {
     const { app, world, client, activity } = await panel();
     addSite(world, 'alpha');
@@ -457,9 +495,10 @@ describe('the file tools', () => {
     world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.notFound });
     const big = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'theme.zip', sizeBytes: 20 * 1024 * 1024, sha256: sha('x') });
     expect(big.value.command).toContain('while [ $((i * n)) -lt 20971520 ]; do');
-    expect(big.value.command).toContain('"http://panel.example.test/api/file-uploads?offset=$((i * n))" || { ok=0; break; }');
-    // A refused piece makes the whole command fail, not just stop.
-    expect(big.value.command.split('\n').at(-1)).toBe('[ "$ok" = 1 ]');
+    expect(big.value.command).toContain('"http://panel.example.test/api/file-uploads?offset=$((i * n))") || break');
+    // Success is the last answer having the file in place: a refused piece, or a file that ran
+    // out before its size, ends the command as a failure (run for real in siteFilesScripts.test.ts).
+    expect(big.value.command.split('\n').at(-1)).toMatch(/^case "\$r" in \*'"written":\{'\*\) ;; \*'"written":null'\*\) echo "Not in place: /);
   });
 
   it('stop the links an app made once MCP is switched off', async () => {

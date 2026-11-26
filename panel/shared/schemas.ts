@@ -1469,9 +1469,9 @@ export const siteUploadLinkBody = z.object({
 
 export const fileUploadQuery = z.object({
   /**
-   * Where this piece goes: the bytes sent before it. Left out, 0 - so `curl -T file <url>`
-   * sends a file whole. An empty value is refused rather than taken as 0, which would start
-   * the file over.
+   * Where this piece goes: the bytes sent before it. Left out, the request is the whole file -
+   * `curl -T file <url>` - and is refused unless it has the link's size. An empty value is
+   * refused rather than taken as 0, which would start the file over.
    */
   offset: z
     .string()

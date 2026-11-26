@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, type Writable } from 'node:stream';
@@ -10,6 +11,8 @@ import type { DockerPort, ExecOpts, RunResult } from '../../src/services/docker.
 import { SiteFilesService } from '../../src/services/siteFiles.js';
 import { FILE_EXIT, SCRIPTS } from '../../src/services/siteFilesScripts.js';
 import { AppError } from '../../src/lib/errors.js';
+import { sites } from '../../src/db/schema.js';
+import { makeApp, makeWorld, mcpClient } from '../helpers.js';
 
 /**
  * The Web FTP scripts, for real: every command runs through a local `sh` standing in for
@@ -20,7 +23,8 @@ import { AppError } from '../../src/lib/errors.js';
  * where those are: CI's Ubuntu runner, or on a Mac through
  *   docker run --rm -v "$PWD":/w -v /w/panel/node_modules -w /w/panel node:22 \
  *     sh -c 'npm ci --ignore-scripts=false >/dev/null && npx vitest run test/unit/siteFilesScripts.test.ts'
- * Zip tests need `php` with the zip extension, which is all they use.
+ * Zip tests need `php` with the zip extension, which is all they use. The upload link's commands
+ * need curl.
  */
 
 const gnu =
@@ -30,6 +34,7 @@ const phpZip =
   spawnSync('php', ['-n', '-r', 'if (!class_exists("ZipArchive")) @dl("zip.so"); exit(class_exists("ZipArchive") ? 0 : 1);'])
     .status === 0;
 const php = spawnSync('php', ['-v']).status === 0;
+const curl = spawnSync('curl', ['--version']).status === 0;
 /** Permission checks mean nothing to root, which may do anything. */
 const root = process.getuid?.() === 0;
 
@@ -647,3 +652,82 @@ describe.skipIf(!phpZip)('Web FTP zip archives, run for real', () => {
     expect(err.statusCode).toBe(400);
   });
 });
+
+/** A command in `sh`, the way an app's shell runs it: its exit status, and all it printed. */
+function runInSh(command: string): Promise<{ code: number; out: string }> {
+  return new Promise((resolve) => {
+    const child = spawn('sh', ['-c', command]);
+    let out = '';
+    child.stdout.on('data', (c: Buffer) => (out += c.toString()));
+    child.stderr.on('data', (c: Buffer) => (out += c.toString()));
+    child.on('close', (code) => resolve({ code: code ?? 1, out }));
+  });
+}
+
+/**
+ * The commands wpl7_upload_site_file hands out, run as an app runs them: curl in a shell, the
+ * panel listening, and the scripts above on the test's folder. Exit 0 must mean the file is in
+ * place - a script that goes on to the next step goes by nothing else.
+ */
+describe.skipIf(!gnu || !curl)('upload link commands, run for real', () => {
+  it('put a file in place in one request or in pieces, and fail for one shorter, longer or other than the link is for', async () => {
+    const world = await makeWorld();
+    const { app } = await makeApp(world);
+    world.deps.settings.set('mcpEnabled', true);
+    const now = Date.now();
+    world.db
+      .insert(sites)
+      .values({ slug: 'alpha', title: 'a', domains: '["alpha.test"]', phpVersion: '8.3', status: 'running', dbName: 'a', dbUser: 'a', dbPassword: 'x', containerName: 'wp-alpha', createdAt: now, updatedAt: now })
+      .run();
+    world.docker.containers.set('wp-alpha', 'running');
+    // The site's files are this test's folder, worked on by the scripts for real.
+    (world.servers.handleFor(1) as { siteFiles: SiteFilesService }).siteFiles = files;
+    const local = fs.mkdtempSync(path.join(os.tmpdir(), 'wpl7-app-'));
+    await app.listen({ port: 0, host: '127.0.0.1' });
+    try {
+      // The links point where the panel listens.
+      Object.assign(world.config, { panelDomain: `127.0.0.1:${(app.server.address() as AddressInfo).port}` });
+      const mcp = mcpClient(app, { authorization: `Bearer ${world.deps.apiKeys.create('ci', 'manage').token}` });
+      /** The command for a link to `declared`, run with `onDisk` as the file it sends. */
+      const upload = async (name: string, declared: Buffer, onDisk: Buffer = declared) => {
+        const file = path.join(local, `my ${name}`);
+        fs.writeFileSync(file, onDisk);
+        const res = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: name, sizeBytes: declared.length, sha256: sha(declared) });
+        expect(res.isError, JSON.stringify(res.value)).toBe(false);
+        return runInSh((res.value.command as string).replace('FILE', file));
+      };
+      const piece = 8 * 1024 * 1024;
+
+      for (const [name, data] of [['one.zip', crypto.randomBytes(3000)], ['pieces.zip', crypto.randomBytes(piece + 1000)], ['empty.txt', Buffer.alloc(0)]] as const) {
+        const ran = await upload(name, data);
+        expect(ran.code, ran.out).toBe(0);
+        expect(fs.readFileSync(at(name)).equals(data), name).toBe(true);
+      }
+      expect(leftovers()).toEqual([]);
+
+      // One request: a file that shrank, grew or changed since the link was made.
+      const small = crypto.randomBytes(3000);
+      const shorter = await upload('a.zip', small, small.subarray(0, 2000));
+      expect(shorter.code).not.toBe(0);
+      expect(shorter.out).toContain('Not saved: the file sent is 2000 bytes, and this link is for one of 3000');
+      expect((await upload('b.zip', small, Buffer.concat([small, Buffer.from('x')]))).code).not.toBe(0);
+      const other = await upload('c.zip', small, crypto.randomBytes(3000));
+      expect(other.code).not.toBe(0);
+      expect(other.out).toContain('its SHA-256 differs');
+
+      // Pieces: every one is answered 200 until the last, so the command has to look at it.
+      const big = crypto.randomBytes(piece + 1000);
+      const shortLast = await upload('d.zip', big, big.subarray(0, piece + 500));
+      expect(shortLast.code).not.toBe(0);
+      expect(shortLast.out).toContain('"written":null');
+      expect(shortLast.out).toContain('is shorter than the size this link is for');
+      // Shorter by more than a piece: the empty piece after it is refused.
+      expect((await upload('e.zip', big, big.subarray(0, 4096))).code).not.toBe(0);
+      for (const name of ['a.zip', 'b.zip', 'c.zip', 'd.zip', 'e.zip']) expect(fs.existsSync(at(name)), name).toBe(false);
+    } finally {
+      await app.close();
+      fs.rmSync(local, { recursive: true, force: true });
+    }
+  });
+});
+
