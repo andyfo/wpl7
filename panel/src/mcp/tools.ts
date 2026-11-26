@@ -585,30 +585,40 @@ interface UploadLinkBody {
 }
 
 /**
- * An upload link as a command to run, which exits 0 only once the file is in place. FILE is the
- * app's to fill in.
+ * An upload link as a command to run, which exits 0 only once the file is in place - on the
+ * panel's own answer saying so, `"written":{` and the file's entry, and on nothing else. An exit
+ * code alone says too little: curl takes a redirect, a proxy's sign-in page say, as success, and
+ * every piece of a file is answered 200 until the last. FILE is the app's to fill in.
  *
- * A file that fits in a request goes in one curl: sent without an offset, a request is the
- * whole file, and the panel refuses one that is not the link's size. A bigger file goes in a
- * loop of pieces, each with its offset - and every piece is answered 200 until the last, so a
- * file that shrank since the link was made would end the loop well with nothing in place. The
- * loop keeps the last answer, and only `"written":{` in it, the file's entry, is success.
+ * A file that fits in a request goes in one curl: without an offset, a request is the whole
+ * file, and the panel refuses one that is not the link's size. A bigger file goes in a loop of
+ * pieces, each with its offset, once the file on the disk is found to be the link's size - one
+ * that grew would otherwise go short of its new end, and land as the file it was. The loop stops
+ * at the first answer that is not the panel's. `-g`: curl reads [ ] and { } in a file name, or a
+ * URL, as a pattern of several, and sends nothing for `photo[1].png`.
  */
 function uploadCommand(site: string, path: string, size: number, link: UploadLinkBody): Record<string, unknown> {
   const header = `-H '${link.header}: ${link.token}'`;
+  const notTaken = `echo "Not in place: the panel did not take the file." >&2; false`;
   const command =
     size <= link.chunkBytes
-      ? `curl -sS --fail-with-body -T "FILE" ${header} '${link.url}'`
+      ? `r=$(curl -sS -g --fail-with-body -T "FILE" ${header} '${link.url}'); printf '%s\\n' "$r"; ` +
+        `case "$r" in *'"written":{'*) ;; *) ${notTaken} ;; esac`
       : [
           `f="FILE"; n=${link.chunkBytes}; i=0; r=`,
-          `while [ $((i * n)) -lt ${size} ]; do`,
-          `  r=$(dd if="$f" bs=$n skip=$i count=1 2>/dev/null | curl -sS --fail-with-body -X PUT --data-binary @- ` +
+          `if [ "$(wc -c < "$f" | tr -dc 0-9)" != ${size} ]; then`,
+          `  echo "Not sent: $f is not the ${size} bytes this link is for. Ask for a new link with its size and sha256." >&2; false`,
+          'else',
+          `  while [ $((i * n)) -lt ${size} ]; do`,
+          `    r=$(dd if="$f" bs=$n skip=$i count=1 2>/dev/null | curl -sS -g --fail-with-body -X PUT --data-binary @- ` +
             `-H 'Content-Type: application/octet-stream' ${header} "${link.url}?offset=$((i * n))") || break`,
-          '  i=$((i + 1))',
-          'done',
-          `printf '%s\\n' "$r"`,
-          `case "$r" in *'"written":{'*) ;; *'"written":null'*) echo "Not in place: $f is shorter than the size this link is for. ` +
-            `Ask for a new link with its size and sha256." >&2; false ;; *) false ;; esac`,
+          `    case "$r" in *'"received":'*) ;; *) break ;; esac`,
+          '    i=$((i + 1))',
+          '  done',
+          `  printf '%s\\n' "$r"`,
+          `  case "$r" in *'"written":{'*) ;; *'"written":null'*) echo "Not in place: $f got shorter while it was sent. ` +
+            `Ask for a new link with its size and sha256." >&2; false ;; *) ${notTaken} ;; esac`,
+          'fi',
         ].join('\n');
   let host = '';
   try {

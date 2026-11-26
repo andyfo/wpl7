@@ -12,7 +12,7 @@ import { SiteFilesService } from '../../src/services/siteFiles.js';
 import { FILE_EXIT, SCRIPTS } from '../../src/services/siteFilesScripts.js';
 import { AppError } from '../../src/lib/errors.js';
 import { sites } from '../../src/db/schema.js';
-import { makeApp, makeWorld, mcpClient } from '../helpers.js';
+import { makeApp, makeWorld, mcpClient, runInSh } from '../helpers.js';
 
 /**
  * The Web FTP scripts, for real: every command runs through a local `sh` standing in for
@@ -653,24 +653,13 @@ describe.skipIf(!phpZip)('Web FTP zip archives, run for real', () => {
   });
 });
 
-/** A command in `sh`, the way an app's shell runs it: its exit status, and all it printed. */
-function runInSh(command: string): Promise<{ code: number; out: string }> {
-  return new Promise((resolve) => {
-    const child = spawn('sh', ['-c', command]);
-    let out = '';
-    child.stdout.on('data', (c: Buffer) => (out += c.toString()));
-    child.stderr.on('data', (c: Buffer) => (out += c.toString()));
-    child.on('close', (code) => resolve({ code: code ?? 1, out }));
-  });
-}
-
 /**
  * The commands wpl7_upload_site_file hands out, run as an app runs them: curl in a shell, the
  * panel listening, and the scripts above on the test's folder. Exit 0 must mean the file is in
  * place - a script that goes on to the next step goes by nothing else.
  */
 describe.skipIf(!gnu || !curl)('upload link commands, run for real', () => {
-  it('put a file in place in one request or in pieces, and fail for one shorter, longer or other than the link is for', async () => {
+  it('put a file in place in one request or in pieces, and fail for one shorter, longer or other than the link is for, sending none of it', async () => {
     const world = await makeWorld();
     const { app } = await makeApp(world);
     world.deps.settings.set('mcpEnabled', true);
@@ -698,7 +687,8 @@ describe.skipIf(!gnu || !curl)('upload link commands, run for real', () => {
       };
       const piece = 8 * 1024 * 1024;
 
-      for (const [name, data] of [['one.zip', crypto.randomBytes(3000)], ['pieces.zip', crypto.randomBytes(piece + 1000)], ['empty.txt', Buffer.alloc(0)]] as const) {
+      // A local name curl would read as a pattern of several files: photo[1].png.
+      for (const [name, data] of [['photo[1].png', crypto.randomBytes(3000)], ['pieces.zip', crypto.randomBytes(piece + 1000)], ['empty.txt', Buffer.alloc(0)]] as const) {
         const ran = await upload(name, data);
         expect(ran.code, ran.out).toBe(0);
         expect(fs.readFileSync(at(name)).equals(data), name).toBe(true);
@@ -715,15 +705,18 @@ describe.skipIf(!gnu || !curl)('upload link commands, run for real', () => {
       expect(other.code).not.toBe(0);
       expect(other.out).toContain('its SHA-256 differs');
 
-      // Pieces: every one is answered 200 until the last, so the command has to look at it.
+      // Pieces: a file of another size is not sent at all - one that grew by a byte past an exact
+      // number of pieces too, which the loop would otherwise send short of its new end.
       const big = crypto.randomBytes(piece + 1000);
-      const shortLast = await upload('d.zip', big, big.subarray(0, piece + 500));
-      expect(shortLast.code).not.toBe(0);
-      expect(shortLast.out).toContain('"written":null');
-      expect(shortLast.out).toContain('is shorter than the size this link is for');
-      // Shorter by more than a piece: the empty piece after it is refused.
-      expect((await upload('e.zip', big, big.subarray(0, 4096))).code).not.toBe(0);
-      for (const name of ['a.zip', 'b.zip', 'c.zip', 'd.zip', 'e.zip']) expect(fs.existsSync(at(name)), name).toBe(false);
+      const shorter2 = await upload('d.zip', big, big.subarray(0, piece + 500));
+      expect(shorter2.code).not.toBe(0);
+      expect(shorter2.out).toContain(`is not the ${piece + 1000} bytes this link is for`);
+      const exact = crypto.randomBytes(2 * piece);
+      const grew = await upload('e.zip', exact, Buffer.concat([exact, Buffer.from('x')]));
+      expect(grew.code).not.toBe(0);
+      expect(grew.out).toContain(`is not the ${2 * piece} bytes this link is for`);
+      expect((await upload('f.zip', big, crypto.randomBytes(piece + 1000))).out).toContain('its SHA-256 differs');
+      for (const name of ['a.zip', 'b.zip', 'c.zip', 'd.zip', 'e.zip', 'f.zip']) expect(fs.existsSync(at(name)), name).toBe(false);
     } finally {
       await app.close();
       fs.rmSync(local, { recursive: true, force: true });

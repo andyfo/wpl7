@@ -1,5 +1,6 @@
 import { ReminderService } from '../src/services/reminders.js';
 import { SiteCronService } from '../src/services/siteCron.js';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -2089,6 +2090,20 @@ export function curlAnswer(
     stderr: `\n@@wpl7-meta@@${JSON.stringify(meta)}\n@@wpl7-headers@@${headers}\n`,
     exitCode: opts.exitCode ?? 0,
   };
+}
+
+/**
+ * A command in `sh`, the way an app's shell runs it: its exit status, and all it printed. Never
+ * blocks the event loop, so the panel a command talks to can be this test's own.
+ */
+export function runInSh(command: string): Promise<{ code: number; out: string }> {
+  return new Promise((resolve) => {
+    const child = spawn('sh', ['-c', command]);
+    let out = '';
+    child.stdout.on('data', (c: Buffer) => (out += c.toString()));
+    child.stderr.on('data', (c: Buffer) => (out += c.toString()));
+    child.on('close', (code) => resolve({ code: code ?? 1, out }));
+  });
 }
 
 export async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {

@@ -189,7 +189,8 @@ the token in `X-WPL7-Upload-Token`. A file of up to 8 MiB goes in one request wi
 such a request is the whole file, and is refused (`400`, nothing written) unless it has the link's
 size. A bigger one goes in pieces of at most 8 MiB, each with `?offset=` the bytes sent before it.
 Every piece but the last is answered `{"written": null}`, so a client sending pieces checks that its
-last answer has `written` set. The piece that completes the file puts it in place only if the whole
+last answer has `written` set. It goes by that answer rather than curl's exit status, which is 0 for
+a redirect too. The piece that completes the file puts it in place only if the whole
 file has the SHA-256 the link names, and, for a `.php` file, only if it parses; otherwise the part
 is removed and nothing is replaced. A link works once, ends after an hour without a piece arriving (what arrived is then
 removed), and stops when whatever made it is revoked. One piece at a time: a second one while the
