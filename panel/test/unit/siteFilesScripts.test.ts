@@ -20,11 +20,13 @@ import { makeApp, makeWorld, mcpClient, runInSh } from '../helpers.js';
  * is the part a fake cannot - that the scripts do what siteFiles.ts believes they do.
  *
  * The scripts are written for the site image (Debian: dash and GNU tools), so they only run
- * where those are: CI's Ubuntu runner, or on a Mac through
- *   docker run --rm -v "$PWD":/w -v /w/panel/node_modules -w /w/panel node:22 \
- *     sh -c 'npm ci --ignore-scripts=false >/dev/null && npx vitest run test/unit/siteFilesScripts.test.ts'
- * Zip tests need `php` with the zip extension, which is all they use. The upload link's commands
- * need curl.
+ * where those are. CI runs this file in a container of the Debian the site image is built on
+ * (.github/workflows/test.yml, `scripts`), where nothing may skip; on a Mac it runs the same way:
+ *   docker run --rm -v "$PWD":/w -v /w/panel/node_modules -w /w/panel node:22-trixie sh -c \
+ *     'apt-get update -qq && apt-get install -y -qq php-cli php-zip >/dev/null \
+ *      && npm ci --ignore-scripts=false >/dev/null && npx vitest run test/unit/siteFilesScripts.test.ts'
+ * That runs as root, which skips the one test of a permission refused. Zip tests need `php` with
+ * the zip extension, which is all they use. The upload link's commands need curl.
  */
 
 const gnu =
@@ -37,6 +39,16 @@ const php = spawnSync('php', ['-v']).status === 0;
 const curl = spawnSync('curl', ['--version']).status === 0;
 /** Permission checks mean nothing to root, which may do anything. */
 const root = process.getuid?.() === 0;
+
+/**
+ * Where these tests must run - CI's job for them - a tool missing is a failure. Skipped, they
+ * pass without having run anything, as they did on CI once its Ubuntu took the Rust coreutils.
+ */
+describe.runIf(process.env.WPL7_SCRIPT_TESTS === 'required')('where these tests must run', () => {
+  it('has every tool they use, and runs them as a user that permissions apply to', () => {
+    expect({ gnu, php, phpZip, curl, root }).toEqual({ gnu: true, php: true, phpZip: true, curl: true, root: false });
+  });
+});
 
 /** `docker exec` stand-in: the same argv, run here, with the env and working directory it asks for. */
 class LocalShell {

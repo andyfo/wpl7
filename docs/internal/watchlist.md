@@ -85,6 +85,7 @@ for a reason; remove one once there is nothing left to watch.
 | [WordPress's incompatible SQL modes, as a package's triggers run in them](#wordpresss-incompatible-sql-modes-as-a-packages-triggers-run-in-them) | Low | 2026-11-24 10:31 UTC | 7.1.5 takes out six modes; trunk adds `NO_BACKSLASH_ESCAPES`, which the panel takes out already |
 | [MariaDB's keywords and functions, as a trigger's words are read](#mariadbs-keywords-and-functions-as-a-triggers-words-are-read) | Low | 2026-11-24 11:54 UTC | 11.4.13: 699 keywords, 268 functions, as `panel/src/lib/mariadbWords.ts` has them; spatial functions are not among them |
 | [MCP: no way to hand a tool a file](#mcp-no-way-to-hand-a-tool-a-file) | Low | 2026-11-25 18:17 UTC | `io.modelcontextprotocol/files` is a draft extension, last changed 2026-11-09, with no reference implementation and no app known to support it |
+| [CI: the Web FTP scripts' tests, on the site image's Debian](#ci-the-web-ftp-scripts-tests-on-the-site-images-debian) | Low | 2026-11-26 09:05 UTC | WordPress's fpm image and `node:22-trixie` are both Debian 13.8 with GNU coreutils 9.7; `ubuntu-latest` is Ubuntu 26.04, whose `head` is uutils 0.10.0 |
 
 ## Traefik: an idle visitor's rate limit refills
 
@@ -1929,4 +1930,25 @@ for a reason; remove one once there is nothing left to watch.
   `wpl7_upload_site_file` a file argument marked `x-mcp-file` for clients that declare the extension,
   and answer its `upload_required` with an upload link as the target. The app then sends the file
   itself, from a file picker or its sandbox. Keep base64 and the curl command for apps without it.
+
+## CI: the Web FTP scripts' tests, on the site image's Debian
+
+- **Priority:** Low
+- **Last checked:** 2026-11-26 09:05 UTC. `wordpress:php8.4-fpm`, which `deploy/wordpress-image` builds on, is
+  Debian 13.8 with GNU coreutils 9.7, findutils 4.10.0 and dash. `node:22-trixie` is Debian 13.8 with
+  the same coreutils. `ubuntu-latest` is the `ubuntu-26.04` runner image, whose `head` is
+  `uutils coreutils 0.10.0`.
+- **The problem:** `panel/test/unit/siteFilesScripts.test.ts` runs the Web FTP scripts for real
+  only on GNU tools, as the site's container has them, and skips those tests elsewhere. Once
+  `ubuntu-latest` moved to Ubuntu 26.04 and its Rust coreutils, the main test job skipped 43 of the
+  file's 47 tests and still passed.
+- **What we do about it:** the `scripts` job in `.github/workflows/test.yml` runs the file in
+  `node:22-trixie`, the Debian release of the site image's base, as the `node` user.
+  `WPL7_SCRIPT_TESTS=required` makes a missing tool, or running as root, a failure there.
+- **Check:** `docker run --rm --entrypoint sh wordpress:php8.4-fpm -c 'cat /etc/debian_version;
+  head --version | head -1'`, and the same in the `scripts` job's image. In a recent pull request's
+  run, the `scripts` job ran the file with nothing skipped.
+- **When it changes:** when the WordPress image moves to another Debian release, move the job to the
+  node image of that release (`node:22-<codename>`), in the same pull request as the site image if
+  it can be.
 

@@ -38,6 +38,10 @@ cd panel && npm ci
 npm run typecheck && npm test
 ```
 
+On a Mac, the tests of the Web FTP scripts skip themselves: they need the GNU tools of the site
+image's Debian. CI runs them in a Debian container, and the top of
+`panel/test/unit/siteFilesScripts.test.ts` has the command to run them the same way.
+
 The tests never touch the network or a real Docker daemon. A change in behavior comes with a test
 and updates the documentation in the same pull request. These pages are in `docs/site/`, and
 `docs/site/README.md` has their writing rules.

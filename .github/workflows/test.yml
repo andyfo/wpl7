@@ -69,12 +69,32 @@ jobs:
       - name: Check the connect protocol's vectors
         run: php panel/connect-plugin/tests/run.php
 
+  # The Web FTP scripts run inside a site's container, on its Debian's GNU tools and dash, and
+  # test/unit/siteFilesScripts.test.ts runs them for real only where those are. ubuntu-latest has
+  # Ubuntu 26.04's Rust coreutils instead, where that file skips them, so it runs here as well: on
+  # the Debian the site image is built on (deploy/wordpress-image, wordpress:*-fpm), as a user
+  # that permissions apply to. WPL7_SCRIPT_TESTS=required turns a missing tool into a failure,
+  # where it would otherwise skip the tests that need it and pass.
+  scripts:
+    name: Web FTP scripts, on Debian
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container: node:22-trixie
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install PHP with zip, for the PHP and zip checks
+        run: apt-get update && apt-get install -y --no-install-recommends php-cli php-zip
+      - name: Run the scripts' tests, as the node user
+        run: |
+          chown -R node:node .
+          su node -s /bin/sh -c 'cd panel && npm ci && WPL7_SCRIPT_TESTS=required npx vitest run test/unit/siteFilesScripts.test.ts'
+
   # What a pull request's run tested, by tree - the merge result it checked out. A squash merge
   # made while main stood still lands exactly this tree on main, and deploy.yml builds that
   # without testing it a second time.
   mark:
     name: Mark the tested tree
-    needs: [test, check, php]
+    needs: [test, check, php, scripts]
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
