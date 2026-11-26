@@ -2106,6 +2106,9 @@ export function runInSh(command: string): Promise<{ code: number; out: string }>
   });
 }
 
+/** `s` as one argument in `sh`: in single quotes, each ' in it closed, escaped and opened again. */
+export const shellArg = (s: string): string => `'${s.replaceAll("'", `'\\''`)}'`;
+
 export async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   // Checked often: most conditions are one query, and ~200 waits in the suite each lose half

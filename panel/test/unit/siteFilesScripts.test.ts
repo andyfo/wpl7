@@ -12,7 +12,7 @@ import { SiteFilesService } from '../../src/services/siteFiles.js';
 import { FILE_EXIT, SCRIPTS } from '../../src/services/siteFilesScripts.js';
 import { AppError } from '../../src/lib/errors.js';
 import { sites } from '../../src/db/schema.js';
-import { makeApp, makeWorld, mcpClient, runInSh } from '../helpers.js';
+import { makeApp, makeWorld, mcpClient, runInSh, shellArg } from '../helpers.js';
 
 /**
  * The Web FTP scripts, for real: every command runs through a local `sh` standing in for
@@ -691,11 +691,12 @@ describe.skipIf(!gnu || !curl)('upload link commands, run for real', () => {
       const mcp = mcpClient(app, { authorization: `Bearer ${world.deps.apiKeys.create('ci', 'manage').token}` });
       /** The command for a link to `declared`, run with `onDisk` as the file it sends. */
       const upload = async (name: string, declared: Buffer, onDisk: Buffer = declared) => {
-        const file = path.join(local, `my ${name}`);
+        // A name a shell would read: $1, a quote, a backtick.
+        const file = path.join(local, `my $1 it's \`x\` ${name}`);
         fs.writeFileSync(file, onDisk);
         const res = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: name, sizeBytes: declared.length, sha256: sha(declared) });
         expect(res.isError, JSON.stringify(res.value)).toBe(false);
-        return runInSh((res.value.command as string).replace('FILE', file));
+        return runInSh((res.value.command as string).replace('FILE', shellArg(file)));
       };
       const piece = 8 * 1024 * 1024;
 

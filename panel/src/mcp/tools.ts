@@ -596,16 +596,23 @@ interface UploadLinkBody {
  * that grew would otherwise go short of its new end, and land as the file it was. The loop stops
  * at the first answer that is not the panel's. `-g`: curl reads [ ] and { } in a file name, or a
  * URL, as a pattern of several, and sends nothing for `photo[1].png`.
+ *
+ * The path goes in as the one argument of a script whose text the shell never expands (a quoted
+ * heredoc), and the script reads it from $1. Put into the script itself, a name such as
+ * `price$5.csv` would reach curl and dd as `price.csv`, and a quote or a backtick in it would be
+ * read as shell.
  */
 function uploadCommand(site: string, path: string, size: number, link: UploadLinkBody): Record<string, unknown> {
   const header = `-H '${link.header}: ${link.token}'`;
   const notTaken = `echo "Not in place: the panel did not take the file." >&2; false`;
-  const command =
+  const script =
     size <= link.chunkBytes
-      ? `r=$(curl -sS -g --fail-with-body -T "FILE" ${header} '${link.url}'); printf '%s\\n' "$r"; ` +
-        `case "$r" in *'"written":{'*) ;; *) ${notTaken} ;; esac`
+      ? [
+          `r=$(curl -sS -g --fail-with-body -T "$1" ${header} '${link.url}'); printf '%s\\n' "$r"`,
+          `case "$r" in *'"written":{'*) ;; *) ${notTaken} ;; esac`,
+        ]
       : [
-          `f="FILE"; n=${link.chunkBytes}; i=0; r=`,
+          `f=$1; n=${link.chunkBytes}; i=0; r=`,
           `if [ "$(wc -c < "$f" | tr -dc 0-9)" != ${size} ]; then`,
           `  echo "Not sent: $f is not the ${size} bytes this link is for. Ask for a new link with its size and sha256." >&2; false`,
           'else',
@@ -619,7 +626,8 @@ function uploadCommand(site: string, path: string, size: number, link: UploadLin
           `  case "$r" in *'"written":{'*) ;; *'"written":null'*) echo "Not in place: $f got shorter while it was sent. ` +
             `Ask for a new link with its size and sha256." >&2; false ;; *) ${notTaken} ;; esac`,
           'fi',
-        ].join('\n');
+        ];
+  const command = [`sh -s -- FILE <<'WPL7'`, ...script, 'WPL7'].join('\n');
   let host = '';
   try {
     host = new URL(link.url).host;
@@ -634,8 +642,8 @@ function uploadCommand(site: string, path: string, size: number, link: UploadLin
     expiresAt: new Date(link.expiresAt).toISOString(),
     command,
     next:
-      "Run it in your shell with FILE replaced by the path of the file. It prints the panel's answer, and exits 0 " +
-      'only once the file is in place. If curl cannot reach ' +
+      "Run it in your shell with FILE replaced by the path of the file in single quotes, a ' inside it written as " +
+      "'\\''. It prints the panel's answer, and exits 0 only once the file is in place. If curl cannot reach " +
       (host || 'the panel') +
       ", your sandbox's network settings may not allow it: ask the user to allow that address. Until then, text goes " +
       'through wpl7_write_site_file, and a small binary file as contentBase64.',

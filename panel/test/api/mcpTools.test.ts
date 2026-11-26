@@ -16,7 +16,7 @@ import { FILE_EXIT } from '../../src/services/siteFilesScripts.js';
 import { injectAs } from '../../src/mcp/call.js';
 import type { ApiActivityDto } from '../../shared/types.js';
 import type { AccessLevel } from '../../shared/access.js';
-import { makeApp, makeWorld, mcpClient, runInSh, type TestWorld } from '../helpers.js';
+import { makeApp, makeWorld, mcpClient, runInSh, shellArg, type TestWorld } from '../helpers.js';
 
 async function panel() {
   const world = await makeWorld();
@@ -486,9 +486,17 @@ describe('the file tools', () => {
     expect(res.isError).toBe(false);
     expect(res.value).toMatchObject({ status: 201, site: 'alpha', path: 'plugin.zip', sizeBytes: 5, expiresAt: expect.stringMatching(/^\d{4}-\d\d-\d\dT/) });
     const command = res.value.command as string;
-    expect(command).toMatch(
-      /^r=\$\(curl -sS -g --fail-with-body -T "FILE" -H 'X-WPL7-Upload-Token: wpl7up_[A-Za-z0-9_-]{43}' 'http:\/\/panel\.example\.test\/api\/file-uploads'\); printf '%s\\n' "\$r"; case "\$r" in \*'"written":\{'\*\) ;; \*\) echo "Not in place: the panel did not take the file\." >&2; false ;; esac$/,
-    );
+    // The path is the script's one argument, read from $1: never part of the script's text.
+    expect(command.split('\n')).toEqual([
+      `sh -s -- FILE <<'WPL7'`,
+      expect.stringMatching(
+        /^r=\$\(curl -sS -g --fail-with-body -T "\$1" -H 'X-WPL7-Upload-Token: wpl7up_[A-Za-z0-9_-]{43}' 'http:\/\/panel\.example\.test\/api\/file-uploads'\); printf '%s\\n' "\$r"$/,
+      ),
+      `case "$r" in *'"written":{'*) ;; *) echo "Not in place: the panel did not take the file." >&2; false ;; esac`,
+      'WPL7',
+    ]);
+    expect(command.match(/FILE/g)).toHaveLength(1);
+    expect(res.value.next).toContain("FILE replaced by the path of the file in single quotes, a ' inside it written as '\\''");
     expect(res.value.next).toMatch(/If curl cannot reach panel\.example\.test/);
     expect((await activity())[0]).toMatchObject({ via: 'mcp', tool: 'wpl7_upload_site_file', route: '/api/sites/:slug/files/upload-links', status: 201 });
 
@@ -502,10 +510,11 @@ describe('the file tools', () => {
     // Over one request's worth, the same in pieces.
     world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: FILE_EXIT.notFound });
     const big = await mcp.call('wpl7_upload_site_file', { site: 'alpha', path: 'theme.zip', sizeBytes: 20 * 1024 * 1024, sha256: sha('x') });
-    expect(big.value.command).toContain('if [ "$(wc -c < "$f" | tr -dc 0-9)" != 20971520 ]; then');
+    const loop = (big.value.command as string).split('\n');
+    expect(loop.slice(0, 3)).toEqual([`sh -s -- FILE <<'WPL7'`, 'f=$1; n=8388608; i=0; r=', 'if [ "$(wc -c < "$f" | tr -dc 0-9)" != 20971520 ]; then']);
     expect(big.value.command).toContain('while [ $((i * n)) -lt 20971520 ]; do');
     expect(big.value.command).toContain('"http://panel.example.test/api/file-uploads?offset=$((i * n))") || break');
-    expect(big.value.command.split('\n').at(-1)).toBe('fi');
+    expect(loop.slice(-2)).toEqual(['fi', 'WPL7']);
   });
 
   it('stop the links an app made once MCP is switched off', async () => {
@@ -563,7 +572,7 @@ describe.skipIf(!curl)('the upload commands, run with curl', () => {
     const run = (command: string, name: string, onDisk: Buffer) => {
       const file = path.join(local, name);
       fs.writeFileSync(file, onDisk);
-      return runInSh(command.replace('FILE', file));
+      return runInSh(command.replace('FILE', shellArg(file)));
     };
     const sent = () => world.docker.inputs.map((b) => b.length);
     const close = async () => {
@@ -589,13 +598,14 @@ describe.skipIf(!curl)('the upload commands, run with curl', () => {
     return { url, requests: () => requests, close: () => new Promise<void>((resolve) => server.close(() => resolve())) };
   }
 
-  it('exit 0 once the panel has the file in place: in one request, with a name curl would read as a pattern, and in pieces', async () => {
+  it('exit 0 once the panel has the file in place, in one request and in pieces, whatever its name', async () => {
     const p = await listening();
     try {
       const small = crypto.randomBytes(3000);
       const single = await p.commandFor('photo.png', small);
       p.world.docker.execQueue.push(inPlace('photo.png', 3000));
-      const one = await p.run(single, 'photo[1].png', small);
+      // A name with all a shell or curl would read: $5, a quote, a backtick, brackets, a space.
+      const one = await p.run(single, "price$5 it's `x` [1].png", small);
       expect(one.code, one.out).toBe(0);
       expect(one.out).toContain('"written":{');
       expect(p.sent()).toEqual([3000]);
@@ -603,7 +613,7 @@ describe.skipIf(!curl)('the upload commands, run with curl', () => {
       const big = crypto.randomBytes(PIECE + 1000);
       const command = await p.commandFor('theme.zip', big);
       p.world.docker.execQueue.push({ stdout: '', stderr: '', exitCode: 0 }, inPlace('theme.zip', PIECE + 1000));
-      const pieces = await p.run(command, 'theme.zip', big);
+      const pieces = await p.run(command, "theme $HOME it's `x`.zip", big);
       expect(pieces.code, pieces.out).toBe(0);
       expect(p.sent()).toEqual([3000, PIECE, 1000]);
     } finally {
